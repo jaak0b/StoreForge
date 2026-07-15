@@ -2,6 +2,7 @@
 import { useApp } from './stores/app';
 import QueuePage from './components/QueuePage.vue';
 import BinDesignerPage from './components/BinDesignerPage.vue';
+import PlatePage from './components/PlatePage.vue';
 
 const app = useApp();
 </script>
@@ -24,9 +25,17 @@ const app = useApp();
       >
         Designer
       </v-btn>
+      <v-btn
+        variant="text"
+        :active="app.page === 'plate'"
+        @click="app.showPlate()"
+      >
+        Plate
+      </v-btn>
     </v-app-bar>
     <v-main>
       <QueuePage v-if="app.page === 'queue'" />
+      <PlatePage v-else-if="app.page === 'plate'" />
       <BinDesignerPage v-else :key="app.editingEntryId ?? 'new'" />
     </v-main>
   </v-app>
