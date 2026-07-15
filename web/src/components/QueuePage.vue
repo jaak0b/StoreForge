@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
+import { useBinTemplates } from '../stores/binTemplates';
 import { generateLabeledBinUnion } from '../workerClient';
 import { meshToStlBlob } from '../engine/gridfinity/stlExport';
 import { iconByName } from '../engine/label/icons';
-import type { BinEntry } from '../engine/plan/types';
+import type { BinEntry, BinTemplate } from '../engine/plan/types';
+import FootprintThumb from './FootprintThumb.vue';
 
 const app = useApp();
 const queue = useBinQueue();
+const templates = useBinTemplates();
 const { smAndDown } = useDisplay();
 
 type Filter = 'all' | 'queued' | 'printed';
@@ -29,16 +32,6 @@ function sizeLabel(entry: BinEntry): string {
 
 function cardTitle(entry: BinEntry): string {
   return entry.labelText !== '' ? entry.labelText : sizeLabel(entry);
-}
-
-// Thumbnail: the footprint grid is rendered at most 6 x 6 cells; larger bins
-// get a "+N" overlay stating how many cells are not shown.
-const THUMB_CAP = 6;
-
-function thumbCells(entry: BinEntry): { cols: number; rows: number; hidden: number } {
-  const cols = Math.min(entry.gridX, THUMB_CAP);
-  const rows = Math.min(entry.gridY, THUMB_CAP);
-  return { cols, rows, hidden: entry.gridX * entry.gridY - cols * rows };
 }
 
 function labelIconPath(name: string): string {
@@ -126,6 +119,7 @@ function toggleSession(): void {
   sessionActive.value = !sessionActive.value;
   selectedIds.value = new Set();
   if (sessionActive.value) {
+    exitBulkMode();
     filter.value = 'queued';
     sessionBannerVisible.value = true;
   }
@@ -144,6 +138,129 @@ function markSelectedPrinted(): void {
   sessionActive.value = false;
   selectedIds.value = new Set();
 }
+
+// Bulk selection: a second, independent mode for acting on many bins of any
+// status at once. Mutually exclusive with the print session.
+const bulkMode = ref(false);
+const bulkSelectedIds = ref<Set<string>>(new Set());
+const bulkDeleteConfirmOpen = ref(false);
+
+function exitBulkMode(): void {
+  bulkMode.value = false;
+  bulkSelectedIds.value = new Set();
+}
+
+function toggleBulkMode(): void {
+  if (bulkMode.value) {
+    exitBulkMode();
+    return;
+  }
+  if (sessionActive.value) {
+    sessionActive.value = false;
+    selectedIds.value = new Set();
+  }
+  bulkSelectedIds.value = new Set();
+  bulkMode.value = true;
+}
+
+function toggleBulkSelected(entry: BinEntry): void {
+  if (!bulkMode.value) return;
+  const next = new Set(bulkSelectedIds.value);
+  if (next.has(entry.id)) next.delete(entry.id);
+  else next.add(entry.id);
+  bulkSelectedIds.value = next;
+}
+
+const bulkSelectedEntries = computed(() =>
+  queue.entries.filter((entry) => bulkSelectedIds.value.has(entry.id)),
+);
+const bulkHasQueued = computed(() =>
+  bulkSelectedEntries.value.some((entry) => entry.status === 'queued'),
+);
+const bulkHasPrinted = computed(() =>
+  bulkSelectedEntries.value.some((entry) => entry.status === 'printed'),
+);
+
+function bulkDuplicate(): void {
+  for (const id of bulkSelectedIds.value) queue.duplicate(id);
+  exitBulkMode();
+}
+
+function bulkRequeue(): void {
+  queue.requeue(bulkSelectedIds.value);
+  exitBulkMode();
+}
+
+function bulkMarkPrinted(): void {
+  queue.markPrinted(bulkSelectedIds.value);
+  exitBulkMode();
+}
+
+function bulkDelete(): void {
+  bulkDeleteConfirmOpen.value = false;
+  for (const id of bulkSelectedIds.value) queue.remove(id);
+  exitBulkMode();
+}
+
+// Quick add: one click queues a saved template.
+const quickAddSnackbar = ref(false);
+const quickAddName = ref('');
+const quickAddId = ref<string | null>(null);
+
+function quickAdd(template: BinTemplate): void {
+  quickAddId.value = queue.add({ ...template.params }, 1);
+  quickAddName.value = template.name;
+  quickAddSnackbar.value = true;
+}
+
+function editQuickAdded(): void {
+  quickAddSnackbar.value = false;
+  if (quickAddId.value !== null) app.openDesignerEdit(quickAddId.value);
+}
+
+// Manage templates: inline rename and delete.
+const manageTemplatesOpen = ref(false);
+const renamingTemplateId = ref<string | null>(null);
+const renameText = ref('');
+
+function startRename(template: BinTemplate): void {
+  renamingTemplateId.value = template.id;
+  renameText.value = template.name;
+}
+
+function commitRename(): void {
+  if (renamingTemplateId.value === null) return;
+  const name = renameText.value.trim();
+  if (name !== '') templates.rename(renamingTemplateId.value, name);
+  renamingTemplateId.value = null;
+}
+
+function templateSize(template: BinTemplate): string {
+  return `${template.params.gridX} x ${template.params.gridY} x ${template.params.heightUnits}`;
+}
+
+// Keyboard shortcuts dispatched by the global listener in App.vue.
+watch(
+  () => app.shortcutIntent,
+  (intent) => {
+    if (intent === null) return;
+    if (intent.kind === 'toggleSession') {
+      if (queue.queuedCount > 0 || sessionActive.value) toggleSession();
+    } else if (intent.kind === 'toggleBulk') {
+      if (queue.entries.length > 0 || bulkMode.value) toggleBulkMode();
+    } else if (intent.kind === 'escape') {
+      // An open dialog consumes Escape itself; do not also cancel the mode.
+      const dialogOpen =
+        importDialogOpen.value ||
+        bulkDeleteConfirmOpen.value ||
+        manageTemplatesOpen.value ||
+        app.shortcutSheetOpen;
+      if (dialogOpen) return;
+      if (bulkMode.value) exitBulkMode();
+      else if (sessionActive.value) toggleSession();
+    }
+  },
+);
 </script>
 
 <template>
@@ -165,6 +282,11 @@ function markSelectedPrinted(): void {
         @click="app.openDesignerNew()"
       >
         Add bin
+        <v-tooltip activator="parent" location="bottom">Add bin (Ctrl+N)</v-tooltip>
+      </v-btn>
+      <v-btn icon variant="text" @click="app.shortcutSheetOpen = true">
+        <v-icon icon="mdi-help-circle-outline" />
+        <v-tooltip activator="parent" location="bottom">Keyboard shortcuts (?)</v-tooltip>
       </v-btn>
       <v-menu>
         <template #activator="{ props: menuProps }">
@@ -181,11 +303,22 @@ function markSelectedPrinted(): void {
             @click="toggleSession"
           />
           <v-list-item
+            prepend-icon="mdi-checkbox-multiple-marked-outline"
+            :disabled="queue.entries.length === 0 && !bulkMode"
+            :title="bulkMode ? 'Cancel selection' : 'Select bins'"
+            @click="toggleBulkMode"
+          />
+          <v-list-item
             prepend-icon="mdi-format-list-bulleted-square"
             title="Add from screw list"
             @click="app.showScrewListImport()"
           />
           <v-divider />
+          <v-list-item
+            prepend-icon="mdi-view-grid-outline"
+            title="Manage templates"
+            @click="manageTemplatesOpen = true"
+          />
           <v-list-item
             prepend-icon="mdi-download"
             title="Export JSON"
@@ -199,6 +332,20 @@ function markSelectedPrinted(): void {
         </v-list>
       </v-menu>
     </v-toolbar>
+
+    <div v-if="templates.templates.length > 0" class="mt-2 mb-1">
+      <div class="text-caption text-medium-emphasis">Quick add</div>
+      <v-chip-group column>
+        <v-chip
+          v-for="template in templates.templates"
+          :key="template.id"
+          prepend-icon="mdi-plus"
+          @click="quickAdd(template)"
+        >
+          {{ template.name }}
+        </v-chip>
+      </v-chip-group>
+    </div>
 
     <v-tabs
       v-if="!sessionActive"
@@ -281,41 +428,41 @@ function markSelectedPrinted(): void {
         md="4"
       >
         <v-card
-          :variant="sessionActive && selectedIds.has(entry.id) ? 'tonal' : 'outlined'"
-          :color="sessionActive && selectedIds.has(entry.id) ? 'primary' : undefined"
+          :variant="
+            (sessionActive && selectedIds.has(entry.id)) ||
+            (bulkMode && bulkSelectedIds.has(entry.id))
+              ? 'tonal'
+              : 'outlined'
+          "
+          :color="
+            (sessionActive && selectedIds.has(entry.id)) ||
+            (bulkMode && bulkSelectedIds.has(entry.id))
+              ? 'primary'
+              : undefined
+          "
           :class="{ 'card-dimmed': sessionActive && entry.status !== 'queued' }"
           v-on="
-            sessionActive && entry.status === 'queued'
-              ? { click: () => toggleSelected(entry) }
-              : {}
+            bulkMode
+              ? { click: () => toggleBulkSelected(entry) }
+              : sessionActive && entry.status === 'queued'
+                ? { click: () => toggleSelected(entry) }
+                : {}
           "
         >
           <v-card-item>
             <template #prepend>
-              <div
-                class="footprint-thumb mr-1"
-                :style="{
-                  gridTemplateColumns: `repeat(${thumbCells(entry).cols}, 1fr)`,
-                  gridTemplateRows: `repeat(${thumbCells(entry).rows}, 1fr)`,
-                }"
-              >
-                <div
-                  v-for="cell in thumbCells(entry).cols * thumbCells(entry).rows"
-                  :key="cell"
-                  class="footprint-thumb__cell"
-                />
-                <div
-                  v-if="thumbCells(entry).hidden > 0"
-                  class="footprint-thumb__overlay text-caption"
-                >
-                  +{{ thumbCells(entry).hidden }}
-                </div>
-                <div v-else-if="entry.labelIcon !== null" class="footprint-thumb__overlay">
-                  <svg width="16" height="16" viewBox="0 0 100 100" aria-hidden="true">
-                    <path :d="labelIconPath(entry.labelIcon)" fill="currentColor" fill-rule="evenodd" />
-                  </svg>
-                </div>
-              </div>
+              <v-checkbox-btn
+                v-if="bulkMode"
+                :model-value="bulkSelectedIds.has(entry.id)"
+                class="mr-1 flex-grow-0"
+                @click.stop="toggleBulkSelected(entry)"
+              />
+              <FootprintThumb
+                class="mr-1"
+                :grid-x="entry.gridX"
+                :grid-y="entry.gridY"
+                :label-icon="entry.labelIcon"
+              />
             </template>
             <v-card-title>{{ cardTitle(entry) }}</v-card-title>
             <v-card-subtitle v-if="entry.labelText !== ''">
@@ -365,7 +512,7 @@ function markSelectedPrinted(): void {
               {{ entry.quantity }}
             </v-chip>
           </v-card-text>
-          <v-card-actions v-if="!sessionActive" class="justify-end">
+          <v-card-actions v-if="!sessionActive" class="justify-end" @click.stop>
             <v-btn
               variant="text"
               size="small"
@@ -425,6 +572,35 @@ function markSelectedPrinted(): void {
       </v-col>
     </v-row>
 
+    <div v-if="bulkMode" class="session-bar d-flex align-center flex-wrap py-3 px-2">
+      <span class="text-body-1 mr-4">
+        {{ bulkSelectedIds.size }} selected
+      </span>
+      <v-spacer />
+      <v-btn variant="text" @click="exitBulkMode">Cancel</v-btn>
+      <v-btn
+        variant="text"
+        :disabled="bulkSelectedIds.size === 0"
+        @click="bulkDuplicate"
+      >
+        Duplicate
+      </v-btn>
+      <v-btn variant="text" :disabled="!bulkHasPrinted" @click="bulkRequeue">
+        Requeue
+      </v-btn>
+      <v-btn variant="text" :disabled="!bulkHasQueued" @click="bulkMarkPrinted">
+        Mark printed
+      </v-btn>
+      <v-btn
+        variant="text"
+        color="error"
+        :disabled="bulkSelectedIds.size === 0"
+        @click="bulkDeleteConfirmOpen = true"
+      >
+        Delete
+      </v-btn>
+    </div>
+
     <div v-if="sessionActive" class="session-bar d-flex align-center py-3 px-2">
       <span class="text-body-1 mr-4">
         {{ selectedIds.size }} selected
@@ -471,6 +647,83 @@ function markSelectedPrinted(): void {
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <v-dialog v-model="bulkDeleteConfirmOpen" max-width="400">
+      <v-card>
+        <v-card-title>Delete bins</v-card-title>
+        <v-card-text>
+          Delete {{ bulkSelectedIds.size }}
+          {{ bulkSelectedIds.size === 1 ? 'bin' : 'bins' }}? This cannot be undone.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="bulkDeleteConfirmOpen = false">Cancel</v-btn>
+          <v-btn color="error" variant="flat" @click="bulkDelete">Delete</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="manageTemplatesOpen" max-width="520">
+      <v-card>
+        <v-card-title>Manage templates</v-card-title>
+        <v-card-text v-if="templates.templates.length === 0">
+          You haven't saved any bin templates yet. Save one from the bin
+          designer to reuse it here.
+        </v-card-text>
+        <v-list v-else density="comfortable">
+          <v-list-item v-for="template in templates.templates" :key="template.id">
+            <template #prepend>
+              <FootprintThumb
+                class="mr-3"
+                :grid-x="template.params.gridX"
+                :grid-y="template.params.gridY"
+                :label-icon="template.params.labelIcon"
+              />
+            </template>
+            <v-text-field
+              v-if="renamingTemplateId === template.id"
+              v-model="renameText"
+              density="compact"
+              hide-details
+              autofocus
+              @blur="commitRename"
+              @keydown.enter.prevent="commitRename"
+            />
+            <template v-else>
+              <v-list-item-title
+                class="template-name"
+                @click="startRename(template)"
+              >
+                {{ template.name }}
+              </v-list-item-title>
+              <v-list-item-subtitle>{{ templateSize(template) }}</v-list-item-subtitle>
+            </template>
+            <template #append>
+              <v-btn
+                icon
+                variant="text"
+                size="small"
+                @click="templates.remove(template.id)"
+              >
+                <v-icon icon="mdi-delete-outline" />
+                <v-tooltip activator="parent" location="bottom">Delete</v-tooltip>
+              </v-btn>
+            </template>
+          </v-list-item>
+        </v-list>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="manageTemplatesOpen = false">Close</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-snackbar v-model="quickAddSnackbar" timeout="4000">
+      Added {{ quickAddName }} to the queue.
+      <template #actions>
+        <v-btn variant="text" color="primary" @click="editQuickAdded">Edit</v-btn>
+      </template>
+    </v-snackbar>
   </v-container>
 </template>
 
@@ -479,29 +732,8 @@ function markSelectedPrinted(): void {
   max-width: 1100px;
 }
 
-.footprint-thumb {
-  position: relative;
-  width: 48px;
-  height: 48px;
-  display: grid;
-  gap: 1px;
-  padding: 3px;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 6px;
-}
-
-.footprint-thumb__cell {
-  background: rgb(var(--v-theme-surface-variant));
-  border-radius: 2px;
-}
-
-.footprint-thumb__overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgb(var(--v-theme-on-surface));
+.template-name {
+  cursor: pointer;
 }
 
 .card-dimmed {

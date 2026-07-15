@@ -1,3 +1,4 @@
+import type { LabeledBinParams } from '../gridfinity/types';
 import { PLAN_FILE_VERSION, type BinEntry, type BinStatus, type PlanFile } from './types';
 
 /** Result of parsing a plan file: either the plan or a user-worded error. */
@@ -14,6 +15,66 @@ function isIsoTimestamp(value: unknown): value is string {
 }
 
 /**
+ * Validates the LabeledBinParams fields on a raw object. Returns null when
+ * they are valid, otherwise a message naming the first offending field,
+ * prefixed with the given subject (for example "entry abc" or "template abc").
+ * Shared by the plan file and the template file, which both persist the same
+ * design parameters.
+ */
+export function validateBinParams(entry: Record<string, unknown>, subject: string): string | null {
+  if (!isPositiveInteger(entry.gridX, 1)) {
+    return `${subject}: gridX must be an integer of at least 1`;
+  }
+  if (!isPositiveInteger(entry.gridY, 1)) {
+    return `${subject}: gridY must be an integer of at least 1`;
+  }
+  if (!isPositiveInteger(entry.heightUnits, 2)) {
+    return `${subject}: heightUnits must be an integer of at least 2`;
+  }
+  if (typeof entry.stackingLip !== 'boolean') {
+    return `${subject}: stackingLip must be true or false`;
+  }
+  if (typeof entry.magnetHoles !== 'boolean') {
+    return `${subject}: magnetHoles must be true or false`;
+  }
+  // dividerCountX/Y and perforatedBase were added after the first version-1
+  // plans shipped; older files simply omit them, so undefined is accepted and
+  // defaulted (no version bump needed, the envelope stays backward compatible).
+  if (entry.dividerCountX !== undefined && !isPositiveInteger(entry.dividerCountX, 0)) {
+    return `${subject}: dividerCountX must be an integer of at least 0`;
+  }
+  if (entry.dividerCountY !== undefined && !isPositiveInteger(entry.dividerCountY, 0)) {
+    return `${subject}: dividerCountY must be an integer of at least 0`;
+  }
+  if (entry.perforatedBase !== undefined && typeof entry.perforatedBase !== 'boolean') {
+    return `${subject}: perforatedBase must be true or false`;
+  }
+  if (typeof entry.labelText !== 'string') {
+    return `${subject}: labelText must be a string`;
+  }
+  if (entry.labelIcon !== null && typeof entry.labelIcon !== 'string') {
+    return `${subject}: labelIcon must be a string or null`;
+  }
+  return null;
+}
+
+/** Copies only the LabeledBinParams fields from a validated raw object. */
+export function pickBinParams(raw: Record<string, unknown>): LabeledBinParams {
+  return {
+    gridX: raw.gridX as number,
+    gridY: raw.gridY as number,
+    heightUnits: raw.heightUnits as number,
+    stackingLip: raw.stackingLip as boolean,
+    magnetHoles: raw.magnetHoles as boolean,
+    dividerCountX: (raw.dividerCountX as number | undefined) ?? 0,
+    dividerCountY: (raw.dividerCountY as number | undefined) ?? 0,
+    perforatedBase: (raw.perforatedBase as boolean | undefined) ?? false,
+    labelText: raw.labelText as string,
+    labelIcon: raw.labelIcon as string | null,
+  };
+}
+
+/**
  * Validates one raw object as a BinEntry. Returns null when it is valid,
  * otherwise a message naming the first offending field.
  */
@@ -26,39 +87,8 @@ export function validateEntry(raw: unknown): string | null {
     return 'an entry is missing its id';
   }
   const id = entry.id;
-  if (!isPositiveInteger(entry.gridX, 1)) {
-    return `entry ${id}: gridX must be an integer of at least 1`;
-  }
-  if (!isPositiveInteger(entry.gridY, 1)) {
-    return `entry ${id}: gridY must be an integer of at least 1`;
-  }
-  if (!isPositiveInteger(entry.heightUnits, 2)) {
-    return `entry ${id}: heightUnits must be an integer of at least 2`;
-  }
-  if (typeof entry.stackingLip !== 'boolean') {
-    return `entry ${id}: stackingLip must be true or false`;
-  }
-  if (typeof entry.magnetHoles !== 'boolean') {
-    return `entry ${id}: magnetHoles must be true or false`;
-  }
-  // dividerCountX/Y and perforatedBase were added after the first version-1
-  // plans shipped; older files simply omit them, so undefined is accepted and
-  // defaulted (no version bump needed, the envelope stays backward compatible).
-  if (entry.dividerCountX !== undefined && !isPositiveInteger(entry.dividerCountX, 0)) {
-    return `entry ${id}: dividerCountX must be an integer of at least 0`;
-  }
-  if (entry.dividerCountY !== undefined && !isPositiveInteger(entry.dividerCountY, 0)) {
-    return `entry ${id}: dividerCountY must be an integer of at least 0`;
-  }
-  if (entry.perforatedBase !== undefined && typeof entry.perforatedBase !== 'boolean') {
-    return `entry ${id}: perforatedBase must be true or false`;
-  }
-  if (typeof entry.labelText !== 'string') {
-    return `entry ${id}: labelText must be a string`;
-  }
-  if (entry.labelIcon !== null && typeof entry.labelIcon !== 'string') {
-    return `entry ${id}: labelIcon must be a string or null`;
-  }
+  const paramsProblem = validateBinParams(entry, `entry ${id}`);
+  if (paramsProblem !== null) return paramsProblem;
   if (!isPositiveInteger(entry.quantity, 1)) {
     return `entry ${id}: quantity must be an integer of at least 1`;
   }
@@ -81,16 +111,7 @@ export function validateEntry(raw: unknown): string | null {
 function pickEntry(raw: Record<string, unknown>): BinEntry {
   const entry: BinEntry = {
     id: raw.id as string,
-    gridX: raw.gridX as number,
-    gridY: raw.gridY as number,
-    heightUnits: raw.heightUnits as number,
-    stackingLip: raw.stackingLip as boolean,
-    magnetHoles: raw.magnetHoles as boolean,
-    dividerCountX: (raw.dividerCountX as number | undefined) ?? 0,
-    dividerCountY: (raw.dividerCountY as number | undefined) ?? 0,
-    perforatedBase: (raw.perforatedBase as boolean | undefined) ?? false,
-    labelText: raw.labelText as string,
-    labelIcon: raw.labelIcon as string | null,
+    ...pickBinParams(raw),
     quantity: raw.quantity as number,
     status: raw.status as BinStatus,
     createdAt: raw.createdAt as string,

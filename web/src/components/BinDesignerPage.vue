@@ -1,19 +1,29 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
+import { useDisplay } from 'vuetify';
 import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
+import { useBinTemplates } from '../stores/binTemplates';
 import { useApp } from '../stores/app';
 import { generateLabeledBin, generateLabeledBinUnion } from '../workerClient';
 import { meshToStlBlob } from '../engine/gridfinity/stlExport';
 import { PITCH, WALL_THICKNESS } from '../engine/gridfinity/constants';
 import { LABEL_ICONS } from '../engine/label/icons';
-import type { LabeledBinMeshes } from '../engine/gridfinity/types';
+import type { LabeledBinMeshes, LabeledBinParams } from '../engine/gridfinity/types';
 import BinViewport from './BinViewport.vue';
+import FootprintThumb from './FootprintThumb.vue';
 
 const store = useBinDesigner();
 const queue = useBinQueue();
+const templates = useBinTemplates();
 const app = useApp();
+const { smAndDown } = useDisplay();
+
+// The 3D preview is heavy; on small screens it starts paused and loads on
+// demand. Once loaded it stays loaded. Mesh generation itself keeps running
+// regardless, so the STL download is always available.
+const previewLoaded = ref(!smAndDown.value);
 
 const quantity = ref(1);
 const notes = ref('');
@@ -91,6 +101,35 @@ function spacingCaption(count: number, interiorMm: number): string {
   const effective = (interiorMm / (count + 1)).toFixed(1);
   const noun = count === 1 ? 'divider' : 'dividers';
   return `${count} ${noun} (effective spacing ${effective} mm)`;
+}
+
+// Templates: save the current parameters under a name, or load a saved set.
+const saveTemplateOpen = ref(false);
+const templateName = ref('');
+
+function openSaveTemplate(): void {
+  templateName.value =
+    labelText.value !== ''
+      ? labelText.value
+      : `${gridX.value} x ${gridY.value} x ${heightUnits.value}`;
+  saveTemplateOpen.value = true;
+}
+
+function saveTemplate(): void {
+  const name = templateName.value.trim();
+  if (name === '') return;
+  templates.save(name, store.params);
+  saveTemplateOpen.value = false;
+}
+
+function templateSize(params: LabeledBinParams): string {
+  return `${params.gridX} x ${params.gridY} x ${params.heightUnits}`;
+}
+
+function applyTemplate(id: string): void {
+  const params = templates.apply(id);
+  if (params === null) return;
+  store.$patch(params);
 }
 
 const meshes = ref<LabeledBinMeshes | null>(null);
@@ -179,7 +218,40 @@ async function downloadStl(): Promise<void> {
     <v-row class="fill-height">
       <v-col cols="12" md="4" lg="3">
         <v-card>
-          <v-card-title>Bin Designer</v-card-title>
+          <v-card-title class="d-flex align-center">
+            Bin Designer
+            <v-spacer />
+            <v-menu v-if="templates.templates.length > 0">
+              <template #activator="{ props: menuProps }">
+                <v-btn
+                  variant="text"
+                  size="small"
+                  prepend-icon="mdi-view-grid-outline"
+                  v-bind="menuProps"
+                >
+                  From template
+                </v-btn>
+              </template>
+              <v-list density="comfortable" max-height="320" class="overflow-y-auto">
+                <v-list-item
+                  v-for="template in templates.templates"
+                  :key="template.id"
+                  :title="template.name"
+                  :subtitle="templateSize(template.params)"
+                  @click="applyTemplate(template.id)"
+                >
+                  <template #prepend>
+                    <FootprintThumb
+                      class="mr-3"
+                      :grid-x="template.params.gridX"
+                      :grid-y="template.params.gridY"
+                      :label-icon="template.params.labelIcon"
+                    />
+                  </template>
+                </v-list-item>
+              </v-list>
+            </v-menu>
+          </v-card-title>
           <v-card-text>
             <p class="text-body-2 mb-4">
               Design a standard Gridfinity bin. Sizes are given in grid units of
@@ -339,6 +411,15 @@ async function downloadStl(): Promise<void> {
             >
               Download STL
             </v-btn>
+            <v-btn
+              variant="text"
+              block
+              class="mt-2 ml-0"
+              prepend-icon="mdi-content-save-outline"
+              @click="openSaveTemplate"
+            >
+              Save as template
+            </v-btn>
             <v-btn variant="text" block class="mt-2 ml-0" @click="app.showQueue()">
               Cancel
             </v-btn>
@@ -347,9 +428,53 @@ async function downloadStl(): Promise<void> {
       </v-col>
       <v-col cols="12" md="8" lg="9">
         <v-card class="fill-height">
-          <BinViewport :mesh="meshes?.body ?? null" :label="meshes?.label ?? null" />
+          <BinViewport
+            v-if="previewLoaded"
+            :mesh="meshes?.body ?? null"
+            :label="meshes?.label ?? null"
+          />
+          <div
+            v-else
+            class="d-flex flex-column align-center justify-center text-center fill-height pa-8"
+          >
+            <v-icon icon="mdi-cube-outline" size="64" class="mb-4 text-medium-emphasis" />
+            <p class="text-body-2 text-medium-emphasis mb-4">
+              The 3D preview is paused on this screen size to save battery and data.
+            </p>
+            <v-btn color="primary" variant="tonal" @click="previewLoaded = true">
+              Load preview
+            </v-btn>
+          </div>
         </v-card>
       </v-col>
     </v-row>
+
+    <v-dialog v-model="saveTemplateOpen" max-width="400">
+      <v-card>
+        <v-card-title>Save as template</v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="templateName"
+            label="Template name"
+            density="comfortable"
+            autofocus
+            hide-details
+            @keydown.enter.prevent="saveTemplate"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="saveTemplateOpen = false">Cancel</v-btn>
+          <v-btn
+            color="primary"
+            variant="flat"
+            :disabled="templateName.trim() === ''"
+            @click="saveTemplate"
+          >
+            Save
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-container>
 </template>

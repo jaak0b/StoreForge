@@ -1,3 +1,5 @@
+import type { LabeledBinParams } from '../gridfinity/types';
+
 /** Lifecycle status of a bin entry in the print plan. */
 export type BinStatus = 'queued' | 'printed';
 
@@ -47,3 +49,26 @@ export interface PlanFile {
 
 /** The current envelope format version. */
 export const PLAN_FILE_VERSION = 1;
+
+/** A named, reusable set of bin design parameters. */
+export interface BinTemplate {
+  /** Stable unique identifier (UUID). */
+  id: string;
+  /** User-chosen display name of the template. */
+  name: string;
+  /** The saved bin design parameters. */
+  params: LabeledBinParams;
+  /** ISO 8601 timestamp of when the template was saved. */
+  createdAt: string;
+}
+
+/** Versioned envelope the templates are persisted as. */
+export interface TemplateFile {
+  /** Envelope format version. Currently always 1. */
+  version: 1;
+  /** All saved templates. */
+  templates: BinTemplate[];
+}
+
+/** The current template envelope format version. */
+export const TEMPLATE_FILE_VERSION = 1;

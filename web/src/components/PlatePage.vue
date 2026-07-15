@@ -21,9 +21,11 @@ const FOOTPRINT_CLEARANCE = 0.5;
 
 // Plate size selection.
 const platePresets = [
-  { title: '256 x 256 mm', value: '256' },
-  { title: '220 x 220 mm', value: '220' },
+  { title: '150 x 150 mm', value: '150' },
+  { title: '160 x 160 mm', value: '160' },
   { title: '180 x 180 mm', value: '180' },
+  { title: '220 x 220 mm', value: '220' },
+  { title: '256 x 256 mm', value: '256' },
   { title: 'Custom size', value: 'custom' },
 ];
 const platePreset = ref('256');
