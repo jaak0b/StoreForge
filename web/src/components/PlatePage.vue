@@ -137,6 +137,9 @@ function paramsOf(entry: BinEntry): LabeledBinParams {
     heightUnits: entry.heightUnits,
     stackingLip: entry.stackingLip,
     magnetHoles: entry.magnetHoles,
+    dividerCountX: entry.dividerCountX,
+    dividerCountY: entry.dividerCountY,
+    perforatedBase: entry.perforatedBase,
     labelText: entry.labelText,
     labelIcon: entry.labelIcon,
   };
@@ -149,6 +152,9 @@ function dedupKey(params: LabeledBinParams): string {
     params.heightUnits,
     params.stackingLip,
     params.magnetHoles,
+    params.dividerCountX,
+    params.dividerCountY,
+    params.perforatedBase,
     params.labelText,
     params.labelIcon,
   ]);

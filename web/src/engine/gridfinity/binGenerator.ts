@@ -12,6 +12,7 @@ import {
   BASE_TOP_RADIUS,
   BASE_TOP_SIZE,
   CORNER_SEGMENTS,
+  DIVIDER_THICKNESS,
   FLOOR_TOP,
   FOOT_HEIGHT,
   FOOT_LOWER_CHAMFER,
@@ -25,6 +26,8 @@ import {
   MAGNET_HOLE_DIAMETER,
   MAGNET_HOLE_FROM_CELL_EDGE,
   OUTER_CORNER_RADIUS,
+  PERFORATION_HOLE_DIAMETER,
+  PERFORATION_RIB,
   PITCH,
   WALL_THICKNESS,
 } from './constants';
@@ -132,12 +135,140 @@ function footMagnetCutters(m: ManifoldToplevel): Manifold {
 }
 
 /**
+ * Positions (relative to a grid cell centre) of the perforation holes in one
+ * cell of a perforated floor. The holes form a centred square grid of
+ * PERFORATION_HOLE_DIAMETER circles with PERFORATION_RIB solid ribs between
+ * them, confined to the flat bottom footprint of the stacking foot inset by
+ * one rib width, so a hole can never breach the foot's chamfered side walls.
+ * When the bin has magnet holes, any perforation whose rib to a magnet hole
+ * would fall below PERFORATION_RIB is dropped, keeping each magnet seat solid.
+ */
+export function perforationCellCentres(magnetHoles: boolean): Array<[number, number]> {
+  const footBottomSize =
+    BASE_TOP_SIZE - 2 * FOOT_UPPER_CHAMFER - 2 * FOOT_LOWER_CHAMFER;
+  const regionHalf = footBottomSize / 2 - PERFORATION_RIB;
+  const step = PERFORATION_HOLE_DIAMETER + PERFORATION_RIB;
+  const span = 2 * regionHalf - PERFORATION_HOLE_DIAMETER;
+  const perAxis = Math.floor(span / step) + 1;
+  const start = -((perAxis - 1) / 2) * step;
+
+  const magnetOffset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
+  const keepOut =
+    MAGNET_HOLE_DIAMETER / 2 + PERFORATION_HOLE_DIAMETER / 2 + PERFORATION_RIB;
+
+  const centres: Array<[number, number]> = [];
+  for (let i = 0; i < perAxis; i++) {
+    for (let j = 0; j < perAxis; j++) {
+      const x = start + i * step;
+      const y = start + j * step;
+      if (magnetHoles) {
+        let nearMagnet = false;
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            if (Math.hypot(x - sx * magnetOffset, y - sy * magnetOffset) < keepOut) {
+              nearMagnet = true;
+            }
+          }
+        }
+        if (nearMagnet) continue;
+      }
+      centres.push([x, y]);
+    }
+  }
+  return centres;
+}
+
+/**
+ * Perforation cutters for the whole bin: one cylinder per hole per grid cell,
+ * spanning from the bed (z = 0) up to the top of the floor, so each hole goes
+ * clean through the foot and the floor slab but never above the floor.
+ */
+function perforationCutters(m: ManifoldToplevel, params: BinParams): Manifold {
+  const { gridX, gridY, magnetHoles } = params;
+  const centres = perforationCellCentres(magnetHoles);
+  const cutters: Manifold[] = [];
+  for (let ix = 0; ix < gridX; ix++) {
+    for (let iy = 0; iy < gridY; iy++) {
+      const cx = (ix - (gridX - 1) / 2) * PITCH;
+      const cy = (iy - (gridY - 1) / 2) * PITCH;
+      for (const [hx, hy] of centres) {
+        cutters.push(
+          m.Manifold.cylinder(
+            FLOOR_TOP,
+            PERFORATION_HOLE_DIAMETER / 2,
+            PERFORATION_HOLE_DIAMETER / 2,
+            4 * CORNER_SEGMENTS,
+          ).translate(cx + hx, cy + hy, 0),
+        );
+      }
+    }
+  }
+  return m.Manifold.union(cutters);
+}
+
+/**
+ * Interior divider walls. dividerCountX walls stand perpendicular to the X
+ * axis (splitting the width into dividerCountX + 1 equal compartments), and
+ * likewise for Y. Each wall is DIVIDER_THICKNESS thick, rises from inside the
+ * floor slab (top of the feet) to the nominal bin top (below the stacking lip
+ * seat), and is trimmed to the outer wall outline so it welds into the walls
+ * and floor without poking outside the bin.
+ */
+function buildDividers(
+  m: ManifoldToplevel,
+  params: BinParams,
+  outerPoly: SimplePolygon,
+  outerWidth: number,
+  outerDepth: number,
+  bodyTop: number,
+): Manifold {
+  const { dividerCountX, dividerCountY } = params;
+  const innerWidth = outerWidth - 2 * WALL_THICKNESS;
+  const innerDepth = outerDepth - 2 * WALL_THICKNESS;
+  // Embedded into the floor slab (feet top to floor top) for a solid weld.
+  const zBottom = FOOT_HEIGHT;
+  const height = bodyTop - zBottom;
+  const walls: Manifold[] = [];
+  for (let i = 1; i <= dividerCountX; i++) {
+    const x = -innerWidth / 2 + (i * innerWidth) / (dividerCountX + 1);
+    walls.push(
+      m.Manifold.cube([DIVIDER_THICKNESS, outerDepth, height], true).translate(
+        x,
+        0,
+        zBottom + height / 2,
+      ),
+    );
+  }
+  for (let i = 1; i <= dividerCountY; i++) {
+    const y = -innerDepth / 2 + (i * innerDepth) / (dividerCountY + 1);
+    walls.push(
+      m.Manifold.cube([outerWidth, DIVIDER_THICKNESS, height], true).translate(
+        0,
+        y,
+        zBottom + height / 2,
+      ),
+    );
+  }
+  const outline = m.Manifold.extrude([outerPoly], height).translate(0, 0, zBottom);
+  return m.Manifold.intersection(m.Manifold.union(walls), outline);
+}
+
+/**
  * Build the full bin solid. The bin is centred on the origin in X and Y and
  * rests on z = 0.
  */
 export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifold {
   validateParams(params);
-  const { gridX, gridY, heightUnits, stackingLip, magnetHoles } = params;
+  const {
+    gridX,
+    gridY,
+    heightUnits,
+    stackingLip,
+    magnetHoles,
+    dividerCountX,
+    dividerCountY,
+    perforatedBase,
+  } = params;
 
   const outerWidth = gridX * PITCH - 0.5;
   const outerDepth = gridY * PITCH - 0.5;
@@ -209,7 +340,17 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
     );
   }
 
-  const result = m.Manifold.difference(solid, m.Manifold.union(cutters));
+  let result = m.Manifold.difference(solid, m.Manifold.union(cutters));
+
+  if (dividerCountX > 0 || dividerCountY > 0) {
+    const dividers = buildDividers(m, params, outerPoly, outerWidth, outerDepth, bodyTop);
+    result = m.Manifold.union([result, dividers]);
+  }
+
+  if (perforatedBase) {
+    result = m.Manifold.difference(result, perforationCutters(m, params));
+  }
+
   if (result.status() !== 'NoError') {
     throw new Error(`Bin generation produced an invalid solid: ${result.status()}`);
   }
@@ -218,14 +359,29 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
 
 /** Validate and reject out-of-range parameters with a clear message. */
 export function validateParams(params: BinParams): void {
-  const { gridX, gridY, heightUnits } = params;
+  const { gridX, gridY, heightUnits, dividerCountX, dividerCountY } = params;
   for (const [name, value, min] of [
     ['gridX', gridX, 1],
     ['gridY', gridY, 1],
     ['heightUnits', heightUnits, 2],
+    ['dividerCountX', dividerCountX, 0],
+    ['dividerCountY', dividerCountY, 0],
   ] as const) {
     if (!Number.isInteger(value) || value < min) {
       throw new Error(`${name} must be an integer of at least ${min}, got ${value}`);
+    }
+  }
+  // Each compartment must keep a positive clear width between divider walls.
+  for (const [name, count, outer] of [
+    ['dividerCountX', dividerCountX, gridX * PITCH - 0.5],
+    ['dividerCountY', dividerCountY, gridY * PITCH - 0.5],
+  ] as const) {
+    const inner = outer - 2 * WALL_THICKNESS;
+    const clear = (inner - count * DIVIDER_THICKNESS) / (count + 1);
+    if (count > 0 && clear <= 0) {
+      throw new Error(
+        `${name} is too large: ${count} dividers leave no room between compartment walls`,
+      );
     }
   }
 }

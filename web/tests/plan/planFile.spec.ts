@@ -17,6 +17,9 @@ function entry(overrides: Partial<BinEntry> = {}): BinEntry {
     heightUnits: 3,
     stackingLip: true,
     magnetHoles: false,
+    dividerCountX: 0,
+    dividerCountY: 0,
+    perforatedBase: false,
     labelText: 'M3 bolts',
     labelIcon: 'bolt',
     quantity: 1,
@@ -83,6 +86,21 @@ describe('serializePlanFile / parsePlanFile', () => {
     });
   });
 
+  it('defaults dividers and perforation on version-1 files that predate them', () => {
+    const legacy: Record<string, unknown> = { ...entry() };
+    delete legacy.dividerCountX;
+    delete legacy.dividerCountY;
+    delete legacy.perforatedBase;
+    const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
+    expect(result).toEqual({
+      ok: true,
+      plan: {
+        version: 1,
+        entries: [entry({ dividerCountX: 0, dividerCountY: 0, perforatedBase: false })],
+      },
+    });
+  });
+
   it('drops unknown extra fields on an entry when parsing', () => {
     const withExtra = { ...entry(), somethingElse: 42 };
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [withExtra] }));
@@ -101,6 +119,9 @@ describe('validateEntry', () => {
     ['heightUnits', 1, 'heightUnits must be an integer of at least 2'],
     ['stackingLip', 'yes', 'stackingLip must be true or false'],
     ['magnetHoles', 1, 'magnetHoles must be true or false'],
+    ['dividerCountX', -1, 'dividerCountX must be an integer of at least 0'],
+    ['dividerCountY', 0.5, 'dividerCountY must be an integer of at least 0'],
+    ['perforatedBase', 'yes', 'perforatedBase must be true or false'],
     ['labelText', null, 'labelText must be a string'],
     ['labelIcon', 7, 'labelIcon must be a string or null'],
     ['quantity', 0, 'quantity must be an integer of at least 1'],

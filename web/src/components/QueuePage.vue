@@ -55,6 +55,9 @@ async function downloadStl(entry: BinEntry): Promise<void> {
       heightUnits: entry.heightUnits,
       stackingLip: entry.stackingLip,
       magnetHoles: entry.magnetHoles,
+      dividerCountX: entry.dividerCountX,
+      dividerCountY: entry.dividerCountY,
+      perforatedBase: entry.perforatedBase,
       labelText: entry.labelText,
       labelIcon: entry.labelIcon,
     });
@@ -349,6 +352,14 @@ function markSelectedPrinted(): void {
                 </svg>
               </template>
               {{ entry.labelIcon }}
+            </v-chip>
+            <v-chip
+              v-if="entry.dividerCountX > 0 || entry.dividerCountY > 0"
+              size="small"
+              variant="text"
+              prepend-icon="mdi-view-grid-plus-outline"
+            >
+              {{ entry.dividerCountX }}x{{ entry.dividerCountY }}
             </v-chip>
             <v-chip size="small" variant="outlined" prepend-icon="mdi-close">
               {{ entry.quantity }}

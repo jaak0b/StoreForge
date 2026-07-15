@@ -41,6 +41,18 @@ export function validateEntry(raw: unknown): string | null {
   if (typeof entry.magnetHoles !== 'boolean') {
     return `entry ${id}: magnetHoles must be true or false`;
   }
+  // dividerCountX/Y and perforatedBase were added after the first version-1
+  // plans shipped; older files simply omit them, so undefined is accepted and
+  // defaulted (no version bump needed, the envelope stays backward compatible).
+  if (entry.dividerCountX !== undefined && !isPositiveInteger(entry.dividerCountX, 0)) {
+    return `entry ${id}: dividerCountX must be an integer of at least 0`;
+  }
+  if (entry.dividerCountY !== undefined && !isPositiveInteger(entry.dividerCountY, 0)) {
+    return `entry ${id}: dividerCountY must be an integer of at least 0`;
+  }
+  if (entry.perforatedBase !== undefined && typeof entry.perforatedBase !== 'boolean') {
+    return `entry ${id}: perforatedBase must be true or false`;
+  }
   if (typeof entry.labelText !== 'string') {
     return `entry ${id}: labelText must be a string`;
   }
@@ -74,6 +86,9 @@ function pickEntry(raw: Record<string, unknown>): BinEntry {
     heightUnits: raw.heightUnits as number,
     stackingLip: raw.stackingLip as boolean,
     magnetHoles: raw.magnetHoles as boolean,
+    dividerCountX: (raw.dividerCountX as number | undefined) ?? 0,
+    dividerCountY: (raw.dividerCountY as number | undefined) ?? 0,
+    perforatedBase: (raw.perforatedBase as boolean | undefined) ?? false,
     labelText: raw.labelText as string,
     labelIcon: raw.labelIcon as string | null,
     quantity: raw.quantity as number,

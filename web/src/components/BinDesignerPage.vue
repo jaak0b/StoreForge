@@ -6,6 +6,7 @@ import { useBinQueue } from '../stores/binQueue';
 import { useApp } from '../stores/app';
 import { generateLabeledBin, generateLabeledBinUnion } from '../workerClient';
 import { meshToStlBlob } from '../engine/gridfinity/stlExport';
+import { PITCH, WALL_THICKNESS } from '../engine/gridfinity/constants';
 import { LABEL_ICONS } from '../engine/label/icons';
 import type { LabeledBinMeshes } from '../engine/gridfinity/types';
 import BinViewport from './BinViewport.vue';
@@ -26,6 +27,9 @@ if (editingId !== null) {
       heightUnits: entry.heightUnits,
       stackingLip: entry.stackingLip,
       magnetHoles: entry.magnetHoles,
+      dividerCountX: entry.dividerCountX,
+      dividerCountY: entry.dividerCountY,
+      perforatedBase: entry.perforatedBase,
       labelText: entry.labelText,
       labelIcon: entry.labelIcon,
     });
@@ -47,8 +51,47 @@ function saveEntry(): void {
   }
   app.showQueue();
 }
-const { gridX, gridY, heightUnits, stackingLip, magnetHoles, labelText, labelIcon } =
-  storeToRefs(store);
+const {
+  gridX,
+  gridY,
+  heightUnits,
+  stackingLip,
+  magnetHoles,
+  dividerCountX,
+  dividerCountY,
+  perforatedBase,
+  labelText,
+  labelIcon,
+} = storeToRefs(store);
+
+// Dividers can be entered as a count or as a target spacing. Spacing is a
+// UI convenience only: it is converted to a stored count on input, so the
+// count stays the single persisted representation.
+const dividerMode = ref<'count' | 'spacing'>('count');
+const spacingX = ref<number | null>(null);
+const spacingY = ref<number | null>(null);
+
+const interiorWidth = computed(() => gridX.value * PITCH - 0.5 - 2 * WALL_THICKNESS);
+const interiorDepth = computed(() => gridY.value * PITCH - 0.5 - 2 * WALL_THICKNESS);
+
+function countFromSpacing(interiorMm: number, spacing: number | null): number {
+  if (spacing === null || !Number.isFinite(spacing) || spacing <= 0) return 0;
+  return Math.max(0, Math.round(interiorMm / spacing) - 1);
+}
+
+function applySpacingX(): void {
+  dividerCountX.value = countFromSpacing(interiorWidth.value, spacingX.value);
+}
+
+function applySpacingY(): void {
+  dividerCountY.value = countFromSpacing(interiorDepth.value, spacingY.value);
+}
+
+function spacingCaption(count: number, interiorMm: number): string {
+  const effective = (interiorMm / (count + 1)).toFixed(1);
+  const noun = count === 1 ? 'divider' : 'dividers';
+  return `${count} ${noun} (effective spacing ${effective} mm)`;
+}
 
 const meshes = ref<LabeledBinMeshes | null>(null);
 const generating = ref(false);
@@ -93,7 +136,18 @@ function scheduleRegenerate(): void {
 }
 
 watch(
-  [gridX, gridY, heightUnits, stackingLip, magnetHoles, labelText, labelIcon],
+  [
+    gridX,
+    gridY,
+    heightUnits,
+    stackingLip,
+    magnetHoles,
+    dividerCountX,
+    dividerCountY,
+    perforatedBase,
+    labelText,
+    labelIcon,
+  ],
   scheduleRegenerate,
 );
 onMounted(() => void regenerate());
@@ -169,6 +223,68 @@ async function downloadStl(): Promise<void> {
               hint="Each foot gets four 6.5 mm holes for 6 x 2 mm magnets, so the bin holds onto a magnetic baseplate."
               persistent-hint
             />
+            <v-switch
+              v-model="perforatedBase"
+              color="primary"
+              label="Perforated floor"
+              hint="The bin floor is cut away in a grid pattern instead of solid, saving filament and letting spilled contents and debris fall through."
+              persistent-hint
+            />
+            <div class="text-subtitle-2 mt-4">Dividers</div>
+            <p class="text-body-2 text-medium-emphasis mb-2">
+              Dividers split the bin's interior into equal compartments along
+              each axis; add none for a single open interior.
+            </p>
+            <v-btn-toggle
+              v-model="dividerMode"
+              density="comfortable"
+              divided
+              mandatory
+              class="mb-3"
+            >
+              <v-btn value="count" size="small">By count</v-btn>
+              <v-btn value="spacing" size="small">By spacing</v-btn>
+            </v-btn-toggle>
+            <template v-if="dividerMode === 'count'">
+              <v-text-field
+                v-model.number="dividerCountX"
+                type="number"
+                min="0"
+                step="1"
+                label="Dividers along X"
+                density="comfortable"
+              />
+              <v-text-field
+                v-model.number="dividerCountY"
+                type="number"
+                min="0"
+                step="1"
+                label="Dividers along Y"
+                density="comfortable"
+              />
+            </template>
+            <template v-else>
+              <v-text-field
+                v-model.number="spacingX"
+                type="number"
+                min="1"
+                label="Spacing along X (mm)"
+                density="comfortable"
+                :hint="spacingCaption(dividerCountX, interiorWidth)"
+                persistent-hint
+                @update:model-value="applySpacingX"
+              />
+              <v-text-field
+                v-model.number="spacingY"
+                type="number"
+                min="1"
+                label="Spacing along Y (mm)"
+                density="comfortable"
+                :hint="spacingCaption(dividerCountY, interiorDepth)"
+                persistent-hint
+                @update:model-value="applySpacingY"
+              />
+            </template>
             <v-text-field
               v-model="labelText"
               label="Label text"

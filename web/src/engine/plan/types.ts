@@ -15,6 +15,12 @@ export interface BinEntry {
   stackingLip: boolean;
   /** Whether the bin has magnet holes under each foot. */
   magnetHoles: boolean;
+  /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */
+  dividerCountX: number;
+  /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
+  dividerCountY: number;
+  /** Whether the floor is cut away in a grid of perforation holes. */
+  perforatedBase: boolean;
   /** Text embossed on the label shelf. An empty string means no text. */
   labelText: string;
   /** Name of the label icon shown left of the text, or null for no icon. */

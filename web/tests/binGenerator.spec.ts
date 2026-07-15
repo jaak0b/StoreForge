@@ -4,14 +4,25 @@ import { loadManifold } from './helpers/manifold';
 import {
   buildBinManifold,
   generateBin,
+  perforationCellCentres,
   roundedRectPolygon,
   validateParams,
 } from '../src/engine/gridfinity/binGenerator';
 import {
+  BASE_TOP_SIZE,
+  DIVIDER_THICKNESS,
+  FLOOR_TOP,
   FOOT_HEIGHT,
+  FOOT_LOWER_CHAMFER,
+  FOOT_UPPER_CHAMFER,
   HEIGHT_UNIT,
   LIP_HEIGHT,
+  MAGNET_HOLE_DIAMETER,
+  MAGNET_HOLE_FROM_CELL_EDGE,
+  PERFORATION_HOLE_DIAMETER,
+  PERFORATION_RIB,
   PITCH,
+  WALL_THICKNESS,
 } from '../src/engine/gridfinity/constants';
 import type { BinParams } from '../src/engine/gridfinity/types';
 
@@ -28,6 +39,9 @@ function params(overrides: Partial<BinParams> = {}): BinParams {
     heightUnits: 3,
     stackingLip: false,
     magnetHoles: false,
+    dividerCountX: 0,
+    dividerCountY: 0,
+    perforatedBase: false,
     ...overrides,
   };
 }
@@ -121,6 +135,160 @@ describe('buildBinManifold', () => {
     expect(() => validateParams(params({ gridX: 0 }))).toThrow(/gridX/);
     expect(() => validateParams(params({ gridY: 1.5 }))).toThrow(/gridY/);
     expect(() => validateParams(params({ heightUnits: 1 }))).toThrow(/heightUnits/);
+  });
+});
+
+describe('interior dividers', () => {
+  it('keeps the solid watertight with dividers on both axes', () => {
+    const bin = buildBinManifold(m, params({ dividerCountX: 2, dividerCountY: 1 }));
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('zero dividers leave the bin volume unchanged', () => {
+    const plain = buildBinManifold(m, params());
+    const zeroed = buildBinManifold(
+      m,
+      params({ dividerCountX: 0, dividerCountY: 0, perforatedBase: false }),
+    );
+    expect(zeroed.volume()).toBeCloseTo(plain.volume(), 6);
+    plain.delete();
+    zeroed.delete();
+  });
+
+  it('adds exactly the divider wall volume inside the cavity', () => {
+    const countX = 2;
+    const countY = 1;
+    const plain = buildBinManifold(m, params());
+    const divided = buildBinManifold(m, params({ dividerCountX: countX, dividerCountY: countY }));
+    const inner = PITCH - 0.5 - 2 * WALL_THICKNESS;
+    const visibleHeight = 3 * HEIGHT_UNIT - FLOOR_TOP;
+    const expected =
+      visibleHeight *
+      DIVIDER_THICKNESS *
+      (countX * inner + countY * inner - countX * countY * DIVIDER_THICKNESS);
+    expect(divided.volume() - plain.volume()).toBeCloseTo(expected, 1);
+    plain.delete();
+    divided.delete();
+  });
+
+  it('places divider walls at equal-compartment positions inside the interior', () => {
+    const bin = buildBinManifold(m, params({ dividerCountX: 2 }));
+    const inner = PITCH - 0.5 - 2 * WALL_THICKNESS;
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // A probe at the centre compartment finds open air.
+    const airProbe = m.Manifold.cube([2, 2, 2], true).translate(0, 0, midZ);
+    const air = bin.intersect(airProbe);
+    expect(air.isEmpty()).toBe(true);
+    // Probes at both divider planes find solid wall.
+    for (const i of [1, 2]) {
+      const x = -inner / 2 + (i * inner) / 3;
+      const probe = m.Manifold.cube([0.5, 2, 2], true).translate(x, 0, midZ);
+      const hit = bin.intersect(probe);
+      expect(hit.isEmpty()).toBe(false);
+      hit.delete();
+      probe.delete();
+    }
+    air.delete();
+    airProbe.delete();
+    bin.delete();
+  });
+
+  it('keeps dividers below the stacking lip seat and inside the outline', () => {
+    const bin = buildBinManifold(
+      m,
+      params({ stackingLip: true, dividerCountX: 1, dividerCountY: 1 }),
+    );
+    expect(bin.status()).toBe('NoError');
+    const box = bin.boundingBox();
+    expect(box.max[0] - box.min[0]).toBeCloseTo(PITCH - 0.5, 5);
+    expect(box.max[1] - box.min[1]).toBeCloseTo(PITCH - 0.5, 5);
+    // Nothing solid crosses the lip band at the divider plane.
+    const lipZ = 3 * HEIGHT_UNIT + LIP_HEIGHT / 2;
+    const probe = m.Manifold.cube([2, 2, 1], true).translate(0, 0, lipZ);
+    const hit = bin.intersect(probe);
+    expect(hit.isEmpty()).toBe(true);
+    hit.delete();
+    probe.delete();
+    bin.delete();
+  });
+
+  it('rejects negative or fractional divider counts', () => {
+    expect(() => validateParams(params({ dividerCountX: -1 }))).toThrow(/dividerCountX/);
+    expect(() => validateParams(params({ dividerCountY: 1.5 }))).toThrow(/dividerCountY/);
+  });
+});
+
+describe('perforated floor', () => {
+  const footBottomSize = BASE_TOP_SIZE - 2 * FOOT_UPPER_CHAMFER - 2 * FOOT_LOWER_CHAMFER;
+
+  it('keeps every hole inside the flat foot bottom with a full rib to the edge', () => {
+    for (const magnets of [false, true]) {
+      for (const [x, y] of perforationCellCentres(magnets)) {
+        const reach = Math.max(Math.abs(x), Math.abs(y)) + PERFORATION_HOLE_DIAMETER / 2;
+        expect(reach).toBeLessThanOrEqual(footBottomSize / 2 - PERFORATION_RIB + 1e-9);
+      }
+    }
+  });
+
+  it('cuts watertight through-holes: one handle per hole', () => {
+    const holes = perforationCellCentres(false).length;
+    expect(holes).toBeGreaterThan(0);
+    const bin = buildBinManifold(m, params({ perforatedBase: true }));
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(holes);
+    bin.delete();
+  });
+
+  it('removes exactly one full-depth cylinder of material per hole', () => {
+    const plain = buildBinManifold(m, params());
+    const perforated = buildBinManifold(m, params({ perforatedBase: true }));
+    const holes = perforationCellCentres(false).length;
+    const exact = holes * Math.PI * (PERFORATION_HOLE_DIAMETER / 2) ** 2 * FLOOR_TOP;
+    const delta = plain.volume() - perforated.volume();
+    // The polygonal cylinder is slightly smaller than the exact circle; a
+    // delta below that band would mean a hole leaked out of solid material.
+    expect(delta).toBeGreaterThan(0.99 * exact);
+    expect(delta).toBeLessThanOrEqual(exact + 1e-6);
+    // The outer shape (feet included) is untouched: same bounding box.
+    const a = plain.boundingBox();
+    const b = perforated.boundingBox();
+    expect(b.min[2]).toBeCloseTo(a.min[2], 9);
+    expect(b.max[2]).toBeCloseTo(a.max[2], 9);
+    plain.delete();
+    perforated.delete();
+  });
+
+  it('composes with magnet holes, keeping a solid rib around each magnet', () => {
+    const centres = perforationCellCentres(true);
+    expect(centres.length).toBeLessThan(perforationCellCentres(false).length);
+    const magnetOffset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
+    const keepOut =
+      MAGNET_HOLE_DIAMETER / 2 + PERFORATION_HOLE_DIAMETER / 2 + PERFORATION_RIB;
+    for (const [x, y] of centres) {
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          expect(Math.hypot(x - sx * magnetOffset, y - sy * magnetOffset)).toBeGreaterThanOrEqual(
+            keepOut - 1e-9,
+          );
+        }
+      }
+    }
+    const bin = buildBinManifold(m, params({ perforatedBase: true, magnetHoles: true }));
+    expect(bin.status()).toBe('NoError');
+    // Magnet holes are blind, so only the perforations add handles.
+    expect(bin.genus()).toBe(centres.length);
+    bin.delete();
+  });
+
+  it('combines with dividers into one valid solid', () => {
+    const bin = buildBinManifold(
+      m,
+      params({ perforatedBase: true, dividerCountX: 1, dividerCountY: 2 }),
+    );
+    expect(bin.status()).toBe('NoError');
+    bin.delete();
   });
 });
 

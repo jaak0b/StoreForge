@@ -56,3 +56,23 @@ export const MAGNET_HOLE_FROM_CELL_EDGE = 8.0;
 
 /** Number of segments used to approximate each quarter-circle corner arc. */
 export const CORNER_SEGMENTS = 12;
+
+/**
+ * Thickness of an interior divider wall. Matches the 1.2 mm divider width
+ * used by kennetek/gridfinity-rebuilt-openscad (d_div in src/core/standard.scad).
+ */
+export const DIVIDER_THICKNESS = 1.2;
+
+/**
+ * Diameter of one perforation hole in a perforated floor. Reuses the magnet
+ * hole diameter so the perforations share an established, proven-printable
+ * hole size rather than introducing a new tuned value.
+ */
+export const PERFORATION_HOLE_DIAMETER = MAGNET_HOLE_DIAMETER;
+
+/**
+ * Minimum solid rib left between perforation holes, and between a hole and
+ * any other feature (foot side wall, magnet hole). Two wall thicknesses, so
+ * every rib is at least as strong as a pair of bin walls.
+ */
+export const PERFORATION_RIB = 2 * WALL_THICKNESS;

@@ -203,6 +203,9 @@ describe('writePlate3mf with two real labeled bins', () => {
       heightUnits: 3,
       stackingLip: true,
       magnetHoles: false,
+      dividerCountX: 0,
+      dividerCountY: 0,
+      perforatedBase: false,
       labelText: 'M3',
       labelIcon: null,
     });
@@ -212,6 +215,9 @@ describe('writePlate3mf with two real labeled bins', () => {
       heightUnits: 2,
       stackingLip: false,
       magnetHoles: false,
+      dividerCountX: 0,
+      dividerCountY: 0,
+      perforatedBase: false,
       labelText: 'M4',
       labelIcon: null,
     });
