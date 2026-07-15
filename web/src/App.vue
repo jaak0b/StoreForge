@@ -3,6 +3,7 @@ import { useApp } from './stores/app';
 import QueuePage from './components/QueuePage.vue';
 import BinDesignerPage from './components/BinDesignerPage.vue';
 import PlatePage from './components/PlatePage.vue';
+import ScrewListImportPage from './components/ScrewListImportPage.vue';
 
 const app = useApp();
 </script>
@@ -36,6 +37,7 @@ const app = useApp();
     <v-main>
       <QueuePage v-if="app.page === 'queue'" />
       <PlatePage v-else-if="app.page === 'plate'" />
+      <ScrewListImportPage v-else-if="app.page === 'screwListImport'" />
       <BinDesignerPage v-else :key="app.editingEntryId ?? 'new'" />
     </v-main>
   </v-app>

@@ -177,6 +177,11 @@ function markSelectedPrinted(): void {
             :title="sessionActive ? 'Cancel session' : 'Start print session'"
             @click="toggleSession"
           />
+          <v-list-item
+            prepend-icon="mdi-format-list-bulleted-square"
+            title="Add from screw list"
+            @click="app.showScrewListImport()"
+          />
           <v-divider />
           <v-list-item
             prepend-icon="mdi-download"

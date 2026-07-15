@@ -1,0 +1,366 @@
+import { BASE_TOP_SIZE, PITCH, WALL_THICKNESS } from '../gridfinity/constants';
+
+/**
+ * Screw-list shorthand parsing and bin sizing for the "add bins from a screw
+ * list" flow. Pure functions, no Vue or DOM.
+ *
+ * Grammar (case-insensitive, whitespace-tolerant), one batch per
+ * comma-separated segment:
+ *
+ *   batch  := parts in any order, at most one of each:
+ *             thread, length, head, quantity
+ *   thread := "M" digit+ ("." digit+)?          M2, M2.5, M3, ...
+ *   length := digit+ ("mm")?                    6 to 100 integer millimetres
+ *   head   := an alias from HEAD_ALIASES        may come before or after the
+ *                                               thread/length pair
+ *   qty    := "x" digit+ | "*" digit+ | "qty" digit+
+ *
+ * "m3x20 fhcs x6" and "fhcs m3x20mm x6" parse identically. The head is
+ * optional; when omitted it stays unspecified, never guessed.
+ *
+ * Extension over the base grammar: nuts, washers and threaded inserts have no
+ * meaningful length, so a batch like "m5 nut" is complete without one, and the
+ * composed label drops the length part ("M5 NUT").
+ */
+
+/** Canonical head types. All but 'wood screw' are also label icon names. */
+export type HeadType =
+  | 'countersunk screw'
+  | 'pan head screw'
+  | 'cap head screw'
+  | 'hex bolt'
+  | 'wood screw'
+  | 'self-tapping screw'
+  | 'hex nut'
+  | 'washer'
+  | 'threaded insert';
+
+/** Every canonical head type, in UI display order. */
+export const HEAD_TYPES: HeadType[] = [
+  'countersunk screw',
+  'pan head screw',
+  'cap head screw',
+  'hex bolt',
+  'wood screw',
+  'self-tapping screw',
+  'hex nut',
+  'washer',
+  'threaded insert',
+];
+
+/** Shorthand words (lowercase) accepted for each head type. */
+export const HEAD_ALIASES: Record<string, HeadType> = {
+  fhcs: 'countersunk screw',
+  csk: 'countersunk screw',
+  countersunk: 'countersunk screw',
+  flat: 'countersunk screw',
+  bhcs: 'pan head screw',
+  button: 'pan head screw',
+  pan: 'pan head screw',
+  shcs: 'cap head screw',
+  cap: 'cap head screw',
+  socket: 'cap head screw',
+  hex: 'hex bolt',
+  hexbolt: 'hex bolt',
+  'hex bolt': 'hex bolt',
+  hexnut: 'hex nut',
+  'hex nut': 'hex nut',
+  nut: 'hex nut',
+  washer: 'washer',
+  insert: 'threaded insert',
+  heatset: 'threaded insert',
+  'heat-set': 'threaded insert',
+  'self-tap': 'self-tapping screw',
+  selftap: 'self-tapping screw',
+  tek: 'self-tapping screw',
+  wood: 'wood screw',
+};
+
+/** The abbreviation each head type contributes to the label text. */
+export const HEAD_LABEL_ABBREV: Record<HeadType, string> = {
+  'countersunk screw': 'FHCS',
+  'pan head screw': 'PAN',
+  'cap head screw': 'SHCS',
+  'hex bolt': 'HEX',
+  'wood screw': 'WOOD',
+  'self-tapping screw': 'ST',
+  'hex nut': 'NUT',
+  washer: 'WASHER',
+  'threaded insert': 'INSERT',
+};
+
+/** The label icon name for each head type (wood screws share the self-tapping icon). */
+export const HEAD_ICON_NAME: Record<HeadType, string> = {
+  'countersunk screw': 'countersunk screw',
+  'pan head screw': 'pan head screw',
+  'cap head screw': 'cap head screw',
+  'hex bolt': 'hex bolt',
+  'wood screw': 'self-tapping screw',
+  'self-tapping screw': 'self-tapping screw',
+  'hex nut': 'hex nut',
+  washer: 'washer',
+  'threaded insert': 'threaded insert',
+};
+
+/** Head types with no meaningful length (label and sizing skip the length). */
+export const LENGTHLESS_HEADS: ReadonlySet<HeadType> = new Set<HeadType>([
+  'hex nut',
+  'washer',
+  'threaded insert',
+]);
+
+/** The supported fastener length range in millimetres. */
+export const MIN_LENGTH_MM = 6;
+export const MAX_LENGTH_MM = 100;
+
+/** One parsed batch of identical fasteners. Null fields were not given. */
+export interface ScrewBatch {
+  /** Thread size, normalized like 'M3', or null when the batch had none. */
+  thread: string | null;
+  /** Fastener length in whole millimetres, or null when absent or invalid. */
+  lengthMm: number | null;
+  /** Canonical head type, or null when unspecified. */
+  head: HeadType | null;
+  /** How many fasteners the batch calls for. At least 1, defaults to 1. */
+  quantity: number;
+}
+
+/** Result of parsing one shorthand line. */
+export interface ParsedShorthand {
+  /** One batch per comma-separated segment that contained anything readable. */
+  batches: ScrewBatch[];
+  /** User-worded problems, each naming the token or segment it refers to. */
+  errors: string[];
+}
+
+const COMBINED_TOKEN = /^m(\d+(?:\.\d+)?)(?:x(\d+(?:\.\d+)?)(mm)?)?(?:x(\d+))?$/;
+const MARKED_NUMBER = /^[x*](\d+(?:\.\d+)?)(mm)?$/;
+const BARE_NUMBER = /^(\d+(?:\.\d+)?)(mm)?$/;
+const QTY_WORD = /^qty(\d+)?$/;
+
+/** Parses one line of screw-list shorthand into batches plus error messages. */
+export function parseShorthand(line: string): ParsedShorthand {
+  const batches: ScrewBatch[] = [];
+  const errors: string[] = [];
+  for (const segment of line.split(',')) {
+    const text = segment.trim();
+    if (text === '') continue;
+    const batch = parseBatchSegment(text, errors);
+    if (batch !== null) batches.push(batch);
+  }
+  return { batches, errors };
+}
+
+function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
+  const words = text.toLowerCase().replace(/×/g, 'x').split(/\s+/).filter(Boolean);
+  let thread: string | null = null;
+  let lengthMm: number | null = null;
+  let lengthSeen = false;
+  let head: HeadType | null = null;
+  let quantity: number | null = null;
+  let expectQty = false;
+  let pendingSeparator = false;
+  let sawAnything = false;
+
+  const setLength = (raw: string): void => {
+    lengthSeen = true;
+    const value = Number(raw);
+    if (!Number.isInteger(value)) {
+      errors.push(`The length '${raw}' must be a whole number of millimetres.`);
+      return;
+    }
+    if (value < MIN_LENGTH_MM || value > MAX_LENGTH_MM) {
+      errors.push(
+        `The length '${raw}' is outside the supported ${MIN_LENGTH_MM} to ${MAX_LENGTH_MM} mm range.`,
+      );
+      return;
+    }
+    lengthMm = value;
+  };
+
+  const setQty = (raw: string): void => {
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1) {
+      errors.push(`The quantity '${raw}' must be a whole number of at least 1.`);
+      return;
+    }
+    quantity = value;
+  };
+
+  let i = 0;
+  while (i < words.length) {
+    const word = words[i];
+    // Two-word head aliases ("hex bolt") take precedence over one-word ones ("hex").
+    const pair = i + 1 < words.length ? `${word} ${words[i + 1]}` : null;
+    if (pair !== null && HEAD_ALIASES[pair] !== undefined) {
+      head = HEAD_ALIASES[pair];
+      sawAnything = true;
+      i += 2;
+      continue;
+    }
+    if (HEAD_ALIASES[word] !== undefined) {
+      head = HEAD_ALIASES[word];
+      sawAnything = true;
+      i += 1;
+      continue;
+    }
+    let match = COMBINED_TOKEN.exec(word);
+    if (match !== null) {
+      thread = `M${match[1]}`;
+      if (match[2] !== undefined) setLength(match[2]);
+      if (match[4] !== undefined) setQty(match[4]);
+      sawAnything = true;
+      i += 1;
+      continue;
+    }
+    if (word === 'x' || word === '*') {
+      pendingSeparator = true;
+      i += 1;
+      continue;
+    }
+    const qtyWord = QTY_WORD.exec(word);
+    if (qtyWord !== null) {
+      if (qtyWord[1] !== undefined) setQty(qtyWord[1]);
+      else expectQty = true;
+      sawAnything = true;
+      i += 1;
+      continue;
+    }
+    match = MARKED_NUMBER.exec(word) ?? (pendingSeparator ? BARE_NUMBER.exec(word) : null);
+    if (match !== null) {
+      // A marked number is the length while none is known (and the head does
+      // not rule one out); once the length is settled it reads as a quantity.
+      pendingSeparator = false;
+      if (expectQty) {
+        setQty(match[1]);
+        expectQty = false;
+      } else if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+        setLength(match[1]);
+      } else {
+        setQty(match[1]);
+      }
+      sawAnything = true;
+      i += 1;
+      continue;
+    }
+    match = BARE_NUMBER.exec(word);
+    if (match !== null) {
+      if (expectQty) {
+        setQty(match[1]);
+        expectQty = false;
+      } else if (!lengthSeen) {
+        setLength(match[1]);
+      } else {
+        errors.push(`Can't read '${word}'. Use 'x${match[1]}' for a quantity.`);
+      }
+      sawAnything = true;
+      i += 1;
+      continue;
+    }
+    errors.push(`Can't read head type '${word}'. Pick one from the row's dropdown instead.`);
+    sawAnything = true;
+    i += 1;
+  }
+
+  if (!sawAnything) return null;
+  if (thread === null) {
+    errors.push(`Can't find a thread size (like M3) in '${text}'.`);
+  }
+  if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+    errors.push(`'${text}' has no length. Add one like 'x20' or fill it in on the row.`);
+  }
+  return { thread, lengthMm, head, quantity: quantity ?? 1 };
+}
+
+/**
+ * Composes the bin label text for a batch, from whichever parts are present:
+ * "M3 x 20 FHCS", "M3 x 20", or "M5 NUT" for a lengthless head.
+ */
+export function composeLabelText(
+  thread: string | null,
+  lengthMm: number | null,
+  head: HeadType | null,
+): string {
+  const parts: string[] = [];
+  if (thread !== null) parts.push(thread);
+  if (lengthMm !== null && (head === null || !LENGTHLESS_HEADS.has(head))) {
+    parts.push(`x ${lengthMm}`);
+  }
+  if (head !== null) parts.push(HEAD_LABEL_ABBREV[head]);
+  return parts.join(' ');
+}
+
+/**
+ * Room to spare around a fastener lying flat in its bin, so it can be picked
+ * up with fingers and does not wedge against the walls.
+ */
+export const HANDLING_CLEARANCE_MM = 4;
+
+/**
+ * Interior width of a bin spanning `units` grid cells: the outer footprint is
+ * units * PITCH minus the per-cell clearance (PITCH - BASE_TOP_SIZE, shared
+ * half per side), minus a wall on each side.
+ */
+export function interiorWidthMm(units: number): number {
+  return units * PITCH - (PITCH - BASE_TOP_SIZE) - 2 * WALL_THICKNESS;
+}
+
+/**
+ * The smallest bin width in grid units whose interior fits a fastener of the
+ * given length plus HANDLING_CLEARANCE_MM.
+ */
+export function computeBinWidthUnits(lengthMm: number): number {
+  const needed = lengthMm + HANDLING_CLEARANCE_MM;
+  let units = 1;
+  while (interiorWidthMm(units) < needed) units += 1;
+  return units;
+}
+
+/** A raw row headed for grouping: a batch plus its effective bin width. */
+export interface GroupableRow {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+  quantity: number;
+  widthUnits: number;
+}
+
+/** One grouped bin entry, merged from rows with identical thread, length and head. */
+export interface BatchGroup {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+  /** Sum of the merged rows' quantities. */
+  quantity: number;
+  /** The widest of the merged rows' bin widths, so no override is lost. */
+  widthUnits: number;
+  /** How many raw rows merged into this group. */
+  rowCount: number;
+}
+
+/**
+ * Collapses rows with identical (thread, length, head) into one group each,
+ * summing quantities. Order follows each group's first appearance.
+ */
+export function groupBatchRows(rows: GroupableRow[]): BatchGroup[] {
+  const groups = new Map<string, BatchGroup>();
+  for (const row of rows) {
+    const key = `${row.thread}|${row.lengthMm}|${row.head}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, {
+        thread: row.thread,
+        lengthMm: row.lengthMm,
+        head: row.head,
+        quantity: row.quantity,
+        widthUnits: row.widthUnits,
+        rowCount: 1,
+      });
+    } else {
+      existing.quantity += row.quantity;
+      existing.widthUnits = Math.max(existing.widthUnits, row.widthUnits);
+      existing.rowCount += 1;
+    }
+  }
+  return [...groups.values()];
+}

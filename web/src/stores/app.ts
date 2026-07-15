@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 
 /** The pages the app can show. */
-export type AppPage = 'queue' | 'designer' | 'plate';
+export type AppPage = 'queue' | 'designer' | 'plate' | 'screwListImport';
 
 /**
  * In-app navigation state. The queue is the home page; the designer opens
@@ -28,6 +28,11 @@ export const useApp = defineStore('app', {
     showQueue() {
       this.editingEntryId = null;
       this.page = 'queue';
+    },
+    /** Opens the screw list import page. */
+    showScrewListImport() {
+      this.editingEntryId = null;
+      this.page = 'screwListImport';
     },
     /** Opens the build plate composer. */
     showPlate() {
