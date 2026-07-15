@@ -77,6 +77,39 @@ describe('svgPathToPolygons', () => {
     }
   });
 
+  it('extrudes each icon to its expected genus (holes present exactly where designed)', () => {
+    const expected: Record<string, number> = {
+      'countersunk screw': 0,
+      'pan head screw': 0,
+      'cap head screw': 0,
+      'hex bolt': 0,
+      'hex nut': 1,
+      washer: 1,
+      'threaded insert': 0,
+      'self-tapping screw': 0,
+    };
+    expect(LABEL_ICONS.map((icon) => icon.name).sort()).toEqual(Object.keys(expected).sort());
+    for (const [name, genus] of Object.entries(expected)) {
+      const solid = extrudeLabel(m, svgPathToPolygons(iconByName(name).path), 1);
+      expect(solid.genus(), name).toBe(genus);
+      solid.delete();
+    }
+  });
+
+  it('keeps every icon inside its viewBox and spanning most of it', () => {
+    for (const icon of LABEL_ICONS) {
+      const [minX, minY, width, height] = icon.viewBox;
+      const box = bounds(svgPathToPolygons(icon.path));
+      expect(box.minX, icon.name).toBeGreaterThanOrEqual(minX);
+      expect(box.minY, icon.name).toBeGreaterThanOrEqual(minY);
+      expect(box.maxX, icon.name).toBeLessThanOrEqual(minX + width);
+      expect(box.maxY, icon.name).toBeLessThanOrEqual(minY + height);
+      // Consistent visual weight: each silhouette fills the bulk of the box.
+      expect(box.maxX - box.minX, icon.name).toBeGreaterThanOrEqual(0.6 * width);
+      expect(box.maxY - box.minY, icon.name).toBeGreaterThanOrEqual(0.4 * height);
+    }
+  });
+
   it('rejects malformed path data', () => {
     expect(() => svgPathToPolygons('12 34')).toThrow(/command/i);
     expect(() => svgPathToPolygons('M1 1L')).toThrow(/number/i);
