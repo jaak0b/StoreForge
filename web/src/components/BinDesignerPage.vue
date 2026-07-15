@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../stores/binDesigner';
+import { useBinQueue } from '../stores/binQueue';
+import { useApp } from '../stores/app';
 import { generateLabeledBin, generateLabeledBinUnion } from '../workerClient';
 import { meshToStlBlob } from '../engine/gridfinity/stlExport';
 import { LABEL_ICONS } from '../engine/label/icons';
@@ -9,6 +11,42 @@ import type { LabeledBinMeshes } from '../engine/gridfinity/types';
 import BinViewport from './BinViewport.vue';
 
 const store = useBinDesigner();
+const queue = useBinQueue();
+const app = useApp();
+
+const quantity = ref(1);
+const notes = ref('');
+const editingId = app.editingEntryId;
+if (editingId !== null) {
+  const entry = queue.entryById(editingId);
+  if (entry !== null) {
+    store.$patch({
+      gridX: entry.gridX,
+      gridY: entry.gridY,
+      heightUnits: entry.heightUnits,
+      stackingLip: entry.stackingLip,
+      magnetHoles: entry.magnetHoles,
+      labelText: entry.labelText,
+      labelIcon: entry.labelIcon,
+    });
+    quantity.value = entry.quantity;
+    notes.value = entry.notes ?? '';
+  }
+}
+
+function saveEntry(): void {
+  if (editingId !== null && queue.entryById(editingId) !== null) {
+    queue.update(editingId, {
+      ...store.params,
+      quantity: quantity.value,
+      notes: notes.value === '' ? undefined : notes.value,
+    });
+  } else {
+    const id = queue.add(store.params, quantity.value);
+    if (notes.value !== '') queue.update(id, { notes: notes.value });
+  }
+  app.showQueue();
+}
 const { gridX, gridY, heightUnits, stackingLip, magnetHoles, labelText, labelIcon } =
   storeToRefs(store);
 
@@ -148,20 +186,45 @@ async function downloadStl(): Promise<void> {
               hint="The icon is embossed on the shelf to the left of the label text."
               persistent-hint
             />
+            <v-text-field
+              v-model.number="quantity"
+              type="number"
+              min="1"
+              step="1"
+              label="Quantity"
+              density="comfortable"
+              class="mt-2"
+              hint="How many copies of this bin the print plan calls for."
+              persistent-hint
+            />
+            <v-textarea
+              v-model="notes"
+              label="Notes"
+              density="comfortable"
+              rows="2"
+              class="mt-4"
+              auto-grow
+            />
             <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">
               {{ errorMessage }}
             </v-alert>
           </v-card-text>
-          <v-card-actions>
+          <v-card-actions class="flex-column align-stretch">
+            <v-btn color="primary" variant="flat" block @click="saveEntry">
+              {{ editingId !== null ? 'Save changes' : 'Add to queue' }}
+            </v-btn>
             <v-btn
-              color="primary"
-              variant="flat"
+              variant="outlined"
               block
+              class="mt-2 ml-0"
               :disabled="!meshes || generating || downloading"
               :loading="downloading"
               @click="downloadStl"
             >
               Download STL
+            </v-btn>
+            <v-btn variant="text" block class="mt-2 ml-0" @click="app.showQueue()">
+              Cancel
             </v-btn>
           </v-card-actions>
         </v-card>
