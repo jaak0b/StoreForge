@@ -1,7 +1,12 @@
 import type { Manifold, ManifoldToplevel, SimplePolygon, Vec3 } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import type { BinParams, LabeledBinMeshes, LabeledBinParams, MeshData } from './types';
-import { buildLabelManifold } from '../label/placement';
+import {
+  buildLabelManifold,
+  buildLabelShelf,
+  specHasLabel,
+} from '../label/placement';
+import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
   BASE_TOP_RADIUS,
@@ -252,6 +257,30 @@ export function generateBin(m: ManifoldToplevel, params: BinParams): MeshData {
   }
 }
 
+function labelSpecOf(params: LabeledBinParams): LabelSpec {
+  return {
+    text: params.labelText,
+    icon: params.labelIcon === null ? null : iconByName(params.labelIcon),
+  };
+}
+
+/**
+ * Build the bin body, with the label shelf welded in when the parameters ask
+ * for a label. A plain bin (no text, no icon) gets no shelf.
+ */
+function buildLabeledBody(m: ManifoldToplevel, params: LabeledBinParams): Manifold {
+  const body = buildBinManifold(m, params);
+  if (!specHasLabel(labelSpecOf(params))) return body;
+  const shelf = buildLabelShelf(m, params);
+  const withShelf = m.Manifold.union([body, shelf]);
+  body.delete();
+  shelf.delete();
+  if (withShelf.status() !== 'NoError') {
+    throw new Error(`Shelf union produced an invalid solid: ${withShelf.status()}`);
+  }
+  return withShelf;
+}
+
 /**
  * Build the label solid for the given parameters and verify it is welded to
  * the bin body (they must overlap so a union prints as one part). Returns
@@ -263,34 +292,32 @@ function buildWeldedLabel(
   params: LabeledBinParams,
   body: Manifold,
 ): Manifold | null {
-  const label = buildLabelManifold(m, font, params, {
-    text: params.labelText,
-    icon: params.labelIcon === null ? null : iconByName(params.labelIcon),
-  });
+  const label = buildLabelManifold(m, font, params, labelSpecOf(params));
   if (label) {
     const overlap = label.intersect(body);
     const welded = !overlap.isEmpty();
     overlap.delete();
     if (!welded) {
       label.delete();
-      throw new Error('The label does not touch the bin wall, so it cannot be printed.');
+      throw new Error('The label does not touch the label shelf, so it cannot be printed.');
     }
   }
   return label;
 }
 
 /**
- * Generate a bin plus its front-wall label as separate meshes, so the label
- * can be rendered (and, later, exported) in its own color. The label solid
- * reaches into the wall, so unioning the two meshes yields one printable
- * solid; with no text and no icon the label is null.
+ * Generate a bin (with its label shelf) plus the label as separate meshes, so
+ * the label can be rendered (and, later, exported) in its own color. The
+ * label solid reaches into the shelf, so unioning the two meshes yields one
+ * printable solid; with no text and no icon the label is null and the body
+ * has no shelf.
  */
 export function generateLabeledBin(
   m: ManifoldToplevel,
   font: Font,
   params: LabeledBinParams,
 ): LabeledBinMeshes {
-  const body = buildBinManifold(m, params);
+  const body = buildLabeledBody(m, params);
   let label: Manifold | null = null;
   try {
     label = buildWeldedLabel(m, font, params, body);
@@ -313,7 +340,7 @@ export function generateLabeledBinUnion(
   font: Font,
   params: LabeledBinParams,
 ): MeshData {
-  const body = buildBinManifold(m, params);
+  const body = buildLabeledBody(m, params);
   let label: Manifold | null = null;
   let union: Manifold | null = null;
   try {

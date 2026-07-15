@@ -136,7 +136,7 @@ async function downloadStl(): Promise<void> {
               label="Label text"
               density="comfortable"
               class="mt-2"
-              hint="The text is embossed on the front wall, raised 0.6 mm. Long text is shrunk to fit the wall."
+              hint="The label is embossed on a shelf at the top front edge of the bin, raised 0.6 mm, so it reads from above. Long text is shrunk to fit the bin width."
               persistent-hint
             />
             <v-select
@@ -145,7 +145,7 @@ async function downloadStl(): Promise<void> {
               label="Label icon"
               density="comfortable"
               class="mt-4"
-              hint="The icon is embossed to the left of the label text."
+              hint="The icon is embossed on the shelf to the left of the label text."
               persistent-hint
             />
             <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">

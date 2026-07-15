@@ -6,30 +6,48 @@ import type { LabelIcon } from './icons';
 import { extrudeLabel } from './extrude';
 import type { LabelFillRule } from './extrude';
 import {
-  FOOT_HEIGHT,
   HEIGHT_UNIT,
+  OUTER_CORNER_RADIUS,
   PITCH,
+  WALL_THICKNESS,
 } from '../gridfinity/constants';
+import { roundedRectPolygon } from '../gridfinity/binGenerator';
 import type { BinParams } from '../gridfinity/types';
 
 /**
- * Front-wall emboss placement. The label (icon left, text right) is raised
- * off the front outer wall and vertically centred on the wall band between
- * the top of the feet and the top of the walls. Structured as one placement
- * flavour so a label-shelf placement can be added as a sibling module later.
+ * Label-shelf placement. A flat plate spans the top front edge of the bin
+ * interior, its top face flush with the nominal bin top (below the stacking
+ * lip), and the label (icon left, text right) is embossed on that face so it
+ * reads from above when the bin sits in a drawer. Structured as one placement
+ * flavour so another placement can be added as a sibling module later.
  */
 
-/** How far the embossed label stands proud of the outer wall, in millimetres. */
+/**
+ * How deep the shelf reaches into the bin from the interior front wall, in
+ * millimetres. This matches the common flat label-shelf designs in the
+ * Gridfinity ecosystem; kennetek/gridfinity-rebuilt-openscad's label tab is a
+ * different, angled design (15.85 mm deep at a 36-degree support angle), so
+ * its figure is not applicable here.
+ */
+export const SHELF_DEPTH = 12;
+
+/** Thickness of the flat shelf plate, matching the bin wall thickness. */
+export const SHELF_THICKNESS = WALL_THICKNESS;
+
+/** How far the embossed label stands proud of the shelf top face. */
 export const EMBOSS_HEIGHT = 0.6;
 
-/** How far the label extends into the wall so the two solids are welded. */
+/** How far the label extends into the shelf so the two solids are welded. */
 export const EMBOSS_WELD_DEPTH = 0.4;
 
 /** Cap height of the label text at full size, in millimetres. */
 export const LABEL_TEXT_HEIGHT = 6;
 
-/** Clear margin kept between the label and the bin's vertical edges. */
+/** Clear margin kept between the label and the interior side walls. */
 export const LABEL_MARGIN = 3;
+
+/** Clear margin kept between the label and the shelf's front and back edges. */
+export const SHELF_DEPTH_MARGIN = 1.5;
 
 /** Horizontal gap between the icon and the text when both are present. */
 export const ICON_TEXT_GAP = 2;
@@ -38,6 +56,11 @@ export const ICON_TEXT_GAP = 2;
 export interface LabelSpec {
   text: string;
   icon: LabelIcon | null;
+}
+
+/** True when the spec would produce a label (and therefore needs a shelf). */
+export function specHasLabel(spec: LabelSpec): boolean {
+  return spec.text.trim().length > 0 || spec.icon !== null;
 }
 
 interface Bounds {
@@ -92,12 +115,13 @@ export interface LabelFacePart {
 /**
  * Lay out the label face in 2D: icon to the left of the text, both sharing
  * the LABEL_TEXT_HEIGHT nominal height, uniformly shrunk when the row would
- * not fit the available width. The result is centred on the origin.
+ * not fit the available width or depth. The result is centred on the origin.
  */
 export function layoutLabelFace(
   font: Font,
   spec: LabelSpec,
   availableWidthMm: number,
+  availableDepthMm: number,
 ): LabelFacePart[] {
   const text = spec.text.trim();
   const parts: LabelFacePart[] = [];
@@ -133,11 +157,14 @@ export function layoutLabelFace(
     cursor += box.maxX - box.minX + ICON_TEXT_GAP;
   }
 
-  // Shrink to fit the available width, then centre on the origin.
+  // Shrink to fit the available width and depth, then centre on the origin.
   const all = parts.flatMap((part) => part.polygons);
   const box = boundsOf(all);
-  const fit =
-    box.maxX - box.minX > availableWidthMm ? availableWidthMm / (box.maxX - box.minX) : 1;
+  const fit = Math.min(
+    1,
+    availableWidthMm / (box.maxX - box.minX),
+    availableDepthMm / (box.maxY - box.minY),
+  );
   const cx = ((box.minX + box.maxX) / 2) * fit;
   const cy = ((box.minY + box.maxY) / 2) * fit;
   return parts.map((part) => ({
@@ -147,10 +174,68 @@ export function layoutLabelFace(
 }
 
 /**
- * Build the label solid embossed on the bin's front outer wall (the wall
- * facing -Y). The solid stands EMBOSS_HEIGHT proud of the wall and reaches
- * EMBOSS_WELD_DEPTH into it, so unioning it with the bin body welds them.
- * Returns null when the spec is empty.
+ * Build the label shelf: a flat plate along the interior front wall, full
+ * interior width, SHELF_DEPTH deep, its top face flush with the nominal bin
+ * top, with a 45-degree support chamfer running from the plate's inner bottom
+ * edge down to the front wall so it prints without supports. The profile
+ * reaches into the front wall so unioning it with the bin body welds them,
+ * and the prism is clipped to the bin's rounded outer outline so it also
+ * welds to the side walls without protruding outside the bin.
+ */
+export function buildLabelShelf(m: ManifoldToplevel, params: BinParams): Manifold {
+  const outerWidth = params.gridX * PITCH - 0.5;
+  const outerDepth = params.gridY * PITCH - 0.5;
+  const bodyTop = params.heightUnits * HEIGHT_UNIT;
+
+  const yOuter = -outerDepth / 2;
+  const yInner = yOuter + WALL_THICKNESS;
+  const yBack = yInner + SHELF_DEPTH;
+  const plateBottom = bodyTop - SHELF_THICKNESS;
+  const chamferBottom = plateBottom - SHELF_DEPTH;
+
+  // Shelf profile in the (y, z) plane: flat plate on top, 45-degree chamfer
+  // underneath from the plate's inner bottom edge to the interior wall face.
+  const profile: SimplePolygon = [
+    [yOuter, bodyTop],
+    [yBack, bodyTop],
+    [yBack, plateBottom],
+    [yInner, chamferBottom],
+    [yOuter, chamferBottom],
+  ];
+  const section = new m.CrossSection([profile], 'NonZero');
+  let prism: Manifold;
+  try {
+    // Extrude along +Z, then permute axes (x, y, z) -> (z, x, y) so the
+    // profile lands in the (y, z) plane with the extrusion running along X.
+    prism = section
+      .extrude(outerWidth)
+      .rotate(90, 0, 90)
+      .translate(-outerWidth / 2, 0, 0);
+  } finally {
+    section.delete();
+  }
+
+  // Clip to the bin's rounded outer outline so the shelf's front corners
+  // follow the corner radius instead of poking outside the bin.
+  const outline = m.Manifold.extrude(
+    [roundedRectPolygon(outerWidth, outerDepth, OUTER_CORNER_RADIUS)],
+    bodyTop,
+  );
+  const shelf = m.Manifold.intersection(prism, outline);
+  prism.delete();
+  outline.delete();
+  if (shelf.status() !== 'NoError') {
+    throw new Error(`Label shelf construction produced an invalid solid: ${shelf.status()}`);
+  }
+  return shelf;
+}
+
+/**
+ * Build the label solid embossed on the shelf's top face. The face lies flat
+ * (readable from above, right-side-up when viewed from the bin front), stands
+ * EMBOSS_HEIGHT proud of the shelf and reaches EMBOSS_WELD_DEPTH into it, so
+ * unioning it with the bin body welds them. Returns null when the spec is
+ * empty.
  */
 export function buildLabelManifold(
   m: ManifoldToplevel,
@@ -158,26 +243,30 @@ export function buildLabelManifold(
   params: BinParams,
   spec: LabelSpec,
 ): Manifold | null {
-  if (spec.text.trim().length === 0 && !spec.icon) return null;
+  if (!specHasLabel(spec)) return null;
 
   const outerWidth = params.gridX * PITCH - 0.5;
   const outerDepth = params.gridY * PITCH - 0.5;
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
+  const interiorWidth = outerWidth - 2 * WALL_THICKNESS;
 
-  const parts = layoutLabelFace(font, spec, outerWidth - 2 * LABEL_MARGIN);
+  const parts = layoutLabelFace(
+    font,
+    spec,
+    interiorWidth - 2 * LABEL_MARGIN,
+    SHELF_DEPTH - 2 * SHELF_DEPTH_MARGIN,
+  );
   const depth = EMBOSS_HEIGHT + EMBOSS_WELD_DEPTH;
   const solids = parts.map((part) => extrudeLabel(m, part.polygons, depth, part.fillRule));
   const flat = solids.length === 1 ? solids[0] : m.Manifold.union(solids);
   if (solids.length > 1) {
     for (const solid of solids) solid.delete();
   }
-  // The face is extruded along +Z; rotate it upright against the front wall
-  // (extrusion pointing along -Y) and centre it vertically on the wall band
-  // between the top of the feet and the top of the walls.
-  const wallCentreZ = (FOOT_HEIGHT + bodyTop) / 2;
-  const label = flat
-    .rotate(90, 0, 0)
-    .translate(0, -outerDepth / 2 + EMBOSS_WELD_DEPTH, wallCentreZ);
+  // The face is extruded along +Z and already reads correctly from the bin
+  // front (baseline parallel to the front wall); move it onto the middle of
+  // the shelf, sunk EMBOSS_WELD_DEPTH into the plate.
+  const shelfCentreY = -outerDepth / 2 + WALL_THICKNESS + SHELF_DEPTH / 2;
+  const label = flat.translate(0, shelfCentreY, bodyTop - EMBOSS_WELD_DEPTH);
   flat.delete();
   if (label.status() !== 'NoError') {
     throw new Error(`Label placement produced an invalid solid: ${label.status()}`);
