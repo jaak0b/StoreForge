@@ -9,6 +9,7 @@ import type { LabelIcon } from '../engine/label/icons';
 import { downloadBin3mf, downloadBinStl } from '../binDownloads';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
+import CountStepper from './CountStepper.vue';
 
 /**
  * The whole app on one page: the add-bin card on top, then zero or more
@@ -56,13 +57,9 @@ function plateCountOf(entry: BinEntry): number {
   return plateCounts.value.get(entry.id) ?? entry.quantity;
 }
 
-function setPlateCount(entry: BinEntry, value: string): void {
-  const parsed = Math.floor(Number(value));
-  const clamped = Number.isFinite(parsed)
-    ? Math.min(Math.max(1, parsed), entry.quantity)
-    : entry.quantity;
+function setPlateCount(entry: BinEntry, value: number): void {
   const next = new Map(plateCounts.value);
-  next.set(entry.id, clamped);
+  next.set(entry.id, Math.min(Math.max(1, Math.floor(value)), entry.quantity));
   plateCounts.value = next;
 }
 
@@ -122,9 +119,8 @@ function removeRow(entry: BinEntry): void {
   <v-container class="main-page">
     <h1 class="text-h5 mt-2 mb-1">What do you want to print?</h1>
     <p class="text-body-2 text-medium-emphasis mb-5">
-      Add bins at the top. They land in the queue at the bottom; selecting
-      queue rows creates a build plate batch, and batches sit in between until
-      you confirm what printed.
+      Add bins to the queue, select rows to create a build plate batch, then
+      confirm what printed.
     </p>
 
     <AddBinCard />
@@ -146,14 +142,14 @@ function removeRow(entry: BinEntry): void {
       v-if="queue.entries.length === 0"
       icon="mdi-cube-outline"
       title="No bins queued"
-      text="Add a bin with the card above. Queued bins can be downloaded one at a time or grouped into a build plate batch."
+      text="Add a bin with the card above."
     />
 
     <div v-else class="d-flex flex-column ga-1">
       <div
         v-for="entry in queue.entries"
         :key="entry.id"
-        class="qrow d-flex align-center ga-3 px-3 py-2"
+        class="qrow"
         :class="{ selected: selectedIds.has(entry.id) }"
         role="button"
         @click="editRow(entry)"
@@ -161,7 +157,7 @@ function removeRow(entry: BinEntry): void {
         <v-checkbox-btn
           :model-value="selectedIds.has(entry.id)"
           density="compact"
-          class="flex-grow-0"
+          class="flex-grow-0 row-check"
           @click.stop="toggleSelected(entry)"
         />
         <span class="swatch d-flex align-center justify-center">
@@ -189,27 +185,18 @@ function removeRow(entry: BinEntry): void {
             {{ entry.labelText2 }}
           </span>
         </span>
-        <span class="text-caption text-medium-emphasis row-dims">{{ sizeText(entry) }}</span>
-        <v-chip size="small" variant="outlined">x{{ entry.quantity }}</v-chip>
-        <div
-          v-if="selectedIds.has(entry.id)"
-          class="d-flex align-center ga-1"
-          @click.stop
-        >
+        <span class="row-dims">{{ entry.labelText !== '' ? sizeText(entry) : '' }}</span>
+        <span class="qty-badge">x{{ entry.quantity }}</span>
+        <div v-if="selectedIds.has(entry.id)" class="d-flex align-center ga-1" @click.stop>
           <span class="text-caption text-primary font-weight-bold">Plate:</span>
-          <v-text-field
+          <CountStepper
             :model-value="plateCountOf(entry)"
-            type="number"
-            min="1"
             :max="entry.quantity"
-            density="compact"
-            hide-details
-            style="width: 70px"
-            @update:model-value="(v: string) => setPlateCount(entry, v)"
+            @update:model-value="(v: number) => setPlateCount(entry, v)"
           />
         </div>
-        <v-spacer />
-        <div class="row-actions d-flex ga-1" @click.stop>
+        <div v-else></div>
+        <div class="row-actions d-flex ga-1 justify-end" @click.stop>
           <v-menu>
             <template #activator="{ props: menuProps }">
               <v-btn
@@ -270,10 +257,30 @@ function removeRow(entry: BinEntry): void {
 }
 
 .qrow {
+  display: grid;
+  grid-template-columns: 30px 34px 1.6fr 1fr 52px minmax(120px, auto) 110px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 14px;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 10px;
   cursor: pointer;
   background: rgb(var(--v-theme-surface));
+}
+
+.row-check {
+  justify-self: start;
+}
+
+.qty-badge {
+  font-family: monospace;
+  font-size: 11.5px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 8px;
+  padding: 2px 8px;
+  justify-self: start;
 }
 
 .qrow:hover {
@@ -304,11 +311,20 @@ function removeRow(entry: BinEntry): void {
 }
 
 .row-name {
-  min-width: 160px;
+  min-width: 0;
 }
 
 .row-dims {
   font-family: monospace;
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+
+@media (max-width: 800px) {
+  .qrow {
+    display: flex;
+    flex-wrap: wrap;
+  }
 }
 
 .create-plate-bar {

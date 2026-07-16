@@ -171,13 +171,15 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
   <v-row>
     <v-col cols="12" md="6">
       <div class="text-caption text-medium-emphasis mb-1">Screw</div>
-      <div class="d-flex ga-2">
+      <div class="d-flex flex-wrap ga-2">
         <v-select
           v-model="thread"
           :items="THREAD_ITEMS"
           label="Thread"
           density="comfortable"
           hide-details
+          class="screw-field"
+          style="min-width: 125px"
         />
         <v-select
           v-model="head"
@@ -185,6 +187,8 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           label="Head"
           density="comfortable"
           hide-details
+          class="screw-field"
+          style="min-width: 150px"
         >
           <template #item="{ props: itemProps, item }">
             <v-list-item v-bind="itemProps">
@@ -207,7 +211,8 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           density="comfortable"
           hide-details
           :disabled="lengthless"
-          style="max-width: 130px"
+          class="screw-field"
+          style="min-width: 110px; max-width: 150px"
         />
         <v-text-field
           v-model.number="count"
@@ -217,7 +222,8 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           label="Count"
           density="comfortable"
           hide-details
-          style="max-width: 100px"
+          class="screw-field"
+          style="min-width: 90px; max-width: 120px"
         />
       </div>
       <p v-if="!lengthValid" class="text-error text-body-2 mt-2 mb-0">
@@ -237,8 +243,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
         Add to queue
       </v-btn>
       <p class="text-caption text-medium-emphasis mt-2 mb-0">
-        The form keeps its values after adding, so you can change one field and
-        add the next screw right away.
+        The form keeps its values after adding.
       </p>
 
       <v-divider class="mt-4 mb-3" />
@@ -255,9 +260,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
         {{ quickHint }}
       </p>
       <p v-else class="text-caption text-medium-emphasis mt-1 mb-0">
-        Metric (M3, M4...) and imperial (#8, 1/4-20) shorthand both work, and a
-        comma separates screws. Imperial lengths use inches, written as 1",
-        1-1/2" or 1/2".
+        Separate screws with commas; imperial works too (#8 x 1-1/2" wood).
       </p>
       <v-alert
         v-for="(error, i) in parsed.errors"
@@ -284,7 +287,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
         >
           <v-icon icon="mdi-cube-outline" size="64" class="mb-4 text-medium-emphasis" />
           <p class="text-body-2 text-medium-emphasis mb-4">
-            The 3D preview is paused on this screen size to save battery and data.
+            The 3D preview is paused on small screens.
           </p>
           <v-btn color="primary" variant="tonal" @click="previewLoaded = true">
             Load preview
@@ -293,7 +296,6 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
       </v-card>
       <p class="text-caption text-medium-emphasis mt-2 mb-0">
         Resulting bin: {{ previewParams.labelText }} ({{ sizeText(previewParams) }}).
-        The bin width follows the screw length.
       </p>
       <v-alert v-if="errorMessage" type="error" density="compact" class="mt-2">
         {{ errorMessage }}
@@ -309,5 +311,9 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
 <style scoped>
 .preview-card {
   min-height: 320px;
+}
+
+.screw-field {
+  flex: 1 1 0;
 }
 </style>

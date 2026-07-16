@@ -227,34 +227,29 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
         placeholder="What's inside?"
         density="comfortable"
         class="mt-4"
-        hint="The label is embossed on a shelf at the top front edge of the bin, raised 0.6 mm, so it reads from above. Long text is shrunk to fit the bin width."
+        hint="Embossed on the label shelf; long text shrinks to fit."
       />
       <div class="text-caption text-medium-emphasis mt-2 mb-1">Label icon</div>
       <IconPicker v-model="labelIcon" />
 
-      <div
-        class="d-flex align-center mt-4 more-options-toggle"
-        role="button"
+      <v-btn
+        variant="text"
+        size="small"
+        class="mt-4 px-2"
+        :prepend-icon="moreOptionsOpen ? 'mdi-chevron-up' : 'mdi-chevron-down'"
         @click="moreOptionsOpen = !moreOptionsOpen"
       >
-        <v-icon
-          :icon="moreOptionsOpen ? 'mdi-menu-down' : 'mdi-menu-right'"
-          size="20"
-          class="mr-1"
-        />
-        <span class="text-body-2 text-primary">
-          More options (second label line, stacking lip, magnets, dividers, floor, quantity)
-        </span>
-      </div>
+        More options
+      </v-btn>
       <v-expand-transition>
-        <div v-show="moreOptionsOpen" class="mt-3">
+        <div v-if="moreOptionsOpen" class="mt-3">
           <v-text-field
             v-model="labelText2"
             label="Second label line"
             density="comfortable"
-            hint="An optional smaller line of text under the main label, useful for a subcategory or extra note."
+            hide-details
           />
-          <div class="d-flex ga-2 mt-2">
+          <div class="options-grid mt-3">
             <v-text-field
               v-model.number="quantity"
               type="number"
@@ -283,27 +278,29 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
               hide-details
             />
           </div>
-          <v-switch
-            v-model="stackingLip"
-            color="primary"
-            density="compact"
-            hide-details
-            label="Stacking lip"
-          />
-          <v-switch
-            v-model="magnetHoles"
-            color="primary"
-            density="compact"
-            hide-details
-            label="Magnet holes"
-          />
-          <v-switch
-            v-model="perforatedBase"
-            color="primary"
-            density="compact"
-            hide-details
-            label="Perforated floor"
-          />
+          <div class="options-grid mt-3">
+            <v-switch
+              v-model="stackingLip"
+              color="primary"
+              density="compact"
+              hide-details
+              label="Stacking lip"
+            />
+            <v-switch
+              v-model="magnetHoles"
+              color="primary"
+              density="compact"
+              hide-details
+              label="Magnet holes"
+            />
+            <v-switch
+              v-model="perforatedBase"
+              color="primary"
+              density="compact"
+              hide-details
+              label="Perforated floor"
+            />
+          </div>
           <v-textarea
             v-model="notes"
             label="Notes"
@@ -349,8 +346,7 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
         density="compact"
         class="mt-2"
       >
-        You are editing "{{ editingEntry.labelText !== '' ? editingEntry.labelText : templateSize(editingEntry) }}"
-        from the queue. Saving updates the queue row.
+        Editing "{{ editingEntry.labelText !== '' ? editingEntry.labelText : templateSize(editingEntry) }}"; saving updates the queue row.
       </v-alert>
     </v-col>
 
@@ -367,7 +363,7 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
         >
           <v-icon icon="mdi-cube-outline" size="64" class="mb-4 text-medium-emphasis" />
           <p class="text-body-2 text-medium-emphasis mb-4">
-            The 3D preview is paused on this screen size to save battery and data.
+            The 3D preview is paused on small screens.
           </p>
           <v-btn color="primary" variant="tonal" @click="previewLoaded = true">
             Load preview
@@ -407,9 +403,10 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
 </template>
 
 <style scoped>
-.more-options-toggle {
-  cursor: pointer;
-  user-select: none;
+.options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 12px;
 }
 
 .preview-card {

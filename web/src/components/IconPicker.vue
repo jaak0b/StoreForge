@@ -5,31 +5,34 @@ import { validateCustomIcon } from '../engine/label/customIcon';
 import { useCustomIcons } from '../stores/customIcons';
 
 /**
- * Inline label icon swatch panel: category tabs over a grid of icon tiles,
- * plus the custom SVG upload flow on the Custom tab. v-model is the icon
+ * Label icon picker: one flat wrap-grid of icon tiles ("No icon" first, then
+ * fasteners, general and custom icons separated by thin dividers), ending in
+ * a "+" tile that opens the custom SVG upload dialog. v-model is the icon
  * name or null for no icon.
  */
 
 const model = defineModel<string | null>({ required: true });
 
 const customIcons = useCustomIcons();
-const iconTab = ref<'fasteners' | 'general' | 'custom'>('fasteners');
 
-const iconsByCategory = computed<Record<'fasteners' | 'general' | 'custom', LabelIcon[]>>(
-  () => ({
-    fasteners: LABEL_ICONS.filter((icon) => icon.category === 'fasteners'),
-    general: LABEL_ICONS.filter((icon) => icon.category === 'general'),
-    custom: customIcons.icons.map((icon) => ({
-      name: icon.name,
-      path: icon.path,
-      viewBox: icon.viewBox,
-      category: 'custom' as const,
-    })),
-  }),
+const fastenerIcons = computed(() =>
+  LABEL_ICONS.filter((icon) => icon.category === 'fasteners'),
+);
+const generalIcons = computed(() =>
+  LABEL_ICONS.filter((icon) => icon.category === 'general'),
+);
+const userIcons = computed<LabelIcon[]>(() =>
+  customIcons.icons.map((icon) => ({
+    name: icon.name,
+    path: icon.path,
+    viewBox: icon.viewBox,
+    category: 'custom' as const,
+  })),
 );
 
-// Custom icon upload: paste or upload an SVG, validate it, then save it
-// under a name. Validation runs live on the pasted text.
+// Custom icon upload dialog: paste or upload an SVG, validate it live, then
+// save it under a name.
+const uploadOpen = ref(false);
 const customIconInput = ref('');
 const customIconName = ref('');
 const svgFileInput = ref<HTMLInputElement | null>(null);
@@ -37,6 +40,12 @@ const svgFileInput = ref<HTMLInputElement | null>(null);
 const customIconValidation = computed(() =>
   customIconInput.value.trim() === '' ? null : validateCustomIcon(customIconInput.value),
 );
+
+function openUpload(): void {
+  customIconInput.value = '';
+  customIconName.value = '';
+  uploadOpen.value = true;
+}
 
 function openSvgPicker(): void {
   svgFileInput.value?.click();
@@ -74,20 +83,14 @@ function addCustomIcon(): void {
   if (validation === null || !validation.ok || !canAddCustomIcon.value) return;
   const name = customIconName.value.trim();
   customIcons.add(name, validation.path, validation.viewBox);
-  customIconInput.value = '';
-  customIconName.value = '';
   model.value = name;
+  uploadOpen.value = false;
 }
 </script>
 
 <template>
   <div>
-    <v-tabs v-model="iconTab" density="compact">
-      <v-tab value="fasteners">Fasteners</v-tab>
-      <v-tab value="general">General</v-tab>
-      <v-tab value="custom">Custom</v-tab>
-    </v-tabs>
-    <div class="d-flex flex-wrap ga-1 mt-2">
+    <div class="d-flex flex-wrap align-center ga-1">
       <v-btn
         variant="outlined"
         size="small"
@@ -98,94 +101,114 @@ function addCustomIcon(): void {
         <v-icon icon="mdi-close" size="18" />
         <v-tooltip activator="parent" location="bottom">No icon</v-tooltip>
       </v-btn>
-      <v-btn
-        v-for="icon in iconsByCategory[iconTab]"
-        :key="icon.name"
-        variant="outlined"
-        size="small"
-        class="icon-tile"
-        :color="model === icon.name ? 'primary' : undefined"
-        @click="model = icon.name"
+      <template
+        v-for="group in [fastenerIcons, generalIcons, userIcons].filter(
+          (icons) => icons.length > 0,
+        )"
+        :key="group[0].category"
       >
-        <svg width="24" height="24" :viewBox="icon.viewBox.join(' ')" aria-hidden="true">
-          <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
-        </svg>
-        <v-tooltip activator="parent" location="bottom">{{ icon.name }}</v-tooltip>
-      </v-btn>
-    </div>
-    <template v-if="iconTab === 'custom'">
-      <v-textarea
-        v-model="customIconInput"
-        label="Paste SVG path data or a full <svg>"
-        rows="3"
-        density="compact"
-        class="mt-3"
-        hint="Paste path data (the d attribute) or a full SVG with exactly one filled shape. The icon is embossed on the label shelf the same size as the built-in icons, so keep it simple and bold."
-        persistent-hint
-      />
-      <input
-        ref="svgFileInput"
-        type="file"
-        accept=".svg,image/svg+xml"
-        class="d-none"
-        @change="onSvgFilePicked"
-      />
-      <v-btn
-        variant="text"
-        size="small"
-        prepend-icon="mdi-upload-outline"
-        class="mt-2"
-        @click="openSvgPicker"
-      >
-        Upload SVG file
-      </v-btn>
-      <v-alert
-        v-if="customIconValidation !== null && !customIconValidation.ok"
-        type="warning"
-        density="compact"
-        variant="tonal"
-        class="mt-2"
-      >
-        {{ customIconValidation.error }}
-      </v-alert>
-      <template v-if="customIconValidation !== null && customIconValidation.ok">
-        <div class="d-flex align-center ga-2 mt-2">
-          <v-icon icon="mdi-check-circle" color="success" size="20" />
-          <svg
-            width="24"
-            height="24"
-            :viewBox="customIconValidation.viewBox.join(' ')"
-            aria-hidden="true"
-          >
-            <path
-              :d="customIconValidation.path"
-              fill="currentColor"
-              fill-rule="evenodd"
-            />
-          </svg>
-          <span class="text-body-2">This shape can be embossed.</span>
-        </div>
-        <v-text-field
-          v-model="customIconName"
-          label="Icon name"
-          density="compact"
-          class="mt-2"
-          :error-messages="
-            customIconNameTaken ? ['An icon with this name already exists.'] : []
-          "
-          @keydown.enter.prevent="addCustomIcon"
-        />
+        <span class="group-divider" aria-hidden="true" />
         <v-btn
-          color="primary"
-          variant="tonal"
+          v-for="icon in group"
+          :key="icon.name"
+          variant="outlined"
           size="small"
-          :disabled="!canAddCustomIcon"
-          @click="addCustomIcon"
+          class="icon-tile"
+          :color="model === icon.name ? 'primary' : undefined"
+          @click="model = icon.name"
         >
-          Add to my icons
+          <svg width="24" height="24" :viewBox="icon.viewBox.join(' ')" aria-hidden="true">
+            <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
+          </svg>
+          <v-tooltip activator="parent" location="bottom">{{ icon.name }}</v-tooltip>
         </v-btn>
       </template>
-    </template>
+      <v-btn variant="outlined" size="small" class="icon-tile" @click="openUpload">
+        <v-icon icon="mdi-plus" size="18" />
+        <v-tooltip activator="parent" location="bottom">Add a custom icon</v-tooltip>
+      </v-btn>
+    </div>
+
+    <v-dialog v-model="uploadOpen" max-width="480">
+      <v-card>
+        <v-card-title>Add a custom icon</v-card-title>
+        <v-card-text>
+          <v-textarea
+            v-model="customIconInput"
+            label="SVG path data or a full <svg>"
+            rows="3"
+            density="compact"
+            hint="Use one filled shape; keep it simple and bold."
+            persistent-hint
+          />
+          <input
+            ref="svgFileInput"
+            type="file"
+            accept=".svg,image/svg+xml"
+            class="d-none"
+            @change="onSvgFilePicked"
+          />
+          <v-btn
+            variant="text"
+            size="small"
+            prepend-icon="mdi-upload-outline"
+            class="mt-2"
+            @click="openSvgPicker"
+          >
+            Upload SVG file
+          </v-btn>
+          <v-alert
+            v-if="customIconValidation !== null && !customIconValidation.ok"
+            type="warning"
+            density="compact"
+            variant="tonal"
+            class="mt-2"
+          >
+            {{ customIconValidation.error }}
+          </v-alert>
+          <template v-if="customIconValidation !== null && customIconValidation.ok">
+            <div class="d-flex align-center ga-2 mt-2">
+              <v-icon icon="mdi-check-circle" color="success" size="20" />
+              <svg
+                width="24"
+                height="24"
+                :viewBox="customIconValidation.viewBox.join(' ')"
+                aria-hidden="true"
+              >
+                <path
+                  :d="customIconValidation.path"
+                  fill="currentColor"
+                  fill-rule="evenodd"
+                />
+              </svg>
+              <span class="text-body-2">This shape can be embossed.</span>
+            </div>
+            <v-text-field
+              v-model="customIconName"
+              label="Icon name"
+              density="compact"
+              class="mt-2"
+              :error-messages="
+                customIconNameTaken ? ['An icon with this name already exists.'] : []
+              "
+              @keydown.enter.prevent="addCustomIcon"
+            />
+          </template>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="uploadOpen = false">Cancel</v-btn>
+          <v-btn
+            color="primary"
+            variant="flat"
+            :disabled="!canAddCustomIcon"
+            @click="addCustomIcon"
+          >
+            Add to my icons
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -195,5 +218,12 @@ function addCustomIcon(): void {
   width: 40px;
   height: 40px;
   padding: 0;
+}
+
+.group-divider {
+  width: 1px;
+  height: 28px;
+  background: rgba(var(--v-theme-on-surface), 0.16);
+  margin: 0 4px;
 }
 </style>

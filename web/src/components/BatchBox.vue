@@ -5,6 +5,7 @@ import type { BatchItem, PrintBatch } from '../engine/plan/types';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
 import { downloadBatch, type BatchFormat } from '../binDownloads';
+import CountStepper from './CountStepper.vue';
 
 /**
  * One print batch box: an editable name, per-row confirm and fail actions
@@ -157,7 +158,7 @@ async function download(format: BatchFormat): Promise<void> {
       <div
         v-for="item in batch.items"
         :key="item.id"
-        class="d-flex align-center ga-3 px-3 py-2 batch-row"
+        class="d-flex align-center ga-3 px-3 py-1 batch-row"
       >
         <span class="swatch d-flex align-center justify-center">
           <svg
@@ -184,24 +185,17 @@ async function download(format: BatchFormat): Promise<void> {
             {{ item.params.labelText2 }}
           </span>
         </span>
-        <span class="text-caption text-medium-emphasis row-dims">{{ sizeText(item) }}</span>
-        <v-chip size="small" variant="outlined">x{{ item.count }}</v-chip>
+        <span class="row-dims">{{ item.params.labelText !== '' ? sizeText(item) : '' }}</span>
+        <span class="qty-badge">x{{ item.count }}</span>
         <v-spacer />
         <template v-if="confirmingItemId === item.id">
-          <div class="d-flex align-center ga-1 confirm-inline pa-1 pl-2">
+          <div
+            class="d-flex align-center ga-1 confirm-inline pa-1 pl-2"
+            @keydown.enter.prevent="commitConfirm(item)"
+            @keydown.esc="confirmingItemId = null"
+          >
             <span class="text-caption text-success font-weight-bold">Printed:</span>
-            <v-text-field
-              v-model.number="confirmAmount"
-              type="number"
-              min="1"
-              :max="item.count"
-              density="compact"
-              hide-details
-              style="width: 70px"
-              autofocus
-              @keydown.enter.prevent="commitConfirm(item)"
-              @keydown.esc="confirmingItemId = null"
-            />
+            <CountStepper v-model="confirmAmount" :max="item.count" />
             <span class="text-caption text-medium-emphasis">of {{ item.count }}</span>
             <v-btn size="small" color="success" variant="flat" @click="commitConfirm(item)">
               OK
@@ -274,6 +268,19 @@ async function download(format: BatchFormat): Promise<void> {
 
 .row-dims {
   font-family: monospace;
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  min-width: 60px;
+}
+
+.qty-badge {
+  font-family: monospace;
+  font-size: 11.5px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 8px;
+  padding: 2px 8px;
 }
 
 .confirm-inline {
