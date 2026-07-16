@@ -9,7 +9,10 @@ import { useApp } from '../stores/app';
 import { generateLabeledBin, generateLabeledBinUnion } from '../workerClient';
 import { meshToStlBlob } from '../engine/gridfinity/stlExport';
 import { PITCH, WALL_THICKNESS } from '../engine/gridfinity/constants';
-import { LABEL_ICONS } from '../engine/label/icons';
+import { LABEL_ICONS, type LabelIcon } from '../engine/label/icons';
+import { validateCustomIcon } from '../engine/label/customIcon';
+import { useCustomIcons } from '../stores/customIcons';
+import { resolveLabelIcon } from '../labelIcons';
 import type { LabeledBinMeshes, LabeledBinParams } from '../engine/gridfinity/types';
 import BinViewport from './BinViewport.vue';
 import FootprintThumb from './FootprintThumb.vue';
@@ -41,6 +44,7 @@ if (editingId !== null) {
       dividerCountY: entry.dividerCountY,
       perforatedBase: entry.perforatedBase,
       labelText: entry.labelText,
+      labelText2: entry.labelText2,
       labelIcon: entry.labelIcon,
     });
     quantity.value = entry.quantity;
@@ -71,6 +75,7 @@ const {
   dividerCountY,
   perforatedBase,
   labelText,
+  labelText2,
   labelIcon,
 } = storeToRefs(store);
 
@@ -137,10 +142,84 @@ const generating = ref(false);
 const downloading = ref(false);
 const errorMessage = ref<string | null>(null);
 
-const iconChoices = computed(() => [
-  { title: 'No icon', value: null as string | null },
-  ...LABEL_ICONS.map((icon) => ({ title: icon.name, value: icon.name as string | null })),
-]);
+// Icon picker: a swatch grid grouped into category tabs, plus the custom
+// icon upload flow on the Custom tab.
+const customIcons = useCustomIcons();
+const iconMenuOpen = ref(false);
+const iconTab = ref<'fasteners' | 'general' | 'custom'>('fasteners');
+
+const iconsByCategory = computed<Record<'fasteners' | 'general' | 'custom', LabelIcon[]>>(
+  () => ({
+    fasteners: LABEL_ICONS.filter((icon) => icon.category === 'fasteners'),
+    general: LABEL_ICONS.filter((icon) => icon.category === 'general'),
+    custom: customIcons.icons.map((icon) => ({
+      name: icon.name,
+      path: icon.path,
+      viewBox: icon.viewBox,
+      category: 'custom' as const,
+    })),
+  }),
+);
+
+const selectedIcon = computed(() =>
+  labelIcon.value !== null ? resolveLabelIcon(labelIcon.value) : null,
+);
+
+function pickIcon(name: string | null): void {
+  labelIcon.value = name;
+  iconMenuOpen.value = false;
+}
+
+// Custom icon upload: paste or upload an SVG, validate it, then save it
+// under a name. Validation runs live on the pasted text.
+const customIconInput = ref('');
+const customIconName = ref('');
+const svgFileInput = ref<HTMLInputElement | null>(null);
+
+const customIconValidation = computed(() =>
+  customIconInput.value.trim() === '' ? null : validateCustomIcon(customIconInput.value),
+);
+
+function openSvgPicker(): void {
+  svgFileInput.value?.click();
+}
+
+async function onSvgFilePicked(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  customIconInput.value = await file.text();
+  if (customIconName.value === '') {
+    customIconName.value = file.name.replace(/\.svg$/i, '');
+  }
+}
+
+const customIconNameTaken = computed(() => {
+  const name = customIconName.value.trim();
+  if (name === '') return false;
+  return (
+    LABEL_ICONS.some((icon) => icon.name === name) ||
+    customIcons.iconByName(name) !== null
+  );
+});
+
+const canAddCustomIcon = computed(
+  () =>
+    customIconValidation.value?.ok === true &&
+    customIconName.value.trim() !== '' &&
+    !customIconNameTaken.value,
+);
+
+function addCustomIcon(): void {
+  const validation = customIconValidation.value;
+  if (validation === null || !validation.ok || !canAddCustomIcon.value) return;
+  const name = customIconName.value.trim();
+  customIcons.add(name, validation.path, validation.viewBox);
+  customIconInput.value = '';
+  customIconName.value = '';
+  pickIcon(name);
+}
 
 let debounceHandle: ReturnType<typeof setTimeout> | null = null;
 let generationCounter = 0;
@@ -185,6 +264,7 @@ watch(
     dividerCountY,
     perforatedBase,
     labelText,
+    labelText2,
     labelIcon,
   ],
   scheduleRegenerate,
@@ -365,15 +445,147 @@ async function downloadStl(): Promise<void> {
               hint="The label is embossed on a shelf at the top front edge of the bin, raised 0.6 mm, so it reads from above. Long text is shrunk to fit the bin width."
               persistent-hint
             />
-            <v-select
-              v-model="labelIcon"
-              :items="iconChoices"
-              label="Label icon"
+            <v-text-field
+              v-model="labelText2"
+              label="Second line"
               density="comfortable"
               class="mt-4"
-              hint="The icon is embossed on the shelf to the left of the label text."
-              persistent-hint
+              hint="An optional smaller line of text under the main label, useful for a subcategory or extra note."
             />
+            <div class="text-caption text-medium-emphasis mt-4 mb-1">Label icon</div>
+            <v-menu v-model="iconMenuOpen" :close-on-content-click="false">
+              <template #activator="{ props: iconMenuProps }">
+                <v-btn variant="outlined" block class="justify-start" v-bind="iconMenuProps">
+                  <template v-if="selectedIcon !== null" #prepend>
+                    <svg
+                      width="20"
+                      height="20"
+                      :viewBox="selectedIcon.viewBox.join(' ')"
+                      aria-hidden="true"
+                    >
+                      <path :d="selectedIcon.path" fill="currentColor" fill-rule="evenodd" />
+                    </svg>
+                  </template>
+                  {{ labelIcon ?? 'No icon' }}
+                </v-btn>
+              </template>
+              <v-card width="320">
+                <v-tabs v-model="iconTab" density="compact" grow>
+                  <v-tab value="fasteners">Fasteners</v-tab>
+                  <v-tab value="general">General</v-tab>
+                  <v-tab value="custom">Custom</v-tab>
+                </v-tabs>
+                <v-card-text>
+                  <div class="d-flex flex-wrap ga-1">
+                    <v-btn
+                      variant="outlined"
+                      size="small"
+                      class="icon-tile"
+                      :color="labelIcon === null ? 'primary' : undefined"
+                      @click="pickIcon(null)"
+                    >
+                      <v-icon icon="mdi-close" size="18" />
+                      <v-tooltip activator="parent" location="bottom">No icon</v-tooltip>
+                    </v-btn>
+                    <v-btn
+                      v-for="icon in iconsByCategory[iconTab]"
+                      :key="icon.name"
+                      variant="outlined"
+                      size="small"
+                      class="icon-tile"
+                      :color="labelIcon === icon.name ? 'primary' : undefined"
+                      @click="pickIcon(icon.name)"
+                    >
+                      <svg
+                        width="24"
+                        height="24"
+                        :viewBox="icon.viewBox.join(' ')"
+                        aria-hidden="true"
+                      >
+                        <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
+                      </svg>
+                      <v-tooltip activator="parent" location="bottom">{{ icon.name }}</v-tooltip>
+                    </v-btn>
+                  </div>
+                  <template v-if="iconTab === 'custom'">
+                    <v-textarea
+                      v-model="customIconInput"
+                      label="Paste SVG path data or a full <svg>"
+                      rows="3"
+                      density="compact"
+                      class="mt-3"
+                      hint="Paste path data (the d attribute) or a full SVG with exactly one filled shape. The icon is embossed on the label shelf the same size as the built-in icons, so keep it simple and bold."
+                      persistent-hint
+                    />
+                    <input
+                      ref="svgFileInput"
+                      type="file"
+                      accept=".svg,image/svg+xml"
+                      class="d-none"
+                      @change="onSvgFilePicked"
+                    />
+                    <v-btn
+                      variant="text"
+                      size="small"
+                      prepend-icon="mdi-upload-outline"
+                      class="mt-2"
+                      @click="openSvgPicker"
+                    >
+                      Upload SVG file
+                    </v-btn>
+                    <v-alert
+                      v-if="customIconValidation !== null && !customIconValidation.ok"
+                      type="warning"
+                      density="compact"
+                      variant="tonal"
+                      class="mt-2"
+                    >
+                      {{ customIconValidation.error }}
+                    </v-alert>
+                    <template v-if="customIconValidation !== null && customIconValidation.ok">
+                      <div class="d-flex align-center ga-2 mt-2">
+                        <v-icon icon="mdi-check-circle" color="success" size="20" />
+                        <svg
+                          width="24"
+                          height="24"
+                          :viewBox="customIconValidation.viewBox.join(' ')"
+                          aria-hidden="true"
+                        >
+                          <path
+                            :d="customIconValidation.path"
+                            fill="currentColor"
+                            fill-rule="evenodd"
+                          />
+                        </svg>
+                        <span class="text-body-2">This shape can be embossed.</span>
+                      </div>
+                      <v-text-field
+                        v-model="customIconName"
+                        label="Icon name"
+                        density="compact"
+                        class="mt-2"
+                        :error-messages="
+                          customIconNameTaken ? ['An icon with this name already exists.'] : []
+                        "
+                        @keydown.enter.prevent="addCustomIcon"
+                      />
+                      <v-btn
+                        color="primary"
+                        variant="tonal"
+                        size="small"
+                        :disabled="!canAddCustomIcon"
+                        @click="addCustomIcon"
+                      >
+                        Add to my icons
+                      </v-btn>
+                    </template>
+                  </template>
+                </v-card-text>
+              </v-card>
+            </v-menu>
+            <p class="text-caption text-medium-emphasis mt-1 mb-0">
+              The icon is embossed on the shelf to the left of the label text.
+            </p>
             <v-text-field
               v-model.number="quantity"
               type="number"
@@ -478,3 +690,12 @@ async function downloadStl(): Promise<void> {
     </v-dialog>
   </v-container>
 </template>
+
+<style scoped>
+.icon-tile {
+  min-width: 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+}
+</style>

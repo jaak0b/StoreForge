@@ -13,6 +13,7 @@ export const useBinDesigner = defineStore('binDesigner', {
     dividerCountY: 0,
     perforatedBase: false,
     labelText: '',
+    labelText2: '',
     labelIcon: null,
   }),
   getters: {
@@ -27,6 +28,7 @@ export const useBinDesigner = defineStore('binDesigner', {
         dividerCountY: state.dividerCountY,
         perforatedBase: state.perforatedBase,
         labelText: state.labelText,
+        labelText2: state.labelText2,
         labelIcon: state.labelIcon,
       };
     },

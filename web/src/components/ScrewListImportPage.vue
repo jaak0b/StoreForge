@@ -23,7 +23,16 @@ const app = useApp();
 const queue = useBinQueue();
 const { smAndDown } = useDisplay();
 
-const THREADS = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
+const METRIC_THREADS = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
+const IMPERIAL_THREADS = ['#4', '#6', '#8', '#10', '#12', '1/4-20', '5/16-18', '3/8-16'];
+
+/** Thread choices for row selects, grouped by measurement system. */
+const THREAD_ITEMS = [
+  { type: 'subheader' as const, title: 'Metric' },
+  ...METRIC_THREADS,
+  { type: 'subheader' as const, title: 'Imperial' },
+  ...IMPERIAL_THREADS,
+];
 
 /** Bin widths beyond this many grid units get a soft warning on the chip. */
 const WIDTH_WARNING_UNITS = 3;
@@ -41,6 +50,8 @@ interface Row {
   qty: number;
   /** Manual bin width override in grid units, or null to derive from length. */
   widthOverride: number | null;
+  /** Imperial length as entered ('1-1/2"'), or null for a metric length. */
+  enteredLengthText: string | null;
 }
 
 let nextRowId = 1;
@@ -59,7 +70,7 @@ const parsed = computed(() => parseShorthand(shorthand.value));
 const previewLabels = computed(() =>
   parsed.value.batches.map(
     (b) =>
-      `${composeLabelText(b.thread, b.lengthMm, b.head) || '?'}${b.quantity > 1 ? ` x${b.quantity}` : ''}`,
+      `${composeLabelText(b.thread, b.lengthMm, b.head, b.enteredLengthText) || '?'}${b.quantity > 1 ? ` x${b.quantity}` : ''}`,
   ),
 );
 
@@ -74,6 +85,7 @@ function commitShorthand(): void {
       head: batch.head,
       qty: batch.quantity,
       widthOverride: null,
+      enteredLengthText: batch.enteredLengthText,
     });
   }
   shorthand.value = '';
@@ -106,7 +118,12 @@ const validRows = computed(() => rows.value.filter(rowValid));
 const invalidCount = computed(() => rows.value.length - validRows.value.length);
 
 function rowLabel(row: Row): string {
-  return composeLabelText(row.thread, isLengthless(row) ? null : row.lengthMm, row.head);
+  return composeLabelText(
+    row.thread,
+    isLengthless(row) ? null : row.lengthMm,
+    row.head,
+    row.enteredLengthText,
+  );
 }
 
 function headIconPath(head: HeadType): string {
@@ -116,8 +133,10 @@ function headIconPath(head: HeadType): string {
 function onLengthInput(row: Row, value: string): void {
   const parsedValue = Number(value);
   row.lengthMm = value === '' || !Number.isFinite(parsedValue) ? null : Math.round(parsedValue);
-  // A stale manual width no longer belongs to the new length.
+  // A stale manual width no longer belongs to the new length, and a manually
+  // typed millimetre value replaces any imperial as-entered text.
   row.widthOverride = null;
+  row.enteredLengthText = null;
 }
 
 function addRow(): void {
@@ -129,6 +148,7 @@ function addRow(): void {
     head: last?.head ?? defaultHead.value,
     qty: 1,
     widthOverride: null,
+    enteredLengthText: last?.enteredLengthText ?? null,
   });
 }
 
@@ -172,6 +192,7 @@ function enterReview(): void {
       head: row.head,
       quantity: row.qty,
       widthUnits: effectiveWidth(row),
+      enteredLengthText: row.enteredLengthText,
     })),
   ).map((group) => ({
     ...group,
@@ -202,7 +223,13 @@ function commitToQueue(): void {
         dividerCountX: 0,
         dividerCountY: 0,
         perforatedBase: false,
-        labelText: composeLabelText(group.thread, group.lengthMm, group.head),
+        labelText: composeLabelText(
+          group.thread,
+          group.lengthMm,
+          group.head,
+          group.enteredLengthText,
+        ),
+        labelText2: '',
         labelIcon: group.head !== null ? HEAD_ICON_NAME[group.head] : null,
       },
       group.quantity,
@@ -212,7 +239,7 @@ function commitToQueue(): void {
 }
 
 function groupLabel(group: ReviewGroup): string {
-  return composeLabelText(group.thread, group.lengthMm, group.head);
+  return composeLabelText(group.thread, group.lengthMm, group.head, group.enteredLengthText);
 }
 
 // Leaving with unsaved rows asks for confirmation.
@@ -239,13 +266,17 @@ function requestLeave(): void {
         v-model="shorthand"
         class="mt-4"
         label="Type a screw list"
-        placeholder="m3x20 fhcs, m4x40 hex bolt x6"
+        placeholder='m3x20 fhcs, #8x1-1/2 wood, 1/4-20x1in hex'
         density="comfortable"
         variant="outlined"
         hide-details
         autofocus
         @keydown.enter.prevent="commitShorthand"
       />
+      <p class="text-caption text-medium-emphasis mt-1 mb-0">
+        Metric (M3, M4...) and imperial (#8, 1/4-20) shorthand both work.
+        Imperial lengths use inches, written as 1", 1-1/2" or 1/2".
+      </p>
       <div v-if="previewLabels.length > 0" class="d-flex flex-wrap ga-1 mt-2">
         <v-chip
           v-for="(label, i) in previewLabels"
@@ -281,7 +312,7 @@ function requestLeave(): void {
           column
         >
           <v-chip
-            v-for="thread in THREADS"
+            v-for="thread in [...METRIC_THREADS, ...IMPERIAL_THREADS]"
             :key="thread"
             :value="thread"
             size="small"
@@ -330,7 +361,7 @@ function requestLeave(): void {
             <td>
               <v-select
                 v-model="row.thread"
-                :items="THREADS"
+                :items="THREAD_ITEMS"
                 density="compact"
                 hide-details
                 variant="plain"
@@ -345,7 +376,12 @@ function requestLeave(): void {
                 :min="MIN_LENGTH_MM"
                 :max="MAX_LENGTH_MM"
                 density="compact"
-                hide-details
+                :hide-details="row.enteredLengthText === null"
+                :messages="
+                  row.enteredLengthText !== null
+                    ? [`${row.enteredLengthText} (${row.lengthMm} mm)`]
+                    : []
+                "
                 variant="plain"
                 @update:model-value="onLengthInput(row, $event)"
               />
@@ -494,7 +530,7 @@ function requestLeave(): void {
             </div>
             <v-select
               v-model="row.thread"
-              :items="THREADS"
+              :items="THREAD_ITEMS"
               label="Thread"
               density="compact"
               hide-details
@@ -507,7 +543,12 @@ function requestLeave(): void {
               :min="MIN_LENGTH_MM"
               :max="MAX_LENGTH_MM"
               density="compact"
-              hide-details
+              :hide-details="row.enteredLengthText === null"
+              :messages="
+                row.enteredLengthText !== null
+                  ? [`${row.enteredLengthText} (${row.lengthMm} mm)`]
+                  : []
+              "
               @update:model-value="onLengthInput(row, $event)"
             />
             <v-select

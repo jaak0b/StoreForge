@@ -52,15 +52,27 @@ export const SHELF_DEPTH_MARGIN = 1.5;
 /** Horizontal gap between the icon and the text when both are present. */
 export const ICON_TEXT_GAP = 2;
 
+/** Cap height of the second text line relative to the first. */
+export const LABEL_LINE2_SCALE = 0.6;
+
+/** Vertical gap between the first and second text line, in millimetres. */
+export const LABEL_LINE_GAP = 1;
+
 /** What to put on the label. Empty text with no icon means no label. */
 export interface LabelSpec {
   text: string;
+  /** Optional smaller second line rendered under the first. */
+  text2?: string;
   icon: LabelIcon | null;
 }
 
 /** True when the spec would produce a label (and therefore needs a shelf). */
 export function specHasLabel(spec: LabelSpec): boolean {
-  return spec.text.trim().length > 0 || spec.icon !== null;
+  return (
+    spec.text.trim().length > 0 ||
+    (spec.text2 ?? '').trim().length > 0 ||
+    spec.icon !== null
+  );
 }
 
 interface Bounds {
@@ -114,8 +126,10 @@ export interface LabelFacePart {
 
 /**
  * Lay out the label face in 2D: icon to the left of the text, both sharing
- * the LABEL_TEXT_HEIGHT nominal height, uniformly shrunk when the row would
- * not fit the available width or depth. The result is centred on the origin.
+ * the LABEL_TEXT_HEIGHT nominal height, with the optional second text line
+ * placed under the first at LABEL_LINE2_SCALE of its cap height. The whole
+ * face is uniformly shrunk when it would not fit the available width or
+ * depth, and the result is centred on the origin.
  */
 export function layoutLabelFace(
   font: Font,
@@ -124,6 +138,7 @@ export function layoutLabelFace(
   availableDepthMm: number,
 ): LabelFacePart[] {
   const text = spec.text.trim();
+  const text2 = (spec.text2 ?? '').trim();
   const parts: LabelFacePart[] = [];
 
   if (spec.icon) {
@@ -145,16 +160,29 @@ export function layoutLabelFace(
       fillRule: 'NonZero',
     });
   }
-  if (parts.length === 0) {
+  if (parts.length === 0 && text2.length === 0) {
     throw new Error('A label needs text, an icon, or both.');
   }
 
-  // Place the parts side by side, icon first.
+  // Place the first-line parts side by side, icon first.
   let cursor = 0;
   for (const part of parts) {
     const box = boundsOf(part.polygons);
     part.polygons = transform(part.polygons, 1, cursor, 0, false);
     cursor += box.maxX - box.minX + ICON_TEXT_GAP;
+  }
+
+  // The second line sits under the first at a reduced cap height, left
+  // aligned with the row, separated by LABEL_LINE_GAP.
+  if (text2.length > 0) {
+    const polygons = textToPolygons(font, text2, LABEL_TEXT_HEIGHT * LABEL_LINE2_SCALE);
+    const box = boundsOf(polygons);
+    const rowBottom =
+      parts.length > 0 ? boundsOf(parts.flatMap((part) => part.polygons)).minY : 0;
+    parts.push({
+      polygons: transform(polygons, 1, -box.minX, rowBottom - LABEL_LINE_GAP - box.maxY, false),
+      fillRule: 'NonZero',
+    });
   }
 
   // Shrink to fit the available width and depth, then centre on the origin.

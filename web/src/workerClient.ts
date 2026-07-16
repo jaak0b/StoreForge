@@ -1,5 +1,6 @@
 import * as Comlink from 'comlink';
 import type { GeometryWorkerApi } from './worker/geometry.worker';
+import { withResolvedIconPath } from './labelIcons';
 import type {
   BinParams,
   LabeledBinMeshes,
@@ -28,12 +29,12 @@ export async function generateBin(params: BinParams): Promise<MeshData> {
 export async function generateLabeledBin(
   params: LabeledBinParams,
 ): Promise<LabeledBinMeshes> {
-  return getWorker().generateLabeledBin(params);
+  return getWorker().generateLabeledBin(withResolvedIconPath(params));
 }
 
 /** Generate a labeled bin as one unioned mesh for the STL download. */
 export async function generateLabeledBinUnion(
   params: LabeledBinParams,
 ): Promise<MeshData> {
-  return getWorker().generateLabeledBinUnion(params);
+  return getWorker().generateLabeledBinUnion(withResolvedIconPath(params));
 }

@@ -207,6 +207,7 @@ describe('writePlate3mf with two real labeled bins', () => {
       dividerCountY: 0,
       perforatedBase: false,
       labelText: 'M3',
+      labelText2: '',
       labelIcon: null,
     });
     binB = generateLabeledBin(m, font, {
@@ -219,6 +220,7 @@ describe('writePlate3mf with two real labeled bins', () => {
       dividerCountY: 0,
       perforatedBase: false,
       labelText: 'M4',
+      labelText2: '',
       labelIcon: null,
     });
   });

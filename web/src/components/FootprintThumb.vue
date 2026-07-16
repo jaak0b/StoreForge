@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { iconByName } from '../engine/label/icons';
+import { resolveLabelIcon } from '../labelIcons';
 
 // Thumbnail: the footprint grid is rendered at most 6 x 6 cells; larger bins
 // get a "+N" overlay stating how many cells are not shown.
@@ -18,8 +18,8 @@ const cells = computed(() => {
   return { cols, rows, hidden: props.gridX * props.gridY - cols * rows };
 });
 
-const iconPath = computed(() =>
-  props.labelIcon !== null ? iconByName(props.labelIcon).path : null,
+const icon = computed(() =>
+  props.labelIcon !== null ? resolveLabelIcon(props.labelIcon) : null,
 );
 </script>
 
@@ -35,9 +35,9 @@ const iconPath = computed(() =>
     <div v-if="cells.hidden > 0" class="footprint-thumb__overlay text-caption">
       +{{ cells.hidden }}
     </div>
-    <div v-else-if="iconPath !== null" class="footprint-thumb__overlay">
-      <svg width="16" height="16" viewBox="0 0 100 100" aria-hidden="true">
-        <path :d="iconPath" fill="currentColor" fill-rule="evenodd" />
+    <div v-else-if="icon !== null" class="footprint-thumb__overlay">
+      <svg width="16" height="16" :viewBox="icon.viewBox.join(' ')" aria-hidden="true">
+        <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
       </svg>
     </div>
   </div>

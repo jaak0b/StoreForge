@@ -143,6 +143,7 @@ function paramsOf(entry: BinEntry): LabeledBinParams {
     dividerCountY: entry.dividerCountY,
     perforatedBase: entry.perforatedBase,
     labelText: entry.labelText,
+    labelText2: entry.labelText2,
     labelIcon: entry.labelIcon,
   };
 }
@@ -158,6 +159,7 @@ function dedupKey(params: LabeledBinParams): string {
     params.dividerCountY,
     params.perforatedBase,
     params.labelText,
+    params.labelText2,
     params.labelIcon,
   ]);
 }

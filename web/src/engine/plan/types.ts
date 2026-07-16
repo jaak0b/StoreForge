@@ -25,6 +25,8 @@ export interface BinEntry {
   perforatedBase: boolean;
   /** Text embossed on the label shelf. An empty string means no text. */
   labelText: string;
+  /** Optional smaller second text line under the first. Empty means none. */
+  labelText2: string;
   /** Name of the label icon shown left of the text, or null for no icon. */
   labelIcon: string | null;
   /** How many copies of this bin the plan calls for. Integer, at least 1. */

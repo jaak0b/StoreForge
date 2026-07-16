@@ -22,8 +22,17 @@ export interface BinParams {
 export interface LabeledBinParams extends BinParams {
   /** Text embossed on the front wall. An empty string means no text. */
   labelText: string;
+  /** Optional smaller second text line under the first. Empty means none. */
+  labelText2: string;
   /** Name of the label icon shown left of the text, or null for no icon. */
   labelIcon: string | null;
+  /**
+   * Resolved SVG path data for a custom labelIcon. Custom icons live in the
+   * browser's localStorage, which the geometry worker cannot reach, so the UI
+   * resolves the path before the worker call and passes it here. Transient:
+   * never persisted, and absent when labelIcon names a built-in icon.
+   */
+  labelIconPath?: string;
 }
 
 /** Triangle mesh in flat typed arrays, ready to transfer between threads. */

@@ -11,9 +11,12 @@ import {
 import {
   buildLabelManifold,
   buildLabelShelf,
+  layoutLabelFace,
   EMBOSS_HEIGHT,
   EMBOSS_WELD_DEPTH,
+  LABEL_LINE2_SCALE,
   LABEL_MARGIN,
+  LABEL_TEXT_HEIGHT,
   SHELF_DEPTH,
   SHELF_THICKNESS,
 } from '../../src/engine/label/placement';
@@ -44,6 +47,7 @@ function params(overrides: Partial<LabeledBinParams> = {}): LabeledBinParams {
     dividerCountY: 0,
     perforatedBase: false,
     labelText: 'M3',
+    labelText2: '',
     labelIcon: null,
     ...overrides,
   };
@@ -179,6 +183,92 @@ describe('buildLabelManifold', () => {
     );
     textOnly.delete();
     withIcon.delete();
+  });
+});
+
+describe('layoutLabelFace with a second line', () => {
+  const wide = 1000;
+
+  function partBounds(part: { polygons: [number, number][][] }): {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const contour of part.polygons) {
+      for (const [x, y] of contour) {
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    return { minX, maxX, minY, maxY };
+  }
+
+  it('stacks the second line below the first at the reduced cap height', () => {
+    const parts = layoutLabelFace(
+      font,
+      { text: 'M3', text2: 'M3', icon: null },
+      wide,
+      wide,
+    );
+    expect(parts).toHaveLength(2);
+    const line1 = partBounds(parts[0]);
+    const line2 = partBounds(parts[1]);
+    // Below, with clear separation.
+    expect(line2.maxY).toBeLessThan(line1.minY);
+    // Same text at the second-line scale: cap height ratio matches.
+    expect((line2.maxY - line2.minY) / (line1.maxY - line1.minY)).toBeCloseTo(
+      LABEL_LINE2_SCALE,
+      6,
+    );
+    // Glyphs may slightly overshoot the nominal cap height (rounded digits).
+    expect(line1.maxY - line1.minY).toBeCloseTo(LABEL_TEXT_HEIGHT, 0);
+  });
+
+  it('leaves a single-line label unchanged when the second line is empty', () => {
+    const single = layoutLabelFace(font, { text: 'M3', icon: null }, wide, wide);
+    const emptied = layoutLabelFace(font, { text: 'M3', text2: '  ', icon: null }, wide, wide);
+    expect(emptied).toHaveLength(single.length);
+    expect(partBounds(emptied[0])).toEqual(partBounds(single[0]));
+  });
+
+  it('shrinks both lines together to fit the shelf depth', () => {
+    const narrowDepth = 4;
+    const parts = layoutLabelFace(
+      font,
+      { text: 'M3', text2: 'M3', icon: null },
+      wide,
+      narrowDepth,
+    );
+    const all = parts.map(partBounds);
+    const minY = Math.min(...all.map((b) => b.minY));
+    const maxY = Math.max(...all.map((b) => b.maxY));
+    expect(maxY - minY).toBeLessThanOrEqual(narrowDepth + 1e-9);
+    // The two lines keep their relative scale when shrunk together.
+    expect((all[1].maxY - all[1].minY) / (all[0].maxY - all[0].minY)).toBeCloseTo(
+      LABEL_LINE2_SCALE,
+      6,
+    );
+  });
+
+  it('builds a taller label solid when a second line is present', () => {
+    const oneLine = buildLabelManifold(m, font, params(), { text: 'M3', icon: null })!;
+    const twoLines = buildLabelManifold(m, font, params(), {
+      text: 'M3',
+      text2: 'wood',
+      icon: null,
+    })!;
+    const oneBox = oneLine.boundingBox();
+    const twoBox = twoLines.boundingBox();
+    expect(twoBox.max[1] - twoBox.min[1]).toBeGreaterThan(oneBox.max[1] - oneBox.min[1]);
+    oneLine.delete();
+    twoLines.delete();
   });
 });
 

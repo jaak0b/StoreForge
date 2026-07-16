@@ -20,6 +20,7 @@ function makeTemplate(overrides: Partial<BinTemplate> = {}): BinTemplate {
       dividerCountY: 0,
       perforatedBase: false,
       labelText: 'M3 x 20',
+      labelText2: '',
       labelIcon: 'screw',
     },
     createdAt: '2026-07-15T10:00:00.000Z',

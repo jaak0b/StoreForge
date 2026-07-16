@@ -414,9 +414,24 @@ export function generateBin(m: ManifoldToplevel, params: BinParams): MeshData {
 }
 
 function labelSpecOf(params: LabeledBinParams): LabelSpec {
+  let icon = null;
+  if (params.labelIcon !== null) {
+    // A custom icon's path is resolved on the UI side (the worker cannot
+    // reach localStorage) and passed in labelIconPath; built-ins resolve here.
+    icon =
+      params.labelIconPath !== undefined
+        ? {
+            name: params.labelIcon,
+            path: params.labelIconPath,
+            viewBox: [0, 0, 100, 100] as [number, number, number, number],
+            category: 'custom' as const,
+          }
+        : iconByName(params.labelIcon);
+  }
   return {
     text: params.labelText,
-    icon: params.labelIcon === null ? null : iconByName(params.labelIcon),
+    text2: params.labelText2,
+    icon,
   };
 }
 

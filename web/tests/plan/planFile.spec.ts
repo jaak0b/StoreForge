@@ -21,6 +21,7 @@ function entry(overrides: Partial<BinEntry> = {}): BinEntry {
     dividerCountY: 0,
     perforatedBase: false,
     labelText: 'M3 bolts',
+    labelText2: '',
     labelIcon: 'bolt',
     quantity: 1,
     status: 'queued',
@@ -101,6 +102,16 @@ describe('serializePlanFile / parsePlanFile', () => {
     });
   });
 
+  it('defaults the second label line on version-1 files that predate it', () => {
+    const legacy: Record<string, unknown> = { ...entry() };
+    delete legacy.labelText2;
+    const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 1, entries: [entry({ labelText2: '' })] },
+    });
+  });
+
   it('drops unknown extra fields on an entry when parsing', () => {
     const withExtra = { ...entry(), somethingElse: 42 };
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [withExtra] }));
@@ -123,6 +134,7 @@ describe('validateEntry', () => {
     ['dividerCountY', 0.5, 'dividerCountY must be an integer of at least 0'],
     ['perforatedBase', 'yes', 'perforatedBase must be true or false'],
     ['labelText', null, 'labelText must be a string'],
+    ['labelText2', 7, 'labelText2 must be a string'],
     ['labelIcon', 7, 'labelIcon must be a string or null'],
     ['quantity', 0, 'quantity must be an integer of at least 1'],
     ['status', 'done', 'status must be "queued" or "printed"'],

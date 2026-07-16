@@ -87,6 +87,19 @@ describe('svgPathToPolygons', () => {
       washer: 1,
       'threaded insert': 0,
       'self-tapping screw': 0,
+      brad: 0,
+      dowel: 0,
+      'pocket screw': 0,
+      cable: 0,
+      battery: 0,
+      'lego brick': 0,
+      resistor: 0,
+      'ic chip': 0,
+      spring: 0,
+      bearing: 1,
+      bit: 0,
+      adhesive: 0,
+      'misc box': 0,
     };
     expect(LABEL_ICONS.map((icon) => icon.name).sort()).toEqual(Object.keys(expected).sort());
     for (const [name, genus] of Object.entries(expected)) {
@@ -108,6 +121,31 @@ describe('svgPathToPolygons', () => {
       expect(box.maxX - box.minX, icon.name).toBeGreaterThanOrEqual(0.6 * width);
       expect(box.maxY - box.minY, icon.name).toBeGreaterThanOrEqual(0.4 * height);
     }
+  });
+
+  it('assigns every icon a picker category, and the new sets land in theirs', () => {
+    for (const icon of LABEL_ICONS) {
+      expect(['fasteners', 'general'], icon.name).toContain(icon.category);
+    }
+    const byCategory = (category: string): string[] =>
+      LABEL_ICONS.filter((icon) => icon.category === category).map((icon) => icon.name);
+    expect(byCategory('fasteners')).toContain('brad');
+    expect(byCategory('fasteners')).toContain('dowel');
+    expect(byCategory('fasteners')).toContain('pocket screw');
+    expect(byCategory('general').sort()).toEqual(
+      [
+        'cable',
+        'battery',
+        'lego brick',
+        'resistor',
+        'ic chip',
+        'spring',
+        'bearing',
+        'bit',
+        'adhesive',
+        'misc box',
+      ].sort(),
+    );
   });
 
   it('rejects malformed path data', () => {

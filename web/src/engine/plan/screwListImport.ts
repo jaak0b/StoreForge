@@ -10,13 +10,27 @@ import { BASE_TOP_SIZE, PITCH, WALL_THICKNESS } from '../gridfinity/constants';
  *   batch  := parts in any order, at most one of each:
  *             thread, length, head, quantity
  *   thread := "M" digit+ ("." digit+)?          M2, M2.5, M3, ...
+ *           | "#" digit+ ("-" TPI)?             #8, #8-32 (normalized to #8)
+ *           | digit+ "/" digit+ "-" TPI         1/4-20, 5/16-18
  *   length := digit+ ("mm")?                    6 to 100 integer millimetres
+ *           | inches ('"' | "in")?              1", 1-1/2", 1/2", 1in
  *   head   := an alias from HEAD_ALIASES        may come before or after the
  *                                               thread/length pair
  *   qty    := "x" digit+ | "*" digit+ | "qty" digit+
  *
  * "m3x20 fhcs x6" and "fhcs m3x20mm x6" parse identically. The head is
  * optional; when omitted it stays unspecified, never guessed.
+ *
+ * Imperial lengths are converted to the canonical lengthMm by multiplying by
+ * 25.4 and rounding to the nearest whole millimetre (bins are sized with a
+ * 4 mm handling clearance, so sub-millimetre precision carries no meaning).
+ * The text as entered is kept in enteredLengthText for display and labels.
+ * A number-series thread's TPI suffix is dropped from the normalized thread
+ * ("#8-32" reads as "#8"); a fractional thread keeps its TPI ("1/4-20"),
+ * because that is how each is conventionally written on labels. An inch
+ * suffix is optional inside a combined imperial token ("#8x1-1/2") and for
+ * any fractional length; a bare integer is metric millimetres unless it
+ * follows an imperial thread in the same combined token.
  *
  * Extension over the base grammar: nuts, washers and threaded inserts have no
  * meaningful length, so a batch like "m5 nut" is complete without one, and the
@@ -31,6 +45,9 @@ export type HeadType =
   | 'hex bolt'
   | 'wood screw'
   | 'self-tapping screw'
+  | 'pocket screw'
+  | 'brad'
+  | 'dowel'
   | 'hex nut'
   | 'washer'
   | 'threaded insert';
@@ -43,6 +60,9 @@ export const HEAD_TYPES: HeadType[] = [
   'hex bolt',
   'wood screw',
   'self-tapping screw',
+  'pocket screw',
+  'brad',
+  'dowel',
   'hex nut',
   'washer',
   'threaded insert',
@@ -74,6 +94,10 @@ export const HEAD_ALIASES: Record<string, HeadType> = {
   selftap: 'self-tapping screw',
   tek: 'self-tapping screw',
   wood: 'wood screw',
+  pocket: 'pocket screw',
+  'pocket screw': 'pocket screw',
+  brad: 'brad',
+  dowel: 'dowel',
 };
 
 /** The abbreviation each head type contributes to the label text. */
@@ -84,6 +108,9 @@ export const HEAD_LABEL_ABBREV: Record<HeadType, string> = {
   'hex bolt': 'HEX',
   'wood screw': 'WOOD',
   'self-tapping screw': 'ST',
+  'pocket screw': 'POCKET',
+  brad: 'BRAD',
+  dowel: 'DOWEL',
   'hex nut': 'NUT',
   washer: 'WASHER',
   'threaded insert': 'INSERT',
@@ -97,6 +124,9 @@ export const HEAD_ICON_NAME: Record<HeadType, string> = {
   'hex bolt': 'hex bolt',
   'wood screw': 'self-tapping screw',
   'self-tapping screw': 'self-tapping screw',
+  'pocket screw': 'pocket screw',
+  brad: 'brad',
+  dowel: 'dowel',
   'hex nut': 'hex nut',
   washer: 'washer',
   'threaded insert': 'threaded insert',
@@ -113,16 +143,23 @@ export const LENGTHLESS_HEADS: ReadonlySet<HeadType> = new Set<HeadType>([
 export const MIN_LENGTH_MM = 6;
 export const MAX_LENGTH_MM = 100;
 
+/** The measurement system a batch was entered in. */
+export type EnteredUnit = 'metric' | 'imperial';
+
 /** One parsed batch of identical fasteners. Null fields were not given. */
 export interface ScrewBatch {
-  /** Thread size, normalized like 'M3', or null when the batch had none. */
+  /** Thread size, normalized like 'M3', '#8' or '1/4-20', or null when the batch had none. */
   thread: string | null;
-  /** Fastener length in whole millimetres, or null when absent or invalid. */
+  /** Fastener length in whole millimetres (canonical), or null when absent or invalid. */
   lengthMm: number | null;
   /** Canonical head type, or null when unspecified. */
   head: HeadType | null;
   /** How many fasteners the batch calls for. At least 1, defaults to 1. */
   quantity: number;
+  /** Whether the batch was entered in metric or imperial notation. */
+  enteredUnit: EnteredUnit;
+  /** The length as entered for an imperial batch ('1-1/2"'), display only. */
+  enteredLengthText: string | null;
 }
 
 /** Result of parsing one shorthand line. */
@@ -137,6 +174,55 @@ const COMBINED_TOKEN = /^m(\d+(?:\.\d+)?)(?:x(\d+(?:\.\d+)?)(mm)?)?(?:x(\d+))?$/
 const MARKED_NUMBER = /^[x*](\d+(?:\.\d+)?)(mm)?$/;
 const BARE_NUMBER = /^(\d+(?:\.\d+)?)(mm)?$/;
 const QTY_WORD = /^qty(\d+)?$/;
+
+// Imperial threads: a number series like #8 or #8-32, or a fractional inch
+// size with its TPI like 1/4-20.
+const NUMBER_THREAD = /^#(\d{1,2})(?:-(\d{2,3}))?$/;
+const FRACTION_THREAD = /^(\d+)\/(\d+)-(\d{2,3})$/;
+// Imperial lengths: 1, 1-1/2 or 1/2, with an optional " or "in" suffix. The
+// bare-integer form is only read as inches inside a combined imperial token;
+// elsewhere the suffix or a fraction is required to distinguish it from mm.
+const IMPERIAL_LENGTH = /^(?:[x*])?(\d+)(?:-(\d+)\/(\d+))?(?:"|”|in)?$/;
+const IMPERIAL_FRACTION_LENGTH = /^(?:[x*])?(\d+)\/(\d+)(?:"|”|in)?$/;
+// A combined imperial token: thread, an x, and an imperial length.
+const COMBINED_IMPERIAL = /^(#\d{1,2}(?:-\d{2,3})?|\d+\/\d+-\d{2,3})(?:x(.+))?$/;
+
+const MM_PER_INCH = 25.4;
+
+/** Parse an imperial length token into inches plus its normalized display text. */
+function parseImperialLength(word: string): { inches: number; text: string } | null {
+  let match = IMPERIAL_FRACTION_LENGTH.exec(word);
+  if (match !== null) {
+    const den = Number(match[2]);
+    if (den === 0) return null;
+    return { inches: Number(match[1]) / den, text: `${match[1]}/${match[2]}"` };
+  }
+  match = IMPERIAL_LENGTH.exec(word);
+  if (match === null) return null;
+  const whole = Number(match[1]);
+  if (match[2] !== undefined) {
+    const den = Number(match[3]);
+    if (den === 0) return null;
+    return {
+      inches: whole + Number(match[2]) / den,
+      text: `${match[1]}-${match[2]}/${match[3]}"`,
+    };
+  }
+  return { inches: whole, text: `${match[1]}"` };
+}
+
+/** True when the token spells an imperial length explicitly (suffix or fraction). */
+function isExplicitImperialLength(word: string): boolean {
+  if (parseImperialLength(word) === null) return false;
+  return /(?:"|”|in)$/.test(word) || word.includes('/');
+}
+
+/** Normalize an imperial thread token: '#8-32' reads as '#8', '1/4-20' stays. */
+function normalizeImperialThread(token: string): string {
+  const numberSeries = NUMBER_THREAD.exec(token);
+  if (numberSeries !== null) return `#${numberSeries[1]}`;
+  return token;
+}
 
 /** Parses one line of screw-list shorthand into batches plus error messages. */
 export function parseShorthand(line: string): ParsedShorthand {
@@ -161,6 +247,8 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
   let expectQty = false;
   let pendingSeparator = false;
   let sawAnything = false;
+  let imperial = false;
+  let enteredLengthText: string | null = null;
 
   const setLength = (raw: string): void => {
     lengthSeen = true;
@@ -176,6 +264,25 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
       return;
     }
     lengthMm = value;
+  };
+
+  const setImperialLength = (word: string): void => {
+    lengthSeen = true;
+    imperial = true;
+    const parsedLength = parseImperialLength(word);
+    if (parsedLength === null) {
+      errors.push(`Can't read the length '${word}'.`);
+      return;
+    }
+    const mm = Math.round(parsedLength.inches * MM_PER_INCH);
+    if (mm < MIN_LENGTH_MM || mm > MAX_LENGTH_MM) {
+      errors.push(
+        `The length '${parsedLength.text}' (${mm} mm) is outside the supported ${MIN_LENGTH_MM} to ${MAX_LENGTH_MM} mm range.`,
+      );
+      return;
+    }
+    lengthMm = mm;
+    enteredLengthText = parsedLength.text;
   };
 
   const setQty = (raw: string): void => {
@@ -209,6 +316,28 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
       thread = `M${match[1]}`;
       if (match[2] !== undefined) setLength(match[2]);
       if (match[4] !== undefined) setQty(match[4]);
+      sawAnything = true;
+      i += 1;
+      continue;
+    }
+    // An imperial thread, alone or combined with an inch length ("#8x1-1/2").
+    match = COMBINED_IMPERIAL.exec(word);
+    if (match !== null && (NUMBER_THREAD.test(match[1]) || FRACTION_THREAD.test(match[1]))) {
+      thread = normalizeImperialThread(match[1]);
+      imperial = true;
+      if (match[2] !== undefined) setImperialLength(match[2]);
+      sawAnything = true;
+      i += 1;
+      continue;
+    }
+    // An explicit imperial length ('1-1/2"', '3/4in', or any fraction).
+    if (isExplicitImperialLength(word)) {
+      pendingSeparator = false;
+      if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+        setImperialLength(word);
+      } else {
+        errors.push(`Can't read '${word}'. Use 'x4' for a quantity.`);
+      }
       sawAnything = true;
       i += 1;
       continue;
@@ -264,27 +393,36 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
 
   if (!sawAnything) return null;
   if (thread === null) {
-    errors.push(`Can't find a thread size (like M3) in '${text}'.`);
+    errors.push(`Can't find a thread size (like M3 or #8) in '${text}'.`);
   }
   if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
     errors.push(`'${text}' has no length. Add one like 'x20' or fill it in on the row.`);
   }
-  return { thread, lengthMm, head, quantity: quantity ?? 1 };
+  return {
+    thread,
+    lengthMm,
+    head,
+    quantity: quantity ?? 1,
+    enteredUnit: imperial ? 'imperial' : 'metric',
+    enteredLengthText,
+  };
 }
 
 /**
  * Composes the bin label text for a batch, from whichever parts are present:
- * "M3 x 20 FHCS", "M3 x 20", or "M5 NUT" for a lengthless head.
+ * "M3 x 20 FHCS", "M3 x 20", or "M5 NUT" for a lengthless head. An imperial
+ * batch prints its length as entered: '#8 x 1-1/2" WOOD'.
  */
 export function composeLabelText(
   thread: string | null,
   lengthMm: number | null,
   head: HeadType | null,
+  enteredLengthText: string | null = null,
 ): string {
   const parts: string[] = [];
   if (thread !== null) parts.push(thread);
   if (lengthMm !== null && (head === null || !LENGTHLESS_HEADS.has(head))) {
-    parts.push(`x ${lengthMm}`);
+    parts.push(`x ${enteredLengthText ?? lengthMm}`);
   }
   if (head !== null) parts.push(HEAD_LABEL_ABBREV[head]);
   return parts.join(' ');
@@ -323,6 +461,8 @@ export interface GroupableRow {
   head: HeadType | null;
   quantity: number;
   widthUnits: number;
+  /** Imperial length as entered, for labels; omitted or null for metric rows. */
+  enteredLengthText?: string | null;
 }
 
 /** One grouped bin entry, merged from rows with identical thread, length and head. */
@@ -336,6 +476,8 @@ export interface BatchGroup {
   widthUnits: number;
   /** How many raw rows merged into this group. */
   rowCount: number;
+  /** Imperial length as entered, taken from the first merged row that had one. */
+  enteredLengthText: string | null;
 }
 
 /**
@@ -355,11 +497,15 @@ export function groupBatchRows(rows: GroupableRow[]): BatchGroup[] {
         quantity: row.quantity,
         widthUnits: row.widthUnits,
         rowCount: 1,
+        enteredLengthText: row.enteredLengthText ?? null,
       });
     } else {
       existing.quantity += row.quantity;
       existing.widthUnits = Math.max(existing.widthUnits, row.widthUnits);
       existing.rowCount += 1;
+      if (existing.enteredLengthText === null) {
+        existing.enteredLengthText = row.enteredLengthText ?? null;
+      }
     }
   }
   return [...groups.values()];

@@ -6,7 +6,8 @@ import { useBinQueue } from '../stores/binQueue';
 import { useBinTemplates } from '../stores/binTemplates';
 import { generateLabeledBinUnion } from '../workerClient';
 import { meshToStlBlob } from '../engine/gridfinity/stlExport';
-import { iconByName } from '../engine/label/icons';
+import { resolveLabelIcon } from '../labelIcons';
+import type { LabelIcon } from '../engine/label/icons';
 import type { BinEntry, BinTemplate } from '../engine/plan/types';
 import FootprintThumb from './FootprintThumb.vue';
 
@@ -34,8 +35,8 @@ function cardTitle(entry: BinEntry): string {
   return entry.labelText !== '' ? entry.labelText : sizeLabel(entry);
 }
 
-function labelIconPath(name: string): string {
-  return iconByName(name).path;
+function labelIconOf(name: string): LabelIcon | null {
+  return resolveLabelIcon(name);
 }
 
 async function downloadStl(entry: BinEntry): Promise<void> {
@@ -52,6 +53,7 @@ async function downloadStl(entry: BinEntry): Promise<void> {
       dividerCountY: entry.dividerCountY,
       perforatedBase: entry.perforatedBase,
       labelText: entry.labelText,
+      labelText2: entry.labelText2,
       labelIcon: entry.labelIcon,
     });
     const blob = meshToStlBlob(mesh);
@@ -468,6 +470,9 @@ watch(
             <v-card-subtitle v-if="entry.labelText !== ''">
               {{ sizeLabel(entry) }}
             </v-card-subtitle>
+            <div v-if="entry.labelText2 !== ''" class="text-caption text-medium-emphasis">
+              {{ entry.labelText2 }}
+            </div>
             <template #append>
               <v-icon
                 v-if="sessionActive && selectedIds.has(entry.id)"
@@ -487,15 +492,19 @@ watch(
           <v-divider />
           <v-card-text class="py-2 d-flex align-center flex-wrap ga-1">
             <v-chip v-if="entry.labelIcon !== null" size="small" variant="text">
-              <template #prepend>
+              <template v-if="labelIconOf(entry.labelIcon) !== null" #prepend>
                 <svg
                   width="14"
                   height="14"
-                  viewBox="0 0 100 100"
+                  :viewBox="labelIconOf(entry.labelIcon)!.viewBox.join(' ')"
                   class="mr-1"
                   aria-hidden="true"
                 >
-                  <path :d="labelIconPath(entry.labelIcon)" fill="currentColor" fill-rule="evenodd" />
+                  <path
+                    :d="labelIconOf(entry.labelIcon)!.path"
+                    fill="currentColor"
+                    fill-rule="evenodd"
+                  />
                 </svg>
               </template>
               {{ entry.labelIcon }}

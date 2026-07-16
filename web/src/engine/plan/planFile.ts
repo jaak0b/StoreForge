@@ -52,6 +52,11 @@ export function validateBinParams(entry: Record<string, unknown>, subject: strin
   if (typeof entry.labelText !== 'string') {
     return `${subject}: labelText must be a string`;
   }
+  // labelText2 was added after the first version-1 plans shipped; older files
+  // simply omit it, so undefined is accepted and defaulted to an empty string.
+  if (entry.labelText2 !== undefined && typeof entry.labelText2 !== 'string') {
+    return `${subject}: labelText2 must be a string`;
+  }
   if (entry.labelIcon !== null && typeof entry.labelIcon !== 'string') {
     return `${subject}: labelIcon must be a string or null`;
   }
@@ -70,6 +75,7 @@ export function pickBinParams(raw: Record<string, unknown>): LabeledBinParams {
     dividerCountY: (raw.dividerCountY as number | undefined) ?? 0,
     perforatedBase: (raw.perforatedBase as boolean | undefined) ?? false,
     labelText: raw.labelText as string,
+    labelText2: (raw.labelText2 as string | undefined) ?? '',
     labelIcon: raw.labelIcon as string | null,
   };
 }
