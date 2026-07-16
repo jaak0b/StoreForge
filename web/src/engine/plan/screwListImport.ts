@@ -451,8 +451,12 @@ const HEAD_ALIASES_REVERSE: Record<HeadType, string> = {
 
 /**
  * Composes the bin label text for a batch, from whichever parts are present:
- * "M3 x 20 FHCS", "M3 x 20", or "M5 NUT" for a lengthless head. An imperial
- * batch prints its length as entered: '#8 x 1-1/2" WOOD'.
+ * "M3 x 20", or "M5 NUT" for a lengthless head. The head type is shown
+ * pictorially via the icon instead of spelled out in the text, so the
+ * abbreviation is dropped once a length is present; a lengthless head (nut,
+ * washer, insert) keeps its abbreviation since the text would otherwise carry
+ * no information at all. An imperial batch prints its length as entered:
+ * '#8 x 1-1/2"'.
  */
 export function composeLabelText(
   thread: string | null,
@@ -462,10 +466,11 @@ export function composeLabelText(
 ): string {
   const parts: string[] = [];
   if (thread !== null) parts.push(thread);
-  if (lengthMm !== null && (head === null || !LENGTHLESS_HEADS.has(head))) {
+  const lengthless = head !== null && LENGTHLESS_HEADS.has(head);
+  if (lengthMm !== null && !lengthless) {
     parts.push(`x ${enteredLengthText ?? lengthMm}`);
   }
-  if (head !== null) parts.push(HEAD_LABEL_ABBREV[head]);
+  if (lengthless) parts.push(HEAD_LABEL_ABBREV[head as HeadType]);
   return parts.join(' ');
 }
 

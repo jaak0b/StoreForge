@@ -56,13 +56,16 @@ describe('svgPathToPolygons', () => {
     }
   });
 
-  it('parses the washer icon (arcs, holes, closepath) into an annulus', () => {
+  it('parses the washer icon (arcs, holes, closepath) into an annulus plus a side view', () => {
     const icon = iconByName('washer');
     const contours = svgPathToPolygons(icon.path);
-    expect(contours.length).toBe(2);
+    // End-view annulus (outer + hole) plus the side-view plate: 3 contours.
+    expect(contours.length).toBe(3);
     const solid = extrudeLabel(m, contours, 1);
     expect(solid.status()).toBe('NoError');
-    expect(solid.genus()).toBe(1);
+    // The end view's hole and the side view's disconnection from it combine
+    // to a reported genus of 0 (one hole minus one extra component).
+    expect(solid.genus()).toBe(0);
     solid.delete();
   });
 
@@ -78,17 +81,23 @@ describe('svgPathToPolygons', () => {
   });
 
   it('extrudes each icon to its expected genus (holes present exactly where designed)', () => {
+    // The two-view fastener icons are two disconnected silhouettes (end view
+    // plus side view). manifold3d's reported genus for a disconnected mesh is
+    // (sum of each component's genus) - (component count - 1), so an end
+    // view with one drive hole and a solid side view reports genus 0 (1 - 1),
+    // and a solid end view (hex bolt, brad, dowel: no drive hole) reports -1
+    // (0 - 1).
     const expected: Record<string, number> = {
       'countersunk screw': 0,
       'pan head screw': 0,
       'cap head screw': 0,
-      'hex bolt': 0,
-      'hex nut': 1,
-      washer: 1,
+      'hex bolt': -1,
+      'hex nut': 0,
+      washer: 0,
       'threaded insert': 0,
       'self-tapping screw': 0,
-      brad: 0,
-      dowel: 0,
+      brad: -1,
+      dowel: -1,
       'pocket screw': 0,
       cable: 0,
       battery: 0,

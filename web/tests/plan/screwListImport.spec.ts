@@ -267,45 +267,45 @@ describe('parseShorthand imperial', () => {
   });
 
   it('maps the brad, dowel and pocket screw aliases with lengths and labels', () => {
-    const cases: Array<[string, string, string]> = [
-      ['brad', 'brad', 'BRAD'],
-      ['dowel', 'dowel', 'DOWEL'],
-      ['pocket', 'pocket screw', 'POCKET'],
-      ['pocket screw', 'pocket screw', 'POCKET'],
+    const cases: Array<[string, string]> = [
+      ['brad', 'brad'],
+      ['dowel', 'dowel'],
+      ['pocket', 'pocket screw'],
+      ['pocket screw', 'pocket screw'],
     ];
-    for (const [alias, head, abbrev] of cases) {
+    for (const [alias, head] of cases) {
       const result = parseShorthand(`m4x30 ${alias}`);
       expect(result.batches[0].head, alias).toBe(head);
       expect(result.batches[0].lengthMm, alias).toBe(30);
-      expect(composeLabelText('M4', 30, result.batches[0].head)).toBe(`M4 x 30 ${abbrev}`);
+      expect(composeLabelText('M4', 30, result.batches[0].head)).toBe('M4 x 30');
     }
   });
 });
 
 describe('composeLabelText', () => {
-  it('composes thread, length and head abbreviation', () => {
-    expect(composeLabelText('M3', 20, 'countersunk screw')).toBe('M3 x 20 FHCS');
+  it('composes thread and length, dropping the head abbreviation', () => {
+    expect(composeLabelText('M3', 20, 'countersunk screw')).toBe('M3 x 20');
   });
 
   it('omits the head part when unspecified', () => {
     expect(composeLabelText('M3', 20, null)).toBe('M3 x 20');
   });
 
-  it('drops the length for a lengthless head', () => {
+  it('keeps the head abbreviation for a lengthless head, since it is the only label text', () => {
     expect(composeLabelText('M5', null, 'hex nut')).toBe('M5 NUT');
     expect(composeLabelText('M5', 10, 'hex nut')).toBe('M5 NUT');
     expect(composeLabelText('M4', null, 'washer')).toBe('M4 WASHER');
     expect(composeLabelText('M4', null, 'threaded insert')).toBe('M4 INSERT');
   });
 
-  it('uses the distinct wood and self-tapping abbreviations', () => {
-    expect(composeLabelText('M4', 30, 'wood screw')).toBe('M4 x 30 WOOD');
-    expect(composeLabelText('M4', 30, 'self-tapping screw')).toBe('M4 x 30 ST');
+  it('drops the wood and self-tapping abbreviations once a length is present', () => {
+    expect(composeLabelText('M4', 30, 'wood screw')).toBe('M4 x 30');
+    expect(composeLabelText('M4', 30, 'self-tapping screw')).toBe('M4 x 30');
   });
 
-  it('prints an imperial batch with its length as entered', () => {
-    expect(composeLabelText('#8', 38, 'wood screw', '1-1/2"')).toBe('#8 x 1-1/2" WOOD');
-    expect(composeLabelText('1/4-20', 25, 'hex bolt', '1"')).toBe('1/4-20 x 1" HEX');
+  it('prints an imperial batch with its length as entered, no head abbreviation', () => {
+    expect(composeLabelText('#8', 38, 'wood screw', '1-1/2"')).toBe('#8 x 1-1/2"');
+    expect(composeLabelText('1/4-20', 25, 'hex bolt', '1"')).toBe('1/4-20 x 1"');
   });
 });
 

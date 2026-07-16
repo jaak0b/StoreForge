@@ -1,13 +1,18 @@
 /**
  * Icon set for bin labels: original filled silhouettes of common hardware,
- * drawn for this project (no external license applies). Fasteners are shown
- * in side view, head on the left and threaded shank on the right, with bold
- * triangular thread teeth so they stay readable when printed a few
- * millimetres tall. Nut and washer are shown face on. The general category
- * adds silhouettes of common workshop items drawn to the same rules. Each
- * icon is a single
- * SVG path in a 100 x 100 viewBox, y down as in SVG, filled with the
+ * drawn for this project (no external license applies). Each icon is a
+ * single SVG path in a 100 x 100 viewBox, y down as in SVG, filled with the
  * even-odd rule so ring-shaped icons keep their holes.
+ *
+ * Fastener head-type icons (the ones named in HEAD_ICON_NAME) use a two-view
+ * technical-drawing layout: an end view on the left (x 0-44, a filled circle
+ * or hexagon with the drive cut out as an even-odd hole: hex socket, Phillips
+ * cross, square, or no hole where there is no drive) and a side view on the
+ * right (x 56-100, the head profile silhouette plus a smooth shaft with no
+ * thread teeth, since teeth that fine do not print cleanly). The 12-unit gap
+ * between the two views keeps them visually separate. The general category
+ * adds silhouettes of common workshop items drawn to the same single-view
+ * rules as before.
  */
 
 /** The picker category an icon belongs to. */
@@ -29,106 +34,128 @@ const VIEW_BOX: [number, number, number, number] = [0, 0, 100, 100];
 
 export const LABEL_ICONS: LabelIcon[] = [
   {
-    // Flat countersunk head on the left, fully threaded tapered shank
-    // running out to a point on the right.
+    // Two-view: end view is a circle with a hex-socket hole (flat head cap
+    // screws take a hex key); side view is the flat, tapered countersunk
+    // head profile plus a smooth shaft.
     name: 'countersunk screw',
     path:
-      'M2 28L16 39L24 26.1L32 41.2L40 28.3L48 43.4L56 34.3L64 45.6L72 40.6' +
-      'L80 47.8L88 46.9L96 50L88 53.1L80 52.2L72 59.4L64 54.4L56 65.7L48 56.6' +
-      'L40 71.7L32 58.8L24 73.9L16 61L2 72Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M33 50L28.5 42.21L19.5 42.21L15 50L19.5 57.79L28.5 57.79Z' +
+      'M56 30L56 70L78 56L100 56L100 44L78 44Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Chamfered pan head, uniform machine thread, blunt end.
+    // Two-view: end view is a circle with a small hex-socket hole (button
+    // head cap screws take a hex key); side view is the low domed head
+    // profile plus a smooth shaft.
     name: 'pan head screw',
     path:
-      'M2 34L8 27L20 27L20 41L28 28L36 41L44 28L52 41L60 28L68 41L76 28' +
-      'L84 41L92 41L92 59L84 59L76 72L68 59L60 72L52 59L44 72L36 59L28 72' +
-      'L20 59L20 73L8 73L2 66Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M31 50L27.5 43.94L20.5 43.94L17 50L20.5 56.06L27.5 56.06Z' +
+      'M56 34L74 34L74 43L100 43L100 57L74 57L74 66L56 66Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Tall cylindrical socket head, uniform machine thread, blunt end.
+    // Two-view: end view is a circle with a larger hex-socket hole (socket
+    // cap screws take a hex key); side view is the tall cylindrical head
+    // profile plus a smooth shaft.
     name: 'cap head screw',
     path:
-      'M2 28L26 28L26 41L34 29L42 41L50 29L58 41L66 29L74 41L82 29L90 41' +
-      'L92 41L92 59L90 59L82 71L74 59L66 71L58 59L50 71L42 59L34 71L26 59' +
-      'L26 72L2 72Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M34 50L29 41.34L19 41.34L14 50L19 58.66L29 58.66Z' +
+      'M56 30L80 30L80 43L100 43L100 57L80 57L80 70L56 70Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Chamfered hex head in side view, plain shank, threaded end.
+    // Two-view: end view is a solid hexagon (the wrench flats, no drive
+    // hole); side view is the chamfered hex head profile plus a smooth
+    // shank.
     name: 'hex bolt',
     path:
-      'M2 36L9 29L22 29L22 41L58 41L66 29L74 41L82 29L90 41L94 41L94 59' +
-      'L90 59L82 71L74 59L66 71L58 59L22 59L22 71L9 71L2 64Z',
+      'M44 50L34 32.68L14 32.68L4 50L14 67.32L34 67.32Z' +
+      'M56 38L62 30L74 30L80 38L80 43L100 43L100 57L80 57L80 62L74 70L62 70L56 62Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Face-on hexagon with a round hole (even-odd).
+    // Two-view: end view is a hexagon with a round bore (even-odd); side
+    // view is the short chamfered block profile of the nut, no shaft.
     name: 'hex nut',
     path:
-      'M96 50L73 89.8L27 89.8L4 50L27 10.2L73 10.2Z' +
-      'M50 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z',
+      'M44 50L34 32.68L14 32.68L4 50L14 67.32L34 67.32Z' +
+      'M24 42a8 8 0 1 0 0 16a8 8 0 1 0 0-16Z' +
+      'M56 38L62 30L90 30L96 38L96 62L90 70L62 70L56 62Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Face-on annulus (even-odd).
+    // Two-view: end view is an annulus (even-odd), the bore through the
+    // washer; side view is the thin flat plate profile.
     name: 'washer',
     path:
-      'M50 5a45 45 0 1 0 0 90a45 45 0 1 0 0-90Z' +
-      'M50 29a21 21 0 1 0 0 42a21 21 0 1 0 0-42Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M24 40a10 10 0 1 0 0 20a10 10 0 1 0 0-20Z' +
+      'M56 44L100 44L100 56L56 56Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Heat-set insert: plain collar on the left, bold knurled band,
-    // chamfered lead end on the right.
+    // Two-view: end view is an annulus (even-odd), the insert's internal
+    // thread bore; side view is the plain collar with a chamfered lead end,
+    // no knurl teeth so it stays printable at a few millimetres tall.
     name: 'threaded insert',
     path:
-      'M16 26L28 26L34 38L40 26L46 38L52 26L58 38L64 26L70 38L76 26L84 36' +
-      'L84 64L76 74L70 62L64 74L58 62L52 74L46 62L40 74L34 62L28 74L16 74Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M24 42a8 8 0 1 0 0 16a8 8 0 1 0 0-16Z' +
+      'M56 36L86 36L94 44L94 56L86 64L56 64Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Sheet metal screw: pan head, coarse deep thread, pointed tip.
+    // Two-view: end view is a circle with a Phillips cross-slot hole
+    // (even-odd); side view is the low domed head profile plus a smooth
+    // shaft tapered to a point (also used for wood screws).
     name: 'self-tapping screw',
     path:
-      'M2 34L8 27L20 27L20 42L30 28L40 42L50 28L60 42L70 28L80 36.5L88 47.5' +
-      'L96 50L88 52.5L80 63.5L70 72L60 58L50 72L40 58L30 72L20 58L20 73' +
-      'L8 73L2 66Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M20 37L28 37L28 46L37 46L37 54L28 54L28 63L20 63L20 54L11 54L11 46L20 46Z' +
+      'M56 34L74 34L74 43L92 43L100 50L92 57L74 57L74 66L56 66Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Thin nail in side view: a small flat head on the left and a slender
-    // shank running out to a point on the right.
+    // Two-view: end view is a plain filled circle (a brad has no drive);
+    // side view is a small flat head plus a slender shank running out to a
+    // point.
     name: 'brad',
     path:
-      'M2 28L10 28L10 43L88 43L98 50L88 57L10 57L10 72L2 72Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M56 38L64 38L64 46L88 46L100 50L88 54L64 54L64 62L56 62Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Plain cylindrical pin in side view with a chamfer on each end.
+    // Two-view: end view is a plain filled circle (round cross-section, no
+    // drive); side view is a straight rod with a chamfer at each end.
     name: 'dowel',
     path:
-      'M10 30L90 30L98 38L98 62L90 70L10 70L2 62L2 38Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M60 40L92 40L96 44L96 56L92 60L60 60L56 56L56 44Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
   {
-    // Pocket-hole screw: chamfered pan head, coarse deep thread, blunt tip.
+    // Two-view: end view is a circle with a square-drive hole (pocket
+    // screws commonly take a square bit); side view is the wide flat
+    // flange head profile plus a smooth shaft tapered to a point.
     name: 'pocket screw',
     path:
-      'M2 34L8 27L20 27L20 42L32 28L44 42L56 28L68 42L80 28L92 42L92 58' +
-      'L80 72L68 58L56 72L44 58L32 72L20 58L20 73L8 73L2 66Z',
+      'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
+      'M17 43L31 43L31 57L17 57Z' +
+      'M56 30L70 30L70 43L92 43L100 50L92 57L70 57L70 70L56 70Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
