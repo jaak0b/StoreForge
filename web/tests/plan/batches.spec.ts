@@ -17,7 +17,6 @@ function entry(overrides: Partial<BinEntry> = {}): BinEntry {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    perforatedBase: false,
     labelText: 'M3 bolts',
     labelText2: '',
     labelIcon: 'bolt',

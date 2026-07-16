@@ -26,8 +26,6 @@ import {
   MAGNET_HOLE_DIAMETER,
   MAGNET_HOLE_FROM_CELL_EDGE,
   OUTER_CORNER_RADIUS,
-  PERFORATION_HOLE_DIAMETER,
-  PERFORATION_RIB,
   PITCH,
   WALL_THICKNESS,
 } from './constants';
@@ -135,78 +133,6 @@ function footMagnetCutters(m: ManifoldToplevel): Manifold {
 }
 
 /**
- * Positions (relative to a grid cell centre) of the perforation holes in one
- * cell of a perforated floor. The holes form a centred square grid of
- * PERFORATION_HOLE_DIAMETER circles with PERFORATION_RIB solid ribs between
- * them, confined to the flat bottom footprint of the stacking foot inset by
- * one rib width, so a hole can never breach the foot's chamfered side walls.
- * When the bin has magnet holes, any perforation whose rib to a magnet hole
- * would fall below PERFORATION_RIB is dropped, keeping each magnet seat solid.
- */
-export function perforationCellCentres(magnetHoles: boolean): Array<[number, number]> {
-  const footBottomSize =
-    BASE_TOP_SIZE - 2 * FOOT_UPPER_CHAMFER - 2 * FOOT_LOWER_CHAMFER;
-  const regionHalf = footBottomSize / 2 - PERFORATION_RIB;
-  const step = PERFORATION_HOLE_DIAMETER + PERFORATION_RIB;
-  const span = 2 * regionHalf - PERFORATION_HOLE_DIAMETER;
-  const perAxis = Math.floor(span / step) + 1;
-  const start = -((perAxis - 1) / 2) * step;
-
-  const magnetOffset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
-  const keepOut =
-    MAGNET_HOLE_DIAMETER / 2 + PERFORATION_HOLE_DIAMETER / 2 + PERFORATION_RIB;
-
-  const centres: Array<[number, number]> = [];
-  for (let i = 0; i < perAxis; i++) {
-    for (let j = 0; j < perAxis; j++) {
-      const x = start + i * step;
-      const y = start + j * step;
-      if (magnetHoles) {
-        let nearMagnet = false;
-        for (const sx of [-1, 1]) {
-          for (const sy of [-1, 1]) {
-            if (Math.hypot(x - sx * magnetOffset, y - sy * magnetOffset) < keepOut) {
-              nearMagnet = true;
-            }
-          }
-        }
-        if (nearMagnet) continue;
-      }
-      centres.push([x, y]);
-    }
-  }
-  return centres;
-}
-
-/**
- * Perforation cutters for the whole bin: one cylinder per hole per grid cell,
- * spanning from the bed (z = 0) up to the top of the floor, so each hole goes
- * clean through the foot and the floor slab but never above the floor.
- */
-function perforationCutters(m: ManifoldToplevel, params: BinParams): Manifold {
-  const { gridX, gridY, magnetHoles } = params;
-  const centres = perforationCellCentres(magnetHoles);
-  const cutters: Manifold[] = [];
-  for (let ix = 0; ix < gridX; ix++) {
-    for (let iy = 0; iy < gridY; iy++) {
-      const cx = (ix - (gridX - 1) / 2) * PITCH;
-      const cy = (iy - (gridY - 1) / 2) * PITCH;
-      for (const [hx, hy] of centres) {
-        cutters.push(
-          m.Manifold.cylinder(
-            FLOOR_TOP,
-            PERFORATION_HOLE_DIAMETER / 2,
-            PERFORATION_HOLE_DIAMETER / 2,
-            4 * CORNER_SEGMENTS,
-          ).translate(cx + hx, cy + hy, 0),
-        );
-      }
-    }
-  }
-  return m.Manifold.union(cutters);
-}
-
-/**
  * Interior divider walls. dividerCountX walls stand perpendicular to the X
  * axis (splitting the width into dividerCountX + 1 equal compartments), and
  * likewise for Y. Each wall is DIVIDER_THICKNESS thick, rises from inside the
@@ -267,7 +193,6 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
     magnetHoles,
     dividerCountX,
     dividerCountY,
-    perforatedBase,
   } = params;
 
   const outerWidth = gridX * PITCH - 0.5;
@@ -345,10 +270,6 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   if (dividerCountX > 0 || dividerCountY > 0) {
     const dividers = buildDividers(m, params, outerPoly, outerWidth, outerDepth, bodyTop);
     result = m.Manifold.union([result, dividers]);
-  }
-
-  if (perforatedBase) {
-    result = m.Manifold.difference(result, perforationCutters(m, params));
   }
 
   if (result.status() !== 'NoError') {

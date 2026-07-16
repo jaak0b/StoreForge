@@ -22,8 +22,6 @@ export interface BinEntry {
   dividerCountX: number;
   /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
   dividerCountY: number;
-  /** Whether the floor is cut away in a grid of perforation holes. */
-  perforatedBase: boolean;
   /** Text embossed on the label shelf. An empty string means no text. */
   labelText: string;
   /** Optional smaller second text line under the first. Empty means none. */
@@ -80,26 +78,3 @@ export interface PlanFile {
 
 /** The current envelope format version. */
 export const PLAN_FILE_VERSION = 2;
-
-/** A named, reusable set of bin design parameters. */
-export interface BinTemplate {
-  /** Stable unique identifier (UUID). */
-  id: string;
-  /** User-chosen display name of the template. */
-  name: string;
-  /** The saved bin design parameters. */
-  params: LabeledBinParams;
-  /** ISO 8601 timestamp of when the template was saved. */
-  createdAt: string;
-}
-
-/** Versioned envelope the templates are persisted as. */
-export interface TemplateFile {
-  /** Envelope format version. Currently always 1. */
-  version: 1;
-  /** All saved templates. */
-  templates: BinTemplate[];
-}
-
-/** The current template envelope format version. */
-export const TEMPLATE_FILE_VERSION = 1;

@@ -43,17 +43,14 @@ export function validateBinParams(entry: Record<string, unknown>, subject: strin
   if (typeof entry.magnetHoles !== 'boolean') {
     return `${subject}: magnetHoles must be true or false`;
   }
-  // dividerCountX/Y and perforatedBase were added after the first version-1
-  // plans shipped; older files simply omit them, so undefined is accepted and
-  // defaulted (the migration path stays backward compatible).
+  // dividerCountX/Y were added after the first version-1 plans shipped; older
+  // files simply omit them, so undefined is accepted and defaulted (the
+  // migration path stays backward compatible).
   if (entry.dividerCountX !== undefined && !isPositiveInteger(entry.dividerCountX, 0)) {
     return `${subject}: dividerCountX must be an integer of at least 0`;
   }
   if (entry.dividerCountY !== undefined && !isPositiveInteger(entry.dividerCountY, 0)) {
     return `${subject}: dividerCountY must be an integer of at least 0`;
-  }
-  if (entry.perforatedBase !== undefined && typeof entry.perforatedBase !== 'boolean') {
-    return `${subject}: perforatedBase must be true or false`;
   }
   if (typeof entry.labelText !== 'string') {
     return `${subject}: labelText must be a string`;
@@ -79,7 +76,6 @@ export function pickBinParams(raw: Record<string, unknown>): LabeledBinParams {
     magnetHoles: raw.magnetHoles as boolean,
     dividerCountX: (raw.dividerCountX as number | undefined) ?? 0,
     dividerCountY: (raw.dividerCountY as number | undefined) ?? 0,
-    perforatedBase: (raw.perforatedBase as boolean | undefined) ?? false,
     labelText: raw.labelText as string,
     labelText2: (raw.labelText2 as string | undefined) ?? '',
     labelIcon: raw.labelIcon as string | null,

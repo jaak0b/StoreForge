@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useDisplay } from 'vuetify';
+import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { iconByName } from '../engine/label/icons';
@@ -18,6 +19,7 @@ import {
 } from '../engine/plan/screwListImport';
 import type { LabeledBinParams } from '../engine/gridfinity/types';
 import BinViewport from './BinViewport.vue';
+import MoreOptions from './MoreOptions.vue';
 
 /**
  * The Screw entry tab of the add-bin card: one screw at a time through four
@@ -27,6 +29,7 @@ import BinViewport from './BinViewport.vue';
  */
 
 const queue = useBinQueue();
+const store = useBinDesigner();
 const { smAndDown } = useDisplay();
 
 const METRIC_THREADS = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
@@ -40,10 +43,9 @@ const THREAD_ITEMS = [
   ...IMPERIAL_THREADS,
 ];
 
-/** Defaults matching the designer's initial bin. */
+/** Height matching the designer's initial bin; the screw entry form does not
+ * expose a height field, so it stays fixed. */
 const DEFAULT_HEIGHT_UNITS = 3;
-const DEFAULT_STACKING_LIP = true;
-const DEFAULT_MAGNET_HOLES = false;
 
 const thread = ref('M3');
 const head = ref<HeadType>('countersunk screw');
@@ -82,11 +84,10 @@ function binParamsFor(batch: {
     gridX: effectiveLength !== null ? computeBinWidthUnits(effectiveLength) : 1,
     gridY: 1,
     heightUnits: DEFAULT_HEIGHT_UNITS,
-    stackingLip: DEFAULT_STACKING_LIP,
-    magnetHoles: DEFAULT_MAGNET_HOLES,
-    dividerCountX: 0,
-    dividerCountY: 0,
-    perforatedBase: false,
+    stackingLip: store.stackingLip,
+    magnetHoles: store.magnetHoles,
+    dividerCountX: store.dividerCountX,
+    dividerCountY: store.dividerCountY,
     labelText: composeLabelText(
       batch.thread,
       effectiveLength,
@@ -118,7 +119,9 @@ const addedText = ref('');
 /** Adds the form's screw as a bin; the form keeps its values. */
 function addFormBin(): void {
   if (!formValid.value) return;
-  queue.add(formBinParams.value, count.value);
+  const cleanNotes = store.notes.trim();
+  const id = queue.add(formBinParams.value, count.value);
+  if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
   addedText.value = `Added ${formBinParams.value.labelText} to the queue.`;
   addedSnackbar.value = true;
 }
@@ -148,8 +151,10 @@ const quickHint = computed(() => {
 
 function commitShorthand(): void {
   if (quickBatches.value.length === 0 || parsed.value.errors.length > 0) return;
+  const cleanNotes = store.notes.trim();
   for (const batch of quickBatches.value) {
-    queue.add(binParamsFor(batch), batch.quantity);
+    const id = queue.add(binParamsFor(batch), batch.quantity);
+    if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
   }
   addedText.value = `Added ${quickBatches.value.length} ${
     quickBatches.value.length === 1 ? 'bin' : 'bins'
@@ -230,6 +235,8 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
         The length must be a whole number between {{ MIN_LENGTH_MM }} and
         {{ MAX_LENGTH_MM }} mm.
       </p>
+
+      <MoreOptions :per-bin-fields="false" />
 
       <v-btn
         color="primary"

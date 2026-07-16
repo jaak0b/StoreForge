@@ -14,8 +14,6 @@ export interface BinParams {
   dividerCountX: number;
   /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
   dividerCountY: number;
-  /** Whether the floor is cut away in a grid of perforation holes. */
-  perforatedBase: boolean;
 }
 
 /** Parameters describing a Gridfinity bin with an optional embossed label. */

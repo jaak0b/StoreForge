@@ -19,7 +19,6 @@ function entry(overrides: Partial<BinEntry> = {}): BinEntry {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    perforatedBase: false,
     labelText: 'M3 bolts',
     labelText2: '',
     labelIcon: 'bolt',
@@ -158,11 +157,10 @@ describe('version-1 migration', () => {
     });
   });
 
-  it('defaults dividers, perforation and the second label line on old version-1 files', () => {
+  it('defaults dividers and the second label line on old version-1 files', () => {
     const legacy: Record<string, unknown> = { ...entry(), status: 'queued' };
     delete legacy.dividerCountX;
     delete legacy.dividerCountY;
-    delete legacy.perforatedBase;
     delete legacy.labelText2;
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
@@ -189,7 +187,6 @@ describe('validateEntry', () => {
     ['magnetHoles', 1, 'magnetHoles must be true or false'],
     ['dividerCountX', -1, 'dividerCountX must be an integer of at least 0'],
     ['dividerCountY', 0.5, 'dividerCountY must be an integer of at least 0'],
-    ['perforatedBase', 'yes', 'perforatedBase must be true or false'],
     ['labelText', null, 'labelText must be a string'],
     ['labelText2', 7, 'labelText2 must be a string'],
     ['labelIcon', 7, 'labelIcon must be a string or null'],

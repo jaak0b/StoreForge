@@ -45,7 +45,6 @@ function params(overrides: Partial<LabeledBinParams> = {}): LabeledBinParams {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    perforatedBase: false,
     labelText: 'M3',
     labelText2: '',
     labelIcon: null,
