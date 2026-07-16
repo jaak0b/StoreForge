@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Concept A: Workbench</title>
+<style>
+  :root{
+    --bg:#181a1f; --panel:#1f232b; --panel2:#242832; --line:#333947;
+    --text:#e8eaf0; --dim:#9aa3b2; --dim2:#6b7383;
+    --accent:#5fa8ff; --accent2:#7fd68a; --warn:#e0a63e; --bad:#e0655f;
+    --mono:'Cascadia Code','Consolas',monospace;
+    --sans:'Segoe UI',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;}
+  .callout{
+    background:#2a2e22; border:1px dashed #565f3a; color:#b9c48a;
+    font-size:11px; padding:4px 8px; border-radius:3px; margin:4px 0;
+    font-family:var(--sans); line-height:1.4;
+  }
+  .callout b{color:#d7e0a8;}
+
+  /* ---- App shell ---- */
+  .app{display:grid; grid-template-rows:auto 1fr; height:100vh;}
+  .topbar{
+    display:flex; align-items:center; gap:16px; padding:6px 12px;
+    background:var(--panel2); border-bottom:1px solid var(--line);
+  }
+  .topbar .brand{font-weight:600; letter-spacing:.02em; color:var(--text); font-size:13px;}
+  .topbar .brand span{color:var(--accent);}
+  .modebar{display:flex; gap:2px; margin-left:8px;}
+  .modebar button{
+    background:transparent; border:1px solid transparent; color:var(--dim);
+    padding:5px 12px; font-size:12px; cursor:pointer; border-radius:4px;
+  }
+  .modebar button.active{background:var(--panel); border-color:var(--line); color:var(--text); font-weight:600;}
+  .modebar button:hover:not(.active){color:var(--text);}
+  .topbar .spacer{flex:1;}
+  .topbar .stat{color:var(--dim); font-size:12px; margin-right:14px;}
+  .topbar .stat b{color:var(--text);}
+  .topbar .iconbtn{
+    background:var(--panel); border:1px solid var(--line); color:var(--dim);
+    padding:5px 10px; border-radius:4px; font-size:12px; cursor:pointer; margin-left:6px;
+  }
+  .topbar .iconbtn:hover{color:var(--text); border-color:#4a5163;}
+
+  .workspace{display:grid; grid-template-columns:300px 1fr 320px; height:100%; overflow:hidden;}
+  .pane{overflow-y:auto; border-right:1px solid var(--line);}
+  .pane:last-child{border-right:none;}
+
+  /* ---- Left rail: Add bin ---- */
+  .rail{background:var(--panel); padding:10px;}
+  .rail h2{font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:14px 0 6px; font-weight:600;}
+  .rail h2:first-child{margin-top:2px;}
+  .field{margin-bottom:8px;}
+  .field label{display:block; font-size:11px; color:var(--dim); margin-bottom:3px;}
+  .field input, .field select, .field textarea{
+    width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text);
+    padding:6px 8px; border-radius:4px; font-size:12.5px; font-family:var(--sans);
+  }
+  .field input:focus, .field select:focus, .field textarea:focus{outline:1px solid var(--accent); border-color:var(--accent);}
+  .row3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;}
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .shorthand-box{
+    background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:8px;
+  }
+  .shorthand-box textarea{resize:vertical; min-height:44px; font-family:var(--mono); font-size:12px;}
+  .shorthand-preview{margin-top:6px; font-size:11px; color:var(--dim);}
+  .chip-row{display:flex; flex-wrap:wrap; gap:5px; margin-top:6px;}
+  .chip{
+    background:var(--panel2); border:1px solid var(--line); color:var(--dim);
+    padding:3px 8px; border-radius:12px; font-size:11px; cursor:pointer;
+  }
+  .chip:hover{color:var(--text); border-color:#4a5163;}
+  .icon-grid{display:grid; grid-template-columns:repeat(7,1fr); gap:4px; margin-top:4px;}
+  .icon-cell{
+    aspect-ratio:1; background:var(--bg); border:1px solid var(--line); border-radius:4px;
+    display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--dim2); font-size:14px;
+  }
+  .icon-cell.selected{border-color:var(--accent); color:var(--accent); background:#1c2a3a;}
+  .icon-cell:hover{border-color:#4a5163;}
+  .toggles{display:flex; flex-wrap:wrap; gap:6px; margin-top:2px;}
+  .toggle{
+    display:flex; align-items:center; gap:5px; background:var(--bg); border:1px solid var(--line);
+    padding:5px 8px; border-radius:4px; font-size:11.5px; color:var(--dim); cursor:pointer;
+  }
+  .toggle.on{color:var(--accent2); border-color:#3a5a3e; background:#1c2620;}
+  .toggle input{margin:0;}
+  .btn{
+    background:var(--accent); color:#0b1220; border:none; padding:8px 12px; border-radius:5px;
+    font-size:12.5px; font-weight:600; cursor:pointer; width:100%; margin-top:4px;
+  }
+  .btn:hover{filter:brightness(1.08);}
+  .btn.secondary{background:var(--panel2); color:var(--text); border:1px solid var(--line);}
+  .btn.small{width:auto; padding:5px 10px; font-size:11.5px;}
+  .kbd{font-family:var(--mono); background:var(--bg); border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:10.5px; color:var(--dim);}
+
+  /* ---- Center: queue table ---- */
+  .center{background:var(--bg); display:flex; flex-direction:column;}
+  .center-toolbar{
+    display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--line); background:var(--panel);
+  }
+  .search{
+    flex:1; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:5px 8px; color:var(--text); font-size:12px;
+  }
+  .filter-tabs{display:flex; gap:2px;}
+  .filter-tabs button{
+    background:transparent; border:1px solid var(--line); color:var(--dim); padding:4px 10px;
+    font-size:11.5px; cursor:pointer;
+  }
+  .filter-tabs button:first-child{border-radius:4px 0 0 4px;}
+  .filter-tabs button:last-child{border-radius:0 4px 4px 0;}
+  .filter-tabs button.active{background:var(--panel2); color:var(--text);}
+  .bulk-actions{display:flex; gap:6px;}
+  .bulk-actions button{
+    background:var(--panel2); border:1px solid var(--line); color:var(--dim); padding:5px 9px;
+    border-radius:4px; font-size:11.5px; cursor:pointer;
+  }
+  .bulk-actions button:hover{color:var(--text);}
+
+  table.queue{width:100%; border-collapse:collapse; font-size:12.5px;}
+  table.queue thead th{
+    position:sticky; top:0; background:var(--panel); text-align:left; padding:7px 8px; color:var(--dim);
+    font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line);
+  }
+  table.queue tbody td{padding:6px 8px; border-bottom:1px solid #262b35; vertical-align:middle;}
+  table.queue tbody tr:hover{background:#20242e;}
+  table.queue tbody tr.selected{background:#1c2a3a;}
+  .swatch{width:34px; height:26px; background:var(--panel2); border:1px solid var(--line); border-radius:3px; display:inline-flex; align-items:center; justify-content:center; color:var(--dim2); font-size:13px;}
+  .dims{font-family:var(--mono); color:var(--dim);}
+  .label-cell .l1{color:var(--text);}
+  .label-cell .l2{color:var(--dim); font-size:11px;}
+  .status-pill{padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:600;}
+  .status-pill.queued{background:#2a2e40; color:var(--accent);}
+  .status-pill.printed{background:#20321f; color:var(--accent2);}
+  .status-pill.failed{background:#3a2222; color:var(--bad);}
+  .row-actions{display:flex; gap:3px;}
+  .row-actions button{
+    background:transparent; border:1px solid var(--line); color:var(--dim); width:24px; height:24px;
+    border-radius:4px; cursor:pointer; font-size:12px; line-height:1;
+  }
+  .row-actions button:hover{color:var(--text); border-color:#4a5163;}
+  .qty-stepper{display:inline-flex; align-items:center; gap:4px;}
+  .qty-stepper button{
+    background:var(--panel2); border:1px solid var(--line); color:var(--dim); width:18px; height:18px;
+    border-radius:3px; cursor:pointer; font-size:11px; line-height:1; padding:0;
+  }
+  input.inline-edit{
+    background:transparent; border:1px solid transparent; color:var(--text); font-size:12.5px; width:100%;
+    padding:2px 3px; border-radius:3px; font-family:var(--sans);
+  }
+  input.inline-edit:hover{border-color:var(--line);}
+  input.inline-edit:focus{border-color:var(--accent); background:var(--bg); outline:none;}
+
+  /* ---- Right: context panel ---- */
+  .context{background:var(--panel); padding:12px; display:flex; flex-direction:column; gap:10px;}
+  .context h2{font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 4px; font-weight:600;}
+  .viewport{
+    background:#10131a; border:1px solid var(--line); border-radius:6px; height:220px;
+    display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden;
+  }
+  .viewport .grid-floor{
+    position:absolute; inset:0; background-image:
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size:14px 14px; transform:perspective(300px) rotateX(45deg) scale(1.4); opacity:.6;
+  }
+  .bin3d{
+    width:120px; height:80px; background:linear-gradient(145deg,#3a4358,#282e3d);
+    border:1px solid #4a5468; border-radius:4px; position:relative; z-index:1;
+    box-shadow:0 12px 24px rgba(0,0,0,.5);
+    display:flex; align-items:center; justify-content:center; color:var(--dim); font-size:11px;
+  }
+  .viewport-controls{display:flex; justify-content:space-between; margin-top:6px; font-size:10.5px; color:var(--dim2);}
+  .prop-list{display:grid; grid-template-columns:auto 1fr; gap:4px 10px; font-size:12px;}
+  .prop-list .k{color:var(--dim);}
+  .prop-list .v{color:var(--text); font-family:var(--mono); text-align:right;}
+  .diag-box{background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:8px; margin-top:2px;}
+  .diag-row{display:flex; justify-content:space-between; padding:2px 0; font-family:var(--mono); font-size:11px;}
+  .diag-row .ok{color:var(--accent2);}
+
+  /* Plate panel (shown in plate mode) */
+  .plate-canvas{
+    background:#0f1218; border:1px solid var(--line); border-radius:6px; position:relative; overflow:hidden;
+    aspect-ratio:1/1; margin:0 auto;
+  }
+  .plate-bin{position:absolute; background:#2c3346; border:1px solid var(--accent); border-radius:2px; display:flex; align-items:center; justify-content:center; font-size:9px; color:var(--dim); text-align:center; line-height:1.2;}
+  .preset-row{display:flex; gap:5px; flex-wrap:wrap;}
+  .preset-row button{
+    background:var(--panel2); border:1px solid var(--line); color:var(--dim); padding:4px 8px; border-radius:4px; font-size:11px; cursor:pointer;
+  }
+  .preset-row button.active{border-color:var(--accent); color:var(--accent);}
+
+  /* print session */
+  .session-list{display:flex; flex-direction:column; gap:6px;}
+  .session-item{display:flex; align-items:center; gap:8px; background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:7px 9px;}
+  .session-item .name{flex:1; font-size:12px;}
+  .session-item button{width:26px; height:26px; border-radius:4px; border:1px solid var(--line); background:var(--panel2); color:var(--dim); cursor:pointer;}
+  .session-item button.pass:hover{color:var(--accent2); border-color:#3a5a3e;}
+  .session-item button.fail:hover{color:var(--bad); border-color:#5a3a3a;}
+
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <div class="brand">GRIDFINITY <span>WORKBENCH</span></div>
+    <div class="modebar">
+      <button class="active" data-mode="queue" onclick="setMode('queue')">Queue</button>
+      <button data-mode="plate" onclick="setMode('plate')">Plate</button>
+      <button data-mode="session" onclick="setMode('session')">Print Session</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="stat"><b>8</b> queued</div>
+    <div class="stat"><b>3</b> printed</div>
+    <button class="iconbtn">Import JSON</button>
+    <button class="iconbtn">Export JSON</button>
+  </div>
+
+  <div class="workspace">
+
+    <!-- LEFT RAIL: always-visible add form -->
+    <div class="pane rail">
+      <div class="callout"><b>Design decision:</b> the add-bin form is a permanent rail, not a dialog. It never closes, so building a queue is a rapid loop of fill-fields / hit Enter, no modal round-trips.</div>
+
+      <h2>Quick Add</h2>
+      <div class="field">
+        <label>Size (W &times; D &times; H, grid units)</label>
+        <div class="row3">
+          <input value="2" title="Width">
+          <input value="2" title="Depth">
+          <input value="6" title="Height (7mm units)">
+        </div>
+      </div>
+      <div class="field">
+        <label>Label line 1</label>
+        <input value="M3x20 SHCS" placeholder="Label text">
+      </div>
+      <div class="field">
+        <label>Label line 2 (optional)</label>
+        <input value="x25" placeholder="Second line">
+      </div>
+      <div class="field">
+        <label>Icon</label>
+        <div class="icon-grid">
+          <div class="icon-cell selected">&#9040;</div>
+          <div class="icon-cell">&#9881;</div>
+          <div class="icon-cell">&#128295;</div>
+          <div class="icon-cell">&#128268;</div>
+          <div class="icon-cell">&#9878;</div>
+          <div class="icon-cell">&#128204;</div>
+          <div class="icon-cell">+</div>
+        </div>
+        <div class="shorthand-preview">21 built-ins, or drop a custom SVG on the grid.</div>
+      </div>
+      <div class="field row2">
+        <div>
+          <label>Quantity</label>
+          <input value="1">
+        </div>
+        <div>
+          <label>Template</label>
+          <select><option>None</option><option>Fastener bin 2x2</option><option>Small parts 1x1</option></select>
+        </div>
+      </div>
+      <button class="btn">Add to queue &nbsp;<span class="kbd">Enter</span></button>
+
+      <h2>Screw-List Import</h2>
+      <div class="shorthand-box">
+        <textarea>m3x20 fhcs x5, m5x12 bhcs x10, #8x1-1/2 wood x8</textarea>
+        <div class="shorthand-preview">Parses to 3 bins &middot; sizes auto-fit &middot; icons auto-assigned</div>
+        <div class="chip-row">
+          <div class="chip">m3x16 shcs x20</div>
+          <div class="chip">#6x3/4 wood x12</div>
+        </div>
+        <button class="btn secondary" style="margin-top:8px;">Parse &amp; queue 3 bins</button>
+      </div>
+      <div class="callout">The shorthand box lives right under Quick Add, same panel &mdash; importing a parts list and hand-adding one bin are the same mental action, just different input speed.</div>
+
+      <h2>Bin Options (advanced)</h2>
+      <div class="toggles">
+        <label class="toggle on"><input type="checkbox" checked>Stacking lip</label>
+        <label class="toggle"><input type="checkbox">Magnet holes</label>
+        <label class="toggle"><input type="checkbox">Perforated floor</label>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Dividers (X &times; Y)</label>
+        <div class="row2">
+          <input value="0">
+          <input value="0">
+        </div>
+      </div>
+      <button class="btn secondary">Open full designer</button>
+    </div>
+
+    <!-- CENTER: mode panels -->
+    <div class="pane center" style="border-right:none;">
+
+      <!-- QUEUE MODE -->
+      <div id="mode-queue">
+        <div class="center-toolbar">
+          <input class="search" placeholder="Filter queue... (label, size, icon)">
+          <div class="filter-tabs">
+            <button class="active">All 11</button>
+            <button>Queued 8</button>
+            <button>Printed 3</button>
+          </div>
+          <div class="bulk-actions">
+            <button>Duplicate</button>
+            <button>Delete</button>
+            <button>Mark printed</button>
+          </div>
+        </div>
+        <div class="callout" style="margin:8px 10px;"><b>Design decision:</b> every row action (edit, duplicate, delete, STL download) is an inline icon button, always rendered. Nothing sits behind a kebab menu &mdash; the owner's core complaint was "hidden options everywhere."</div>
+        <table class="queue">
+          <thead>
+            <tr>
+              <th style="width:20px;"><input type="checkbox"></th>
+              <th style="width:44px;">Icon</th>
+              <th>Label</th>
+              <th>Size</th>
+              <th style="width:70px;">Qty</th>
+              <th style="width:90px;">Status</th>
+              <th style="width:120px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="queue-rows">
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#9040;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="M3x20 SHCS"><div class="l2">x25</div></td>
+              <td class="dims">2x2x6</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button title="Edit">&#9998;</button><button title="Duplicate">&#8942;</button><button title="STL">&#8681;</button><button title="Delete">&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#9881;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="M5x12 BHCS"><div class="l2">x10</div></td>
+              <td class="dims">1x2x4</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr class="selected">
+              <td><input type="checkbox" checked></td>
+              <td><span class="swatch">&#128295;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="Wood Screw #8"><div class="l2">1-1/2&Prime; x8</div></td>
+              <td class="dims">2x1x5</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#128268;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="Zip Ties"><div class="l2"></div></td>
+              <td class="dims">2x2x3</td>
+              <td><div class="qty-stepper"><button>-</button><span>2</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#9878;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="Hex Nuts M4"><div class="l2">DIN934</div></td>
+              <td class="dims">1x1x3</td>
+              <td><div class="qty-stepper"><button>-</button><span>4</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#9040;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="M2.5x10 FHCS"><div class="l2">x40</div></td>
+              <td class="dims">1x2x3</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#128204;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="Cotter Pins"><div class="l2"></div></td>
+              <td class="dims">1x1x2</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#128295;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="Wing Nuts M5"><div class="l2"></div></td>
+              <td class="dims">2x1x3</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill queued">queued</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#9040;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="M4x16 SHCS"><div class="l2">x15</div></td>
+              <td class="dims">2x2x5</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill printed">printed</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#9878;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="Washers M4"><div class="l2"></div></td>
+              <td class="dims">1x1x2</td>
+              <td><div class="qty-stepper"><button>-</button><span>2</span><button>+</button></div></td>
+              <td><span class="status-pill printed">printed</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><span class="swatch">&#128268;</span></td>
+              <td class="label-cell"><input class="inline-edit l1" value="Cable Clips"><div class="l2"></div></td>
+              <td class="dims">1x1x2</td>
+              <td><div class="qty-stepper"><button>-</button><span>1</span><button>+</button></div></td>
+              <td><span class="status-pill failed">failed</span></td>
+              <td class="row-actions"><button>&#9998;</button><button>&#8942;</button><button>&#8681;</button><button>&times;</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- PLATE MODE -->
+      <div id="mode-plate" class="hidden" style="padding:12px;">
+        <div class="callout"><b>Design decision:</b> the plate composer reuses the same table-plus-viewport skeleton as Queue, just swaps content. One layout language across modes, not three different UIs to learn.</div>
+        <div class="preset-row" style="margin:8px 0;">
+          <button>150mm</button><button class="active">220mm</button><button>256mm</button><button>Custom</button>
+        </div>
+        <div style="display:flex; gap:16px;">
+          <div style="flex:1;">
+            <div class="plate-canvas" style="width:100%; max-width:420px;">
+              <div class="plate-bin" style="left:6%; top:6%; width:32%; height:32%;">M3x20<br>SHCS</div>
+              <div class="plate-bin" style="left:40%; top:6%; width:18%; height:32%;">M5x12<br>BHCS</div>
+              <div class="plate-bin" style="left:60%; top:6%; width:32%; height:22%;">Wood #8</div>
+              <div class="plate-bin" style="left:6%; top:40%; width:32%; height:18%;">Zip Ties</div>
+              <div class="plate-bin" style="left:40%; top:40%; width:18%; height:18%;">Hex M4</div>
+              <div class="plate-bin" style="left:60%; top:30%; width:32%; height:16%;">M2.5x10</div>
+              <div class="plate-bin" style="left:6%; top:60%; width:18%; height:18%;">Cotter</div>
+              <div class="plate-bin" style="left:26%; top:60%; width:18%; height:18%;">Wing M5</div>
+            </div>
+            <div style="text-align:center; color:var(--dim); font-size:11px; margin-top:6px;">220 x 220mm build plate &middot; 8 bins arranged &middot; 68% area used</div>
+          </div>
+          <div style="width:220px;">
+            <h2 style="font-size:11px; text-transform:uppercase; color:var(--dim);">Plate Actions</h2>
+            <button class="btn secondary" style="margin-bottom:6px;">Auto-arrange</button>
+            <button class="btn secondary" style="margin-bottom:6px;">Add queued bin...</button>
+            <div class="diag-box">
+              <div class="diag-row"><span>Bins on plate</span><span class="ok">8</span></div>
+              <div class="diag-row"><span>Overlap check</span><span class="ok">none</span></div>
+              <div class="diag-row"><span>Clearance</span><span class="ok">3.0 mm</span></div>
+            </div>
+            <h2 style="font-size:11px; text-transform:uppercase; color:var(--dim); margin-top:12px;">Export</h2>
+            <button class="btn" style="margin-bottom:6px;">3MF (two filaments)</button>
+            <button class="btn secondary" style="margin-bottom:6px;">3MF (single color)</button>
+            <button class="btn secondary">STL (plate)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- SESSION MODE -->
+      <div id="mode-session" class="hidden" style="padding:12px;">
+        <div class="callout"><b>Design decision:</b> pass/fail is two buttons per row, right on the queue list &mdash; no separate "session" data entry screen. Failed bins simply stay queued automatically.</div>
+        <h2 style="font-size:11px; text-transform:uppercase; color:var(--dim);">Current Print Session &middot; Plate #4</h2>
+        <div class="session-list">
+          <div class="session-item"><span class="swatch">&#9040;</span><span class="name">M3x20 SHCS &times;1</span><button class="pass" title="Passed">&#10003;</button><button class="fail" title="Failed">&times;</button></div>
+          <div class="session-item"><span class="swatch">&#9881;</span><span class="name">M5x12 BHCS &times;1</span><button class="pass">&#10003;</button><button class="fail">&times;</button></div>
+          <div class="session-item"><span class="swatch">&#128295;</span><span class="name">Wood Screw #8 &times;1</span><button class="pass">&#10003;</button><button class="fail">&times;</button></div>
+          <div class="session-item" style="opacity:.6;"><span class="swatch">&#128268;</span><span class="name">Zip Ties &times;2 &mdash; <span style="color:var(--accent2);">marked printed</span></span><button class="pass">&#10003;</button><button class="fail">&times;</button></div>
+          <div class="session-item" style="opacity:.6;"><span class="swatch">&#128268;</span><span class="name">Cable Clips &times;1 &mdash; <span style="color:var(--bad);">marked failed, requeued</span></span><button class="pass">&#10003;</button><button class="fail">&times;</button></div>
+        </div>
+        <button class="btn" style="max-width:220px; margin-top:12px;">Finish session</button>
+      </div>
+
+    </div>
+
+    <!-- RIGHT: context panel -->
+    <div class="pane context">
+      <div class="callout"><b>Design decision:</b> the right panel is context, not navigation &mdash; it always shows the 3D state of whatever is selected on the left/center (a bin, or the whole plate). No tab you have to remember to check.</div>
+      <h2>Selected: Wood Screw #8</h2>
+      <div class="viewport">
+        <div class="grid-floor"></div>
+        <div class="bin3d">2x1x5 bin<br>live preview</div>
+      </div>
+      <div class="viewport-controls"><span>drag: orbit</span><span>scroll: zoom</span><span>R: reset</span></div>
+      <h2>Properties</h2>
+      <div class="prop-list">
+        <span class="k">Footprint</span><span class="v">83.6 x 41.5 mm</span>
+        <span class="k">Height</span><span class="v">35.0 mm</span>
+        <span class="k">Stacking lip</span><span class="v">yes</span>
+        <span class="k">Magnet holes</span><span class="v">no</span>
+        <span class="k">Dividers</span><span class="v">0 x 0</span>
+        <span class="k">Label</span><span class="v">Wood Screw #8</span>
+      </div>
+      <h2>Diagnostics</h2>
+      <div class="diag-box">
+        <div class="diag-row"><span>Mesh manifold</span><span class="ok">watertight</span></div>
+        <div class="diag-row"><span>Triangle count</span><span>18,204</span></div>
+        <div class="diag-row"><span>Genus</span><span>0</span></div>
+      </div>
+      <button class="btn secondary">Download STL</button>
+      <button class="btn secondary">Open in designer</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function setMode(m){
+  ['queue','plate','session'].forEach(id=>{
+    document.getElementById('mode-'+id).classList.toggle('hidden', id!==m);
+  });
+  document.querySelectorAll('.modebar button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.mode===m);
+  });
+}
+</script>
+</body>
+</html>

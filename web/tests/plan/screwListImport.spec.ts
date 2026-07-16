@@ -129,9 +129,9 @@ describe('parseShorthand', () => {
   });
 
   it('names an out-of-range length in the error and leaves the length unset', () => {
-    const result = parseShorthand('m3x150 fhcs');
+    const result = parseShorthand('m3x1500 fhcs');
     expect(result.errors).toEqual([
-      "The length '150' is outside the supported 6 to 100 mm range.",
+      "The length '1500' is outside the supported 1 to 1000 mm range.",
     ]);
     expect(result.batches[0].lengthMm).toBeNull();
   });
@@ -258,9 +258,9 @@ describe('parseShorthand imperial', () => {
   });
 
   it('rejects an imperial length whose conversion falls outside the range', () => {
-    const result = parseShorthand('#8 x 4-1/2"');
+    const result = parseShorthand('#8 x 44-1/2"');
     expect(result.errors).toEqual([
-      `The length '4-1/2"' (114 mm) is outside the supported 6 to 100 mm range.`,
+      `The length '44-1/2"' (1130 mm) is outside the supported 1 to 1000 mm range.`,
     ]);
     expect(result.batches[0].lengthMm).toBeNull();
     expect(result.batches[0].enteredUnit).toBe('imperial');

@@ -1,0 +1,397 @@
+<title>Concept C: Command Line First</title>
+<style>
+:root{
+  --bg:#0b0d10; --bg2:#111418; --panel:#14171c; --panel2:#1a1e24;
+  --border:#262b33; --border-hi:#3a4150;
+  --text:#e6e9ef; --text-dim:#9aa3b2; --text-faint:#5c6472;
+  --accent:#5eead4; --accent-dim:#2b6f64;
+  --amber:#f4b942; --red:#f2685c; --blue:#7aa2f7;
+  --mono: 'Cascadia Code','SF Mono',Consolas,'JetBrains Mono',monospace;
+  --sans: -apple-system,'Segoe UI',Inter,Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+  font-size:14px; line-height:1.5;
+}
+.shell{max-width:1180px; margin:0 auto; padding:28px 24px 80px;}
+
+/* ---- top bar ---- */
+.topbar{display:flex; align-items:center; justify-content:space-between; margin-bottom:22px;}
+.brand{display:flex; align-items:center; gap:10px; font-family:var(--mono); font-weight:600; letter-spacing:.02em;}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent);}
+.tabs{display:flex; gap:2px; background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:3px;}
+.tab{padding:6px 14px; border-radius:6px; font-size:12.5px; color:var(--text-dim); cursor:pointer; font-family:var(--mono);}
+.tab.active{background:var(--panel2); color:var(--accent); box-shadow:inset 0 0 0 1px var(--border-hi);}
+.stat-strip{display:flex; gap:18px; font-family:var(--mono); font-size:12px; color:var(--text-dim);}
+.stat-strip b{color:var(--text)}
+
+/* ---- callout ---- */
+.note{
+  font-size:11.5px; color:var(--text-faint); font-family:var(--sans);
+  border-left:2px solid var(--border-hi); padding:3px 0 3px 10px; margin:6px 0 14px;
+  max-width:640px;
+}
+.note b{color:#7d8794}
+
+/* ---- omnibox ---- */
+.omni-wrap{
+  background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--border-hi); border-radius:14px; padding:4px;
+  box-shadow:0 0 0 1px rgba(94,234,212,.04), 0 8px 30px -12px rgba(0,0,0,.6);
+  margin-bottom:8px;
+}
+.omni{
+  display:flex; align-items:center; gap:12px; background:var(--bg2);
+  border-radius:11px; padding:16px 18px;
+}
+.omni .prompt{color:var(--accent); font-family:var(--mono); font-size:18px; font-weight:600;}
+.omni input{
+  flex:1; background:transparent; border:none; outline:none; color:var(--text);
+  font-family:var(--mono); font-size:16px; caret-color:var(--accent);
+}
+.omni input::placeholder{color:var(--text-faint)}
+.omni .hint-key{
+  font-family:var(--mono); font-size:11px; color:var(--text-faint);
+  border:1px solid var(--border); border-radius:5px; padding:2px 6px;
+}
+.omni-examples{display:flex; gap:8px; flex-wrap:wrap; padding:10px 6px 2px;}
+.ex-chip{
+  font-family:var(--mono); font-size:11.5px; color:var(--text-dim);
+  background:var(--panel2); border:1px solid var(--border); border-radius:6px;
+  padding:4px 9px; cursor:pointer;
+}
+.ex-chip:hover{border-color:var(--border-hi); color:var(--text)}
+
+/* live parse preview */
+.parse-preview{
+  margin-top:10px; border:1px dashed var(--border-hi); border-radius:10px;
+  padding:12px 16px; background:rgba(94,234,212,.03); display:flex; align-items:center; gap:16px;
+}
+.parse-preview .arrow{color:var(--text-faint); font-family:var(--mono)}
+.pp-token{font-family:var(--mono); font-size:12.5px; padding:3px 8px; border-radius:5px; background:var(--panel2); border:1px solid var(--border);}
+.pp-token.dim{opacity:0.9}
+.pp-token.size{color:var(--blue); border-color:#2c3a5f}
+.pp-token.thread{color:var(--amber); border-color:#5c4a1e}
+.pp-token.qty{color:var(--accent); border-color:var(--accent-dim)}
+.pp-result{display:flex; align-items:center; gap:10px; margin-left:auto;}
+.bin-tile-mini{
+  width:38px;height:26px;border:1.5px solid var(--border-hi); border-radius:4px;
+  display:flex; align-items:center; justify-content:center; font-family:var(--mono);
+  font-size:9px; color:var(--text-dim); background:var(--panel2);
+}
+.commit-btn{
+  font-family:var(--mono); font-size:12px; background:var(--accent); color:#04211d;
+  border:none; border-radius:6px; padding:7px 14px; font-weight:700; cursor:pointer;
+}
+
+/* ---- section headers ---- */
+.section-head{display:flex; align-items:baseline; justify-content:space-between; margin:30px 0 10px;}
+.section-head h2{font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin:0; font-weight:600;}
+.section-head .count{font-family:var(--mono); color:var(--text-faint); font-size:12px;}
+.head-actions{display:flex; gap:8px;}
+.action-btn{
+  display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-dim);
+  background:var(--panel); border:1px solid var(--border); border-radius:7px; padding:6px 11px; cursor:pointer;
+}
+.action-btn:hover{color:var(--text); border-color:var(--border-hi)}
+.action-btn.primary{background:var(--panel2); color:var(--accent); border-color:var(--accent-dim)}
+.action-btn .ico{font-family:var(--mono); font-size:13px;}
+
+/* ---- queue rows: ALL actions visible, no overflow menu ---- */
+.queue{display:flex; flex-direction:column; gap:6px;}
+.row{
+  display:grid; grid-template-columns:28px 46px 1.4fr 1fr 90px auto; align-items:center;
+  gap:14px; background:var(--panel); border:1px solid var(--border); border-radius:9px;
+  padding:10px 14px;
+}
+.row:hover{border-color:var(--border-hi); background:var(--panel2)}
+.row.printed{opacity:.55}
+.row .check{
+  width:16px;height:16px;border-radius:4px;border:1.5px solid var(--border-hi); flex-shrink:0;
+}
+.row.printed .check{background:var(--accent); border-color:var(--accent); position:relative;}
+.row .icon-thumb{
+  width:38px;height:38px; border-radius:7px; background:var(--bg2); border:1px solid var(--border);
+  display:flex; align-items:center; justify-content:center; font-size:16px;
+}
+.row .id{font-family:var(--mono); color:var(--text-faint); font-size:11px;}
+.row .label-main{font-weight:600; font-size:13.5px;}
+.row .label-sub{color:var(--text-faint); font-size:11.5px; font-family:var(--mono); margin-top:1px;}
+.row .dims{font-family:var(--mono); font-size:12.5px; color:var(--text-dim);}
+.row .dims .u{color:var(--text-faint); font-size:10px;}
+.row .qty-pill{
+  font-family:var(--mono); font-size:12px; background:var(--bg2); border:1px solid var(--border);
+  border-radius:6px; padding:3px 9px; justify-self:start; color:var(--text-dim);
+}
+.row .actions{display:flex; gap:5px; justify-self:end;}
+.mini-act{
+  display:flex; align-items:center; gap:4px; font-size:11.5px; color:var(--text-dim);
+  background:transparent; border:1px solid var(--border); border-radius:6px; padding:5px 9px; cursor:pointer;
+}
+.mini-act:hover{color:var(--text); border-color:var(--border-hi); background:var(--bg2)}
+.mini-act.danger:hover{color:var(--red); border-color:#5c2a26}
+.mini-act.good:hover{color:var(--accent); border-color:var(--accent-dim)}
+
+/* ---- plate zone ---- */
+.plate-zone{
+  display:grid; grid-template-columns:1fr 320px; gap:22px; margin-top:8px;
+}
+.plate-canvas-wrap{
+  background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px;
+}
+.plate-outline{
+  background:repeating-linear-gradient(0deg, #1c2027 0 1px, transparent 1px 21px),
+             repeating-linear-gradient(90deg, #1c2027 0 1px, transparent 1px 21px);
+  background-color: var(--bg2);
+  border:2px solid var(--border-hi); border-radius:6px;
+}
+.plate-meta{font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:10px; display:flex; gap:18px;}
+.plate-side{display:flex; flex-direction:column; gap:10px;}
+.preset-row{display:flex; gap:6px; flex-wrap:wrap;}
+.preset-chip{
+  font-family:var(--mono); font-size:11.5px; padding:5px 10px; border-radius:6px;
+  border:1px solid var(--border); color:var(--text-dim); cursor:pointer;
+}
+.preset-chip.sel{border-color:var(--accent-dim); color:var(--accent); background:rgba(94,234,212,.06)}
+.export-btn{
+  font-family:var(--mono); font-size:12.5px; text-align:left; display:flex; justify-content:space-between;
+  align-items:center; background:var(--panel2); border:1px solid var(--border); border-radius:8px;
+  padding:10px 12px; color:var(--text); cursor:pointer;
+}
+.export-btn .tag{font-size:10px; color:var(--text-faint); font-weight:400;}
+.export-btn:hover{border-color:var(--accent-dim)}
+
+/* ---- session summary ---- */
+.session-bar{
+  display:flex; align-items:center; gap:20px; background:var(--panel); border:1px solid var(--border);
+  border-radius:10px; padding:14px 18px; margin-top:8px; font-family:var(--mono); font-size:12.5px;
+}
+.session-bar .metric{display:flex; flex-direction:column; gap:2px;}
+.session-bar .metric b{font-size:18px; font-family:var(--mono);}
+.session-bar .ok b{color:var(--accent)}
+.session-bar .fail b{color:var(--red)}
+.session-bar .pending b{color:var(--amber)}
+
+.footer-note{margin-top:40px; text-align:center; color:var(--text-faint); font-size:11px; font-family:var(--mono);}
+</style>
+
+<div class="shell">
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>gridfinity://queue</div>
+    <div class="tabs">
+      <div class="tab active">Queue</div>
+      <div class="tab">Plate</div>
+      <div class="tab">Session</div>
+      <div class="tab">Backup</div>
+    </div>
+    <div class="stat-strip">
+      <span><b>8</b> queued</span>
+      <span><b>3</b> printed</span>
+      <span><b>2</b> on plate</span>
+    </div>
+  </div>
+
+  <div class="note"><b>Design decision.</b> The shorthand omnibox is the single entry point for everything: add a bin, run a screw import, or jump the plate composer with a slash command. No separate "add" dialog, no import wizard screen: one input, always in the same place, always focused on load.</div>
+
+  <div class="omni-wrap">
+    <div class="omni">
+      <span class="prompt">&gt;</span>
+      <input type="text" value="m3x20 fhcs x5, m5x12 bhcs x8" />
+      <span class="hint-key">Enter</span>
+    </div>
+    <div class="omni-examples">
+      <span class="ex-chip">2x1x3 "SD cards" lego</span>
+      <span class="ex-chip">#8x1-1/2 wood x12</span>
+      <span class="ex-chip">/plate 220</span>
+      <span class="ex-chip">/template deep-divided 3x2</span>
+      <span class="ex-chip">/import screws.txt</span>
+    </div>
+  </div>
+
+  <div class="parse-preview">
+    <span class="pp-token size">2 tokens parsed</span>
+    <span class="arrow">&rarr;</span>
+    <span class="pp-token thread">M3x20 FHCS</span>
+    <span class="pp-token qty">x5</span>
+    <span class="pp-token dim">1x1x2, screw icon</span>
+    <span class="arrow">&rarr;</span>
+    <span class="pp-token thread">M5x12 BHCS</span>
+    <span class="pp-token qty">x8</span>
+    <span class="pp-token dim">1x1x2, screw icon</span>
+    <div class="pp-result">
+      <div class="bin-tile-mini">1x1</div>
+      <div class="bin-tile-mini">1x1</div>
+      <button class="commit-btn">Add 2 bins &crarr;</button>
+    </div>
+  </div>
+  <div class="note">Parse happens on every keystroke, no submit-then-fail round trip. Bad shorthand shows the failing token inline in red with a plain-English reason ("no thread size found for '3x20fhc'") rather than a toast that vanishes.</div>
+
+  <div class="section-head">
+    <h2>Print Queue</h2>
+    <div class="head-actions">
+      <button class="action-btn"><span class="ico">&#9723;</span> Template</button>
+      <button class="action-btn"><span class="ico">&#8635;</span> Bulk requeue</button>
+      <button class="action-btn primary"><span class="ico">&#9654;</span> Send to plate</button>
+    </div>
+  </div>
+  <div class="note">Every row action (edit, duplicate, requeue, send-to-plate, delete) is a labeled inline button, always visible: nothing lives behind a kebab menu. Rows widen slightly on hover to make the action row easier to hit without a mode switch.</div>
+
+  <div class="queue">
+    <div class="row">
+      <div class="check"></div>
+      <div class="icon-thumb">&#128295;</div>
+      <div><div class="label-main">M3x20 FHCS</div><div class="label-sub">countersunk</div></div>
+      <div class="dims">1&times;1&times;2 <span class="u">units</span></div>
+      <div class="qty-pill">x5</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act good">&#8594; Plate</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="check"></div>
+      <div class="icon-thumb">&#128295;</div>
+      <div><div class="label-main">M5x12 BHCS</div><div class="label-sub">button head</div></div>
+      <div class="dims">1&times;1&times;2 <span class="u">units</span></div>
+      <div class="qty-pill">x8</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act good">&#8594; Plate</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="check"></div>
+      <div class="icon-thumb">&#129704;</div>
+      <div><div class="label-main">SD Cards</div><div class="label-sub">lego-compatible top</div></div>
+      <div class="dims">2&times;1&times;3 <span class="u">units</span></div>
+      <div class="qty-pill">x1</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act good">&#8594; Plate</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="check"></div>
+      <div class="icon-thumb">&#9878;</div>
+      <div><div class="label-main">#8 x 1-1/2 Wood</div><div class="label-sub">phillips flat</div></div>
+      <div class="dims">1&times;1&times;2 <span class="u">units</span></div>
+      <div class="qty-pill">x12</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act good">&#8594; Plate</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="check"></div>
+      <div class="icon-thumb">&#9762;</div>
+      <div><div class="label-main">M4 Hex Nut</div><div class="label-sub">nylon lock</div></div>
+      <div class="dims">1&times;1&times;1 <span class="u">units</span></div>
+      <div class="qty-pill">x30</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act good">&#8594; Plate</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+    <div class="row printed">
+      <div class="check"></div>
+      <div class="icon-thumb">&#128295;</div>
+      <div><div class="label-main">M3x16 FHCS</div><div class="label-sub">countersunk</div></div>
+      <div class="dims">1&times;1&times;2 <span class="u">units</span></div>
+      <div class="qty-pill">x6</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act">&#8634; Requeue</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="check"></div>
+      <div class="icon-thumb">&#128268;</div>
+      <div><div class="label-main">Zip Ties 4in</div><div class="label-sub">general storage</div></div>
+      <div class="dims">2&times;2&times;2 <span class="u">units</span></div>
+      <div class="qty-pill">x1</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act good">&#8594; Plate</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="check"></div>
+      <div class="icon-thumb">&#128295;</div>
+      <div><div class="label-main">M6x25 SHCS</div><div class="label-sub">socket head</div></div>
+      <div class="dims">1&times;1&times;2 <span class="u">units</span></div>
+      <div class="qty-pill">x4</div>
+      <div class="actions">
+        <button class="mini-act">&#9998; Edit</button>
+        <button class="mini-act">&#10697; Duplicate</button>
+        <button class="mini-act good">&#8594; Plate</button>
+        <button class="mini-act danger">&#10005;</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-head">
+    <h2>Plate Composer &mdash; 220mm preset</h2>
+    <div class="head-actions">
+      <button class="action-btn">&#8635; Auto-arrange</button>
+    </div>
+  </div>
+  <div class="plate-zone">
+    <div class="plate-canvas-wrap">
+      <svg viewBox="0 0 400 400" width="100%" style="max-width:400px">
+        <rect x="0" y="0" width="400" height="400" class="plate-outline" fill="var(--bg2)" stroke="var(--border-hi)" stroke-width="2" rx="6"/>
+        <rect x="20" y="20" width="76" height="76" rx="5" fill="var(--panel2)" stroke="var(--blue)" stroke-width="1.5"/>
+        <text x="58" y="62" fill="var(--text-dim)" font-size="9" font-family="monospace" text-anchor="middle">M3x20</text>
+        <rect x="104" y="20" width="76" height="76" rx="5" fill="var(--panel2)" stroke="var(--amber)" stroke-width="1.5"/>
+        <text x="142" y="62" fill="var(--text-dim)" font-size="9" font-family="monospace" text-anchor="middle">M5x12</text>
+        <rect x="188" y="20" width="76" height="76" rx="5" fill="var(--panel2)" stroke="var(--red)" stroke-width="1.5"/>
+        <text x="226" y="62" fill="var(--text-dim)" font-size="9" font-family="monospace" text-anchor="middle">#8 Wood</text>
+        <rect x="20" y="104" width="76" height="76" rx="5" fill="var(--panel2)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="58" y="146" fill="var(--text-dim)" font-size="9" font-family="monospace" text-anchor="middle">M4 Nut</text>
+        <rect x="104" y="104" width="160" height="76" rx="5" fill="var(--panel2)" stroke="var(--blue)" stroke-width="1.5"/>
+        <text x="184" y="146" fill="var(--text-dim)" font-size="9" font-family="monospace" text-anchor="middle">M6x25 SHCS</text>
+      </svg>
+      <div class="plate-meta">
+        <span>220 &times; 220 mm</span>
+        <span>5 bins placed</span>
+        <span>62% filled</span>
+      </div>
+    </div>
+    <div class="plate-side">
+      <div class="preset-row">
+        <div class="preset-chip">150</div>
+        <div class="preset-chip">180</div>
+        <div class="preset-chip sel">220</div>
+        <div class="preset-chip">256</div>
+      </div>
+      <button class="export-btn">Two-filament 3MF <span class="tag">Orca toolchanger</span></button>
+      <button class="export-btn">Single-color 3MF <span class="tag">no label swap</span></button>
+      <button class="export-btn">STL per bin <span class="tag">manual slicing</span></button>
+    </div>
+  </div>
+  <div class="note">The plate is drawn to the same scale as the queue tiles above it, so the visual vocabulary never changes between "planning" and "arranging" &mdash; only the frame around the bins does.</div>
+
+  <div class="section-head"><h2>Print Session</h2></div>
+  <div class="session-bar">
+    <div class="metric ok"><b>3</b>printed ok</div>
+    <div class="metric fail"><b>1</b>failed, requeued</div>
+    <div class="metric pending"><b>4</b>awaiting print</div>
+    <span style="color:var(--text-faint)">Session started 14:02, plate 220mm</span>
+  </div>
+
+  <div class="footer-note">concept c &mdash; command line first &middot; mock data, non-functional</div>
+</div>

@@ -12,7 +12,7 @@ import { BASE_TOP_SIZE, PITCH, WALL_THICKNESS } from '../gridfinity/constants';
  *   thread := "M" digit+ ("." digit+)?          M2, M2.5, M3, ...
  *           | "#" digit+ ("-" TPI)?             #8, #8-32 (normalized to #8)
  *           | digit+ "/" digit+ "-" TPI         1/4-20, 5/16-18
- *   length := digit+ ("mm")?                    6 to 100 integer millimetres
+ *   length := digit+ ("mm")?                    1 to 1000 integer millimetres
  *           | inches ('"' | "in")?              1", 1-1/2", 1/2", 1in
  *   head   := an alias from HEAD_ALIASES        may come before or after the
  *                                               thread/length pair
@@ -140,8 +140,8 @@ export const LENGTHLESS_HEADS: ReadonlySet<HeadType> = new Set<HeadType>([
 ]);
 
 /** The supported fastener length range in millimetres. */
-export const MIN_LENGTH_MM = 6;
-export const MAX_LENGTH_MM = 100;
+export const MIN_LENGTH_MM = 1;
+export const MAX_LENGTH_MM = 1000;
 
 /** The measurement system a batch was entered in. */
 export type EnteredUnit = 'metric' | 'imperial';

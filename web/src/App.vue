@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useApp } from './stores/app';
-import QueuePage from './components/QueuePage.vue';
-import BinDesignerPage from './components/BinDesignerPage.vue';
-import PlatePage from './components/PlatePage.vue';
-import ScrewListImportPage from './components/ScrewListImportPage.vue';
+import { useBinQueue } from './stores/binQueue';
+import { triggerDownload } from './binDownloads';
+import MainPage from './components/MainPage.vue';
 
 const app = useApp();
+const queue = useBinQueue();
 
-// The one global keyboard shortcut listener. Page-specific shortcuts are
-// dispatched as intents through the app store; pages watch and react.
+// The one global keyboard shortcut listener.
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -20,26 +19,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
 function onKeydown(event: KeyboardEvent): void {
   const modifier = event.ctrlKey || event.metaKey;
   if (modifier && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') {
-    if (app.page !== 'queue') return;
     event.preventDefault();
-    app.openDesignerNew();
-    return;
-  }
-  if (modifier && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'p') {
-    if (app.page !== 'queue') return;
-    event.preventDefault();
-    app.sendShortcut('toggleSession');
-    return;
-  }
-  if (modifier && event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
-    if (app.page !== 'queue') return;
-    event.preventDefault();
-    app.sendShortcut('toggleBulk');
-    return;
-  }
-  if (event.key === 'Escape') {
-    // Open dialogs consume Escape themselves; this cancels page modes.
-    app.sendShortcut('escape');
+    app.focusAddCard();
     return;
   }
   if (event.key === '?' && !modifier && !isEditableTarget(event.target)) {
@@ -56,82 +37,127 @@ interface ShortcutRow {
   action: string;
 }
 
-const shortcutGroups: { title: string; rows: ShortcutRow[] }[] = [
-  {
-    title: 'Print queue',
-    rows: [
-      { keys: ['Ctrl', 'N'], action: 'Add a new bin' },
-      { keys: ['Ctrl', 'Shift', 'P'], action: 'Start or cancel a print session' },
-      { keys: ['Ctrl', 'Shift', 'S'], action: 'Start or cancel bin selection' },
-      { keys: ['Esc'], action: 'Cancel the active mode or close a dialog' },
-      { keys: ['?'], action: 'Show this shortcut sheet' },
-    ],
-  },
-  {
-    title: 'Screw list',
-    rows: [{ keys: ['Enter'], action: 'Add the typed rows to the list' }],
-  },
+const shortcutRows: ShortcutRow[] = [
+  { keys: ['Ctrl', 'N'], action: 'Start a new bin in the add card' },
+  { keys: ['Enter'], action: 'In the quick input: add the typed screws to the queue' },
+  { keys: ['Esc'], action: 'Close an open dialog' },
+  { keys: ['?'], action: 'Show this shortcut sheet' },
 ];
+
+// Plan backup: export the plan as JSON, import with a merge/replace choice.
+const importDialogOpen = ref(false);
+const pendingImportText = ref<string | null>(null);
+const importError = ref<string | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
+
+function exportBackup(): void {
+  const blob = new Blob([queue.exportJson()], { type: 'application/json' });
+  triggerDownload(blob, 'gridfinity_print_plan.json');
+}
+
+function openImportPicker(): void {
+  importError.value = null;
+  fileInput.value?.click();
+}
+
+async function onImportFileChosen(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    pendingImportText.value = await file.text();
+    importDialogOpen.value = true;
+  } catch (error) {
+    importError.value =
+      error instanceof Error ? error.message : 'Reading the file failed.';
+  }
+}
+
+function finishImport(mode: 'merge' | 'replace'): void {
+  importDialogOpen.value = false;
+  if (pendingImportText.value === null) return;
+  const problem = queue.importJson(pendingImportText.value, mode);
+  pendingImportText.value = null;
+  if (problem !== null) importError.value = problem;
+}
 </script>
 
 <template>
   <v-app>
     <v-app-bar color="primary" density="comfortable">
-      <v-app-bar-title>Gridfinity Generator</v-app-bar-title>
-      <v-btn
-        variant="text"
-        :active="app.page === 'queue'"
-        @click="app.showQueue()"
-      >
-        Queue
+      <v-app-bar-title>Gridfinity Planner</v-app-bar-title>
+      <v-btn variant="text" prepend-icon="mdi-upload" @click="openImportPicker">
+        Import backup
       </v-btn>
-      <v-btn
-        variant="text"
-        :active="app.page === 'designer'"
-        @click="app.openDesignerNew()"
-      >
-        Designer
+      <v-btn variant="text" prepend-icon="mdi-download" @click="exportBackup">
+        Export backup
       </v-btn>
-      <v-btn
-        variant="text"
-        :active="app.page === 'plate'"
-        @click="app.showPlate()"
-      >
-        Plate
+      <v-btn icon variant="text" @click="app.shortcutSheetOpen = true">
+        <v-icon icon="mdi-help-circle-outline" />
+        <v-tooltip activator="parent" location="bottom">Keyboard shortcuts (?)</v-tooltip>
       </v-btn>
     </v-app-bar>
     <v-main>
-      <QueuePage v-if="app.page === 'queue'" />
-      <PlatePage v-else-if="app.page === 'plate'" />
-      <ScrewListImportPage v-else-if="app.page === 'screwListImport'" />
-      <BinDesignerPage v-else :key="app.editingEntryId ?? 'new'" />
+      <MainPage />
     </v-main>
 
-    <v-dialog v-model="app.shortcutSheetOpen" max-width="420">
+    <input
+      ref="fileInput"
+      type="file"
+      accept="application/json,.json"
+      style="display: none"
+      @change="onImportFileChosen"
+    />
+
+    <v-snackbar
+      :model-value="importError !== null"
+      color="error"
+      timeout="6000"
+      @update:model-value="importError = null"
+    >
+      {{ importError }}
+    </v-snackbar>
+
+    <v-dialog v-model="importDialogOpen" max-width="480">
+      <v-card>
+        <v-card-title>Import plan</v-card-title>
+        <v-card-text>
+          Merge keeps your current entries and batches and updates any that
+          appear in the file with the same id. Replace discards the current
+          plan and loads the file as the whole plan.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="importDialogOpen = false">Cancel</v-btn>
+          <v-btn color="primary" variant="text" @click="finishImport('merge')">Merge</v-btn>
+          <v-btn color="primary" variant="flat" @click="finishImport('replace')">Replace</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="app.shortcutSheetOpen" max-width="460">
       <v-card>
         <v-card-title>Keyboard shortcuts</v-card-title>
         <v-card-text>
-          <template v-for="group in shortcutGroups" :key="group.title">
-            <div class="text-subtitle-2 mt-2 mb-1">{{ group.title }}</div>
-            <div
-              v-for="row in group.rows"
-              :key="row.action"
-              class="d-flex align-center justify-space-between py-1"
-            >
-              <span class="text-body-2">{{ row.action }}</span>
-              <span class="d-flex ga-1">
-                <v-chip
-                  v-for="key in row.keys"
-                  :key="key"
-                  size="small"
-                  variant="outlined"
-                  class="shortcut-key"
-                >
-                  {{ key }}
-                </v-chip>
-              </span>
-            </div>
-          </template>
+          <div
+            v-for="row in shortcutRows"
+            :key="row.action"
+            class="d-flex align-center justify-space-between py-1"
+          >
+            <span class="text-body-2">{{ row.action }}</span>
+            <span class="d-flex ga-1">
+              <v-chip
+                v-for="key in row.keys"
+                :key="key"
+                size="small"
+                variant="outlined"
+                class="shortcut-key"
+              >
+                {{ key }}
+              </v-chip>
+            </span>
+          </div>
         </v-card-text>
         <v-card-actions>
           <v-spacer />

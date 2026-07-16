@@ -63,6 +63,31 @@ export const DEFAULT_MARGIN_MM = 5;
  * first (deepest) item of the row. Items that fit nowhere are reported in
  * `overflow`, never dropped.
  */
+/**
+ * Pack the given footprints onto an automatically sized square plate: the
+ * batch downloads have no plate-size input, so the layout just needs every
+ * bin placed without overlap for the user to rearrange in the slicer. The
+ * plate starts at the largest footprint edge and doubles until everything
+ * fits, so nothing ever lands in overflow.
+ */
+export function arrangeAutoPlate(items: FootprintItem[], spacingMm?: number): Placement[] {
+  if (items.length === 0) return [];
+  const margin = DEFAULT_MARGIN_MM;
+  let size = 2 * margin;
+  for (const item of items) {
+    size = Math.max(size, Math.max(item.widthMm, item.depthMm) + 2 * margin);
+  }
+  for (;;) {
+    const result = arrangePlate(items, {
+      plateWidthMm: size,
+      plateDepthMm: size,
+      spacingMm,
+    });
+    if (result.overflow.length === 0) return result.placed;
+    size *= 2;
+  }
+}
+
 export function arrangePlate(
   items: FootprintItem[],
   options: ArrangeOptions,

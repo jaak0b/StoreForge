@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Concept B: Flow</title>
+<style>
+  :root{
+    --bg:#15171c; --panel:#1c1f26; --panel2:#22262f; --line:#2e333e;
+    --text:#eef0f5; --dim:#9ba3b4; --dim2:#6a7284;
+    --accent:#6fb3ff; --accent-deep:#3d7dd6; --accent2:#8fe0a0; --warn:#f0b860; --bad:#f0736a;
+    --sans:'Segoe UI',system-ui,sans-serif; --mono:'Cascadia Code',Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);}
+  .callout{
+    background:#2a2e22; border:1px dashed #565f3a; color:#b9c48a;
+    font-size:11px; padding:5px 9px; border-radius:4px; margin:6px 0; line-height:1.45;
+  }
+  .callout b{color:#d7e0a8;}
+
+  .app{display:flex; flex-direction:column; min-height:100vh;}
+
+  /* ---- Stage stepper header ---- */
+  .stagebar{
+    display:flex; align-items:stretch; background:var(--panel); border-bottom:1px solid var(--line);
+    padding:0 24px;
+  }
+  .stage{
+    flex:1; display:flex; align-items:center; gap:12px; padding:16px 20px; cursor:pointer;
+    border-bottom:3px solid transparent; position:relative;
+  }
+  .stage:hover{background:var(--panel2);}
+  .stage.active{border-bottom-color:var(--accent); background:var(--panel2);}
+  .stage .num{
+    width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    background:var(--bg); border:2px solid var(--line); font-weight:700; color:var(--dim); flex-shrink:0;
+  }
+  .stage.active .num{border-color:var(--accent); color:var(--accent); background:#182636;}
+  .stage.done .num{border-color:var(--accent2); color:var(--accent2); background:#182619;}
+  .stage .info .title{font-weight:700; font-size:15px;}
+  .stage .info .sub{font-size:11.5px; color:var(--dim);}
+  .stage.active .info .title{color:var(--text);}
+  .stage:not(.active) .info .title{color:var(--dim);}
+  .stage-connector{width:36px; align-self:center; height:2px; background:var(--line); margin-top:0;}
+
+  .app-header-meta{display:flex; align-items:center; padding:8px 24px; gap:14px; font-size:12px; color:var(--dim); background:var(--bg); border-bottom:1px solid var(--line);}
+  .app-header-meta .brand{font-weight:700; color:var(--text); font-size:13px;}
+  .app-header-meta .spacer{flex:1;}
+  .app-header-meta a{color:var(--dim); text-decoration:none; margin-left:14px;}
+  .app-header-meta a:hover{color:var(--text);}
+
+  .stagecontent{flex:1; padding:28px 24px 60px; max-width:1100px; margin:0 auto; width:100%;}
+  .hidden{display:none !important;}
+
+  h1.big{font-size:26px; margin:0 0 4px;}
+  p.lede{color:var(--dim); font-size:14px; margin:0 0 24px;}
+
+  /* ---- Plan stage ---- */
+  .plan-grid{display:grid; grid-template-columns:1.1fr 1fr; gap:22px;}
+  .bigcard{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:22px;
+  }
+  .bigfield{margin-bottom:16px;}
+  .bigfield label{display:block; font-size:13px; color:var(--dim); margin-bottom:6px; font-weight:600;}
+  .bigfield input, .bigfield textarea, .bigfield select{
+    width:100%; background:var(--bg); border:1.5px solid var(--line); color:var(--text);
+    padding:12px 14px; border-radius:8px; font-size:15px;
+  }
+  .bigfield input:focus, .bigfield textarea:focus{outline:none; border-color:var(--accent);}
+  .size-row{display:grid; grid-template-columns:1fr auto 1fr auto 1fr; align-items:center; gap:8px;}
+  .size-row .x{color:var(--dim2); font-size:16px; text-align:center;}
+  .size-row input{text-align:center; font-size:18px; font-weight:700;}
+  .icon-picker{display:grid; grid-template-columns:repeat(7,1fr); gap:8px; margin-top:8px;}
+  .icon-opt{
+    aspect-ratio:1; background:var(--bg); border:1.5px solid var(--line); border-radius:8px;
+    display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--dim2); cursor:pointer;
+  }
+  .icon-opt.selected{border-color:var(--accent); color:var(--accent); background:#182636;}
+  .advanced-toggle{
+    display:flex; align-items:center; gap:8px; color:var(--accent); font-size:13px; font-weight:600;
+    cursor:pointer; margin-top:6px; user-select:none;
+  }
+  .advanced-panel{
+    margin-top:12px; padding-top:14px; border-top:1px dashed var(--line); display:grid;
+    grid-template-columns:1fr 1fr; gap:12px 16px;
+  }
+  .advanced-panel.hidden{display:none;}
+  .switch-field{display:flex; align-items:center; justify-content:space-between; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px;}
+  .switch-field span{font-size:12.5px; color:var(--text);}
+  .switch{width:34px; height:18px; border-radius:10px; background:var(--line); position:relative; cursor:pointer; flex-shrink:0;}
+  .switch.on{background:var(--accent-deep);}
+  .switch::after{content:''; position:absolute; width:14px; height:14px; border-radius:50%; background:#fff; top:2px; left:2px; transition:left .15s;}
+  .switch.on::after{left:18px;}
+  .cta-row{display:flex; gap:10px; margin-top:18px;}
+  .btn{
+    background:var(--accent); color:#0a1420; border:none; padding:13px 20px; border-radius:9px;
+    font-weight:700; font-size:14px; cursor:pointer;
+  }
+  .btn:hover{filter:brightness(1.08);}
+  .btn.secondary{background:transparent; color:var(--text); border:1.5px solid var(--line);}
+  .btn.big{flex:1; font-size:15px; padding:15px;}
+  .preview-card{
+    background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:22px;
+    display:flex; flex-direction:column;
+  }
+  .viewport{
+    background:#0e1016; border:1px solid var(--line); border-radius:10px; height:260px;
+    display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; margin-bottom:14px;
+  }
+  .viewport .grid-floor{
+    position:absolute; inset:0; background-image:
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size:16px 16px; transform:perspective(320px) rotateX(45deg) scale(1.5); opacity:.6;
+  }
+  .bin3d{
+    width:150px; height:100px; background:linear-gradient(145deg,#3d4760,#282e3d);
+    border:1px solid #4a5468; border-radius:6px; position:relative; z-index:1;
+    box-shadow:0 16px 30px rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center;
+    color:var(--dim); font-size:12px; text-align:center;
+  }
+  .quick-import-strip{
+    background:linear-gradient(135deg,#1b2430,#1c1f26); border:1px solid var(--line); border-radius:12px;
+    padding:18px 22px; margin-top:20px; display:flex; gap:18px; align-items:center;
+  }
+  .quick-import-strip .txt{flex:1;}
+  .quick-import-strip h3{margin:0 0 4px; font-size:15px;}
+  .quick-import-strip p{margin:0; color:var(--dim); font-size:12.5px;}
+  .quick-import-strip code{background:var(--bg); padding:2px 6px; border-radius:4px; font-family:var(--mono); font-size:11.5px; color:var(--accent2);}
+
+  /* queue list under plan */
+  .queue-section{margin-top:26px;}
+  .queue-section h2{font-size:15px; margin-bottom:10px; display:flex; align-items:center; gap:10px;}
+  .queue-section h2 .count{background:var(--panel2); color:var(--dim); font-size:11.5px; padding:2px 9px; border-radius:10px; font-weight:400;}
+  .qcard-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px;}
+  .qcard{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; position:relative;
+  }
+  .qcard .swatch{width:40px; height:32px; background:var(--panel2); border:1px solid var(--line); border-radius:5px; display:flex; align-items:center; justify-content:center; color:var(--dim2); font-size:16px; margin-bottom:8px;}
+  .qcard .l1{font-weight:700; font-size:13px;}
+  .qcard .l2{color:var(--dim); font-size:11px;}
+  .qcard .dims{font-family:var(--mono); color:var(--dim); font-size:11px; margin-top:6px;}
+  .qcard .qty{position:absolute; top:10px; right:10px; background:var(--bg); border:1px solid var(--line); color:var(--dim); font-size:10.5px; padding:1px 6px; border-radius:8px;}
+
+  /* ---- Print stage ---- */
+  .plate-hero{display:grid; grid-template-columns:1.2fr 1fr; gap:24px;}
+  .preset-row{display:flex; gap:8px; margin-bottom:14px;}
+  .preset-row button{background:var(--panel2); border:1.5px solid var(--line); color:var(--dim); padding:8px 16px; border-radius:8px; font-size:13px; cursor:pointer; font-weight:600;}
+  .preset-row button.active{border-color:var(--accent); color:var(--accent); background:#182636;}
+  .plate-canvas{background:#0e1016; border:1px solid var(--line); border-radius:12px; position:relative; aspect-ratio:1/1;}
+  .plate-bin{position:absolute; background:#2c3346; border:1.5px solid var(--accent); border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:10.5px; color:var(--dim); text-align:center; line-height:1.3;}
+  .export-options{display:flex; flex-direction:column; gap:10px;}
+  .export-opt{
+    background:var(--panel); border:1.5px solid var(--line); border-radius:10px; padding:16px; display:flex; align-items:center; gap:14px; cursor:pointer;
+  }
+  .export-opt.recommended{border-color:var(--accent);}
+  .export-opt .ico{width:38px; height:38px; border-radius:8px; background:var(--panel2); display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0;}
+  .export-opt .txt .t{font-weight:700; font-size:13.5px;}
+  .export-opt .txt .d{color:var(--dim); font-size:11.5px;}
+  .export-opt .tag{margin-left:auto; background:#182636; color:var(--accent); font-size:10px; padding:2px 8px; border-radius:8px; font-weight:700;}
+
+  /* ---- Done stage ---- */
+  .session-header{display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;}
+  .session-list{display:flex; flex-direction:column; gap:10px;}
+  .session-item{
+    display:flex; align-items:center; gap:14px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px;
+  }
+  .session-item .swatch{width:44px; height:36px; background:var(--panel2); border:1px solid var(--line); border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--dim2);}
+  .session-item .name{flex:1;}
+  .session-item .name .l1{font-weight:700; font-size:14px;}
+  .session-item .name .l2{color:var(--dim); font-size:11.5px;}
+  .session-item .decision-btns{display:flex; gap:8px;}
+  .session-item button{
+    padding:10px 16px; border-radius:8px; border:1.5px solid var(--line); background:var(--panel2); color:var(--dim);
+    font-weight:700; font-size:13px; cursor:pointer;
+  }
+  .session-item button.pass:hover{border-color:var(--accent2); color:var(--accent2);}
+  .session-item button.fail:hover{border-color:var(--bad); color:var(--bad);}
+  .session-item.resolved{opacity:.55;}
+  .session-item .resolved-tag{font-size:11.5px; font-weight:700;}
+  .session-item .resolved-tag.ok{color:var(--accent2);}
+  .session-item .resolved-tag.no{color:var(--bad);}
+  .summary-banner{
+    background:linear-gradient(135deg,#182636,#1c1f26); border:1px solid var(--line); border-radius:12px; padding:20px 24px;
+    display:flex; gap:32px; margin-bottom:20px;
+  }
+  .summary-banner .stat{display:flex; flex-direction:column;}
+  .summary-banner .stat .n{font-size:28px; font-weight:800;}
+  .summary-banner .stat .l{font-size:11.5px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em;}
+  .summary-banner .stat.ok .n{color:var(--accent2);}
+  .summary-banner .stat.bad .n{color:var(--bad);}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="app-header-meta">
+    <span class="brand">GRIDFINITY PLANNER</span>
+    <div class="spacer"></div>
+    <a href="#">Import backup</a>
+    <a href="#">Export backup</a>
+  </div>
+
+  <div class="stagebar">
+    <div class="stage done" data-stage="plan" onclick="setStage('plan')">
+      <div class="num">1</div>
+      <div class="info"><div class="title">Plan</div><div class="sub">Queue what to print</div></div>
+    </div>
+    <div class="stage active" data-stage="print" onclick="setStage('print')">
+      <div class="num">2</div>
+      <div class="info"><div class="title">Print</div><div class="sub">Arrange the plate, export</div></div>
+    </div>
+    <div class="stage" data-stage="done" onclick="setStage('done')">
+      <div class="num">3</div>
+      <div class="info"><div class="title">Done</div><div class="sub">Check off what came out</div></div>
+    </div>
+  </div>
+
+  <div class="stagecontent">
+
+    <!-- ===================== PLAN ===================== -->
+    <div id="stage-plan" class="hidden">
+      <h1 class="big">What do you want to print?</h1>
+      <p class="lede">Add a bin, or paste your fastener list below. Everything lands in the queue underneath.</p>
+
+      <div class="callout"><b>Design decision:</b> only three fields are large and mandatory-looking (size, label, icon); everything else lives behind one "More options" disclosure so a first-time user isn't scared off by dividers and perforated floors.</div>
+
+      <div class="plan-grid">
+        <div class="bigcard">
+          <div class="bigfield">
+            <label>Bin size (grid units, 42mm each)</label>
+            <div class="size-row">
+              <input value="2">
+              <span class="x">&times;</span>
+              <input value="2">
+              <span class="x">&times;</span>
+              <input value="6">
+            </div>
+          </div>
+          <div class="bigfield">
+            <label>Label</label>
+            <input value="M3x20 SHCS" placeholder="What's inside?">
+          </div>
+          <div class="bigfield">
+            <label>Icon</label>
+            <div class="icon-picker">
+              <div class="icon-opt selected">&#9040;</div>
+              <div class="icon-opt">&#9881;</div>
+              <div class="icon-opt">&#128295;</div>
+              <div class="icon-opt">&#128268;</div>
+              <div class="icon-opt">&#9878;</div>
+              <div class="icon-opt">&#128204;</div>
+              <div class="icon-opt">+</div>
+            </div>
+          </div>
+          <div class="advanced-toggle" onclick="toggleAdvanced()">
+            <span id="adv-caret">&#9656;</span> More options (second label line, stacking lip, magnets, dividers, floor, quantity)
+          </div>
+          <div class="advanced-panel hidden" id="advanced-panel">
+            <div class="bigfield" style="grid-column:span 2;"><label>Second label line</label><input value="x25"></div>
+            <div class="bigfield"><label>Quantity</label><input value="1"></div>
+            <div class="bigfield"><label>Dividers (X x Y)</label><input value="0 x 0"></div>
+            <div class="switch-field"><span>Stacking lip</span><div class="switch on"></div></div>
+            <div class="switch-field"><span>Magnet holes</span><div class="switch"></div></div>
+            <div class="switch-field"><span>Perforated floor</span><div class="switch"></div></div>
+            <div class="switch-field"><span>Save as template</span><div class="switch"></div></div>
+          </div>
+          <div class="cta-row">
+            <button class="btn big">Add to queue</button>
+            <button class="btn secondary">Full designer &rarr;</button>
+          </div>
+        </div>
+
+        <div class="preview-card">
+          <div class="viewport">
+            <div class="grid-floor"></div>
+            <div class="bin3d">2x2x6 bin<br>live preview updates as you type</div>
+          </div>
+          <div class="callout" style="margin-top:0;"><b>Design decision:</b> the preview sits beside the form at all times so beginners get instant feedback without hunting for a "preview" button.</div>
+        </div>
+      </div>
+
+      <div class="quick-import-strip">
+        <div class="txt">
+          <h3>Have a parts list? Skip the form.</h3>
+          <p>Paste shorthand like <code>m3x20 fhcs x5, m5x12 bhcs x10, #8x1-1/2 wood x8</code> and we size and label the bins for you.</p>
+        </div>
+        <button class="btn secondary">Open screw-list import</button>
+      </div>
+
+      <div class="queue-section">
+        <h2>Your queue <span class="count">8 bins queued</span></h2>
+        <div class="qcard-grid">
+          <div class="qcard"><span class="qty">x1</span><div class="swatch">&#9040;</div><div class="l1">M3x20 SHCS</div><div class="l2">x25</div><div class="dims">2x2x6</div></div>
+          <div class="qcard"><span class="qty">x1</span><div class="swatch">&#9881;</div><div class="l1">M5x12 BHCS</div><div class="l2">x10</div><div class="dims">1x2x4</div></div>
+          <div class="qcard"><span class="qty">x1</span><div class="swatch">&#128295;</div><div class="l1">Wood Screw #8</div><div class="l2">1-1/2&Prime; x8</div><div class="dims">2x1x5</div></div>
+          <div class="qcard"><span class="qty">x2</span><div class="swatch">&#128268;</div><div class="l1">Zip Ties</div><div class="l2"></div><div class="dims">2x2x3</div></div>
+          <div class="qcard"><span class="qty">x4</span><div class="swatch">&#9878;</div><div class="l1">Hex Nuts M4</div><div class="l2">DIN934</div><div class="dims">1x1x3</div></div>
+          <div class="qcard"><span class="qty">x1</span><div class="swatch">&#9040;</div><div class="l1">M2.5x10 FHCS</div><div class="l2">x40</div><div class="dims">1x2x3</div></div>
+          <div class="qcard"><span class="qty">x1</span><div class="swatch">&#128204;</div><div class="l1">Cotter Pins</div><div class="l2"></div><div class="dims">1x1x2</div></div>
+          <div class="qcard"><span class="qty">x1</span><div class="swatch">&#128295;</div><div class="l1">Wing Nuts M5</div><div class="l2"></div><div class="dims">2x1x3</div></div>
+        </div>
+        <div class="cta-row" style="max-width:340px;">
+          <button class="btn big" onclick="setStage('print')">Continue to Print &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== PRINT ===================== -->
+    <div id="stage-print" class="">
+      <h1 class="big">Arrange the plate</h1>
+      <p class="lede">8 queued bins, auto-arranged. Pick your bed size, then export for slicing.</p>
+
+      <div class="callout"><b>Design decision:</b> plate size presets are big buttons up front (matches the owner's 150-256mm range) instead of a numeric field, since most users pick a known printer bed rather than a custom size.</div>
+
+      <div class="plate-hero">
+        <div>
+          <div class="preset-row">
+            <button>150mm</button><button class="active">220mm</button><button>256mm</button><button>Custom&hellip;</button>
+          </div>
+          <div class="plate-canvas">
+            <div class="plate-bin" style="left:6%; top:6%; width:32%; height:32%;">M3x20 SHCS</div>
+            <div class="plate-bin" style="left:40%; top:6%; width:18%; height:32%;">M5x12 BHCS</div>
+            <div class="plate-bin" style="left:60%; top:6%; width:32%; height:22%;">Wood #8</div>
+            <div class="plate-bin" style="left:6%; top:40%; width:32%; height:18%;">Zip Ties</div>
+            <div class="plate-bin" style="left:40%; top:40%; width:18%; height:18%;">Hex M4</div>
+            <div class="plate-bin" style="left:60%; top:30%; width:32%; height:16%;">M2.5x10</div>
+            <div class="plate-bin" style="left:6%; top:60%; width:18%; height:18%;">Cotter</div>
+            <div class="plate-bin" style="left:26%; top:60%; width:18%; height:18%;">Wing M5</div>
+          </div>
+          <p style="color:var(--dim); font-size:12px; text-align:center; margin-top:8px;">68% of plate used &middot; drag any bin to reposition &middot; <button class="btn secondary" style="padding:4px 10px; font-size:11.5px; vertical-align:middle;">Re-auto-arrange</button></p>
+        </div>
+
+        <div>
+          <div class="export-options">
+            <div class="export-opt recommended">
+              <div class="ico">&#127991;&#65039;</div>
+              <div class="txt"><div class="t">Two-filament 3MF</div><div class="d">Body + label on a second filament, for toolchanger printing in Orca Slicer.</div></div>
+              <div class="tag">recommended</div>
+            </div>
+            <div class="export-opt">
+              <div class="ico">&#127991;</div>
+              <div class="txt"><div class="t">Single-color 3MF</div><div class="d">One filament, label engraved rather than color-swapped.</div></div>
+            </div>
+            <div class="export-opt">
+              <div class="ico">&#128190;</div>
+              <div class="txt"><div class="t">STL (whole plate)</div><div class="d">For manual arrangement in any slicer.</div></div>
+            </div>
+          </div>
+          <button class="btn big" style="width:100%; margin-top:16px;">Export plate</button>
+          <div class="callout"><b>Design decision:</b> the recommended export is visually marked so a first-time user doesn't have to know what "two-filament 3MF" even means to make the right choice.</div>
+          <button class="btn secondary" style="width:100%; margin-top:10px;" onclick="setStage('done')">Sent to printer &mdash; continue to Done &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== DONE ===================== -->
+    <div id="stage-done" class="hidden">
+      <h1 class="big">How did the print go?</h1>
+      <p class="lede">Check off each bin that came out fine. Anything marked failed goes back into the queue automatically.</p>
+
+      <div class="callout"><b>Design decision:</b> pass/fail is the only decision on this screen, rendered as two big labeled buttons per bin, not icons, so there is no ambiguity for a tired user checking a plate at 11pm.</div>
+
+      <div class="summary-banner">
+        <div class="stat"><div class="n">8</div><div class="l">bins on this plate</div></div>
+        <div class="stat ok"><div class="n">6</div><div class="l">passed</div></div>
+        <div class="stat bad"><div class="n">1</div><div class="l">failed</div></div>
+        <div class="stat"><div class="n">1</div><div class="l">awaiting check</div></div>
+      </div>
+
+      <div class="session-list">
+        <div class="session-item">
+          <div class="swatch">&#128268;</div>
+          <div class="name"><div class="l1">Cotter Pins</div><div class="l2">1x1x2 &middot; qty 1</div></div>
+          <div class="decision-btns"><button class="pass">Passed</button><button class="fail">Failed</button></div>
+        </div>
+        <div class="session-item resolved">
+          <div class="swatch">&#9040;</div>
+          <div class="name"><div class="l1">M3x20 SHCS</div><div class="l2">2x2x6 &middot; qty 1</div></div>
+          <div class="resolved-tag ok">&#10003; Passed</div>
+        </div>
+        <div class="session-item resolved">
+          <div class="swatch">&#9881;</div>
+          <div class="name"><div class="l1">M5x12 BHCS</div><div class="l2">1x2x4 &middot; qty 1</div></div>
+          <div class="resolved-tag ok">&#10003; Passed</div>
+        </div>
+        <div class="session-item resolved">
+          <div class="swatch">&#128295;</div>
+          <div class="name"><div class="l1">Wood Screw #8</div><div class="l2">2x1x5 &middot; qty 1</div></div>
+          <div class="resolved-tag ok">&#10003; Passed</div>
+        </div>
+        <div class="session-item resolved">
+          <div class="swatch">&#128268;</div>
+          <div class="name"><div class="l1">Zip Ties</div><div class="l2">2x2x3 &middot; qty 2</div></div>
+          <div class="resolved-tag no">&times; Failed &mdash; requeued</div>
+        </div>
+        <div class="session-item resolved">
+          <div class="swatch">&#9878;</div>
+          <div class="name"><div class="l1">Hex Nuts M4</div><div class="l2">1x1x3 &middot; qty 4</div></div>
+          <div class="resolved-tag ok">&#10003; Passed</div>
+        </div>
+        <div class="session-item resolved">
+          <div class="swatch">&#9040;</div>
+          <div class="name"><div class="l1">M2.5x10 FHCS</div><div class="l2">1x2x3 &middot; qty 1</div></div>
+          <div class="resolved-tag ok">&#10003; Passed</div>
+        </div>
+        <div class="session-item resolved">
+          <div class="swatch">&#128295;</div>
+          <div class="name"><div class="l1">Wing Nuts M5</div><div class="l2">2x1x3 &middot; qty 1</div></div>
+          <div class="resolved-tag ok">&#10003; Passed</div>
+        </div>
+      </div>
+
+      <div class="cta-row" style="max-width:340px;">
+        <button class="btn big" onclick="setStage('plan')">Finish session &rarr; back to Plan</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function setStage(s){
+  ['plan','print','done'].forEach(id=>{
+    document.getElementById('stage-'+id).classList.toggle('hidden', id!==s);
+  });
+  document.querySelectorAll('.stage').forEach(el=>{
+    el.classList.toggle('active', el.dataset.stage===s);
+  });
+}
+function toggleAdvanced(){
+  var p = document.getElementById('advanced-panel');
+  var caret = document.getElementById('adv-caret');
+  var open = p.classList.toggle('hidden');
+  caret.innerHTML = open ? '&#9656;' : '&#9662;';
+}
+</script>
+</body>
+</html>

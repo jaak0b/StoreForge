@@ -1,9 +1,10 @@
 import type { LabeledBinParams } from '../gridfinity/types';
 
-/** Lifecycle status of a bin entry in the print plan. */
-export type BinStatus = 'queued' | 'printed';
-
-/** One bin in the print plan, with its design parameters and lifecycle state. */
+/**
+ * One bin in the print queue, with its design parameters. Every queue entry
+ * is pending by definition: printed amounts leave the plan through a print
+ * batch confirmation and are not kept as history.
+ */
 export interface BinEntry {
   /** Stable unique identifier (UUID). */
   id: string;
@@ -31,26 +32,54 @@ export interface BinEntry {
   labelIcon: string | null;
   /** How many copies of this bin the plan calls for. Integer, at least 1. */
   quantity: number;
-  /** Whether the bin still needs printing or has been printed. */
-  status: BinStatus;
   /** ISO 8601 timestamp of when the entry was created. */
   createdAt: string;
-  /** ISO 8601 timestamp of when the entry was marked printed, if it was. */
-  printedAt?: string;
   /** Free-form notes on the entry. */
   notes?: string;
 }
 
+/**
+ * One row of a print batch. The bin design parameters are embedded as a
+ * snapshot (not referenced by entry id): a batch describes what was sent to
+ * the printer, so it must survive edits to or deletion of the queue entry it
+ * was created from. The optional sourceEntryId is only a hint for returning
+ * failed amounts to the same queue row when it still exists.
+ */
+export interface BatchItem {
+  /** Stable unique identifier (UUID) within the plan. */
+  id: string;
+  /** Snapshot of the bin design parameters at batch creation time. */
+  params: LabeledBinParams;
+  /** How many copies of this bin the batch holds. Integer, at least 1. */
+  count: number;
+  /** Id of the queue entry the item was created from, if it still exists. */
+  sourceEntryId?: string;
+}
+
+/** A named set of bins sent to a printer as one build plate. */
+export interface PrintBatch {
+  /** Stable unique identifier (UUID). */
+  id: string;
+  /** User-editable display name, for example the printer it was sent to. */
+  name: string;
+  /** The bins in the batch. A batch with no items left is removed. */
+  items: BatchItem[];
+  /** ISO 8601 timestamp of when the batch was created. */
+  createdAt: string;
+}
+
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
-  /** Envelope format version. Currently always 1. */
-  version: 1;
-  /** All bin entries in the plan. */
+  /** Envelope format version. Currently 2. */
+  version: 2;
+  /** All bin entries in the queue. */
   entries: BinEntry[];
+  /** All open print batches. */
+  batches: PrintBatch[];
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 1;
+export const PLAN_FILE_VERSION = 2;
 
 /** A named, reusable set of bin design parameters. */
 export interface BinTemplate {

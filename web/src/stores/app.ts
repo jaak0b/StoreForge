@@ -1,61 +1,35 @@
 import { defineStore } from 'pinia';
 
-/** The pages the app can show. */
-export type AppPage = 'queue' | 'designer' | 'plate' | 'screwListImport';
-
-/** Keyboard shortcut intents pages can react to. */
-export type ShortcutKind = 'toggleSession' | 'toggleBulk' | 'escape';
-
-/** One dispatched shortcut. The sequence number makes repeats observable. */
-export interface ShortcutIntent {
-  kind: ShortcutKind;
-  seq: number;
-}
-
 /**
- * In-app navigation state. The queue is the home page; the designer opens
- * from it to create a new entry or edit an existing one.
+ * App-wide UI state. The app is a single page; this store carries the
+ * add-bin card's editing target and the global keyboard shortcut state.
  */
 export const useApp = defineStore('app', {
   state: () => ({
-    page: 'queue' as AppPage,
-    /** Id of the queue entry being edited, or null when designing a new bin. */
+    /** Id of the queue entry loaded into the Manual tab, or null for a new bin. */
     editingEntryId: null as string | null,
-    /** The most recently dispatched keyboard shortcut, for pages to watch. */
-    shortcutIntent: null as ShortcutIntent | null,
+    /**
+     * Monotonic counter the Ctrl+N shortcut bumps; the add-bin card watches
+     * it and focuses its first field (resetting to a new bin).
+     */
+    focusAddSeq: 0,
     /** Whether the keyboard shortcut sheet dialog is open. */
     shortcutSheetOpen: false,
   }),
   actions: {
-    /** Dispatches a keyboard shortcut intent for the current page to handle. */
-    sendShortcut(kind: ShortcutKind) {
-      const seq = (this.shortcutIntent?.seq ?? 0) + 1;
-      this.shortcutIntent = { kind, seq };
-    },
-    /** Opens the designer for a new bin entry. */
-    openDesignerNew() {
+    /** Asks the add-bin card to reset to a new bin and take focus. */
+    focusAddCard() {
       this.editingEntryId = null;
-      this.page = 'designer';
+      this.focusAddSeq += 1;
     },
-    /** Opens the designer with an existing queue entry loaded. */
-    openDesignerEdit(entryId: string) {
+    /** Loads a queue entry into the Manual tab for editing. */
+    editEntry(entryId: string) {
       this.editingEntryId = entryId;
-      this.page = 'designer';
+      this.focusAddSeq += 1;
     },
-    /** Returns to the queue page. */
-    showQueue() {
+    /** Leaves editing mode; the Manual tab designs a new bin again. */
+    stopEditing() {
       this.editingEntryId = null;
-      this.page = 'queue';
-    },
-    /** Opens the screw list import page. */
-    showScrewListImport() {
-      this.editingEntryId = null;
-      this.page = 'screwListImport';
-    },
-    /** Opens the build plate composer. */
-    showPlate() {
-      this.editingEntryId = null;
-      this.page = 'plate';
     },
   },
 });

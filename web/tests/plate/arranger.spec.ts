@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  arrangeAutoPlate,
   arrangePlate,
   DEFAULT_MARGIN_MM,
   type ArrangeResult,
@@ -112,5 +113,23 @@ describe('arrangePlate', () => {
     const small = arrangePlate(items, { plateWidthMm: 180, plateDepthMm: 180 });
     expect(small.placed.length).toBeLessThan(large.placed.length);
     assertNoOverlaps(small);
+  });
+});
+
+describe('arrangeAutoPlate', () => {
+  it('places every item without overlap, growing the plate as needed', () => {
+    const items = Array.from({ length: 40 }, (_, i) => bin(`b${i}`, 2, 2));
+    const placed = arrangeAutoPlate(items);
+    expect(placed).toHaveLength(items.length);
+    assertNoOverlaps({ placed, overflow: [] });
+  });
+
+  it('places a single oversized item on a plate grown around it', () => {
+    const placed = arrangeAutoPlate([bin('huge', 12, 12)]);
+    expect(placed).toHaveLength(1);
+  });
+
+  it('returns an empty layout for no items', () => {
+    expect(arrangeAutoPlate([])).toEqual([]);
   });
 });
