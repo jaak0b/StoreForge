@@ -58,6 +58,19 @@ export const LABEL_LINE2_SCALE = 0.6;
 /** Vertical gap between the first and second text line, in millimetres. */
 export const LABEL_LINE_GAP = 1;
 
+/**
+ * How far text outlines are dilated (per side, in millimetres) before
+ * extrusion. Roboto Medium at LABEL_TEXT_HEIGHT (6 mm cap height) has stems
+ * around 0.55 mm wide, under one 0.4 mm nozzle extrusion width, so slicers
+ * render the embossed strokes as thin, barely-visible perimeters. Offsetting
+ * by 0.15 mm per side brings those stems to roughly 0.85 mm, about two
+ * extrusion widths, so the text slices as solid, legible strokes. Icons are
+ * already bold silhouettes and are left alone. Applied after the label is
+ * scaled to its final on-shelf size, so the dilation is always a true 0.15 mm
+ * regardless of any scale-to-fit shrink.
+ */
+export const TEXT_BOLD_OFFSET = 0.15;
+
 /** What to put on the label. Empty text with no icon means no label. */
 export interface LabelSpec {
   text: string;
@@ -122,6 +135,8 @@ function transform(
 export interface LabelFacePart {
   polygons: SimplePolygon[];
   fillRule: LabelFillRule;
+  /** True for font-outline parts (text), false for icon parts. */
+  isText: boolean;
 }
 
 /**
@@ -150,6 +165,7 @@ export function layoutLabelFace(
     parts.push({
       polygons: transform(raw, scale, -box.minX * scale, box.maxY * scale, true),
       fillRule: 'EvenOdd',
+      isText: false,
     });
   }
   if (text.length > 0) {
@@ -158,6 +174,7 @@ export function layoutLabelFace(
     parts.push({
       polygons: transform(polygons, 1, -box.minX, 0, false),
       fillRule: 'NonZero',
+      isText: true,
     });
   }
   if (parts.length === 0 && text2.length === 0) {
@@ -182,6 +199,7 @@ export function layoutLabelFace(
     parts.push({
       polygons: transform(polygons, 1, -box.minX, rowBottom - LABEL_LINE_GAP - box.maxY, false),
       fillRule: 'NonZero',
+      isText: true,
     });
   }
 
@@ -198,7 +216,31 @@ export function layoutLabelFace(
   return parts.map((part) => ({
     polygons: transform(part.polygons, fit, -cx, -cy, false),
     fillRule: part.fillRule,
+    isText: part.isText,
   }));
+}
+
+/**
+ * Dilate a text part's outlines by TEXT_BOLD_OFFSET per side so thin glyph
+ * stems slice as solid strokes. Must run after the label has been scaled to
+ * its final on-shelf size (see layoutLabelFace's scale-to-fit) so the
+ * dilation is a true millimetre figure, not one shrunk along with the text.
+ * Offsetting can merge glyphs that already nearly touch; this is accepted as
+ * a minor consequence of the same fix (see TEXT_BOLD_OFFSET's doc comment).
+ */
+function boldenText(m: ManifoldToplevel, part: LabelFacePart): LabelFacePart {
+  if (!part.isText) return part;
+  const section = new m.CrossSection(part.polygons, part.fillRule);
+  try {
+    const offsetSection = section.offset(TEXT_BOLD_OFFSET, 'Round');
+    try {
+      return { polygons: offsetSection.toPolygons(), fillRule: part.fillRule, isText: true };
+    } finally {
+      offsetSection.delete();
+    }
+  } finally {
+    section.delete();
+  }
 }
 
 /**
@@ -278,12 +320,15 @@ export function buildLabelManifold(
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const interiorWidth = outerWidth - 2 * WALL_THICKNESS;
 
+  // Reserve TEXT_BOLD_OFFSET on every side of the fit box: boldenText grows
+  // text outlines by that much after layout, so shrinking the target here
+  // keeps the bolded result within LABEL_MARGIN / SHELF_DEPTH_MARGIN.
   const parts = layoutLabelFace(
     font,
     spec,
-    interiorWidth - 2 * LABEL_MARGIN,
-    SHELF_DEPTH - 2 * SHELF_DEPTH_MARGIN,
-  );
+    interiorWidth - 2 * LABEL_MARGIN - 2 * TEXT_BOLD_OFFSET,
+    SHELF_DEPTH - 2 * SHELF_DEPTH_MARGIN - 2 * TEXT_BOLD_OFFSET,
+  ).map((part) => boldenText(m, part));
   const depth = EMBOSS_HEIGHT + EMBOSS_WELD_DEPTH;
   const solids = parts.map((part) => extrudeLabel(m, part.polygons, depth, part.fillRule));
   const flat = solids.length === 1 ? solids[0] : m.Manifold.union(solids);

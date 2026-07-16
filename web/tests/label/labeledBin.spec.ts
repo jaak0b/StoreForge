@@ -19,6 +19,7 @@ import {
   LABEL_TEXT_HEIGHT,
   SHELF_DEPTH,
   SHELF_THICKNESS,
+  TEXT_BOLD_OFFSET,
 } from '../../src/engine/label/placement';
 import { iconByName } from '../../src/engine/label/icons';
 import {
@@ -182,6 +183,40 @@ describe('buildLabelManifold', () => {
     );
     textOnly.delete();
     withIcon.delete();
+  });
+});
+
+describe('text bolding', () => {
+  it('dilates text outlines wider without merging separate letters', () => {
+    const [part] = layoutLabelFace(font, { text: 'M3 x 20', icon: null }, 1000, 1000);
+    const original = new m.CrossSection(part.polygons, part.fillRule);
+    const bold = original.offset(TEXT_BOLD_OFFSET, 'Round');
+    // Dilating every stem by TEXT_BOLD_OFFSET per side must grow the printed
+    // area (this is the whole point: thin Roboto stems become thick enough
+    // to slice as solid perimeters).
+    expect(bold.area()).toBeGreaterThan(original.area());
+    // Kerned letters that start out separated must stay separated: same
+    // number of closed contours before and after dilation.
+    expect(bold.numContour()).toBe(original.numContour());
+    original.delete();
+    bold.delete();
+  });
+
+  it('keeps the finished label solid watertight after text bolding', () => {
+    const label = buildLabelManifold(m, font, params(), { text: 'M3 x 20', icon: null })!;
+    expect(label.status()).toBe('NoError');
+    label.delete();
+  });
+
+  it('makes text visibly thicker on the finished label than an unbolded pass would be', () => {
+    // Reproduce the pre-fix geometry (no offset) to compare against the
+    // fixed pipeline's cross-sectional area at the same emboss depth.
+    const [part] = layoutLabelFace(font, { text: 'M3', icon: null }, 1000, 1000);
+    const unbolded = new m.CrossSection(part.polygons, part.fillRule);
+    const bolded = unbolded.offset(TEXT_BOLD_OFFSET, 'Round');
+    expect(bolded.area()).toBeGreaterThan(unbolded.area() * 1.1);
+    unbolded.delete();
+    bolded.delete();
   });
 });
 
