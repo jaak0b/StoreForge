@@ -409,6 +409,47 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
 }
 
 /**
+ * Composes shorthand text from the structured breakdown fields, the inverse
+ * of parseBatchSegment for a single batch. Round-trips with parseShorthand:
+ * parsing the result back reproduces the same thread, length and head. Used
+ * to keep the shorthand text field in sync when the picker fields change.
+ */
+export function composeShorthand(
+  thread: string | null,
+  lengthMm: number | null,
+  head: HeadType | null,
+  count: number,
+): string {
+  const lengthless = head !== null && LENGTHLESS_HEADS.has(head);
+  const parts: string[] = [];
+  if (thread !== null && lengthMm !== null && !lengthless) {
+    parts.push(`${thread}x${lengthMm}`);
+  } else {
+    if (thread !== null) parts.push(thread);
+    if (lengthMm !== null && !lengthless) parts.push(`x${lengthMm}`);
+  }
+  if (head !== null) parts.push(HEAD_ALIASES_REVERSE[head]);
+  if (count > 1) parts.push(`x${count}`);
+  return parts.join(' ');
+}
+
+/** Canonical shorthand alias used to compose text back out for each head type. */
+const HEAD_ALIASES_REVERSE: Record<HeadType, string> = {
+  'countersunk screw': 'fhcs',
+  'pan head screw': 'bhcs',
+  'cap head screw': 'shcs',
+  'hex bolt': 'hex bolt',
+  'wood screw': 'wood',
+  'self-tapping screw': 'self-tap',
+  'pocket screw': 'pocket screw',
+  brad: 'brad',
+  dowel: 'dowel',
+  'hex nut': 'hex nut',
+  washer: 'washer',
+  'threaded insert': 'insert',
+};
+
+/**
  * Composes the bin label text for a batch, from whichever parts are present:
  * "M3 x 20 FHCS", "M3 x 20", or "M5 NUT" for a lengthless head. An imperial
  * batch prints its length as entered: '#8 x 1-1/2" WOOD'.

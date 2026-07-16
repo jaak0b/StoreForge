@@ -8,7 +8,7 @@ export const useBinDesigner = defineStore('binDesigner', {
   state: (): LabeledBinParams & { notes: string; moreOptionsOpen: boolean } => ({
     gridX: 1,
     gridY: 1,
-    heightUnits: 3,
+    heightUnits: 6,
     stackingLip: true,
     magnetHoles: false,
     dividerCountX: 0,

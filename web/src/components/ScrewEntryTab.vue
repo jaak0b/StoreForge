@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
@@ -7,6 +7,7 @@ import { useBinPreview } from '../composables/useBinPreview';
 import { iconByName } from '../engine/label/icons';
 import {
   composeLabelText,
+  composeShorthand,
   computeBinWidthUnits,
   HEAD_ICON_NAME,
   HEAD_TYPES,
@@ -22,10 +23,12 @@ import BinViewport from './BinViewport.vue';
 import MoreOptions from './MoreOptions.vue';
 
 /**
- * The Screw entry tab of the add-bin card: one screw at a time through four
- * inputs, with the resulting bin (computed size, label, icon) previewing
- * live beside the form, plus a quick-input shorthand line below the Add
- * button. Both add straight to the queue.
+ * The Screw entry tab of the add-bin card: one shorthand field ("m3x20 fhcs
+ * x5") that parses live into a synced Thread/Head/Length/Count/Height
+ * breakdown, with the resulting bin (computed size, label, icon) previewing
+ * live beside it. A comma-separated shorthand list adds every parsed screw
+ * at once; the breakdown then shows the first entry and disables editing,
+ * since there is no single set of fields to edit.
  */
 
 const queue = useBinQueue();
@@ -43,14 +46,19 @@ const THREAD_ITEMS = [
   ...IMPERIAL_THREADS,
 ];
 
-/** Height matching the designer's initial bin; the screw entry form does not
- * expose a height field, so it stays fixed. */
-const DEFAULT_HEIGHT_UNITS = 3;
+/** Default bin height for a screw entry when nothing else determines it; the
+ * engine does not derive a minimum height from screw length, so this is a
+ * plain starting value the user can raise. */
+const DEFAULT_HEIGHT_UNITS = 6;
 
 const thread = ref('M3');
 const head = ref<HeadType>('countersunk screw');
 const lengthMm = ref<number | null>(20);
 const count = ref(5);
+const heightUnits = ref(DEFAULT_HEIGHT_UNITS);
+
+const shorthand = ref('M3x20 fhcs x5');
+const shorthandFocused = ref(false);
 
 const previewLoaded = ref(!smAndDown.value);
 
@@ -66,24 +74,28 @@ const lengthValid = computed(
 );
 
 const countValid = computed(() => Number.isInteger(count.value) && count.value >= 1);
+const heightValid = computed(() => Number.isInteger(heightUnits.value) && heightUnits.value >= 2);
 
 function headIconPath(headType: HeadType): string {
   return iconByName(HEAD_ICON_NAME[headType]).path;
 }
 
 /** The bin a screw batch turns into (size from the length, label, icon). */
-function binParamsFor(batch: {
-  thread: string | null;
-  lengthMm: number | null;
-  head: HeadType | null;
-  enteredLengthText?: string | null;
-}): LabeledBinParams {
+function binParamsFor(
+  batch: {
+    thread: string | null;
+    lengthMm: number | null;
+    head: HeadType | null;
+    enteredLengthText?: string | null;
+  },
+  binHeightUnits: number,
+): LabeledBinParams {
   const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
   const effectiveLength = noLength ? null : batch.lengthMm;
   return {
     gridX: effectiveLength !== null ? computeBinWidthUnits(effectiveLength) : 1,
     gridY: 1,
-    heightUnits: DEFAULT_HEIGHT_UNITS,
+    heightUnits: binHeightUnits,
     stackingLip: store.stackingLip,
     magnetHoles: store.magnetHoles,
     dividerCountX: store.dividerCountX,
@@ -99,74 +111,108 @@ function binParamsFor(batch: {
   };
 }
 
-const formBinParams = computed(() =>
-  binParamsFor({
-    thread: thread.value,
-    lengthMm: lengthValid.value ? lengthMm.value : null,
-    head: head.value,
-  }),
-);
-
 function sizeText(params: LabeledBinParams): string {
   return `${params.gridX} x ${params.gridY} x ${params.heightUnits}`;
 }
 
-const formValid = computed(() => lengthValid.value && countValid.value);
+// Parsing the shorthand field is the single source of truth; the breakdown
+// pickers are a synced view onto it. `internalUpdate` suppresses the pickers
+// -> shorthand watcher while the shorthand -> pickers watcher is applying a
+// parse result, so the two directions never fight over the caret.
+let internalUpdate = false;
 
-const addedSnackbar = ref(false);
-const addedText = ref('');
-
-/** Adds the form's screw as a bin; the form keeps its values. */
-function addFormBin(): void {
-  if (!formValid.value) return;
-  const cleanNotes = store.notes.trim();
-  const id = queue.add(formBinParams.value, count.value);
-  if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
-  addedText.value = `Added ${formBinParams.value.labelText} to the queue.`;
-  addedSnackbar.value = true;
-}
-
-// Quick input: the shorthand line below the button. Enter adds every parsed
-// batch straight to the queue.
-const shorthand = ref('');
 const parsed = computed(() => parseShorthand(shorthand.value));
+const isMultiple = computed(() => parsed.value.batches.length > 1);
+const firstBatch = computed<ScrewBatch | null>(() => parsed.value.batches[0] ?? null);
+
+watch(shorthand, () => {
+  const batch = firstBatch.value;
+  if (batch === null) return;
+  internalUpdate = true;
+  if (batch.thread !== null) thread.value = batch.thread;
+  if (batch.head !== null) head.value = batch.head;
+  if (batch.lengthMm !== null) lengthMm.value = batch.lengthMm;
+  count.value = batch.quantity;
+  internalUpdate = false;
+});
+
+watch([thread, head, lengthMm, count], () => {
+  if (internalUpdate || shorthandFocused.value || isMultiple.value) return;
+  shorthand.value = composeShorthand(thread.value, lengthMm.value, head.value, count.value);
+});
 
 function quickBatchComplete(batch: ScrewBatch): boolean {
   const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
   return batch.thread !== null && (noLength || batch.lengthMm !== null);
 }
 
-const quickBatches = computed(() => parsed.value.batches.filter(quickBatchComplete));
+const completeBatches = computed(() => parsed.value.batches.filter(quickBatchComplete));
 
-const quickHint = computed(() => {
-  if (shorthand.value.trim() === '') return '';
-  if (quickBatches.value.length === 0) return '';
-  const parts = quickBatches.value.map((batch) => {
-    const params = binParamsFor(batch);
-    const qty = batch.quantity > 1 ? ` x${batch.quantity}` : '';
-    return `${params.labelText}${qty} (${sizeText(params)})`;
-  });
-  return `${parts.join(', ')}. Enter adds to queue.`;
+/** What Add to queue will do, driving both the summary caption and the
+ * button's enabled state. A single screw uses the breakdown fields (which
+ * stay editable and independently validated); a comma list uses every
+ * complete parsed batch verbatim. */
+const pending = computed<{ batches: Array<{ params: LabeledBinParams; quantity: number }> }>(
+  () => {
+    if (isMultiple.value) {
+      return {
+        batches: completeBatches.value.map((batch) => ({
+          params: binParamsFor(batch, DEFAULT_HEIGHT_UNITS),
+          quantity: batch.quantity,
+        })),
+      };
+    }
+    if (!lengthValid.value || !countValid.value || !heightValid.value || thread.value.trim() === '') {
+      return { batches: [] };
+    }
+    return {
+      batches: [
+        {
+          params: binParamsFor(
+            { thread: thread.value, lengthMm: lengthless.value ? null : lengthMm.value, head: head.value },
+            heightUnits.value,
+          ),
+          quantity: count.value,
+        },
+      ],
+    };
+  },
+);
+
+const resultText = computed(() => {
+  if (isMultiple.value) {
+    const n = completeBatches.value.length;
+    return n > 0 ? `Adds ${n} ${n === 1 ? 'bin' : 'bins'}.` : '';
+  }
+  if (pending.value.batches.length === 0) return '';
+  const params = pending.value.batches[0].params;
+  return `Resulting bin: ${params.labelText} (${sizeText(params)}).`;
 });
 
-function commitShorthand(): void {
-  if (quickBatches.value.length === 0 || parsed.value.errors.length > 0) return;
+const formValid = computed(() => pending.value.batches.length > 0);
+
+const addedSnackbar = ref(false);
+const addedText = ref('');
+
+function addToQueue(): void {
+  if (!formValid.value) return;
   const cleanNotes = store.notes.trim();
-  for (const batch of quickBatches.value) {
-    const id = queue.add(binParamsFor(batch), batch.quantity);
+  for (const { params, quantity } of pending.value.batches) {
+    const id = queue.add(params, quantity);
     if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
   }
-  addedText.value = `Added ${quickBatches.value.length} ${
-    quickBatches.value.length === 1 ? 'bin' : 'bins'
-  } to the queue.`;
+  const n = pending.value.batches.length;
+  addedText.value =
+    n === 1
+      ? `Added ${pending.value.batches[0].params.labelText} to the queue.`
+      : `Added ${n} bins to the queue.`;
   addedSnackbar.value = true;
-  shorthand.value = '';
+  if (isMultiple.value) shorthand.value = '';
 }
 
-// The preview follows the quick-input line while it parses to something,
-// otherwise the picker form.
-const previewParams = computed(() =>
-  quickBatches.value.length > 0 ? binParamsFor(quickBatches.value[0]) : formBinParams.value,
+// The preview follows whichever bin Add to queue would create first.
+const previewParams = computed(
+  () => pending.value.batches[0]?.params ?? binParamsFor({ thread: null, lengthMm: null, head: null }, heightUnits.value),
 );
 
 const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
@@ -175,7 +221,21 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
 <template>
   <v-row>
     <v-col cols="12" md="6">
-      <div class="text-caption text-medium-emphasis mb-1">Screw</div>
+      <v-text-field
+        v-model="shorthand"
+        label="Screw"
+        placeholder="m3x20 fhcs x5"
+        prepend-inner-icon="mdi-pencil-outline"
+        density="comfortable"
+        hide-details
+        @focus="shorthandFocused = true"
+        @blur="shorthandFocused = false"
+      />
+      <p class="text-caption text-medium-emphasis mt-1 mb-0">
+        Separate screws with commas; imperial works too (#8 x 1-1/2" wood).
+      </p>
+
+      <div class="text-caption text-medium-emphasis mt-4 mb-1">Breakdown</div>
       <div class="d-flex flex-wrap ga-2">
         <v-select
           v-model="thread"
@@ -183,6 +243,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           label="Thread"
           density="comfortable"
           hide-details
+          :disabled="isMultiple"
           class="screw-field"
           style="min-width: 125px"
         />
@@ -192,6 +253,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           label="Head"
           density="comfortable"
           hide-details
+          :disabled="isMultiple"
           class="screw-field"
           style="min-width: 150px"
         >
@@ -215,7 +277,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           suffix="mm"
           density="comfortable"
           hide-details
-          :disabled="lengthless"
+          :disabled="isMultiple || lengthless"
           class="screw-field"
           style="min-width: 110px; max-width: 150px"
         />
@@ -227,47 +289,37 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           label="Count"
           density="comfortable"
           hide-details
+          :disabled="isMultiple"
+          class="screw-field"
+          style="min-width: 90px; max-width: 120px"
+        />
+        <v-text-field
+          v-model.number="heightUnits"
+          type="number"
+          min="2"
+          step="1"
+          label="Height"
+          density="comfortable"
+          hide-details
+          :disabled="isMultiple"
           class="screw-field"
           style="min-width: 90px; max-width: 120px"
         />
       </div>
-      <p v-if="!lengthValid" class="text-error text-body-2 mt-2 mb-0">
+      <p v-if="isMultiple" class="text-caption text-medium-emphasis mt-2 mb-0">
+        The shorthand lists more than one screw; the breakdown shows the first entry only.
+        Add to queue adds all of them.
+      </p>
+      <p v-else-if="!lengthValid" class="text-error text-body-2 mt-2 mb-0">
         The length must be a whole number between {{ MIN_LENGTH_MM }} and
         {{ MAX_LENGTH_MM }} mm.
       </p>
-
-      <MoreOptions :per-bin-fields="false" />
-
-      <v-btn
-        color="primary"
-        variant="flat"
-        size="large"
-        block
-        class="mt-4"
-        :disabled="!formValid"
-        @click="addFormBin"
-      >
-        Add to queue
-      </v-btn>
-      <p class="text-caption text-medium-emphasis mt-2 mb-0">
-        The form keeps its values after adding.
+      <p v-else-if="!heightValid" class="text-error text-body-2 mt-2 mb-0">
+        The height must be a whole number of at least 2 height units.
       </p>
 
-      <v-divider class="mt-4 mb-3" />
-      <div class="text-caption text-medium-emphasis mb-1">Quick input</div>
-      <v-text-field
-        v-model="shorthand"
-        density="comfortable"
-        placeholder="m3x20 fhcs x5, then Enter"
-        prepend-inner-icon="mdi-pencil-outline"
-        hide-details
-        @keydown.enter.prevent="commitShorthand"
-      />
-      <p v-if="quickHint !== ''" class="text-caption text-medium-emphasis mt-1 mb-0">
-        {{ quickHint }}
-      </p>
-      <p v-else class="text-caption text-medium-emphasis mt-1 mb-0">
-        Separate screws with commas; imperial works too (#8 x 1-1/2" wood).
+      <p v-if="resultText !== ''" class="text-caption text-medium-emphasis mt-2 mb-0">
+        {{ resultText }}
       </p>
       <v-alert
         v-for="(error, i) in parsed.errors"
@@ -279,6 +331,20 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
       >
         {{ error }}
       </v-alert>
+
+      <MoreOptions :per-bin-fields="false" />
+
+      <v-btn
+        color="primary"
+        variant="flat"
+        size="large"
+        block
+        class="mt-4"
+        :disabled="!formValid"
+        @click="addToQueue"
+      >
+        Add to queue
+      </v-btn>
     </v-col>
 
     <v-col cols="12" md="6">
@@ -301,9 +367,6 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           </v-btn>
         </div>
       </v-card>
-      <p class="text-caption text-medium-emphasis mt-2 mb-0">
-        Resulting bin: {{ previewParams.labelText }} ({{ sizeText(previewParams) }}).
-      </p>
       <v-alert v-if="errorMessage" type="error" density="compact" class="mt-2">
         {{ errorMessage }}
       </v-alert>
