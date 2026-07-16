@@ -5,7 +5,7 @@ import type { LabeledBinParams } from '../engine/gridfinity/types';
  * the bin geometry, but shared across the Manual bin and Screw entry tabs'
  * More options disclosure so the value persists across tab switches). */
 export const useBinDesigner = defineStore('binDesigner', {
-  state: (): LabeledBinParams & { notes: string } => ({
+  state: (): LabeledBinParams & { notes: string; moreOptionsOpen: boolean } => ({
     gridX: 1,
     gridY: 1,
     heightUnits: 3,
@@ -17,6 +17,7 @@ export const useBinDesigner = defineStore('binDesigner', {
     labelText2: '',
     labelIcon: null,
     notes: '',
+    moreOptionsOpen: false,
   }),
   getters: {
     params(state): LabeledBinParams {

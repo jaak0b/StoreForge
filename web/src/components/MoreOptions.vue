@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { ref } from 'vue';
 import { useBinDesigner } from '../stores/binDesigner';
 
 /**
@@ -21,12 +20,8 @@ const emit = defineEmits<{
 }>();
 
 const store = useBinDesigner();
-const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, notes } =
+const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, notes, moreOptionsOpen: open } =
   storeToRefs(store);
-
-const open = ref(false);
-
-defineExpose({ open });
 </script>
 
 <template>

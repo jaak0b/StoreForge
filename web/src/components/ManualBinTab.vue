@@ -29,11 +29,12 @@ const previewLoaded = ref(!smAndDown.value);
 const { gridX, gridY, heightUnits, labelText, labelIcon, notes } = storeToRefs(store);
 
 const quantity = ref(1);
-const moreOptions = ref<{ open: boolean } | null>(null);
 const gridXField = ref<{ focus: () => void } | null>(null);
 
 function resetForm(): void {
+  const keepOpen = store.moreOptionsOpen;
   store.$reset();
+  store.moreOptionsOpen = keepOpen;
   quantity.value = 1;
 }
 
@@ -60,7 +61,7 @@ function loadEditingEntry(entryId: string | null): void {
   });
   quantity.value = entry.quantity;
   if (entry.labelText2 !== '' || entry.notes !== undefined || entry.quantity > 1) {
-    if (moreOptions.value) moreOptions.value.open = true;
+    store.moreOptionsOpen = true;
   }
 }
 
@@ -156,7 +157,7 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
       <div class="text-caption text-medium-emphasis mt-2 mb-1">Label icon</div>
       <IconPicker v-model="labelIcon" />
 
-      <MoreOptions ref="moreOptions" per-bin-fields :quantity="quantity" @update:quantity="quantity = $event" />
+      <MoreOptions per-bin-fields :quantity="quantity" @update:quantity="quantity = $event" />
 
       <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">
         {{ errorMessage }}
