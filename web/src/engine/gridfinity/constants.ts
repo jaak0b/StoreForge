@@ -28,8 +28,8 @@ export const FOOT_UPPER_CHAMFER = 2.15;
 export const FOOT_HEIGHT =
   FOOT_LOWER_CHAMFER + FOOT_VERTICAL + FOOT_UPPER_CHAMFER;
 
-/** Bin wall thickness. (kennetek uses d_wall = 0.95; stage 1 uses 1.2 per spec.) */
-export const WALL_THICKNESS = 1.2;
+/** Bin wall thickness (d_wall = 0.95 in kennetek's src/core/standard.scad). */
+export const WALL_THICKNESS = 0.95;
 
 /**
  * Height of the top of the interior floor above the bed. The floor spans from
@@ -37,6 +37,14 @@ export const WALL_THICKNESS = 1.2;
  * kennetek's BASE_HEIGHT.
  */
 export const FLOOR_TOP = 7.0;
+
+/**
+ * Thickness of the solid floor plate kept above the hollowed base pocket
+ * (h_bot = 2.2, the bin bottom thickness in kennetek's src/core/standard.scad).
+ * The plate's top face sits at FLOOR_TOP; everything below it, down through
+ * the inside of each stacking foot, is pocketed like kennetek's lite base.
+ */
+export const FLOOR_PLATE_THICKNESS = 2.2;
 
 /** Stacking lip total height above the nominal bin top. */
 export const LIP_HEIGHT = 4.4;

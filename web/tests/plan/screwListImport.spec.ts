@@ -310,7 +310,7 @@ describe('composeLabelText', () => {
 });
 
 describe('computeBinWidthUnits', () => {
-  // One-unit interior width is 39.1 mm (42 - 0.5 - 2 * 1.2) and the handling
+  // One-unit interior width is 39.6 mm (42 - 0.5 - 2 * 0.95) and the handling
   // clearance is 4 mm, so 35 mm is the longest screw a one-unit bin fits.
   it('fits a 35 mm screw in one unit', () => {
     expect(computeBinWidthUnits(35)).toBe(1);
@@ -320,7 +320,7 @@ describe('computeBinWidthUnits', () => {
     expect(computeBinWidthUnits(36)).toBe(2);
   });
 
-  // Two-unit interior width is 81.1 mm, so 77 mm still fits two units.
+  // Two-unit interior width is 81.6 mm, so 77 mm still fits two units.
   it('fits a 77 mm screw in two units', () => {
     expect(computeBinWidthUnits(77)).toBe(2);
   });

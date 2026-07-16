@@ -244,13 +244,41 @@ function boldenText(m: ManifoldToplevel, part: LabelFacePart): LabelFacePart {
 }
 
 /**
+ * Widest unsupported gap allowed between two shelf ribs, in millimetres. The
+ * plate's top face is a flat bridge between rib tops; 16 mm is a short,
+ * reliable bridging distance for any common filament.
+ */
+export const RIB_MAX_CLEAR_SPAN = 16;
+
+/** Thickness of one shelf support rib, matching the bin wall thickness. */
+export const RIB_THICKNESS = WALL_THICKNESS;
+
+/**
+ * Number of support ribs under a shelf plate spanning the given width: the
+ * smallest count that keeps every clear gap between neighbouring ribs at or
+ * under RIB_MAX_CLEAR_SPAN, with one rib flush against each end. Solving
+ * (width - n * t) / (n - 1) <= span for the rib count n.
+ */
+export function shelfRibCount(spanWidth: number): number {
+  return Math.max(
+    2,
+    Math.ceil((spanWidth + RIB_MAX_CLEAR_SPAN) / (RIB_MAX_CLEAR_SPAN + RIB_THICKNESS)),
+  );
+}
+
+/**
  * Build the label shelf: a flat plate along the interior front wall, full
  * interior width, SHELF_DEPTH deep, its top face flush with the nominal bin
- * top, with a 45-degree support chamfer running from the plate's inner bottom
- * edge down to the front wall so it prints without supports. The profile
- * reaches into the front wall so unioning it with the bin body welds them,
- * and the prism is clipped to the bin's rounded outer outline so it also
- * welds to the side walls without protruding outside the bin.
+ * top. Instead of a solid support wedge under the full plate, the plate rests
+ * on evenly spaced triangular gussets (our own design, not taken from any
+ * reference implementation): each rib keeps the 45-degree profile from the
+ * plate's inner bottom edge down to the front wall, so ribs and plate still
+ * print without supports, and the plate top bridges the short spans between
+ * ribs. A rib sits flush at each end so the plate is anchored at the side
+ * walls. The profile reaches into the front wall so unioning it with the bin
+ * body welds them, and the solid is clipped to the bin's rounded outer
+ * outline so it also welds to the side walls without protruding outside the
+ * bin.
  */
 export function buildLabelShelf(m: ManifoldToplevel, params: BinParams): Manifold {
   const outerWidth = params.gridX * PITCH - 0.5;
@@ -263,27 +291,48 @@ export function buildLabelShelf(m: ManifoldToplevel, params: BinParams): Manifol
   const plateBottom = bodyTop - SHELF_THICKNESS;
   const chamferBottom = plateBottom - SHELF_DEPTH;
 
-  // Shelf profile in the (y, z) plane: flat plate on top, 45-degree chamfer
-  // underneath from the plate's inner bottom edge to the interior wall face.
-  const profile: SimplePolygon = [
+  // Profiles in the (y, z) plane. The plate is the solid label surface; each
+  // rib is the 45-degree support triangle that used to run the full width.
+  const plateProfile: SimplePolygon = [
     [yOuter, bodyTop],
     [yBack, bodyTop],
+    [yBack, plateBottom],
+    [yOuter, plateBottom],
+  ];
+  const ribProfile: SimplePolygon = [
+    [yOuter, plateBottom],
     [yBack, plateBottom],
     [yInner, chamferBottom],
     [yOuter, chamferBottom],
   ];
-  const section = new m.CrossSection([profile], 'NonZero');
-  let prism: Manifold;
-  try {
-    // Extrude along +Z, then permute axes (x, y, z) -> (z, x, y) so the
-    // profile lands in the (y, z) plane with the extrusion running along X.
-    prism = section
-      .extrude(outerWidth)
-      .rotate(90, 0, 90)
-      .translate(-outerWidth / 2, 0, 0);
-  } finally {
-    section.delete();
+
+  // Extrude along +Z, then permute axes (x, y, z) -> (z, x, y) so the
+  // profile lands in the (y, z) plane with the extrusion running along X.
+  const prismFromProfile = (profile: SimplePolygon, width: number): Manifold => {
+    const section = new m.CrossSection([profile], 'NonZero');
+    try {
+      return section.extrude(width).rotate(90, 0, 90);
+    } finally {
+      section.delete();
+    }
+  };
+
+  const parts: Manifold[] = [
+    prismFromProfile(plateProfile, outerWidth).translate(-outerWidth / 2, 0, 0),
+  ];
+  const ribCount = shelfRibCount(outerWidth);
+  const ribStep = (outerWidth - RIB_THICKNESS) / (ribCount - 1);
+  for (let i = 0; i < ribCount; i++) {
+    parts.push(
+      prismFromProfile(ribProfile, RIB_THICKNESS).translate(
+        -outerWidth / 2 + i * ribStep,
+        0,
+        0,
+      ),
+    );
   }
+  const prism = m.Manifold.union(parts);
+  for (const part of parts) part.delete();
 
   // Clip to the bin's rounded outer outline so the shelf's front corners
   // follow the corner radius instead of poking outside the bin.

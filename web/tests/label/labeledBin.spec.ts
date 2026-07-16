@@ -17,8 +17,10 @@ import {
   LABEL_LINE2_SCALE,
   LABEL_MARGIN,
   LABEL_TEXT_HEIGHT,
+  RIB_THICKNESS,
   SHELF_DEPTH,
   SHELF_THICKNESS,
+  shelfRibCount,
   TEXT_BOLD_OFFSET,
 } from '../../src/engine/label/placement';
 import { iconByName } from '../../src/engine/label/icons';
@@ -121,6 +123,59 @@ describe('buildLabelShelf', () => {
     expect(deeper).toBeLessThan(nearPlate);
     // Both slices stay attached to the front wall.
     expect(nearPlate).toBeGreaterThan(WALL_THICKNESS);
+    shelf.delete();
+  });
+});
+
+describe('label shelf ribs', () => {
+  it('places ribs under the plate with open spans between them', () => {
+    const shelf = buildLabelShelf(m, params());
+    const plateBottom = bodyTop - SHELF_THICKNESS;
+    // Probe at a depth where every rib is solid between the chamfer line and
+    // the plate: at y = -14 the 45-degree rib profile spans z up to the plate.
+    const probeY = shelfFrontY + WALL_THICKNESS + SHELF_DEPTH / 2;
+    const probeZ = plateBottom - 1;
+    const ribCount = shelfRibCount(outerWidth);
+    const step = (outerWidth - RIB_THICKNESS) / (ribCount - 1);
+    for (let i = 0; i < ribCount; i++) {
+      const centre = -outerWidth / 2 + i * step + RIB_THICKNESS / 2;
+      const probe = m.Manifold.cube([RIB_THICKNESS / 2, 1, 1], true).translate(
+        centre,
+        probeY,
+        probeZ,
+      );
+      const hit = shelf.intersect(probe);
+      expect(hit.isEmpty()).toBe(false);
+      hit.delete();
+      probe.delete();
+    }
+    // Midway between two inner ribs there is open air under the plate.
+    const gapX = -outerWidth / 2 + 0.5 * step + RIB_THICKNESS / 2;
+    const gapProbe = m.Manifold.cube([1, 1, 1], true).translate(gapX, probeY, probeZ);
+    const gap = shelf.intersect(gapProbe);
+    expect(gap.isEmpty()).toBe(true);
+    gap.delete();
+    gapProbe.delete();
+    shelf.delete();
+  });
+
+  it('keeps every clear span between ribs at or under the bridging limit', () => {
+    for (const width of [PITCH - 0.5, 2 * PITCH - 0.5, 5 * PITCH - 0.5]) {
+      const n = shelfRibCount(width);
+      const clear = (width - n * RIB_THICKNESS) / (n - 1);
+      expect(clear).toBeLessThanOrEqual(16 + 1e-9);
+      expect(clear).toBeGreaterThan(0);
+    }
+  });
+
+  it('uses much less material than a solid support wedge', () => {
+    const shelf = buildLabelShelf(m, params());
+    const plateArea = (WALL_THICKNESS + SHELF_DEPTH) * SHELF_THICKNESS;
+    const wedgeArea = ((WALL_THICKNESS + SHELF_DEPTH + WALL_THICKNESS) / 2) * SHELF_DEPTH;
+    // The old design extruded plate plus wedge across the full width; the
+    // ribbed shelf must keep well under half the wedge material.
+    expect(shelf.volume()).toBeLessThan((plateArea + 0.35 * wedgeArea) * outerWidth);
+    expect(shelf.volume()).toBeGreaterThan(0);
     shelf.delete();
   });
 });

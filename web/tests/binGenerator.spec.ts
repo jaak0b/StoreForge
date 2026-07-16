@@ -3,16 +3,21 @@ import type { ManifoldToplevel } from 'manifold-3d';
 import { loadManifold } from './helpers/manifold';
 import {
   buildBinManifold,
+  buildFoot,
   generateBin,
   roundedRectPolygon,
   validateParams,
 } from '../src/engine/gridfinity/binGenerator';
 import {
   DIVIDER_THICKNESS,
+  FLOOR_PLATE_THICKNESS,
   FLOOR_TOP,
   FOOT_HEIGHT,
   HEIGHT_UNIT,
   LIP_HEIGHT,
+  MAGNET_HOLE_DEPTH,
+  MAGNET_HOLE_FROM_CELL_EDGE,
+  OUTER_CORNER_RADIUS,
   PITCH,
   WALL_THICKNESS,
 } from '../src/engine/gridfinity/constants';
@@ -99,17 +104,104 @@ describe('buildBinManifold', () => {
     bin.delete();
   });
 
-  it('magnet holes reduce the volume without breaking the solid', () => {
-    const plain = buildBinManifold(m, params());
+  it('magnet holes stay open inside solid bosses without breaking the solid', () => {
     const withMagnets = buildBinManifold(m, params({ magnetHoles: true }));
-    expect(withMagnets.volume()).toBeLessThan(plain.volume());
     expect(withMagnets.status()).toBe('NoError');
-    // Each of the four holes removes at most a full cylinder of material.
-    const holeVolume = Math.PI * 3.25 ** 2 * 2.4;
-    expect(plain.volume() - withMagnets.volume()).toBeLessThanOrEqual(4 * holeVolume + 1e-6);
-    expect(plain.volume() - withMagnets.volume()).toBeGreaterThan(2 * holeVolume);
-    plain.delete();
+    // Each magnet boss welds to the two foot shell walls of its corner and to
+    // the floor plate above, closing two independent loops per boss: genus 2
+    // per boss, 4 bosses on a 1x1 bin.
+    expect(withMagnets.genus()).toBe(8);
+    const offset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        // The hole itself is open air.
+        const hole = m.Manifold.cylinder(MAGNET_HOLE_DEPTH - 0.2, 3.0, 3.0, 16).translate(
+          sx * offset,
+          sy * offset,
+          0.1,
+        );
+        const holeHit = withMagnets.intersect(hole);
+        expect(holeHit.isEmpty()).toBe(true);
+        holeHit.delete();
+        hole.delete();
+        // A ring of solid plastic surrounds the hole (the boss kept out of
+        // the base pocket), probed just outside the hole radius.
+        const ring = m.Manifold.cube([0.4, 0.4, MAGNET_HOLE_DEPTH - 0.2], true).translate(
+          sx * offset + 3.25 + 0.4,
+          sy * offset,
+          MAGNET_HOLE_DEPTH / 2,
+        );
+        const ringHit = withMagnets.intersect(ring);
+        expect(ringHit.isEmpty()).toBe(false);
+        ringHit.delete();
+        ring.delete();
+      }
+    }
     withMagnets.delete();
+  });
+
+  it('hollows the base while keeping the floor plate under the cavity', () => {
+    const bin = buildBinManifold(m, params());
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    // The centre of the foot interior is pocketed away.
+    const hollowProbe = m.Manifold.cube([4, 4, 2], true).translate(0, 0, 2);
+    const hollow = bin.intersect(hollowProbe);
+    expect(hollow.isEmpty()).toBe(true);
+    hollow.delete();
+    hollowProbe.delete();
+    // The floor plate above the pocket is solid up to FLOOR_TOP.
+    const plateProbe = m.Manifold.cube([4, 4, FLOOR_PLATE_THICKNESS - 0.1], true).translate(
+      0,
+      0,
+      FLOOR_TOP - FLOOR_PLATE_THICKNESS / 2,
+    );
+    const plate = bin.intersect(plateProbe);
+    expect(plate.volume()).toBeCloseTo(4 * 4 * (FLOOR_PLATE_THICKNESS - 0.1), 3);
+    plate.delete();
+    plateProbe.delete();
+    // And the cavity above the plate is open: the interior floor stays at
+    // FLOOR_TOP exactly.
+    const cavityProbe = m.Manifold.cube([4, 4, 1], true).translate(0, 0, FLOOR_TOP + 0.6);
+    const cavity = bin.intersect(cavityProbe);
+    expect(cavity.isEmpty()).toBe(true);
+    cavity.delete();
+    cavityProbe.delete();
+    bin.delete();
+  });
+
+  it('the base pocket removes a meaningful amount of material', () => {
+    // Reconstruct the pre-pocket base (solid foot plus solid slab up to
+    // FLOOR_TOP) and compare it against the actual bin below FLOOR_TOP.
+    const outer = PITCH - 0.5;
+    const slab = m.Manifold.extrude(
+      [roundedRectPolygon(outer, outer, OUTER_CORNER_RADIUS)],
+      FLOOR_TOP - FOOT_HEIGHT,
+    ).translate(0, 0, FOOT_HEIGHT);
+    const foot = buildFoot(m);
+    const solidBase = m.Manifold.union([foot, slab]);
+    const bin = buildBinManifold(m, params());
+    const base = bin.trimByPlane([0, 0, -1], -FLOOR_TOP);
+    const saved = solidBase.volume() - base.volume();
+    // The 1x1 pocket saves several cubic centimetres of filament.
+    expect(saved).toBeGreaterThan(3000);
+    expect(base.volume()).toBeGreaterThan(0);
+    solidBase.delete();
+    foot.delete();
+    slab.delete();
+    base.delete();
+    bin.delete();
+  });
+
+  it('keeps a 2x1 bin with magnets and dividers watertight when pocketed', () => {
+    const bin = buildBinManifold(
+      m,
+      params({ gridX: 2, magnetHoles: true, dividerCountX: 1, dividerCountY: 1 }),
+    );
+    expect(bin.status()).toBe('NoError');
+    // Genus 2 per magnet boss (see the magnet hole test): 8 bosses here.
+    expect(bin.genus()).toBe(16);
+    bin.delete();
   });
 
   it('keeps the foot region narrower than the body so bins can stack', () => {
@@ -145,18 +237,29 @@ describe('interior dividers', () => {
     zeroed.delete();
   });
 
-  it('adds exactly the divider wall volume inside the cavity', () => {
+  it('adds the divider wall volume plus their solid roots in the base pocket', () => {
     const countX = 2;
     const countY = 1;
     const plain = buildBinManifold(m, params());
     const divided = buildBinManifold(m, params({ dividerCountX: countX, dividerCountY: countY }));
     const inner = PITCH - 0.5 - 2 * WALL_THICKNESS;
+    const outer = PITCH - 0.5;
     const visibleHeight = 3 * HEIGHT_UNIT - FLOOR_TOP;
-    const expected =
+    const walls =
       visibleHeight *
       DIVIDER_THICKNESS *
       (countX * inner + countY * inner - countX * countY * DIVIDER_THICKNESS);
-    expect(divided.volume() - plain.volume()).toBeCloseTo(expected, 1);
+    const delta = divided.volume() - plain.volume();
+    // The dividers themselves, plus the solid strips kept out of the base
+    // pocket under each divider root (at most a full-height strip of
+    // DIVIDER_THICKNESS + 2 * WALL_THICKNESS across the bin per divider).
+    const stripBound =
+      (DIVIDER_THICKNESS + 2 * WALL_THICKNESS) *
+      outer *
+      (FLOOR_TOP - FLOOR_PLATE_THICKNESS) *
+      (countX + countY);
+    expect(delta).toBeGreaterThan(walls);
+    expect(delta).toBeLessThan(walls + stripBound);
     plain.delete();
     divided.delete();
   });
