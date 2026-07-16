@@ -257,8 +257,7 @@ function removeRow(entry: BinEntry): void {
 }
 
 .qrow {
-  display: grid;
-  grid-template-columns: 30px 34px 1.6fr 1fr 52px minmax(120px, auto) 110px;
+  display: flex;
   align-items: center;
   gap: 12px;
   padding: 6px 14px;
@@ -269,7 +268,7 @@ function removeRow(entry: BinEntry): void {
 }
 
 .row-check {
-  justify-self: start;
+  flex: 0 0 auto;
 }
 
 .qty-badge {
@@ -280,7 +279,7 @@ function removeRow(entry: BinEntry): void {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 8px;
   padding: 2px 8px;
-  justify-self: start;
+  flex: 0 0 auto;
 }
 
 .qrow:hover {
@@ -311,6 +310,7 @@ function removeRow(entry: BinEntry): void {
 }
 
 .row-name {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -321,6 +321,7 @@ function removeRow(entry: BinEntry): void {
 }
 
 .row-dims {
+  flex: 0 0 auto;
   font-family: monospace;
   font-size: 12px;
   color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
