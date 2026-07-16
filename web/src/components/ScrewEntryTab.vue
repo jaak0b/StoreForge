@@ -230,6 +230,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
         hide-details
         @focus="shorthandFocused = true"
         @blur="shorthandFocused = false"
+        @keydown.enter="addToQueue"
       />
       <p class="text-caption text-medium-emphasis mt-1 mb-0">
         Separate screws with commas; imperial works too (#8 x 1-1/2" wood).
