@@ -314,6 +314,12 @@ function removeRow(entry: BinEntry): void {
   min-width: 0;
 }
 
+.row-name > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .row-dims {
   font-family: monospace;
   font-size: 12px;
