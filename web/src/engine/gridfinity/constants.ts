@@ -32,6 +32,17 @@ export const FOOT_HEIGHT =
 export const WALL_THICKNESS = 0.95;
 
 /**
+ * Wall thickness of everything inside the hollowed base region: the foot
+ * shells, the magnet boss walls, the divider root strips, and the per-cell
+ * cross walls. Our own printability choice, not a spec value: three 0.45 mm
+ * extrusion lines are 1.35 mm, plus a small allowance so slicers with a
+ * little line overlap still place three full perimeters; 1.5 x WALL_THICKNESS
+ * gives 1.425 mm, rounded to 1.42. The bin walls above the base keep
+ * WALL_THICKNESS.
+ */
+export const BASE_WALL_THICKNESS = 1.42;
+
+/**
  * Height of the top of the interior floor above the bed. The floor spans from
  * the top of the feet (4.75 mm) up to one full base height (7 mm), matching
  * kennetek's BASE_HEIGHT.

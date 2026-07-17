@@ -9,6 +9,7 @@ import {
   validateParams,
 } from '../src/engine/gridfinity/binGenerator';
 import {
+  BASE_WALL_THICKNESS,
   DIVIDER_THICKNESS,
   FLOOR_PLATE_THICKNESS,
   FLOOR_TOP,
@@ -144,8 +145,9 @@ describe('buildBinManifold', () => {
     const bin = buildBinManifold(m, params());
     expect(bin.status()).toBe('NoError');
     expect(bin.genus()).toBe(0);
-    // The centre of the foot interior is pocketed away.
-    const hollowProbe = m.Manifold.cube([4, 4, 2], true).translate(0, 0, 2);
+    // The foot interior is pocketed away, probed at a cell quarter point
+    // (the cell centre itself carries the "+" cross walls).
+    const hollowProbe = m.Manifold.cube([4, 4, 2], true).translate(10.5, 10.5, 2);
     const hollow = bin.intersect(hollowProbe);
     expect(hollow.isEmpty()).toBe(true);
     hollow.delete();
@@ -170,6 +172,40 @@ describe('buildBinManifold', () => {
     bin.delete();
   });
 
+  it('keeps a "+" of cross walls inside the base pocket of every cell', () => {
+    const bin = buildBinManifold(m, params({ gridX: 2 }));
+    expect(bin.status()).toBe('NoError');
+    for (const cx of [-PITCH / 2, PITCH / 2]) {
+      // Solid on both arms of the "+" (cell midlines), probed near the bed
+      // well inside the BASE_WALL_THICKNESS of the cross walls.
+      for (const [px, py] of [
+        [cx + 10.5, 0],
+        [cx, 10.5],
+      ]) {
+        const probe = m.Manifold.cube([0.5, 0.5, 1], true).translate(px, py, 1.5);
+        const hit = bin.intersect(probe);
+        expect(hit.volume()).toBeCloseTo(0.5 * 0.5 * 1, 3);
+        hit.delete();
+        probe.delete();
+      }
+      // Hollow chambers at the cell quarter points between the walls.
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          const probe = m.Manifold.cube([2, 2, 1], true).translate(
+            cx + sx * 10.5,
+            sy * 10.5,
+            1.5,
+          );
+          const hit = bin.intersect(probe);
+          expect(hit.isEmpty()).toBe(true);
+          hit.delete();
+          probe.delete();
+        }
+      }
+    }
+    bin.delete();
+  });
+
   it('the base pocket removes a meaningful amount of material', () => {
     // Reconstruct the pre-pocket base (solid foot plus solid slab up to
     // FLOOR_TOP) and compare it against the actual bin below FLOOR_TOP.
@@ -183,8 +219,9 @@ describe('buildBinManifold', () => {
     const bin = buildBinManifold(m, params());
     const base = bin.trimByPlane([0, 0, -1], -FLOOR_TOP);
     const saved = solidBase.volume() - base.volume();
-    // The 1x1 pocket saves several cubic centimetres of filament.
-    expect(saved).toBeGreaterThan(3000);
+    // The 1x1 pocket still saves several cubic centimetres of filament even
+    // with the thicker base walls and the "+" cross walls in the pocket.
+    expect(saved).toBeGreaterThan(4000);
     expect(base.volume()).toBeGreaterThan(0);
     solidBase.delete();
     foot.delete();
@@ -252,9 +289,9 @@ describe('interior dividers', () => {
     const delta = divided.volume() - plain.volume();
     // The dividers themselves, plus the solid strips kept out of the base
     // pocket under each divider root (at most a full-height strip of
-    // DIVIDER_THICKNESS + 2 * WALL_THICKNESS across the bin per divider).
+    // DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS across the bin per divider).
     const stripBound =
-      (DIVIDER_THICKNESS + 2 * WALL_THICKNESS) *
+      (DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS) *
       outer *
       (FLOOR_TOP - FLOOR_PLATE_THICKNESS) *
       (countX + countY);

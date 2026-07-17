@@ -10,6 +10,7 @@ import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
   BASE_TOP_RADIUS,
+  BASE_WALL_THICKNESS,
   BASE_TOP_SIZE,
   CORNER_SEGMENTS,
   DIVIDER_THICKNESS,
@@ -117,17 +118,20 @@ export function buildFoot(m: ManifoldToplevel): Manifold {
 /**
  * Inset a convex polygon by the given distance (rounded corners shrink
  * naturally, collapsing to sharp corners when the inset exceeds their radius).
+ * Returns null when the inset consumes the whole polygon (the section closes
+ * completely), so callers can keep that part of the shape solid.
  */
 function insetPolygon(
   m: ManifoldToplevel,
   poly: SimplePolygon,
   inset: number,
-): SimplePolygon {
+): SimplePolygon | null {
   const section = new m.CrossSection([poly], 'NonZero');
   try {
     const shrunk = section.offset(-inset, 'Round');
     try {
       const polygons = shrunk.toPolygons();
+      if (polygons.length === 0) return null;
       if (polygons.length !== 1) {
         throw new Error(`Insetting a polygon by ${inset} mm did not leave one contour.`);
       }
@@ -143,21 +147,22 @@ function insetPolygon(
 /**
  * Pocket cutter hollowing the base of one cell, in the style of the lite base
  * in kennetek/gridfinity-rebuilt-openscad (gridfinity-rebuilt-lite.scad): the
- * foot becomes a shell of WALL_THICKNESS following its own chamfered profile,
- * and the hollow continues up past the foot top to leave only a solid floor
- * plate of FLOOR_PLATE_THICKNESS (kennetek h_bot) under the interior cavity.
- * The 45-degree shell walls and the flat bridged plate print without support.
- * When magnetHoles is set, a solid boss column is kept around each magnet
- * hole (WALL_THICKNESS of plastic around the cutter) so magnets seat in solid
- * material; each boss deliberately overlaps the corner of the foot shell, so
- * it is welded to the shell walls as well as to the floor plate above.
+ * foot becomes a shell of BASE_WALL_THICKNESS following its own chamfered
+ * profile, and the hollow continues up past the foot top to leave only a solid
+ * floor plate of FLOOR_PLATE_THICKNESS (kennetek h_bot) under the interior
+ * cavity. The 45-degree shell walls and the flat bridged plate print without
+ * support. When magnetHoles is set, a solid boss column is kept around each
+ * magnet hole (BASE_WALL_THICKNESS of plastic around the cutter) so magnets
+ * seat in solid material; each boss deliberately overlaps the corner of the
+ * foot shell, so it is welded to the shell walls as well as to the floor
+ * plate above.
  * Centred on the origin; open downward past z = 0 for a clean cut.
  */
-function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifold {
+function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifold | null {
   const eps = 0.01;
   const pocketTop = FLOOR_TOP - FLOOR_PLATE_THICKNESS;
 
-  // Same three sections as buildFoot, inset by one wall thickness. Both
+  // Same three sections as buildFoot, inset by the base wall thickness. Both
   // chamfers keep their 45-degree slope because every section shifts equally.
   const topSize = BASE_TOP_SIZE;
   const midSize = topSize - 2 * FOOT_UPPER_CHAMFER;
@@ -165,12 +170,12 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
   const topPoly = insetPolygon(
     m,
     roundedRectPolygon(topSize, topSize, BASE_TOP_RADIUS),
-    WALL_THICKNESS,
+    BASE_WALL_THICKNESS,
   );
   const midPoly = insetPolygon(
     m,
     roundedRectPolygon(midSize, midSize, BASE_TOP_RADIUS - FOOT_UPPER_CHAMFER),
-    WALL_THICKNESS,
+    BASE_WALL_THICKNESS,
   );
   const bottomPoly = insetPolygon(
     m,
@@ -179,8 +184,11 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
       bottomSize,
       BASE_TOP_RADIUS - FOOT_UPPER_CHAMFER - FOOT_LOWER_CHAMFER,
     ),
-    WALL_THICKNESS,
+    BASE_WALL_THICKNESS,
   );
+  // If the inset consumed any foot section, the shell walls would meet in the
+  // middle: the whole cell base simply stays solid instead of being pocketed.
+  if (topPoly === null || midPoly === null || bottomPoly === null) return null;
 
   const below = m.Manifold.extrude([bottomPoly], eps).translate(0, 0, -eps);
   const lowerChamfer = hullBetween(m, bottomPoly, 0, midPoly, FOOT_LOWER_CHAMFER);
@@ -205,7 +213,7 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
 
   if (magnetHoles) {
     const offset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
-    const bossRadius = MAGNET_HOLE_DIAMETER / 2 + WALL_THICKNESS;
+    const bossRadius = MAGNET_HOLE_DIAMETER / 2 + BASE_WALL_THICKNESS;
     const bosses: Manifold[] = [];
     for (const sx of [-1, 1]) {
       for (const sy of [-1, 1]) {
@@ -228,9 +236,17 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
  * The base pocket for the whole bin: one cell pocket per foot, minus solid
  * strips kept under every divider wall (dividers key into the floor at the
  * foot top, so the material below their roots must remain, all the way to the
- * bed so the strips print as free-standing walls inside the hollow feet).
+ * bed so the strips print as free-standing walls inside the hollow feet), and
+ * minus a "+" of cross walls per grid cell. The cross walls are our own
+ * printability design (not from a reference implementation): one wall along X
+ * at the cell's Y midline and one along Y at the cell's X midline, standing
+ * on the bed and rising to the underside of the floor plate, welded into the
+ * surrounding foot shell so each cell becomes four closed chambers. They keep
+ * the unsupported bridge span of the floor plate near 21 mm at any bin size.
+ * Returns null when the base cannot be pocketed at all (foot too small for
+ * the shell inset), in which case the base stays solid.
  */
-function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold {
+function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | null {
   const { gridX, gridY, magnetHoles, dividerCountX, dividerCountY } = params;
   const eps = 0.01;
   const pocketTop = FLOOR_TOP - FLOOR_PLATE_THICKNESS;
@@ -238,6 +254,7 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold {
   const outerDepth = gridY * PITCH - 0.5;
 
   const cellPocket = buildCellBasePocket(m, magnetHoles);
+  if (cellPocket === null) return null;
   const pockets: Manifold[] = [];
   for (let ix = 0; ix < gridX; ix++) {
     for (let iy = 0; iy < gridY; iy++) {
@@ -249,7 +266,7 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold {
   let pocket = m.Manifold.union(pockets);
 
   const strips: Manifold[] = [];
-  const stripWidth = DIVIDER_THICKNESS + 2 * WALL_THICKNESS;
+  const stripWidth = DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS;
   const stripHeight = pocketTop + 2 * eps;
   const innerWidth = outerWidth - 2 * WALL_THICKNESS;
   const innerDepth = outerDepth - 2 * WALL_THICKNESS;
@@ -272,6 +289,27 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold {
         stripHeight / 2 - eps,
       ),
     );
+  }
+  // Per-cell "+" cross walls: kept out of the pocket, so they intersect the
+  // hollow exactly and weld into the foot shell walls at their ends. Plain
+  // overlap with magnet bosses or divider root strips is intentional.
+  for (let ix = 0; ix < gridX; ix++) {
+    for (let iy = 0; iy < gridY; iy++) {
+      const cx = (ix - (gridX - 1) / 2) * PITCH;
+      const cy = (iy - (gridY - 1) / 2) * PITCH;
+      strips.push(
+        m.Manifold.cube([PITCH, BASE_WALL_THICKNESS, stripHeight], true).translate(
+          cx,
+          cy,
+          stripHeight / 2 - eps,
+        ),
+        m.Manifold.cube([BASE_WALL_THICKNESS, PITCH, stripHeight], true).translate(
+          cx,
+          cy,
+          stripHeight / 2 - eps,
+        ),
+      );
+    }
   }
   if (strips.length > 0) {
     pocket = m.Manifold.difference(pocket, m.Manifold.union(strips));
@@ -432,7 +470,10 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   }
 
   // Hollow the base (lite-style pocket) after the interior cavity is cut.
-  cutters.push(buildBasePocket(m, params));
+  const basePocket = buildBasePocket(m, params);
+  if (basePocket !== null) {
+    cutters.push(basePocket);
+  }
 
   let result = m.Manifold.difference(solid, m.Manifold.union(cutters));
 
