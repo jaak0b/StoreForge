@@ -273,18 +273,6 @@ async function confirm(): Promise<void> {
     </div>
 
     <template v-else>
-      <p class="text-body-2 mb-0">
-        <b>Drag the four handles onto the sheet corners.</b> The trace scale
-        comes from these corners.
-      </p>
-      <canvas
-        ref="canvas"
-        class="photo-canvas"
-        @pointerdown="onPointerDown"
-        @pointermove="onPointerMove"
-        @pointerup="onPointerUp"
-        @pointercancel="onPointerUp"
-      />
       <div class="d-flex align-center flex-wrap ga-3">
         <div>
           <div class="text-caption text-medium-emphasis">Sheet size</div>
@@ -293,25 +281,28 @@ async function confirm(): Promise<void> {
             <v-btn value="letter">Letter</v-btn>
           </v-btn-toggle>
         </div>
-        <v-btn
-          variant="outlined"
-          :disabled="busy"
-          prepend-icon="mdi-crop-free"
-          @click="redetect"
-        >
-          Detect corners again
-        </v-btn>
-        <v-btn
-          variant="outlined"
-          prepend-icon="mdi-image-refresh-outline"
-          :disabled="busy"
-          @click="fileInput?.click()"
-        >
-          Choose a different photo
-        </v-btn>
-        <v-btn color="primary" variant="flat" :loading="busy" @click="confirm">
-          Confirm sheet
-        </v-btn>
+        <v-tooltip text="Re-run corner detection on the loaded photo, discarding any manual drags.">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon="mdi-scan-helper"
+              variant="outlined"
+              :disabled="busy"
+              @click="redetect"
+            />
+          </template>
+        </v-tooltip>
+        <v-tooltip text="Choose a different photo.">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon="mdi-image-refresh-outline"
+              variant="outlined"
+              :disabled="busy"
+              @click="fileInput?.click()"
+            />
+          </template>
+        </v-tooltip>
         <input
           ref="fileInput"
           type="file"
@@ -319,27 +310,52 @@ async function confirm(): Promise<void> {
           class="d-none"
           @change="onFileInput"
         />
+        <p class="text-body-2 mb-0 flex-grow-1">
+          <b>Drag the four handles onto the sheet corners.</b> The trace scale
+          comes from these corners.
+        </p>
+      </div>
+
+      <p v-if="busyText !== ''" class="text-body-2 text-medium-emphasis mb-0">
+        {{ busyText }}
+      </p>
+      <v-progress-linear v-if="busy" indeterminate />
+      <v-alert
+        v-if="detectionNote !== null"
+        type="info"
+        variant="tonal"
+        density="compact"
+      >
+        {{ detectionNote }}
+      </v-alert>
+      <v-alert v-if="errorMessage" type="error" density="compact">
+        {{ errorMessage }}
+      </v-alert>
+      <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis readout">
+        <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
+      </div>
+
+      <div class="photo-canvas-wrap">
+        <canvas
+          ref="canvas"
+          class="photo-canvas"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerUp"
+        />
+        <v-btn
+          color="primary"
+          variant="flat"
+          elevation="6"
+          class="confirm-btn"
+          :loading="busy"
+          @click="confirm"
+        >
+          Confirm sheet
+        </v-btn>
       </div>
     </template>
-
-    <v-alert
-      v-if="detectionNote !== null"
-      type="info"
-      variant="tonal"
-      density="compact"
-    >
-      {{ detectionNote }}
-    </v-alert>
-    <p v-if="busyText !== ''" class="text-body-2 text-medium-emphasis mb-0">
-      {{ busyText }}
-    </p>
-    <v-progress-linear v-if="busy" indeterminate />
-    <v-alert v-if="errorMessage" type="error" density="compact">
-      {{ errorMessage }}
-    </v-alert>
-    <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis readout">
-      <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
-    </div>
   </div>
 </template>
 
@@ -358,11 +374,23 @@ async function confirm(): Promise<void> {
   max-width: 480px;
 }
 
+.photo-canvas-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
 .photo-canvas {
   max-width: 100%;
   border-radius: 8px;
   touch-action: none;
   cursor: crosshair;
-  align-self: flex-start;
+  display: block;
+}
+
+.confirm-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
 }
 </style>
