@@ -8,7 +8,7 @@ import {
 } from '../../stores/toolTrace';
 import { autoPocketGridSize } from '../../workerClient';
 import { boundsOf, primitiveOutline, transformTool } from '../../engine/trace/edit';
-import { binInteriorSizeMm } from '../../engine/gridfinity/constants';
+import { binInteriorSizeMm, PITCH } from '../../engine/gridfinity/constants';
 import type { MmPoint, TracedTool } from '../../engine/trace/types';
 
 /**
@@ -65,6 +65,27 @@ function draw(): void {
   ctx.strokeStyle = 'rgba(128, 128, 128, 0.9)';
   ctx.lineWidth = 1.5;
   ctx.strokeRect(cx - (interiorX / 2) * s, cy - (interiorY / 2) * s, interiorX * s, interiorY * s);
+  // Dotted lines on the 42 mm cell boundaries, so it is visible which grid
+  // cells the layout occupies and where to drag tools to shrink the bin.
+  ctx.save();
+  ctx.strokeStyle = 'rgba(128, 128, 128, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 4]);
+  for (let k = 1; k < gridX.value; k++) {
+    const x = cx + (k - gridX.value / 2) * PITCH * s;
+    ctx.beginPath();
+    ctx.moveTo(x, cy - (interiorY / 2) * s);
+    ctx.lineTo(x, cy + (interiorY / 2) * s);
+    ctx.stroke();
+  }
+  for (let k = 1; k < gridY.value; k++) {
+    const y = cy + (k - gridY.value / 2) * PITCH * s;
+    ctx.beginPath();
+    ctx.moveTo(cx - (interiorX / 2) * s, y);
+    ctx.lineTo(cx + (interiorX / 2) * s, y);
+    ctx.stroke();
+  }
+  ctx.restore();
   // Tools.
   for (const tool of tools.value) {
     const placement = store.placementOf(tool.id);
