@@ -10,6 +10,8 @@ import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
   BASE_TOP_RADIUS,
+  binInteriorSizeMm,
+  binOuterSizeMm,
   BASE_WALL_THICKNESS,
   BASE_TOP_SIZE,
   CORNER_SEGMENTS,
@@ -250,8 +252,8 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | nul
   const { gridX, gridY, magnetHoles, dividerCountX, dividerCountY } = params;
   const eps = 0.01;
   const pocketTop = FLOOR_TOP - FLOOR_PLATE_THICKNESS;
-  const outerWidth = gridX * PITCH - 0.5;
-  const outerDepth = gridY * PITCH - 0.5;
+  const outerWidth = binOuterSizeMm(gridX);
+  const outerDepth = binOuterSizeMm(gridY);
 
   const cellPocket = buildCellBasePocket(m, magnetHoles);
   if (cellPocket === null) return null;
@@ -268,8 +270,8 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | nul
   const strips: Manifold[] = [];
   const stripWidth = DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS;
   const stripHeight = pocketTop + 2 * eps;
-  const innerWidth = outerWidth - 2 * WALL_THICKNESS;
-  const innerDepth = outerDepth - 2 * WALL_THICKNESS;
+  const innerWidth = binInteriorSizeMm(gridX);
+  const innerDepth = binInteriorSizeMm(gridY);
   for (let i = 1; i <= dividerCountX; i++) {
     const x = -innerWidth / 2 + (i * innerWidth) / (dividerCountX + 1);
     strips.push(
@@ -353,8 +355,8 @@ function buildDividers(
   bodyTop: number,
 ): Manifold {
   const { dividerCountX, dividerCountY } = params;
-  const innerWidth = outerWidth - 2 * WALL_THICKNESS;
-  const innerDepth = outerDepth - 2 * WALL_THICKNESS;
+  const innerWidth = binInteriorSizeMm(params.gridX);
+  const innerDepth = binInteriorSizeMm(params.gridY);
   // Embedded into the floor slab (feet top to floor top) for a solid weld.
   const zBottom = FOOT_HEIGHT;
   const height = bodyTop - zBottom;
@@ -399,8 +401,8 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
     dividerCountY,
   } = params;
 
-  const outerWidth = gridX * PITCH - 0.5;
-  const outerDepth = gridY * PITCH - 0.5;
+  const outerWidth = binOuterSizeMm(gridX);
+  const outerDepth = binOuterSizeMm(gridY);
   const bodyTop = heightUnits * HEIGHT_UNIT;
   const solidTop = stackingLip ? bodyTop + LIP_HEIGHT : bodyTop;
 
@@ -503,11 +505,10 @@ export function validateParams(params: BinParams): void {
     }
   }
   // Each compartment must keep a positive clear width between divider walls.
-  for (const [name, count, outer] of [
-    ['dividerCountX', dividerCountX, gridX * PITCH - 0.5],
-    ['dividerCountY', dividerCountY, gridY * PITCH - 0.5],
+  for (const [name, count, inner] of [
+    ['dividerCountX', dividerCountX, binInteriorSizeMm(gridX)],
+    ['dividerCountY', dividerCountY, binInteriorSizeMm(gridY)],
   ] as const) {
-    const inner = outer - 2 * WALL_THICKNESS;
     const clear = (inner - count * DIVIDER_THICKNESS) / (count + 1);
     if (count > 0 && clear <= 0) {
       throw new Error(
@@ -570,7 +571,7 @@ function labelSpecOf(params: LabeledBinParams): LabelSpec {
  * Build the bin body, with the label shelf welded in when the parameters ask
  * for a label. A plain bin (no text, no icon) gets no shelf.
  */
-function buildLabeledBody(m: ManifoldToplevel, params: LabeledBinParams): Manifold {
+export function buildLabeledBody(m: ManifoldToplevel, params: LabeledBinParams): Manifold {
   const body = buildBinManifold(m, params);
   if (!specHasLabel(labelSpecOf(params))) return body;
   const shelf = buildLabelShelf(m, params);
@@ -588,7 +589,7 @@ function buildLabeledBody(m: ManifoldToplevel, params: LabeledBinParams): Manifo
  * the bin body (they must overlap so a union prints as one part). Returns
  * null for an empty label spec.
  */
-function buildWeldedLabel(
+export function buildWeldedLabel(
   m: ManifoldToplevel,
   font: Font,
   params: LabeledBinParams,

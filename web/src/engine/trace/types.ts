@@ -92,6 +92,22 @@ export interface TracedTool {
   fingerHoles: FingerHole[];
 }
 
+/**
+ * One tool's position in a pocket bin, as stored in a plan entry (plain JSON).
+ * The offset is added to every point of the tool's resolved outline (see
+ * `resolvedToolOutline`) and to its finger-hole centres, mapping tool-local mm
+ * directly onto bin-local mm with the bin centred on the origin.
+ */
+export interface ToolPlacement {
+  toolId: string;
+  /** Bin-local X offset of the tool's outline origin, in mm. */
+  xMm: number;
+  /** Bin-local Y offset of the tool's outline origin, in mm. */
+  yMm: number;
+  /** How far the pocket sinks below the nominal bin top, in mm. */
+  pocketDepthMm: number;
+}
+
 /** Scale calibration derived from rectifying the sheet to a top-down image. */
 export interface PaperCalibration {
   /** The photo-pixel corners the rectification was computed from. */

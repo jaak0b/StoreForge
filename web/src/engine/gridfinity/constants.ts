@@ -81,3 +81,22 @@ export const CORNER_SEGMENTS = 12;
  * used by kennetek/gridfinity-rebuilt-openscad (d_div in src/core/standard.scad).
  */
 export const DIVIDER_THICKNESS = 1.2;
+
+/**
+ * Outer footprint size in mm of a bin spanning `cells` grid cells along one
+ * axis: the grid pitch per cell minus the shared footprint clearance
+ * (PITCH - BASE_TOP_SIZE, a quarter millimetre per side). The single home for
+ * this figure; every module needing the bin's outer width or depth derives it
+ * from here.
+ */
+export function binOuterSizeMm(cells: number): number {
+  return cells * PITCH - (PITCH - BASE_TOP_SIZE);
+}
+
+/**
+ * Clear interior size in mm between the bin walls along one axis. The single
+ * home for this figure.
+ */
+export function binInteriorSizeMm(cells: number): number {
+  return binOuterSizeMm(cells) - 2 * WALL_THICKNESS;
+}

@@ -29,7 +29,7 @@ export function resolveLabelIcon(name: string): LabelIcon | null {
  * through unchanged; an unknown name also passes through, so the worker
  * reports it as an unknown icon instead of failing silently here.
  */
-export function withResolvedIconPath(params: LabeledBinParams): LabeledBinParams {
+export function withResolvedIconPath<T extends LabeledBinParams>(params: T): T {
   if (params.labelIcon === null) return params;
   if (LABEL_ICONS.some((icon) => icon.name === params.labelIcon)) return params;
   const custom = useCustomIcons().iconByName(params.labelIcon);

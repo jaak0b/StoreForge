@@ -6,9 +6,10 @@ import type { LabelIcon } from './icons';
 import { extrudeLabel } from './extrude';
 import type { LabelFillRule } from './extrude';
 import {
+  binInteriorSizeMm,
+  binOuterSizeMm,
   HEIGHT_UNIT,
   OUTER_CORNER_RADIUS,
-  PITCH,
   WALL_THICKNESS,
 } from '../gridfinity/constants';
 import { roundedRectPolygon } from '../gridfinity/binGenerator';
@@ -281,8 +282,8 @@ export function shelfRibCount(spanWidth: number): number {
  * bin.
  */
 export function buildLabelShelf(m: ManifoldToplevel, params: BinParams): Manifold {
-  const outerWidth = params.gridX * PITCH - 0.5;
-  const outerDepth = params.gridY * PITCH - 0.5;
+  const outerWidth = binOuterSizeMm(params.gridX);
+  const outerDepth = binOuterSizeMm(params.gridY);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
 
   const yOuter = -outerDepth / 2;
@@ -364,10 +365,9 @@ export function buildLabelManifold(
 ): Manifold | null {
   if (!specHasLabel(spec)) return null;
 
-  const outerWidth = params.gridX * PITCH - 0.5;
-  const outerDepth = params.gridY * PITCH - 0.5;
+  const outerDepth = binOuterSizeMm(params.gridY);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  const interiorWidth = outerWidth - 2 * WALL_THICKNESS;
+  const interiorWidth = binInteriorSizeMm(params.gridX);
 
   // Reserve TEXT_BOLD_OFFSET on every side of the fit box: boldenText grows
   // text outlines by that much after layout, so shrinking the target here

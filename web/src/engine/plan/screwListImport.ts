@@ -1,4 +1,4 @@
-import { BASE_TOP_SIZE, PITCH, WALL_THICKNESS } from '../gridfinity/constants';
+import { binInteriorSizeMm } from '../gridfinity/constants';
 
 /**
  * Screw-list shorthand parsing and bin sizing for the "add bins from a screw
@@ -481,12 +481,11 @@ export function composeLabelText(
 export const HANDLING_CLEARANCE_MM = 4;
 
 /**
- * Interior width of a bin spanning `units` grid cells: the outer footprint is
- * units * PITCH minus the per-cell clearance (PITCH - BASE_TOP_SIZE, shared
- * half per side), minus a wall on each side.
+ * Interior width of a bin spanning `units` grid cells, from the single home
+ * for that figure in the gridfinity constants module.
  */
 export function interiorWidthMm(units: number): number {
-  return units * PITCH - (PITCH - BASE_TOP_SIZE) - 2 * WALL_THICKNESS;
+  return binInteriorSizeMm(units);
 }
 
 /**

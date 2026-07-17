@@ -1,6 +1,6 @@
 import { generateLabeledBin, generateLabeledBinUnion } from './workerClient';
 import { meshToStlBlob } from './engine/gridfinity/stlExport';
-import { PITCH } from './engine/gridfinity/constants';
+import { binOuterSizeMm } from './engine/gridfinity/constants';
 import type { LabeledBinParams } from './engine/gridfinity/types';
 import { binParamsKey } from './engine/plan/batches';
 import { arrangeAutoPlate, type FootprintItem, type Placement } from './engine/plate/arranger';
@@ -13,9 +13,6 @@ import { writePlate3mf, type PlateItem } from './engine/threeMf/writer';
  * layout for batch downloads is arranged automatically (no plate preview);
  * the user rearranges bins in the slicer.
  */
-
-/** Footprint clearance: the base is 0.5 mm smaller than the grid pitch. */
-const FOOTPRINT_CLEARANCE = 0.5;
 
 /** One bin design with the number of copies to export. */
 export interface DownloadBin {
@@ -89,8 +86,8 @@ function arrangeUniqueBins(bins: DownloadBin[]): UniqueBin[] {
       group.ids.push(id);
       items.push({
         id,
-        widthMm: bin.params.gridX * PITCH - FOOTPRINT_CLEARANCE,
-        depthMm: bin.params.gridY * PITCH - FOOTPRINT_CLEARANCE,
+        widthMm: binOuterSizeMm(bin.params.gridX),
+        depthMm: binOuterSizeMm(bin.params.gridY),
       });
     }
   }

@@ -7,6 +7,7 @@ import type {
   LabeledBinParams,
   MeshData,
 } from './engine/gridfinity/types';
+import type { PocketBinParams } from './engine/trace/pocketBin';
 
 let remote: Comlink.Remote<GeometryWorkerApi> | null = null;
 
@@ -37,4 +38,11 @@ export async function generateLabeledBinUnion(
   params: LabeledBinParams,
 ): Promise<MeshData> {
   return getWorker().generateLabeledBinUnion(withResolvedIconPath(params));
+}
+
+/** Generate a bin with tool-shaped pockets as separate body and label meshes. */
+export async function generatePocketBin(
+  params: PocketBinParams,
+): Promise<LabeledBinMeshes> {
+  return getWorker().generatePocketBin(withResolvedIconPath(params));
 }
