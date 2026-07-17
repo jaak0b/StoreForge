@@ -4,6 +4,7 @@
 // the polygons to a mm tolerance, and converts to physical coordinates.
 import type { Cv, CvMat } from './paper';
 import type { MmPoint, PixelPoint, TracedOutline } from './types';
+import { signedArea } from './edit';
 
 /** Options for maskToContour. */
 export interface MaskContourOptions {
@@ -27,17 +28,6 @@ export interface MaskContourOptions {
 
 const DEFAULT_TOLERANCE_MM = 0.2;
 const DEFAULT_MIN_HOLE_AREA_MM2 = 3;
-
-/** Signed shoelace area; positive for one winding direction, negative for the other. */
-function shoelaceArea(points: MmPoint[]): number {
-  let sum = 0;
-  for (let i = 0; i < points.length; i += 1) {
-    const a = points[i];
-    const b = points[(i + 1) % points.length];
-    sum += a.x * b.y - b.x * a.y;
-  }
-  return sum / 2;
-}
 
 /** Simplify a contour Mat with approxPolyDP and convert its vertices to mm. */
 function contourToMmPolygon(
@@ -64,7 +54,7 @@ function contourToMmPolygon(
 
 /** Reverse the polygon in place if its shoelace area sign does not match. */
 function orient(points: MmPoint[], positive: boolean): MmPoint[] {
-  const area = shoelaceArea(points);
+  const area = signedArea(points);
   if ((area > 0) !== positive) {
     points.reverse();
   }

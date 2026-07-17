@@ -45,6 +45,53 @@ export interface TracedOutline {
   holes: MmPoint[][];
 }
 
+/**
+ * A finger hole punched through the tool pocket so the tool can be lifted
+ * out. Coordinates are tool-local millimeters (the same frame as the tool's
+ * outline points); the pocket generator subtracts the circle from the pocket
+ * floor region.
+ */
+export interface FingerHole {
+  x: number;
+  y: number;
+  diameterMm: number;
+}
+
+/**
+ * A tool destined for a shadow-board pocket, as stored in a plan entry.
+ * Plain JSON throughout so it serializes with the plan file.
+ *
+ * `outline` is the raw traced (or primitive) silhouette in tool-local mm and
+ * is never mutated by editing; the editing operations are parameters applied
+ * on read. The canonical pipeline, implemented by
+ * `resolvedToolOutline(m, tool)` in `engine/trace/edit.ts`, is:
+ *
+ *   1. mirror (across the vertical axis through the outline centroid),
+ *   2. rotate (`rotationDeg` counterclockwise about the same centroid),
+ *   3. clearance (`offsetMm` outward offset with rounded joins).
+ *
+ * Rotation and mirroring are rigid, so the clearance offset commutes with
+ * them and the ordering is mathematically free; clearance runs last anyway so
+ * there is exactly one canonical pipeline and `offsetMm` reads as a true
+ * millimeter figure applied to the final orientation. The result is returned
+ * in the same tool-local mm frame, ready for the pocket generator to place
+ * and extrude. Finger holes are not merged into the resolved outline; the
+ * pocket generator cuts them separately (they pierce the pocket floor, not
+ * the silhouette).
+ */
+export interface TracedTool {
+  id: string;
+  name: string;
+  outline: TracedOutline;
+  /** Counterclockwise rotation in degrees applied about the outline centroid. */
+  rotationDeg: number;
+  /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. */
+  offsetMm: number;
+  /** Mirror across the vertical axis through the outline centroid. */
+  mirrored: boolean;
+  fingerHoles: FingerHole[];
+}
+
 /** Scale calibration derived from rectifying the sheet to a top-down image. */
 export interface PaperCalibration {
   /** The photo-pixel corners the rectification was computed from. */
