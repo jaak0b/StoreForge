@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDisplay } from 'vuetify';
+import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
@@ -24,6 +25,7 @@ import LayoutStep from './LayoutStep.vue';
  * switches; the photo itself stays in the vision worker.
  */
 
+const app = useApp();
 const designer = useBinDesigner();
 const trace = useToolTrace();
 const queue = useBinQueue();
@@ -34,6 +36,44 @@ const { rectifiedPreview, embedReady, encodeMs, tools } = storeToRefs(trace);
 
 const quantity = ref(1);
 const previewLoaded = ref(!smAndDown.value);
+
+/** The queue entry being edited on this tab, or null when designing a new bin. */
+const editingEntry = computed(() => {
+  if (app.editingKind !== 'traced' || app.editingEntryId === null) return null;
+  const entry = queue.entryById(app.editingEntryId);
+  return entry !== null && entry.kind === 'traced' ? entry : null;
+});
+
+// Editing a traced queue row opens the tab at the layout step: the entry's
+// tools, placements, footprint, height and shared options are rehydrated into
+// the trace and designer stores. The photo itself is not stored with the
+// entry, so the earlier steps start empty (see the sentence in step 1).
+watch(
+  () => (app.editingKind === 'traced' ? app.editingEntryId : null),
+  (entryId) => {
+    if (entryId === null) return;
+    const entry = queue.entryById(entryId);
+    if (entry === null || entry.kind !== 'traced') return;
+    trace.tools = JSON.parse(JSON.stringify(entry.pockets.tools));
+    trace.placements = JSON.parse(JSON.stringify(entry.pockets.placements));
+    trace.selectedToolId = null;
+    trace.gridX = entry.gridX;
+    trace.gridY = entry.gridY;
+    // The stored footprint is authoritative; auto sizing must not shrink it.
+    trace.gridManual = true;
+    designer.$patch({
+      heightUnits: entry.heightUnits,
+      stackingLip: entry.stackingLip,
+      magnetHoles: entry.magnetHoles,
+      labelText: entry.labelText,
+      labelText2: entry.labelText2,
+      labelIcon: entry.labelIcon,
+      notes: entry.notes ?? '',
+    });
+    quantity.value = entry.quantity;
+  },
+  { immediate: true },
+);
 
 const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
 
@@ -74,25 +114,39 @@ function addToQueue(): void {
   const params = pocketParams.value;
   const pockets: BinPockets = { tools: params.tools, placements: params.placements };
   const cleanNotes = notes.value.trim();
-  const id = queue.add(
-    {
-      gridX: params.gridX,
-      gridY: params.gridY,
-      heightUnits: params.heightUnits,
-      stackingLip: params.stackingLip,
-      magnetHoles: params.magnetHoles,
-      dividerCountX: 0,
-      dividerCountY: 0,
-      labelText: params.labelText,
-      labelText2: params.labelText2,
-      labelIcon: params.labelIcon,
-    },
-    quantity.value,
-  );
-  queue.update(id, {
-    pockets,
-    ...(cleanNotes !== '' ? { notes: cleanNotes } : {}),
-  });
+  const binParams = {
+    gridX: params.gridX,
+    gridY: params.gridY,
+    heightUnits: params.heightUnits,
+    stackingLip: params.stackingLip,
+    magnetHoles: params.magnetHoles,
+    dividerCountX: 0,
+    dividerCountY: 0,
+    labelText: params.labelText,
+    labelText2: params.labelText2,
+    labelIcon: params.labelIcon,
+  };
+  if (editingEntry.value !== null) {
+    const { dividerCountX, dividerCountY, ...shared } = binParams;
+    void dividerCountX;
+    void dividerCountY;
+    queue.update(editingEntry.value.id, {
+      ...shared,
+      pockets,
+      quantity: quantity.value,
+      notes: cleanNotes === '' ? undefined : cleanNotes,
+    });
+    app.stopEditing();
+  } else {
+    const id = queue.add(binParams, quantity.value, { kind: 'traced', pockets });
+    if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
+  }
+  trace.reset();
+  quantity.value = 1;
+}
+
+function cancelEdit(): void {
+  app.stopEditing();
   trace.reset();
   quantity.value = 1;
 }
@@ -102,6 +156,13 @@ function addToQueue(): void {
   <div class="d-flex flex-column ga-5">
     <div>
       <div class="step-head">1. Photo</div>
+      <p
+        v-if="editingEntry !== null && rectifiedPreview === null"
+        class="text-body-2 text-medium-emphasis mb-2"
+      >
+        Tracing new tools needs the original photo; load it again here.
+        The traced pockets of this entry are already in the layout step below.
+      </p>
       <PhotoStep />
       <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis mt-1 readout">
         <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
@@ -154,16 +215,34 @@ function addToQueue(): void {
           <v-alert v-if="addError" type="warning" class="mt-2" density="compact">
             {{ addError }}
           </v-alert>
-          <v-btn
-            color="primary"
-            variant="flat"
-            size="large"
-            class="mt-4"
-            block
-            @click="addToQueue"
+          <div class="d-flex ga-2 mt-4">
+            <v-btn
+              color="primary"
+              variant="flat"
+              size="large"
+              class="flex-grow-1"
+              @click="addToQueue"
+            >
+              {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
+            </v-btn>
+            <v-btn
+              v-if="editingEntry !== null"
+              variant="outlined"
+              size="large"
+              @click="cancelEdit"
+            >
+              Cancel edit
+            </v-btn>
+          </div>
+          <v-alert
+            v-if="editingEntry !== null"
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mt-2"
           >
-            Add to queue
-          </v-btn>
+            Editing "{{ editingEntry.labelText !== '' ? editingEntry.labelText : `${editingEntry.gridX} x ${editingEntry.gridY} x ${editingEntry.heightUnits}` }}"; saving updates the queue row.
+          </v-alert>
         </v-col>
         <v-col cols="12" md="6">
           <v-card variant="outlined" class="preview-card">

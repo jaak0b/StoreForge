@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
 import type { BinEntry } from '../engine/plan/types';
-import { snapshotParams, type BatchSelection } from '../engine/plan/batches';
+import { snapshotParams, snapshotPockets, type BatchSelection } from '../engine/plan/batches';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
 import { downloadBin3mf, downloadBinStl } from '../binDownloads';
@@ -81,9 +81,9 @@ function createPlate(): void {
   plateCounts.value = new Map();
 }
 
-// Row click loads the entry into the Manual tab for editing.
+// Row click loads the entry into the tab that owns its kind for editing.
 function editRow(entry: BinEntry): void {
-  app.editEntry(entry.id);
+  app.editEntry(entry.id, entry.kind);
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -96,8 +96,9 @@ async function downloadRow(entry: BinEntry, format: 'stl' | '3mf'): Promise<void
   errorMessage.value = null;
   try {
     const params = snapshotParams(entry);
-    if (format === 'stl') await downloadBinStl(params, entry.pockets);
-    else await downloadBin3mf(params, entry.pockets);
+    const pockets = snapshotPockets(entry);
+    if (format === 'stl') await downloadBinStl(params, pockets);
+    else await downloadBin3mf(params, pockets);
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : 'The download failed.';
@@ -186,7 +187,7 @@ function removeRow(entry: BinEntry): void {
           </span>
         </span>
         <v-chip
-          v-if="entry.pockets !== undefined"
+          v-if="entry.kind === 'traced'"
           size="x-small"
           variant="tonal"
           color="primary"

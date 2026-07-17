@@ -1,5 +1,6 @@
 import type { LabeledBinParams } from '../gridfinity/types';
 import type { TracedTool, ToolPlacement } from '../trace/types';
+import type { HeadType } from './screwListImport';
 
 /**
  * Tool pockets sunk into a bin's interior, as designed on the Tool trace tab.
@@ -14,11 +15,29 @@ export interface BinPockets {
 }
 
 /**
- * One bin in the print queue, with its design parameters. Every queue entry
- * is pending by definition: printed amounts leave the plan through a print
- * batch confirmation and are not kept as history.
+ * The canonical screw description of a screw-entry bin, in the screw parser's
+ * normalized representation (see screwListImport), so the Screw entry tab can
+ * rehydrate its breakdown form exactly. The shorthand string itself is not
+ * stored: composeShorthand regenerates it from these fields and is the
+ * documented round-trip inverse of the parser.
  */
-export interface BinEntry {
+export interface ScrewSpec {
+  /** Thread size, normalized like 'M3', '#8' or '1/4-20'. */
+  thread: string;
+  /** Length in whole millimetres, or null for a lengthless head (nut, washer, insert). */
+  lengthMm: number | null;
+  /** Canonical head type, or null when unspecified. */
+  head: HeadType | null;
+  /** The length as entered for an imperial screw ('1-1/2"'), display only. */
+  enteredLengthText: string | null;
+}
+
+/**
+ * Fields shared by every kind of queue entry. Every queue entry is pending by
+ * definition: printed amounts leave the plan through a print batch
+ * confirmation and are not kept as history.
+ */
+export interface BinEntryBase {
   /** Stable unique identifier (UUID). */
   id: string;
   /** Number of grid cells along X (42 mm pitch each). Integer, at least 1. */
@@ -31,10 +50,6 @@ export interface BinEntry {
   stackingLip: boolean;
   /** Whether the bin has magnet holes under each foot. */
   magnetHoles: boolean;
-  /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */
-  dividerCountX: number;
-  /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
-  dividerCountY: number;
   /** Text embossed on the label shelf. An empty string means no text. */
   labelText: string;
   /** Optional smaller second text line under the first. Empty means none. */
@@ -47,9 +62,63 @@ export interface BinEntry {
   createdAt: string;
   /** Free-form notes on the entry. */
   notes?: string;
-  /** Tool pockets sunk into the bin, when the entry came from a tool trace. */
-  pockets?: BinPockets;
 }
+
+/** A bin designed by hand on the Manual bin tab. */
+export interface ManualBin extends BinEntryBase {
+  kind: 'manual';
+  /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */
+  dividerCountX: number;
+  /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
+  dividerCountY: number;
+}
+
+/** A bin created from a screw description on the Screw entry tab. */
+export interface ScrewBin extends BinEntryBase {
+  kind: 'screw';
+  /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */
+  dividerCountX: number;
+  /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
+  dividerCountY: number;
+  /** The screw the bin was sized and labeled for. */
+  screw: ScrewSpec;
+}
+
+/**
+ * A bin with tool pockets from the Tool trace tab. The pocket generator
+ * rejects divider walls, so a traced bin carries no divider fields at all.
+ */
+export interface TracedBin extends BinEntryBase {
+  kind: 'traced';
+  /** The tool pockets sunk into the bin. */
+  pockets: BinPockets;
+}
+
+/** One bin in the print queue, with its design parameters, by origin tab. */
+export type BinEntry = ManualBin | ScrewBin | TracedBin;
+
+/** The discriminant of BinEntry, naming the tab that owns the entry. */
+export type BinKind = BinEntry['kind'];
+
+/**
+ * Exhaustiveness helper: a switch over BinEntry kinds calls this in its
+ * default branch, so adding a new kind fails to compile in every consumer.
+ */
+export function assertNever(value: never): never {
+  throw new Error(`Unhandled bin kind: ${String(value)}`);
+}
+
+/**
+ * Partial changes applicable to a queue entry. The kind itself is never
+ * changed; each tab only writes the kind-specific fields it owns, so the
+ * merged entry stays consistent with its kind.
+ */
+export type BinEntryUpdate = Partial<Omit<BinEntryBase, 'id' | 'createdAt'>> & {
+  dividerCountX?: number;
+  dividerCountY?: number;
+  screw?: ScrewSpec;
+  pockets?: BinPockets;
+};
 
 /**
  * One row of a print batch. The bin design parameters are embedded as a
@@ -67,8 +136,10 @@ export interface BatchItem {
   count: number;
   /** Id of the queue entry the item was created from, if it still exists. */
   sourceEntryId?: string;
-  /** Snapshot of the entry's tool pockets, when it had any. */
+  /** Snapshot of the entry's tool pockets, when it was a traced bin. */
   pockets?: BinPockets;
+  /** Snapshot of the entry's screw description, when it was a screw bin. */
+  screw?: ScrewSpec;
 }
 
 /** A named set of bins sent to a printer as one build plate. */

@@ -3,10 +3,13 @@ import {
   PLAN_FILE_VERSION,
   type BatchItem,
   type BinEntry,
+  type BinEntryBase,
   type BinPockets,
   type PlanFile,
   type PrintBatch,
+  type ScrewSpec,
 } from './types';
+import { HEAD_TYPES, type HeadType } from './screwListImport';
 import type { FingerHole, MmPoint, TracedTool, ToolPlacement } from '../trace/types';
 
 /** Result of parsing a plan file: either the plan or a user-worded error. */
@@ -225,6 +228,60 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
   return { tools, placements };
 }
 
+const HEAD_TYPE_SET: ReadonlySet<string> = new Set<string>(HEAD_TYPES);
+
+/**
+ * Validates a raw value as a ScrewSpec. Returns null when it is valid,
+ * otherwise a message naming the first offending field.
+ */
+export function validateScrew(raw: unknown, subject: string): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: screw must be an object`;
+  }
+  const screw = raw as Record<string, unknown>;
+  if (typeof screw.thread !== 'string' || screw.thread.length === 0) {
+    return `${subject}: screw thread must be a non-empty string`;
+  }
+  if (screw.lengthMm !== null && !isPositiveInteger(screw.lengthMm, 1)) {
+    return `${subject}: screw lengthMm must be an integer of at least 1 or null`;
+  }
+  if (screw.head !== null && (typeof screw.head !== 'string' || !HEAD_TYPE_SET.has(screw.head))) {
+    return `${subject}: screw head must be a known head type or null`;
+  }
+  if (
+    screw.enteredLengthText !== null &&
+    screw.enteredLengthText !== undefined &&
+    typeof screw.enteredLengthText !== 'string'
+  ) {
+    return `${subject}: screw enteredLengthText must be a string or null`;
+  }
+  return null;
+}
+
+/** Copies only the known ScrewSpec fields from a validated raw object. */
+function pickScrew(raw: Record<string, unknown>): ScrewSpec {
+  return {
+    thread: raw.thread as string,
+    lengthMm: raw.lengthMm as number | null,
+    head: raw.head as HeadType | null,
+    enteredLengthText: (raw.enteredLengthText as string | null | undefined) ?? null,
+  };
+}
+
+/**
+ * Resolves an entry's kind. Entries written before the discriminated union
+ * carry no kind field; they migrate as traced when they have pockets and as
+ * manual otherwise. Old screw-list entries had no marker of their own, so
+ * they migrate to manual bins too (acceptable: their screw breakdown is not
+ * recoverable from the label text).
+ */
+function resolveKind(entry: Record<string, unknown>): 'manual' | 'screw' | 'traced' {
+  if (entry.kind === 'manual' || entry.kind === 'screw' || entry.kind === 'traced') {
+    return entry.kind;
+  }
+  return entry.pockets !== undefined ? 'traced' : 'manual';
+}
+
 /**
  * Validates one raw object as a BinEntry. Returns null when it is valid,
  * otherwise a message naming the first offending field. Version-1 lifecycle
@@ -240,6 +297,14 @@ export function validateEntry(raw: unknown): string | null {
     return 'an entry is missing its id';
   }
   const id = entry.id;
+  if (
+    entry.kind !== undefined &&
+    entry.kind !== 'manual' &&
+    entry.kind !== 'screw' &&
+    entry.kind !== 'traced'
+  ) {
+    return `entry ${id}: kind must be manual, screw or traced`;
+  }
   const paramsProblem = validateBinParams(entry, `entry ${id}`);
   if (paramsProblem !== null) return paramsProblem;
   if (!isPositiveInteger(entry.quantity, 1)) {
@@ -251,26 +316,65 @@ export function validateEntry(raw: unknown): string | null {
   if (entry.notes !== undefined && typeof entry.notes !== 'string') {
     return `entry ${id}: notes must be a string`;
   }
-  if (entry.pockets !== undefined) {
+  const kind = resolveKind(entry);
+  if (kind === 'traced') {
+    if (entry.pockets === undefined) {
+      return `entry ${id}: a traced entry must have pockets`;
+    }
+    // Only an explicit traced kind rejects divider fields: pre-union traced
+    // entries were written with dividerCountX/Y of 0 alongside their pockets.
+    if (
+      entry.kind === 'traced' &&
+      (entry.dividerCountX !== undefined || entry.dividerCountY !== undefined)
+    ) {
+      return `entry ${id}: a traced entry cannot have divider walls`;
+    }
     const pocketsProblem = validatePockets(entry.pockets, `entry ${id}`);
     if (pocketsProblem !== null) return pocketsProblem;
+    return null;
+  }
+  if (entry.pockets !== undefined) {
+    return `entry ${id}: only a traced entry can have pockets`;
+  }
+  if (kind === 'screw') {
+    const screwProblem = validateScrew(entry.screw, `entry ${id}`);
+    if (screwProblem !== null) return screwProblem;
   }
   return null;
 }
 
 /** Copies only the known BinEntry fields from a validated raw object. */
 function pickEntry(raw: Record<string, unknown>): BinEntry {
-  const entry: BinEntry = {
+  const base: BinEntryBase = {
     id: raw.id as string,
-    ...pickBinParams(raw),
+    gridX: raw.gridX as number,
+    gridY: raw.gridY as number,
+    heightUnits: raw.heightUnits as number,
+    stackingLip: raw.stackingLip as boolean,
+    magnetHoles: raw.magnetHoles as boolean,
+    labelText: raw.labelText as string,
+    labelText2: (raw.labelText2 as string | undefined) ?? '',
+    labelIcon: raw.labelIcon as string | null,
     quantity: raw.quantity as number,
     createdAt: raw.createdAt as string,
   };
-  if (raw.notes !== undefined) entry.notes = raw.notes as string;
-  if (raw.pockets !== undefined) {
-    entry.pockets = pickPockets(raw.pockets as Record<string, unknown>);
+  if (raw.notes !== undefined) base.notes = raw.notes as string;
+  const kind = resolveKind(raw);
+  if (kind === 'traced') {
+    return { ...base, kind, pockets: pickPockets(raw.pockets as Record<string, unknown>) };
   }
-  return entry;
+  const dividerCountX = (raw.dividerCountX as number | undefined) ?? 0;
+  const dividerCountY = (raw.dividerCountY as number | undefined) ?? 0;
+  if (kind === 'screw') {
+    return {
+      ...base,
+      kind,
+      dividerCountX,
+      dividerCountY,
+      screw: pickScrew(raw.screw as Record<string, unknown>),
+    };
+  }
+  return { ...base, kind, dividerCountX, dividerCountY };
 }
 
 /**
@@ -321,6 +425,10 @@ export function validateBatch(raw: unknown): string | null {
       const pocketsProblem = validatePockets(item.pockets, `batch ${id}: item ${item.id}`);
       if (pocketsProblem !== null) return pocketsProblem;
     }
+    if (item.screw !== undefined) {
+      const screwProblem = validateScrew(item.screw, `batch ${id}: item ${item.id}`);
+      if (screwProblem !== null) return screwProblem;
+    }
   }
   return null;
 }
@@ -338,6 +446,9 @@ function pickBatch(raw: Record<string, unknown>): PrintBatch {
     }
     if (rawItem.pockets !== undefined) {
       item.pockets = pickPockets(rawItem.pockets as Record<string, unknown>);
+    }
+    if (rawItem.screw !== undefined) {
+      item.screw = pickScrew(rawItem.screw as Record<string, unknown>);
     }
     return item;
   });

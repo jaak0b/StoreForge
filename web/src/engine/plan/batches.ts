@@ -1,5 +1,5 @@
 import type { LabeledBinParams } from '../gridfinity/types';
-import type { BatchItem, BinEntry, BinPockets, PrintBatch } from './types';
+import { assertNever, type BatchItem, type BinEntry, type BinPockets, type PrintBatch, type ScrewSpec } from './types';
 
 /**
  * Pure print-batch operations over the plan's entries and batches. A batch
@@ -19,25 +19,42 @@ export interface BatchSelection {
 
 /** Copies only the design parameter fields of an entry, as a snapshot. */
 export function snapshotParams(entry: BinEntry): LabeledBinParams {
-  return {
+  const shared = {
     gridX: entry.gridX,
     gridY: entry.gridY,
     heightUnits: entry.heightUnits,
     stackingLip: entry.stackingLip,
     magnetHoles: entry.magnetHoles,
-    dividerCountX: entry.dividerCountX,
-    dividerCountY: entry.dividerCountY,
     labelText: entry.labelText,
     labelText2: entry.labelText2,
     labelIcon: entry.labelIcon,
   };
+  switch (entry.kind) {
+    case 'manual':
+    case 'screw':
+      return {
+        ...shared,
+        dividerCountX: entry.dividerCountX,
+        dividerCountY: entry.dividerCountY,
+      };
+    case 'traced':
+      // The pocket generator rejects divider walls, so a traced bin has none.
+      return { ...shared, dividerCountX: 0, dividerCountY: 0 };
+    default:
+      return assertNever(entry);
+  }
 }
 
-/** Deep JSON copy of an entry's pockets, so a batch snapshot never aliases the queue row. */
+/** Deep JSON copy of a traced entry's pockets, so a batch snapshot never aliases the queue row. */
 export function snapshotPockets(entry: BinEntry): BinPockets | undefined {
-  return entry.pockets === undefined
-    ? undefined
-    : (JSON.parse(JSON.stringify(entry.pockets)) as BinPockets);
+  return entry.kind === 'traced'
+    ? (JSON.parse(JSON.stringify(entry.pockets)) as BinPockets)
+    : undefined;
+}
+
+/** Copy of a screw entry's screw description, for the batch snapshot. */
+export function snapshotScrew(entry: BinEntry): ScrewSpec | undefined {
+  return entry.kind === 'screw' ? { ...entry.screw } : undefined;
 }
 
 /** Stable key identifying a bin design, for grouping identical bins. */
@@ -92,6 +109,8 @@ export function createBatch(
     };
     const pockets = snapshotPockets(entry);
     if (pockets !== undefined) item.pockets = pockets;
+    const screw = snapshotScrew(entry);
+    if (screw !== undefined) item.screw = screw;
     items.push(item);
     remaining.set(entry.id, entry.quantity - count);
   }
@@ -155,21 +174,38 @@ export function failBatchItem(
   const itemKey = binParamsKey(item.params, item.pockets);
   const target =
     entries.find((entry) => entry.id === item.sourceEntryId) ??
-    entries.find((entry) => binParamsKey(snapshotParams(entry), entry.pockets) === itemKey);
+    entries.find(
+      (entry) =>
+        binParamsKey(snapshotParams(entry), entry.kind === 'traced' ? entry.pockets : undefined) ===
+        itemKey,
+    );
   let updatedEntries: BinEntry[];
   if (target !== undefined) {
     updatedEntries = entries.map((entry) =>
       entry.id === target.id ? { ...entry, quantity: entry.quantity + item.count } : entry,
     );
   } else {
-    const recreated: BinEntry = {
-      id: newEntryId(),
-      ...item.params,
-      quantity: item.count,
-      createdAt,
-    };
+    // Recreate the entry as the kind it was batched from: the pockets or
+    // screw snapshot on the item marks its origin (a plain item is manual).
+    const { dividerCountX, dividerCountY, ...shared } = item.params;
+    const base = { id: newEntryId(), ...shared, quantity: item.count, createdAt };
+    let recreated: BinEntry;
     if (item.pockets !== undefined) {
-      recreated.pockets = JSON.parse(JSON.stringify(item.pockets)) as BinPockets;
+      recreated = {
+        ...base,
+        kind: 'traced',
+        pockets: JSON.parse(JSON.stringify(item.pockets)) as BinPockets,
+      };
+    } else if (item.screw !== undefined) {
+      recreated = {
+        ...base,
+        kind: 'screw',
+        dividerCountX,
+        dividerCountY,
+        screw: { ...item.screw },
+      };
+    } else {
+      recreated = { ...base, kind: 'manual', dividerCountX, dividerCountY };
     }
     updatedEntries = [...entries, recreated];
   }

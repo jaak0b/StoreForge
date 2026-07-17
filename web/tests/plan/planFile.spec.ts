@@ -7,11 +7,20 @@ import {
   validateBatch,
   validateEntry,
 } from '../../src/engine/plan/planFile';
-import type { BatchItem, BinEntry, PrintBatch } from '../../src/engine/plan/types';
+import type {
+  BatchItem,
+  BinPockets,
+  ManualBin,
+  PrintBatch,
+  ScrewBin,
+  ScrewSpec,
+  TracedBin,
+} from '../../src/engine/plan/types';
 
-function entry(overrides: Partial<BinEntry> = {}): BinEntry {
+function entry(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
     id: 'a1',
+    kind: 'manual',
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
@@ -28,13 +37,68 @@ function entry(overrides: Partial<BinEntry> = {}): BinEntry {
   };
 }
 
+function screwSpec(overrides: Partial<ScrewSpec> = {}): ScrewSpec {
+  return {
+    thread: 'M3',
+    lengthMm: 20,
+    head: 'countersunk screw',
+    enteredLengthText: null,
+    ...overrides,
+  };
+}
+
+function screwEntry(overrides: Partial<ScrewBin> = {}): ScrewBin {
+  return { ...entry({ id: 's1' }), kind: 'screw', screw: screwSpec(), ...overrides };
+}
+
+function tracedEntry(overrides: Partial<TracedBin> = {}): TracedBin {
+  const { dividerCountX, dividerCountY, kind, ...base } = entry({ id: 't1' });
+  void dividerCountX;
+  void dividerCountY;
+  void kind;
+  return { ...base, kind: 'traced', pockets: pockets(), ...overrides };
+}
+
 function batchItem(overrides: Partial<BatchItem> = {}): BatchItem {
-  const { id, quantity, createdAt, notes, ...params } = entry();
+  const { id, kind, quantity, createdAt, notes, ...params } = entry();
   void quantity;
   void createdAt;
   void notes;
   void id;
+  void kind;
   return { id: 'i1', params, count: 2, sourceEntryId: 'a1', ...overrides };
+}
+
+function pockets(): BinPockets {
+  return {
+    tools: [
+      {
+        id: 't1',
+        name: 'Wrench',
+        outline: {
+          outer: [
+            { x: -10, y: -5 },
+            { x: 10, y: -5 },
+            { x: 10, y: 5 },
+            { x: -10, y: 5 },
+          ],
+          holes: [
+            [
+              { x: -2, y: -1 },
+              { x: -2, y: 1 },
+              { x: 2, y: 1 },
+              { x: 2, y: -1 },
+            ],
+          ],
+        },
+        rotationDeg: 90,
+        offsetMm: 0.5,
+        mirrored: true,
+        fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
+      },
+    ],
+    placements: [{ toolId: 't1', xMm: 3, yMm: -4, pocketDepthMm: 12 }],
+  };
 }
 
 function batch(overrides: Partial<PrintBatch> = {}): PrintBatch {
@@ -273,68 +337,93 @@ describe('mergeBatches', () => {
   });
 });
 
+describe('bin entry kinds in plan files', () => {
+  it('round-trips a screw entry with its screw description', () => {
+    const imperial = screwEntry({
+      screw: screwSpec({ thread: '#8', lengthMm: 38, enteredLengthText: '1-1/2"' }),
+    });
+    const lengthless = screwEntry({
+      id: 's2',
+      screw: screwSpec({ thread: 'M5', lengthMm: null, head: 'hex nut' }),
+    });
+    const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 2, entries: [imperial, lengthless], batches: [] },
+    });
+  });
+
+  it('round-trips a traced entry with pockets and no divider fields', () => {
+    const traced = tracedEntry();
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [traced], batches: [] } });
+  });
+
+  it('round-trips a batch item with pockets and screw snapshots', () => {
+    const withSnapshots = batch({
+      items: [batchItem({ pockets: pockets() }), batchItem({ id: 'i2', screw: screwSpec() })],
+    });
+    const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
+    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [], batches: [withSnapshots] } });
+  });
+
+  it('migrates a legacy entry without kind and with pockets to a traced bin', () => {
+    const legacy: Record<string, unknown> = { ...tracedEntry(), dividerCountX: 0, dividerCountY: 0 };
+    delete legacy.kind;
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [tracedEntry()], batches: [] } });
+  });
+
+  it('migrates a legacy entry without kind and without pockets to a manual bin', () => {
+    const legacy: Record<string, unknown> = { ...entry() };
+    delete legacy.kind;
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [entry()], batches: [] } });
+  });
+
+  it('rejects an unknown kind', () => {
+    expect(validateEntry({ ...entry(), kind: 'mystery' })).toBe(
+      'entry a1: kind must be manual, screw or traced',
+    );
+  });
+
+  it('rejects a traced entry without pockets', () => {
+    const bad: Record<string, unknown> = { ...tracedEntry() };
+    delete bad.pockets;
+    expect(validateEntry(bad)).toBe('entry t1: a traced entry must have pockets');
+  });
+
+  it('rejects a traced entry with divider fields', () => {
+    expect(validateEntry({ ...tracedEntry(), dividerCountX: 1 })).toBe(
+      'entry t1: a traced entry cannot have divider walls',
+    );
+  });
+
+  it('rejects a manual entry with pockets', () => {
+    expect(validateEntry({ ...entry(), pockets: pockets() })).toBe(
+      'entry a1: only a traced entry can have pockets',
+    );
+  });
+
+  it('rejects a screw entry without its screw description', () => {
+    const bad: Record<string, unknown> = { ...screwEntry() };
+    delete bad.screw;
+    expect(validateEntry(bad)).toBe('entry s1: screw must be an object');
+  });
+
+  it('rejects a screw entry with an unknown head type', () => {
+    expect(validateEntry(screwEntry({ screw: { ...screwSpec(), head: 'mushroom' as never } }))).toBe(
+      'entry s1: screw head must be a known head type or null',
+    );
+  });
+});
+
 describe('pockets in plan files', () => {
-  function pockets(): NonNullable<BinEntry['pockets']> {
-    return {
-      tools: [
-        {
-          id: 't1',
-          name: 'Wrench',
-          outline: {
-            outer: [
-              { x: -10, y: -5 },
-              { x: 10, y: -5 },
-              { x: 10, y: 5 },
-              { x: -10, y: 5 },
-            ],
-            holes: [
-              [
-                { x: -2, y: -1 },
-                { x: -2, y: 1 },
-                { x: 2, y: 1 },
-                { x: 2, y: -1 },
-              ],
-            ],
-          },
-          rotationDeg: 90,
-          offsetMm: 0.5,
-          mirrored: true,
-          fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
-        },
-      ],
-      placements: [{ toolId: 't1', xMm: 3, yMm: -4, pocketDepthMm: 12 }],
-    };
-  }
-
-  it('round-trips an entry with pockets through serialize and parse', () => {
-    const withPockets = entry({ pockets: pockets() });
-    const result = parsePlanFile(serializePlanFile([withPockets], []));
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.plan.entries).toEqual([withPockets]);
-  });
-
-  it('round-trips a batch item with pockets through serialize and parse', () => {
-    const withPockets = batch({ items: [batchItem({ pockets: pockets() })] });
-    const result = parsePlanFile(serializePlanFile([], [withPockets]));
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.plan.batches).toEqual([withPockets]);
-  });
-
-  it('accepts an entry without pockets unchanged', () => {
-    const plain = entry();
-    const result = parsePlanFile(serializePlanFile([plain], []));
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.plan.entries[0].pockets).toBeUndefined();
-  });
-
   it('rejects a placement naming a tool that is not in the pockets', () => {
     const bad = pockets();
     bad.placements[0].toolId = 'ghost';
-    expect(validateEntry(entry({ pockets: bad }))).toBe(
-      'entry a1: a pocket placement refers to a tool that is not in the pockets',
+    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+      'entry t1: a pocket placement refers to a tool that is not in the pockets',
     );
   });
 
@@ -344,16 +433,16 @@ describe('pockets in plan files', () => {
       { x: 0, y: 0 },
       { x: 1, y: 0 },
     ];
-    expect(validateEntry(entry({ pockets: bad }))).toBe(
-      'entry a1: pocket tool t1: outline needs at least 3 outer points',
+    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+      'entry t1: pocket tool t1: outline needs at least 3 outer points',
     );
   });
 
   it('rejects a pocket depth of zero', () => {
     const bad = pockets();
     bad.placements[0].pocketDepthMm = 0;
-    expect(validateEntry(entry({ pockets: bad }))).toBe(
-      'entry a1: a pocket placement needs xMm, yMm and a pocketDepthMm above 0',
+    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+      'entry t1: a pocket placement needs xMm, yMm and a pocketDepthMm above 0',
     );
   });
 });

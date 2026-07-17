@@ -5,11 +5,19 @@ import {
   failBatchItem,
   snapshotParams,
 } from '../../src/engine/plan/batches';
-import type { BinEntry, PrintBatch } from '../../src/engine/plan/types';
+import type {
+  BinEntry,
+  BinPockets,
+  ManualBin,
+  PrintBatch,
+  ScrewBin,
+  TracedBin,
+} from '../../src/engine/plan/types';
 
-function entry(overrides: Partial<BinEntry> = {}): BinEntry {
+function entry(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
     id: 'a1',
+    kind: 'manual',
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
@@ -178,8 +186,37 @@ describe('failBatchItem', () => {
   });
 });
 
+describe('screw snapshots in batches', () => {
+  function screwEntry(): ScrewBin {
+    return {
+      ...entry({ id: 'a1', labelText: 'M3 x 20' }),
+      kind: 'screw',
+      screw: { thread: 'M3', lengthMm: 20, head: 'countersunk screw', enteredLengthText: null },
+    };
+  }
+
+  it('snapshots the screw description into the batch item', () => {
+    const result = makeBatch([screwEntry()], [{ entryId: 'a1', count: 2 }]);
+    expect(result.batch!.items[0].screw).toEqual(screwEntry().screw);
+  });
+
+  it('recreates a failed screw item as a screw entry', () => {
+    const made = makeBatch([screwEntry()], [{ entryId: 'a1', count: 5 }]);
+    const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
+    expect(failed.entries).toHaveLength(1);
+    const recreated = failed.entries[0];
+    expect(recreated.kind).toBe('screw');
+    expect((recreated as ScrewBin).screw).toEqual(screwEntry().screw);
+  });
+
+  it('leaves the screw field off items from entries of other kinds', () => {
+    const result = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]);
+    expect('screw' in result.batch!.items[0]).toBe(false);
+  });
+});
+
 describe('pockets in batches', () => {
-  function pockets(): NonNullable<BinEntry['pockets']> {
+  function pockets(): BinPockets {
     return {
       tools: [
         {
@@ -203,13 +240,21 @@ describe('pockets in batches', () => {
     };
   }
 
+  function tracedEntry(): TracedBin {
+    const { dividerCountX, dividerCountY, kind, ...base } = entry();
+    void dividerCountX;
+    void dividerCountY;
+    void kind;
+    return { ...base, kind: 'traced', pockets: pockets() };
+  }
+
   it('snapshots the pockets into the batch item without aliasing the entry', () => {
-    const source = entry({ pockets: pockets() });
+    const source = tracedEntry();
     const result = makeBatch([source], [{ entryId: 'a1', count: 2 }]);
     const item = result.batch!.items[0];
     expect(item.pockets).toEqual(pockets());
     item.pockets!.placements[0].xMm = 99;
-    expect(source.pockets!.placements[0].xMm).toBe(0);
+    expect(source.pockets.placements[0].xMm).toBe(0);
   });
 
   it('leaves the pockets field off items from entries without pockets', () => {
@@ -217,21 +262,23 @@ describe('pockets in batches', () => {
     expect('pockets' in result.batch!.items[0]).toBe(false);
   });
 
-  it('recreates a failed item as an entry that keeps its pockets', () => {
-    const source = entry({ pockets: pockets() });
+  it('recreates a failed item as a traced entry that keeps its pockets', () => {
+    const source = tracedEntry();
     const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
     const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
     expect(failed.entries).toHaveLength(1);
-    expect(failed.entries[0].pockets).toEqual(pockets());
+    const recreated: BinEntry = failed.entries[0];
+    expect(recreated.kind).toBe('traced');
+    expect((recreated as TracedBin).pockets).toEqual(pockets());
   });
 
   it('does not merge a failed pocket item into a pocketless entry with equal params', () => {
     const plain = entry({ id: 'other' });
-    const source = entry({ pockets: pockets() });
+    const source = tracedEntry();
     const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
     const failed = failBatchItem([plain], made.batch!, 'item1', idFactory('new'));
     expect(failed.entries).toHaveLength(2);
     expect(failed.entries[0].quantity).toBe(5);
-    expect(failed.entries[1].pockets).toEqual(pockets());
+    expect((failed.entries[1] as TracedBin).pockets).toEqual(pockets());
   });
 });

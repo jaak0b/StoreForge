@@ -1,6 +1,19 @@
 import { defineStore } from 'pinia';
-import type { BinEntry, PrintBatch } from '../engine/plan/types';
+import {
+  assertNever,
+  type BinEntry,
+  type BinEntryUpdate,
+  type BinPockets,
+  type PrintBatch,
+  type ScrewSpec,
+} from '../engine/plan/types';
 import type { LabeledBinParams } from '../engine/gridfinity/types';
+
+/** Kind-specific data a new queue entry is created with, by its owning tab. */
+export type NewEntryDetails =
+  | { kind: 'manual' }
+  | { kind: 'screw'; screw: ScrewSpec }
+  | { kind: 'traced'; pockets: BinPockets };
 import {
   mergeBatches,
   mergeEntries,
@@ -49,26 +62,51 @@ export const useBinQueue = defineStore('binQueue', {
         console.error('Saving the plan failed.', error);
       }
     },
-    /** Adds a new queued entry from designer parameters. Returns its id. */
-    add(params: LabeledBinParams, quantity = 1): string {
+    /**
+     * Adds a new queued entry from designer parameters, of the kind the
+     * calling tab owns. Returns its id.
+     */
+    add(
+      params: LabeledBinParams,
+      quantity = 1,
+      details: NewEntryDetails = { kind: 'manual' },
+    ): string {
       // labelIconPath is a transient worker-call field, never persisted.
-      const clean = { ...params };
-      delete clean.labelIconPath;
-      const entry: BinEntry = {
+      const { labelIconPath, dividerCountX, dividerCountY, ...shared } = params;
+      void labelIconPath;
+      const base = {
         id: crypto.randomUUID(),
-        ...clean,
+        ...shared,
         quantity,
         createdAt: new Date().toISOString(),
       };
+      let entry: BinEntry;
+      switch (details.kind) {
+        case 'manual':
+          entry = { ...base, kind: 'manual', dividerCountX, dividerCountY };
+          break;
+        case 'screw':
+          entry = { ...base, kind: 'screw', dividerCountX, dividerCountY, screw: details.screw };
+          break;
+        case 'traced':
+          // The pocket generator rejects divider walls: a traced entry has none.
+          entry = { ...base, kind: 'traced', pockets: details.pockets };
+          break;
+        default:
+          entry = assertNever(details);
+      }
       this.entries.push(entry);
       this.persist();
       return entry.id;
     },
-    /** Applies partial changes to an existing entry. */
-    update(id: string, changes: Partial<Omit<BinEntry, 'id'>>) {
+    /**
+     * Applies partial changes to an existing entry. The kind never changes;
+     * each tab only writes the kind-specific fields it owns.
+     */
+    update(id: string, changes: BinEntryUpdate) {
       const index = this.entries.findIndex((e) => e.id === id);
       if (index === -1) return;
-      this.entries[index] = { ...this.entries[index], ...changes };
+      this.entries[index] = { ...this.entries[index], ...changes } as BinEntry;
       this.persist();
     },
     /** Duplicates an entry as a fresh copy. Returns the new id. */

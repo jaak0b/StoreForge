@@ -45,7 +45,7 @@ function loadEditingEntry(entryId: string | null): void {
     return;
   }
   const entry = queue.entryById(entryId);
-  if (entry === null) return;
+  if (entry === null || entry.kind !== 'manual') return;
   store.$patch({
     gridX: entry.gridX,
     gridY: entry.gridY,
@@ -65,7 +65,13 @@ function loadEditingEntry(entryId: string | null): void {
   }
 }
 
-watch(() => app.editingEntryId, loadEditingEntry, { immediate: true });
+// The watch source is null unless the Manual tab owns the edit, so this tab
+// never loads a screw or traced entry by construction.
+watch(
+  () => (app.editingKind === 'manual' || app.editingKind === null ? app.editingEntryId : null),
+  loadEditingEntry,
+  { immediate: true },
+);
 
 // Ctrl+N: reset to a new bin and focus the first size field.
 watch(
@@ -76,9 +82,11 @@ watch(
   },
 );
 
-const editingEntry = computed(() =>
-  app.editingEntryId !== null ? queue.entryById(app.editingEntryId) : null,
-);
+const editingEntry = computed(() => {
+  if (app.editingKind !== 'manual' || app.editingEntryId === null) return null;
+  const entry = queue.entryById(app.editingEntryId);
+  return entry !== null && entry.kind === 'manual' ? entry : null;
+});
 
 function saveEntry(): void {
   const cleanNotes = notes.value.trim();
