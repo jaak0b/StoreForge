@@ -4,6 +4,7 @@ import type {
   PaperCalibration,
   PaperCorners,
   PaperKind,
+  SamPoint,
   TracedOutline,
   TracedTool,
   ToolPlacement,
@@ -28,6 +29,13 @@ export const AUTO_SIZE_MARGIN_MM = 2;
 export const useToolTrace = defineStore('toolTrace', () => {
   /** Object URL of the loaded photo file, for drawing the corner-picking canvas. */
   const photoUrl = ref<string | null>(null);
+  /** The loaded photo's original bytes, stored with the entry on save. */
+  const photoBlob = shallowRef<Blob | null>(null);
+  /**
+   * Photo-store id of the loaded photo when it came from the store (resuming
+   * an edit); null for a freshly uploaded photo, which gets a new id on save.
+   */
+  const sourceId = ref<string | null>(null);
   /** Pixel size of the loaded photo. */
   const photoSize = ref<{ width: number; height: number } | null>(null);
   /** Sheet corners in photo pixels, detected or user-adjusted. */
@@ -61,19 +69,24 @@ export const useToolTrace = defineStore('toolTrace', () => {
    * bounding-box middle so tool-local coordinates sit about the origin, and
    * the tool is placed at the layout origin with the default pocket depth.
    */
-  function addTool(outline: TracedOutline, name?: string): TracedTool {
+  function recentred(outline: TracedOutline): TracedOutline {
     const bounds = boundsOf(outline);
     const cx = (bounds.minX + bounds.maxX) / 2;
     const cy = (bounds.minY + bounds.maxY) / 2;
     const recentre = (p: { x: number; y: number }) => ({ x: p.x - cx, y: p.y - cy });
+    return {
+      outer: outline.outer.map(recentre),
+      holes: outline.holes.map((loop) => loop.map(recentre)),
+    };
+  }
+
+  function addTool(outline: TracedOutline, name?: string, clicks: SamPoint[] = []): TracedTool {
     toolCounter += 1;
     const tool: TracedTool = {
       id: crypto.randomUUID(),
       name: name ?? `Tool ${toolCounter}`,
-      outline: {
-        outer: outline.outer.map(recentre),
-        holes: outline.holes.map((loop) => loop.map(recentre)),
-      },
+      outline: recentred(outline),
+      clicks,
       rotationDeg: 0,
       offsetMm: 0.5,
       mirrored: false,
@@ -88,6 +101,21 @@ export const useToolTrace = defineStore('toolTrace', () => {
     });
     selectedToolId.value = tool.id;
     return tool;
+  }
+
+  /**
+   * Replaces an existing tool's outline and clicks after re-tracing it from
+   * the stored photo; the placement, name and editing parameters stay.
+   */
+  function replaceToolOutline(
+    toolId: string,
+    outline: TracedOutline,
+    clicks: SamPoint[],
+  ): void {
+    const tool = tools.value.find((t) => t.id === toolId);
+    if (tool === undefined) return;
+    tool.outline = recentred(outline);
+    tool.clicks = clicks;
   }
 
   function removeTool(toolId: string): void {
@@ -125,6 +153,8 @@ export const useToolTrace = defineStore('toolTrace', () => {
   function reset(): void {
     if (photoUrl.value !== null) URL.revokeObjectURL(photoUrl.value);
     photoUrl.value = null;
+    photoBlob.value = null;
+    sourceId.value = null;
     photoSize.value = null;
     corners.value = null;
     calibration.value = null;
@@ -143,6 +173,8 @@ export const useToolTrace = defineStore('toolTrace', () => {
 
   return {
     photoUrl,
+    photoBlob,
+    sourceId,
     photoSize,
     corners,
     paperKind,
@@ -158,6 +190,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     gridManual,
     defaultDepthMm,
     addTool,
+    replaceToolOutline,
     removeTool,
     duplicateTool,
     placementOf,

@@ -8,9 +8,18 @@ import {
   type PlanFile,
   type PrintBatch,
   type ScrewSpec,
+  type TracePaper,
 } from './types';
 import { HEAD_TYPES, type HeadType } from './screwListImport';
-import type { FingerHole, MmPoint, TracedTool, ToolPlacement } from '../trace/types';
+import type {
+  FingerHole,
+  MmPoint,
+  PaperCorners,
+  PaperKind,
+  SamPoint,
+  TracedTool,
+  ToolPlacement,
+} from '../trace/types';
 
 /** Result of parsing a plan file: either the plan or a user-worded error. */
 export type PlanParseResult =
@@ -156,6 +165,25 @@ export function validatePockets(raw: unknown, subject: string): string | null {
     if (typeof tool.mirrored !== 'boolean') {
       return `${subject}: pocket tool ${tool.id}: mirrored must be true or false`;
     }
+    // clicks were added after the first traced entries shipped; older plans
+    // simply omit them, so undefined is accepted and defaulted to an empty list.
+    if (tool.clicks !== undefined) {
+      if (!Array.isArray(tool.clicks)) {
+        return `${subject}: pocket tool ${tool.id}: clicks must be a list`;
+      }
+      for (const rawClick of tool.clicks) {
+        const click = rawClick as Record<string, unknown> | null;
+        if (
+          typeof click !== 'object' ||
+          click === null ||
+          !isFiniteNumber(click.x) ||
+          !isFiniteNumber(click.y) ||
+          (click.label !== 0 && click.label !== 1)
+        ) {
+          return `${subject}: pocket tool ${tool.id}: a click needs x, y and a label of 0 or 1`;
+        }
+      }
+    }
     if (!Array.isArray(tool.fingerHoles)) {
       return `${subject}: pocket tool ${tool.id}: fingerHoles must be a list`;
     }
@@ -207,6 +235,11 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
         outer: (outline.outer as MmPoint[]).map((p) => ({ x: p.x, y: p.y })),
         holes: (outline.holes as MmPoint[][]).map((loop) => loop.map((p) => ({ x: p.x, y: p.y }))),
       },
+      clicks: ((tool.clicks as SamPoint[] | undefined) ?? []).map((p) => ({
+        x: p.x,
+        y: p.y,
+        label: p.label,
+      })),
       rotationDeg: tool.rotationDeg as number,
       offsetMm: tool.offsetMm as number,
       mirrored: tool.mirrored as boolean,
@@ -226,6 +259,69 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
     }),
   );
   return { tools, placements };
+}
+
+const CORNER_KEYS = ['tl', 'tr', 'br', 'bl'] as const;
+
+/**
+ * Validates the optional trace-source fields (traceSourceId and paper) on a
+ * raw traced entry or batch item. Returns null when they are valid or absent,
+ * otherwise a message naming the first offending part. Plans from other
+ * devices simply omit both; the entry is then layout-only editable.
+ */
+export function validateTraceSource(raw: Record<string, unknown>, subject: string): string | null {
+  if (raw.traceSourceId !== undefined) {
+    if (typeof raw.traceSourceId !== 'string' || raw.traceSourceId.length === 0) {
+      return `${subject}: traceSourceId must be a non-empty string`;
+    }
+  }
+  if (raw.paper !== undefined) {
+    if (typeof raw.paper !== 'object' || raw.paper === null || Array.isArray(raw.paper)) {
+      return `${subject}: paper must be an object`;
+    }
+    const paper = raw.paper as Record<string, unknown>;
+    if (paper.kind !== 'a4' && paper.kind !== 'letter') {
+      return `${subject}: paper kind must be a4 or letter`;
+    }
+    const corners = paper.corners as Record<string, unknown> | null | undefined;
+    if (typeof corners !== 'object' || corners === null || Array.isArray(corners)) {
+      return `${subject}: paper corners must be an object`;
+    }
+    for (const key of CORNER_KEYS) {
+      const corner = corners[key] as Record<string, unknown> | null | undefined;
+      if (
+        typeof corner !== 'object' ||
+        corner === null ||
+        !isFiniteNumber(corner.x) ||
+        !isFiniteNumber(corner.y)
+      ) {
+        return `${subject}: paper corner ${key} needs x and y coordinates`;
+      }
+    }
+  }
+  return null;
+}
+
+/** Copies only the known TracePaper fields from a validated raw object. */
+function pickTracePaper(raw: Record<string, unknown>): TracePaper {
+  const corners = raw.corners as Record<string, { x: number; y: number }>;
+  const picked = {} as Record<string, { x: number; y: number }>;
+  for (const key of CORNER_KEYS) {
+    picked[key] = { x: corners[key].x, y: corners[key].y };
+  }
+  return { corners: picked as unknown as PaperCorners, kind: raw.kind as PaperKind };
+}
+
+/**
+ * Copies the optional trace-source fields onto a validated traced entry or
+ * batch item, when present.
+ */
+function assignTraceSource(
+  target: { traceSourceId?: string; paper?: TracePaper },
+  raw: Record<string, unknown>,
+): void {
+  if (raw.traceSourceId !== undefined) target.traceSourceId = raw.traceSourceId as string;
+  if (raw.paper !== undefined) target.paper = pickTracePaper(raw.paper as Record<string, unknown>);
 }
 
 const HEAD_TYPE_SET: ReadonlySet<string> = new Set<string>(HEAD_TYPES);
@@ -331,7 +427,7 @@ export function validateEntry(raw: unknown): string | null {
     }
     const pocketsProblem = validatePockets(entry.pockets, `entry ${id}`);
     if (pocketsProblem !== null) return pocketsProblem;
-    return null;
+    return validateTraceSource(entry, `entry ${id}`);
   }
   if (entry.pockets !== undefined) {
     return `entry ${id}: only a traced entry can have pockets`;
@@ -361,7 +457,13 @@ function pickEntry(raw: Record<string, unknown>): BinEntry {
   if (raw.notes !== undefined) base.notes = raw.notes as string;
   const kind = resolveKind(raw);
   if (kind === 'traced') {
-    return { ...base, kind, pockets: pickPockets(raw.pockets as Record<string, unknown>) };
+    const traced: BinEntry = {
+      ...base,
+      kind,
+      pockets: pickPockets(raw.pockets as Record<string, unknown>),
+    };
+    assignTraceSource(traced, raw);
+    return traced;
   }
   const dividerCountX = (raw.dividerCountX as number | undefined) ?? 0;
   const dividerCountY = (raw.dividerCountY as number | undefined) ?? 0;
@@ -425,6 +527,8 @@ export function validateBatch(raw: unknown): string | null {
       const pocketsProblem = validatePockets(item.pockets, `batch ${id}: item ${item.id}`);
       if (pocketsProblem !== null) return pocketsProblem;
     }
+    const traceProblem = validateTraceSource(item, `batch ${id}: item ${item.id}`);
+    if (traceProblem !== null) return traceProblem;
     if (item.screw !== undefined) {
       const screwProblem = validateScrew(item.screw, `batch ${id}: item ${item.id}`);
       if (screwProblem !== null) return screwProblem;
@@ -447,6 +551,7 @@ function pickBatch(raw: Record<string, unknown>): PrintBatch {
     if (rawItem.pockets !== undefined) {
       item.pockets = pickPockets(rawItem.pockets as Record<string, unknown>);
     }
+    assignTraceSource(item, rawItem);
     if (rawItem.screw !== undefined) {
       item.screw = pickScrew(rawItem.screw as Record<string, unknown>);
     }

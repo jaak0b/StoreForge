@@ -87,6 +87,10 @@ async function handleFile(file: File): Promise<void> {
     const info = await loadPhoto(buffer);
     if (photoUrl.value !== null) URL.revokeObjectURL(photoUrl.value);
     photoUrl.value = URL.createObjectURL(file);
+    // A freshly uploaded photo replaces any stored one on save, so it gets a
+    // new photo-store id then; keep the bytes for that save.
+    store.photoBlob = file;
+    store.sourceId = null;
     photoSize.value = info;
     store.rectifiedPreview = null;
     store.embedReady = false;

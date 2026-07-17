@@ -91,6 +91,10 @@ function pockets(): BinPockets {
             ],
           ],
         },
+        clicks: [
+          { x: 120, y: 80, label: 1 },
+          { x: 40, y: 30, label: 0 },
+        ],
         rotationDeg: 90,
         offsetMm: 0.5,
         mirrored: true,
@@ -415,6 +419,90 @@ describe('bin entry kinds in plan files', () => {
     expect(validateEntry(screwEntry({ screw: { ...screwSpec(), head: 'mushroom' as never } }))).toBe(
       'entry s1: screw head must be a known head type or null',
     );
+  });
+});
+
+describe('trace sources in plan files', () => {
+  function tracePaper() {
+    return {
+      corners: {
+        tl: { x: 100, y: 120 },
+        tr: { x: 900, y: 110 },
+        br: { x: 920, y: 700 },
+        bl: { x: 90, y: 710 },
+      },
+      kind: 'a4' as const,
+    };
+  }
+
+  it('round-trips a traced entry with its trace source id, paper and clicks', () => {
+    const traced = tracedEntry({ traceSourceId: 'photo-1', paper: tracePaper() });
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [traced], batches: [] } });
+  });
+
+  it('accepts a traced entry without trace source fields (imported plan)', () => {
+    expect(validateEntry(tracedEntry())).toBeNull();
+  });
+
+  it('defaults missing tool clicks to an empty list on old plans', () => {
+    const legacy = tracedEntry();
+    const raw = JSON.parse(serializePlanFile([legacy], [])) as {
+      entries: Array<{ pockets: { tools: Array<Record<string, unknown>> } }>;
+    };
+    delete raw.entries[0].pockets.tools[0].clicks;
+    const result = parsePlanFile(JSON.stringify({ ...raw, version: 2, batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const entry = result.plan.entries[0] as TracedBin;
+      expect(entry.pockets.tools[0].clicks).toEqual([]);
+    }
+  });
+
+  it('rejects a malformed click', () => {
+    const bad = pockets();
+    bad.tools[0].clicks = [{ x: 1, y: 2, label: 3 as never }];
+    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+      'entry t1: pocket tool t1: a click needs x, y and a label of 0 or 1',
+    );
+  });
+
+  it('rejects an empty traceSourceId', () => {
+    expect(validateEntry({ ...tracedEntry(), traceSourceId: '' })).toBe(
+      'entry t1: traceSourceId must be a non-empty string',
+    );
+  });
+
+  it('rejects an unknown paper kind', () => {
+    const paper = { ...tracePaper(), kind: 'a3' };
+    expect(validateEntry({ ...tracedEntry(), paper })).toBe(
+      'entry t1: paper kind must be a4 or letter',
+    );
+  });
+
+  it('rejects a paper corner without coordinates', () => {
+    const paper = tracePaper() as unknown as { corners: Record<string, unknown>; kind: string };
+    paper.corners.br = { x: 5 };
+    expect(validateEntry({ ...tracedEntry(), paper })).toBe(
+      'entry t1: paper corner br needs x and y coordinates',
+    );
+  });
+
+  it('round-trips a batch item carrying the trace source snapshot', () => {
+    const withSource = batch({
+      items: [batchItem({ pockets: pockets(), traceSourceId: 'photo-1', paper: tracePaper() })],
+    });
+    const result = parsePlanFile(serializePlanFile([], [withSource]));
+    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [], batches: [withSource] } });
+  });
+
+  it('rejects a batch item with a malformed paper field', () => {
+    const bad = batch({ items: [batchItem({ paper: 'a4' as never })] });
+    const result = parsePlanFile(serializePlanFile([], [bad]));
+    expect(result).toEqual({
+      ok: false,
+      error: 'The plan is invalid: batch batch1: item i1: paper must be an object.',
+    });
   });
 });
 

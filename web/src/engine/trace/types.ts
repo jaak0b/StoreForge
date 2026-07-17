@@ -83,6 +83,13 @@ export interface TracedTool {
   id: string;
   name: string;
   outline: TracedOutline;
+  /**
+   * The click prompts (rectified-image pixels) that produced the outline,
+   * kept so re-tracing from the stored photo can restore and continue the
+   * segmentation. Empty for primitive shapes and for tools imported from
+   * plans that predate click storage.
+   */
+  clicks: SamPoint[];
   /** Counterclockwise rotation in degrees applied about the outline centroid. */
   rotationDeg: number;
   /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. */

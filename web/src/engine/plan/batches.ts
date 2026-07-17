@@ -1,5 +1,5 @@
 import type { LabeledBinParams } from '../gridfinity/types';
-import { assertNever, type BatchItem, type BinEntry, type BinPockets, type PrintBatch, type ScrewSpec } from './types';
+import { assertNever, type BatchItem, type BinEntry, type BinPockets, type PrintBatch, type ScrewSpec, type TracePaper, type TracedBin } from './types';
 
 /**
  * Pure print-batch operations over the plan's entries and batches. A batch
@@ -109,6 +109,14 @@ export function createBatch(
     };
     const pockets = snapshotPockets(entry);
     if (pockets !== undefined) item.pockets = pockets;
+    if (entry.kind === 'traced') {
+      // The photo-store key and sheet setup ride along so a failed print
+      // returns to the queue fully re-traceable.
+      if (entry.traceSourceId !== undefined) item.traceSourceId = entry.traceSourceId;
+      if (entry.paper !== undefined) {
+        item.paper = JSON.parse(JSON.stringify(entry.paper)) as TracePaper;
+      }
+    }
     const screw = snapshotScrew(entry);
     if (screw !== undefined) item.screw = screw;
     items.push(item);
@@ -191,11 +199,16 @@ export function failBatchItem(
     const base = { id: newEntryId(), ...shared, quantity: item.count, createdAt };
     let recreated: BinEntry;
     if (item.pockets !== undefined) {
-      recreated = {
+      const traced: TracedBin = {
         ...base,
         kind: 'traced',
         pockets: JSON.parse(JSON.stringify(item.pockets)) as BinPockets,
       };
+      if (item.traceSourceId !== undefined) traced.traceSourceId = item.traceSourceId;
+      if (item.paper !== undefined) {
+        traced.paper = JSON.parse(JSON.stringify(item.paper)) as TracePaper;
+      }
+      recreated = traced;
     } else if (item.screw !== undefined) {
       recreated = {
         ...base,

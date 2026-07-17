@@ -45,6 +45,7 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
     rotationDeg: 0,
     offsetMm: 0,
     mirrored: false,
+    clicks: [],
     fingerHoles: [],
     ...overrides,
   };

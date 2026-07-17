@@ -7,6 +7,7 @@ import 'vuetify/styles';
 import '@mdi/font/css/materialdesignicons.css';
 import './styles.css';
 import App from './App.vue';
+import { useBinQueue } from './stores/binQueue';
 
 const vuetify = createVuetify({
   components,
@@ -49,4 +50,9 @@ const vuetify = createVuetify({
   },
 });
 
-createApp(App).use(createPinia()).use(vuetify).mount('#app');
+const pinia = createPinia();
+createApp(App).use(pinia).use(vuetify).mount('#app');
+
+// Stored trace photos orphaned by an interrupted session (photo stored, plan
+// mutation never persisted) are cleaned up once at startup.
+void useBinQueue(pinia).sweepStoredPhotos();

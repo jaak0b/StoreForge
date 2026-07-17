@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
@@ -23,6 +23,25 @@ const segmenting = ref(false);
 const errorMessage = ref<string | null>(null);
 
 let maskPreview: ImageData | null = null;
+
+// Id of the existing tool being re-traced from its stored clicks; accepting
+// then replaces that tool's outline instead of adding a duplicate.
+const retraceToolId = ref<string | null>(null);
+
+/** The selected tool, when its stored clicks allow re-tracing on this sheet. */
+const retraceableTool = computed(() => {
+  const tool = store.tools.find((t) => t.id === store.selectedToolId) ?? null;
+  return tool !== null && tool.clicks.length > 0 ? tool : null;
+});
+
+/** Loads the selected tool's stored clicks and re-runs the segmentation. */
+function retraceSelected(): void {
+  const tool = retraceableTool.value;
+  if (tool === null || segmenting.value) return;
+  points.value = JSON.parse(JSON.stringify(tool.clicks)) as SamPoint[];
+  retraceToolId.value = tool.id;
+  void runSegment();
+}
 
 function draw(): void {
   const el = canvas.value;
@@ -76,6 +95,7 @@ watch(rectifiedPreview, () => {
 onMounted(() => void nextTick(draw));
 
 function clearClicks(): void {
+  retraceToolId.value = null;
   points.value = [];
   outline.value = null;
   iouScore.value = null;
@@ -122,7 +142,12 @@ function onClick(event: MouseEvent, exclude: boolean): void {
 
 function acceptTool(): void {
   if (outline.value === null) return;
-  store.addTool(outline.value);
+  const clicks = JSON.parse(JSON.stringify(points.value)) as SamPoint[];
+  if (retraceToolId.value !== null) {
+    store.replaceToolOutline(retraceToolId.value, outline.value, clicks);
+  } else {
+    store.addTool(outline.value, undefined, clicks);
+  }
   clearClicks();
 }
 </script>
@@ -146,7 +171,15 @@ function acceptTool(): void {
         :disabled="outline === null || segmenting"
         @click="acceptTool"
       >
-        Accept tool
+        {{ retraceToolId !== null ? 'Replace tool outline' : 'Accept tool' }}
+      </v-btn>
+      <v-btn
+        v-if="retraceableTool !== null && retraceToolId !== retraceableTool.id"
+        variant="outlined"
+        :disabled="segmenting"
+        @click="retraceSelected"
+      >
+        Re-trace "{{ retraceableTool.name }}"
       </v-btn>
       <v-btn variant="outlined" :disabled="points.length === 0" @click="clearClicks">
         Clear clicks

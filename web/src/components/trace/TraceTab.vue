@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../../stores/app';
@@ -10,7 +10,10 @@ import { useBinPreview } from '../../composables/useBinPreview';
 import { generatePocketBin } from '../../workerClient';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
-import type { BinPockets } from '../../engine/plan/types';
+import type { BinPockets, TracePaper, TracedBin } from '../../engine/plan/types';
+import type { PaperCorners } from '../../engine/trace/types';
+import { getPhoto, putPhoto } from '../../photoStore';
+import { embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
 import BinViewport from '../BinViewport.vue';
 import IconPicker from '../IconPicker.vue';
 import MoreOptions from '../MoreOptions.vue';
@@ -44,16 +47,81 @@ const editingEntry = computed(() => {
   return entry !== null && entry.kind === 'traced' ? entry : null;
 });
 
+// The entry's original photo when it is still in this device's photo store,
+// loaded when an edit starts; null while unknown or when it is not stored.
+const storedPhoto = shallowRef<Blob | null>(null);
+/** True once the photo-store lookup came back empty for the edited entry. */
+const photoMissing = ref(false);
+const resumeBusy = ref(false);
+const resumeError = ref<string | null>(null);
+
+async function lookUpStoredPhoto(entry: TracedBin): Promise<void> {
+  storedPhoto.value = null;
+  photoMissing.value = false;
+  if (entry.traceSourceId === undefined || entry.paper === undefined) {
+    photoMissing.value = true;
+    return;
+  }
+  try {
+    const blob = await getPhoto(entry.traceSourceId);
+    storedPhoto.value = blob;
+    photoMissing.value = blob === null;
+  } catch (error) {
+    // Photo storage being unreadable degrades to layout-only editing.
+    console.error('Reading the stored trace photo failed.', error);
+    photoMissing.value = true;
+  }
+}
+
+/**
+ * Loads the stored photo back into the vision worker, applies the entry's
+ * saved sheet corners and size (no re-detection), and rectifies plus embeds
+ * so the trace step can restore each tool's clicks.
+ */
+async function resumeTrace(): Promise<void> {
+  const entry = editingEntry.value;
+  const blob = storedPhoto.value;
+  if (entry === null || blob === null || entry.paper === undefined) return;
+  resumeBusy.value = true;
+  resumeError.value = null;
+  try {
+    const info = await loadPhoto(await blob.arrayBuffer());
+    if (trace.photoUrl !== null) URL.revokeObjectURL(trace.photoUrl);
+    trace.photoUrl = URL.createObjectURL(blob);
+    trace.photoSize = info;
+    trace.photoBlob = blob;
+    trace.sourceId = entry.traceSourceId ?? null;
+    trace.corners = JSON.parse(JSON.stringify(entry.paper.corners)) as PaperCorners;
+    trace.paperKind = entry.paper.kind;
+    const rectified = await rectifyPaper(
+      JSON.parse(JSON.stringify(entry.paper.corners)) as PaperCorners,
+      entry.paper.kind,
+    );
+    trace.calibration = rectified.calibration;
+    trace.rectifiedPreview = rectified.preview;
+    trace.embedReady = false;
+    const embed = await embedImage();
+    trace.encodeMs = embed.encodeMs;
+    trace.embedReady = true;
+  } catch (error) {
+    resumeError.value =
+      error instanceof Error ? error.message : 'Restoring the trace photo failed.';
+  } finally {
+    resumeBusy.value = false;
+  }
+}
+
 // Editing a traced queue row opens the tab at the layout step: the entry's
 // tools, placements, footprint, height and shared options are rehydrated into
-// the trace and designer stores. The photo itself is not stored with the
-// entry, so the earlier steps start empty (see the sentence in step 1).
+// the trace and designer stores. The photo is looked up in the photo store;
+// when found, the trace itself can be resumed from step 1.
 watch(
   () => (app.editingKind === 'traced' ? app.editingEntryId : null),
   (entryId) => {
     if (entryId === null) return;
     const entry = queue.entryById(entryId);
     if (entry === null || entry.kind !== 'traced') return;
+    void lookUpStoredPhoto(entry);
     trace.tools = JSON.parse(JSON.stringify(entry.pockets.tools));
     trace.placements = JSON.parse(JSON.stringify(entry.pockets.placements));
     trace.selectedToolId = null;
@@ -100,9 +168,37 @@ const { meshes, errorMessage } = useBinPreview(
 );
 
 const addError = ref<string | null>(null);
+/** Note about photo storage shown near step 1; survives the form reset. */
+const photoNote = ref<string | null>(null);
 
-function addToQueue(): void {
+/**
+ * The trace-source fields to save with the entry: when a photo with a
+ * confirmed sheet is loaded, its bytes go into the photo store (a fresh
+ * upload under a new id, a resumed photo under its existing one). Without a
+ * photo the fields stay untouched (an edit keeps the entry's stored ones).
+ */
+async function storeTraceSource(): Promise<{ traceSourceId?: string; paper?: TracePaper }> {
+  if (trace.photoBlob === null || trace.calibration === null) return {};
+  const traceSourceId = trace.sourceId ?? crypto.randomUUID();
+  const paper: TracePaper = {
+    corners: JSON.parse(JSON.stringify(trace.calibration.corners)) as PaperCorners,
+    kind: trace.calibration.kind,
+  };
+  try {
+    await putPhoto(traceSourceId, trace.photoBlob);
+  } catch (error) {
+    // The bin is still saved; without the stored photo it is layout-only
+    // editable later, and the note says so.
+    const detail = error instanceof Error ? error.message : String(error);
+    photoNote.value = `Storing the trace photo failed (${detail}). The bin was saved, but its trace cannot be edited later without the photo.`;
+    return {};
+  }
+  return { traceSourceId, paper };
+}
+
+async function addToQueue(): Promise<void> {
   addError.value = null;
+  photoNote.value = null;
   if (trace.placements.length === 0) {
     addError.value = 'Trace and place at least one tool before adding the bin.';
     return;
@@ -126,6 +222,10 @@ function addToQueue(): void {
     labelText2: params.labelText2,
     labelIcon: params.labelIcon,
   };
+  // The photo must be stored before the queue mutation: persisting the plan
+  // sweeps stored photos no entry references, so the reference and the photo
+  // have to land in that order.
+  const source = await storeTraceSource();
   if (editingEntry.value !== null) {
     const { dividerCountX, dividerCountY, ...shared } = binParams;
     void dividerCountX;
@@ -133,12 +233,13 @@ function addToQueue(): void {
     queue.update(editingEntry.value.id, {
       ...shared,
       pockets,
+      ...source,
       quantity: quantity.value,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
     app.stopEditing();
   } else {
-    const id = queue.add(binParams, quantity.value, { kind: 'traced', pockets });
+    const id = queue.add(binParams, quantity.value, { kind: 'traced', pockets, ...source });
     if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
   }
   trace.reset();
@@ -156,14 +257,34 @@ function cancelEdit(): void {
   <div class="d-flex flex-column ga-5">
     <div>
       <div class="step-head">1. Photo</div>
-      <p
-        v-if="editingEntry !== null && rectifiedPreview === null"
-        class="text-body-2 text-medium-emphasis mb-2"
-      >
-        Tracing new tools needs the original photo; load it again here.
-        The traced pockets of this entry are already in the layout step below.
-      </p>
+      <template v-if="editingEntry !== null && rectifiedPreview === null">
+        <div v-if="storedPhoto !== null" class="mb-3">
+          <p class="text-body-2 text-medium-emphasis mb-2">
+            Load the stored photo of this trace to re-trace tools with their
+            saved clicks, or upload a new photo below.
+          </p>
+          <v-btn
+            color="primary"
+            variant="tonal"
+            :loading="resumeBusy"
+            prepend-icon="mdi-image-refresh-outline"
+            @click="resumeTrace"
+          >
+            Edit trace
+          </v-btn>
+          <v-alert v-if="resumeError" type="error" density="compact" class="mt-2">
+            {{ resumeError }}
+          </v-alert>
+        </div>
+        <p v-else-if="photoMissing" class="text-body-2 text-medium-emphasis mb-2">
+          Edit the layout below, or upload a new photo to trace more tools; the
+          original photo of this trace is not stored on this device.
+        </p>
+      </template>
       <PhotoStep />
+      <v-alert v-if="photoNote" type="warning" density="compact" class="mt-2">
+        {{ photoNote }}
+      </v-alert>
       <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis mt-1 readout">
         <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
       </div>

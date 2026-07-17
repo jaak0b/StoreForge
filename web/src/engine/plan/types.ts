@@ -1,5 +1,5 @@
 import type { LabeledBinParams } from '../gridfinity/types';
-import type { TracedTool, ToolPlacement } from '../trace/types';
+import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trace/types';
 import type { HeadType } from './screwListImport';
 
 /**
@@ -12,6 +12,18 @@ export interface BinPockets {
   tools: TracedTool[];
   /** Where each tool's pocket sits in the bin, with its depth. */
   placements: ToolPlacement[];
+}
+
+/**
+ * The reference-sheet setup a traced bin's photo was rectified with. Stored
+ * on the entry so re-tracing from the stored photo can skip corner detection
+ * and reproduce the exact rectified image the tool clicks refer to.
+ */
+export interface TracePaper {
+  /** Sheet corners in photo pixels, as confirmed by the user. */
+  corners: PaperCorners;
+  /** The reference sheet size the corners were rectified as. */
+  kind: PaperKind;
 }
 
 /**
@@ -92,6 +104,14 @@ export interface TracedBin extends BinEntryBase {
   kind: 'traced';
   /** The tool pockets sunk into the bin. */
   pockets: BinPockets;
+  /**
+   * Key of the original trace photo in this device's photo store. Absent for
+   * plans imported from elsewhere or entries saved before photo storage; the
+   * entry is then layout-only editable.
+   */
+  traceSourceId?: string;
+  /** The reference-sheet setup the photo was rectified with, when known. */
+  paper?: TracePaper;
 }
 
 /** One bin in the print queue, with its design parameters, by origin tab. */
@@ -118,6 +138,8 @@ export type BinEntryUpdate = Partial<Omit<BinEntryBase, 'id' | 'createdAt'>> & {
   dividerCountY?: number;
   screw?: ScrewSpec;
   pockets?: BinPockets;
+  traceSourceId?: string;
+  paper?: TracePaper;
 };
 
 /**
@@ -138,6 +160,10 @@ export interface BatchItem {
   sourceEntryId?: string;
   /** Snapshot of the entry's tool pockets, when it was a traced bin. */
   pockets?: BinPockets;
+  /** Snapshot of the traced entry's photo-store key, so a failed print stays fully editable. */
+  traceSourceId?: string;
+  /** Snapshot of the traced entry's reference-sheet setup. */
+  paper?: TracePaper;
   /** Snapshot of the entry's screw description, when it was a screw bin. */
   screw?: ScrewSpec;
 }

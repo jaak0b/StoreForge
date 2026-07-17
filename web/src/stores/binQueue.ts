@@ -6,6 +6,8 @@ import {
   type BinPockets,
   type PrintBatch,
   type ScrewSpec,
+  type TracePaper,
+  type TracedBin,
 } from '../engine/plan/types';
 import type { LabeledBinParams } from '../engine/gridfinity/types';
 
@@ -13,7 +15,7 @@ import type { LabeledBinParams } from '../engine/gridfinity/types';
 export type NewEntryDetails =
   | { kind: 'manual' }
   | { kind: 'screw'; screw: ScrewSpec }
-  | { kind: 'traced'; pockets: BinPockets };
+  | { kind: 'traced'; pockets: BinPockets; traceSourceId?: string; paper?: TracePaper };
 import {
   mergeBatches,
   mergeEntries,
@@ -26,6 +28,8 @@ import {
   failBatchItem,
   type BatchSelection,
 } from '../engine/plan/batches';
+import { sweepOrphanTracePhotos } from '../engine/plan/traceSources';
+import { deletePhoto, listPhotoIds } from '../photoStore';
 
 const STORAGE_KEY = 'gridfinity-generator.plan';
 
@@ -61,6 +65,26 @@ export const useBinQueue = defineStore('binQueue', {
       } catch (error) {
         console.error('Saving the plan failed.', error);
       }
+      // Every plan mutation runs through here, so this is the single place
+      // where stored trace photos that no plan row references anymore are
+      // cleaned up (fire and forget; a failed sweep only leaves photos behind).
+      void this.sweepStoredPhotos();
+    },
+    /**
+     * Deletes stored trace photos no queue entry or batch item references
+     * anymore. Runs after every plan mutation and once on app start (to catch
+     * photos orphaned by an interrupted session).
+     */
+    async sweepStoredPhotos() {
+      try {
+        await sweepOrphanTracePhotos(
+          { listIds: listPhotoIds, deletePhoto },
+          this.entries,
+          this.batches,
+        );
+      } catch (error) {
+        console.error('Cleaning up stored trace photos failed.', error);
+      }
     },
     /**
      * Adds a new queued entry from designer parameters, of the kind the
@@ -88,10 +112,14 @@ export const useBinQueue = defineStore('binQueue', {
         case 'screw':
           entry = { ...base, kind: 'screw', dividerCountX, dividerCountY, screw: details.screw };
           break;
-        case 'traced':
+        case 'traced': {
           // The pocket generator rejects divider walls: a traced entry has none.
-          entry = { ...base, kind: 'traced', pockets: details.pockets };
+          const traced: TracedBin = { ...base, kind: 'traced', pockets: details.pockets };
+          if (details.traceSourceId !== undefined) traced.traceSourceId = details.traceSourceId;
+          if (details.paper !== undefined) traced.paper = details.paper;
+          entry = traced;
           break;
+        }
         default:
           entry = assertNever(details);
       }

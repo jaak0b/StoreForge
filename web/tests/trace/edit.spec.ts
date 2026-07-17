@@ -242,6 +242,7 @@ describe('resolvedToolOutline', () => {
       rotationDeg: 90,
       offsetMm: 1,
       mirrored: false,
+      clicks: [],
       fingerHoles: [],
     };
     const resolved = resolvedToolOutline(m, tool);
@@ -260,6 +261,7 @@ describe('resolvedToolOutline', () => {
       rotationDeg: 0,
       offsetMm: 0,
       mirrored: false,
+      clicks: [],
       fingerHoles: [],
     };
     expect(resolvedToolOutline(m, tool)).toEqual(lShape());

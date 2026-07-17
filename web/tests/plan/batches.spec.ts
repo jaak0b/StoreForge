@@ -233,6 +233,7 @@ describe('pockets in batches', () => {
           rotationDeg: 0,
           offsetMm: 0.5,
           mirrored: false,
+          clicks: [],
           fingerHoles: [],
         },
       ],
@@ -270,6 +271,50 @@ describe('pockets in batches', () => {
     const recreated: BinEntry = failed.entries[0];
     expect(recreated.kind).toBe('traced');
     expect((recreated as TracedBin).pockets).toEqual(pockets());
+  });
+
+  it('snapshots the trace source id and paper into the batch item without aliasing', () => {
+    const paper = {
+      corners: {
+        tl: { x: 1, y: 2 },
+        tr: { x: 3, y: 2 },
+        br: { x: 3, y: 4 },
+        bl: { x: 1, y: 4 },
+      },
+      kind: 'letter' as const,
+    };
+    const source: TracedBin = { ...tracedEntry(), traceSourceId: 'photo-1', paper };
+    const result = makeBatch([source], [{ entryId: 'a1', count: 2 }]);
+    const item = result.batch!.items[0];
+    expect(item.traceSourceId).toBe('photo-1');
+    expect(item.paper).toEqual(paper);
+    item.paper!.corners.tl.x = 99;
+    expect(source.paper!.corners.tl.x).toBe(1);
+  });
+
+  it('recreates a failed item with its trace source id and paper', () => {
+    const paper = {
+      corners: {
+        tl: { x: 1, y: 2 },
+        tr: { x: 3, y: 2 },
+        br: { x: 3, y: 4 },
+        bl: { x: 1, y: 4 },
+      },
+      kind: 'a4' as const,
+    };
+    const source: TracedBin = { ...tracedEntry(), traceSourceId: 'photo-1', paper };
+    const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
+    const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
+    const recreated = failed.entries[0] as TracedBin;
+    expect(recreated.traceSourceId).toBe('photo-1');
+    expect(recreated.paper).toEqual(paper);
+  });
+
+  it('leaves the trace source fields off items from entries without them', () => {
+    const result = makeBatch([tracedEntry()], [{ entryId: 'a1', count: 1 }]);
+    const item = result.batch!.items[0];
+    expect('traceSourceId' in item).toBe(false);
+    expect('paper' in item).toBe(false);
   });
 
   it('does not merge a failed pocket item into a pocketless entry with equal params', () => {
