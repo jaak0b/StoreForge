@@ -6,10 +6,11 @@ import { detectPaper, embedImage, loadPhoto, rectifyPaper } from '../../visionCl
 import type { PaperCorners, PixelPoint } from '../../engine/trace/types';
 
 /**
- * The Photo stage of the Tool trace tab: load a photo into the left canvas
- * pane, correct the detected sheet corners by dragging the four handles, and
- * confirm in the right rail to rectify the sheet and prepare it for
- * click-to-segment.
+ * The Photo stage of the Tool trace tab. Before a photo is loaded it shows
+ * only a large upload dropzone; once one loads, the photo appears with the
+ * draggable sheet-corner overlay and the sheet controls (paper size, corner
+ * re-detection, confirm) underneath. Confirming rectifies the sheet and
+ * prepares it for click-to-segment.
  */
 
 const store = useToolTrace();
@@ -18,6 +19,7 @@ const { photoUrl, photoSize, corners, paperKind, encodeMs } = storeToRefs(store)
 const emit = defineEmits<{ confirmed: [] }>();
 
 const canvas = ref<HTMLCanvasElement | null>(null);
+const fileInput = ref<HTMLInputElement | null>(null);
 const busy = ref(false);
 const busyText = ref('');
 const errorMessage = ref<string | null>(null);
@@ -233,65 +235,64 @@ async function confirm(): Promise<void> {
 </script>
 
 <template>
-  <div class="stage-panes">
-    <div class="canvas-pane">
-      <template v-if="photoUrl !== null">
-        <p class="text-body-2 mb-2">
-          <b>Drag the four handles onto the sheet corners.</b> The trace scale
-          comes from these corners.
-        </p>
-        <canvas
-          ref="canvas"
-          class="photo-canvas"
-          @pointerdown="onPointerDown"
-          @pointermove="onPointerMove"
-          @pointerup="onPointerUp"
-          @pointercancel="onPointerUp"
-        />
-      </template>
-      <div
-        v-else
-        class="canvas-placeholder d-flex flex-column align-center justify-center text-center pa-8"
-      >
-        <v-icon icon="mdi-camera-outline" size="56" class="mb-3 text-medium-emphasis" />
-        <p class="text-body-2 text-medium-emphasis">
-          The photo appears here once it is loaded.
-        </p>
-      </div>
-    </div>
-
-    <div class="rail">
-      <p class="text-body-2 text-medium-emphasis">
+  <div class="d-flex flex-column ga-3">
+    <div
+      v-if="photoUrl === null"
+      class="drop-zone d-flex flex-column align-center justify-center text-center pa-8"
+      :class="{ over: dragOver }"
+      @dragover.prevent="dragOver = true"
+      @dragleave="dragOver = false"
+      @drop.prevent="onDrop"
+    >
+      <v-icon icon="mdi-camera-outline" size="56" class="mb-3 text-medium-emphasis" />
+      <p class="text-body-2 text-medium-emphasis guidance">
         Photograph the tools from directly above, laid out on one Letter or A4
         sheet. Shoot from a distance and zoom in; that reduces perspective
         error at the sheet edges.
       </p>
-      <div
-        class="drop-zone pa-3"
-        :class="{ over: dragOver }"
-        @dragover.prevent="dragOver = true"
-        @dragleave="dragOver = false"
-        @drop.prevent="onDrop"
+      <v-btn
+        color="primary"
+        variant="flat"
+        prepend-icon="mdi-image-plus"
+        class="mt-4"
+        :loading="busy"
+        @click="fileInput?.click()"
       >
-        <input type="file" accept="image/*" @change="onFileInput" />
-        <div class="text-caption text-medium-emphasis mt-1">
-          You can also drop an image file here.
-        </div>
+        Choose a photo
+      </v-btn>
+      <div class="text-caption text-medium-emphasis mt-2">
+        You can also drop an image file here.
       </div>
-      <v-alert
-        v-if="detectionNote !== null"
-        type="info"
-        variant="tonal"
-        density="compact"
-      >
-        {{ detectionNote }}
-      </v-alert>
-      <template v-if="photoUrl !== null">
-        <div class="text-caption text-medium-emphasis">Sheet size</div>
-        <v-btn-toggle v-model="paperKind" mandatory density="comfortable" variant="outlined">
-          <v-btn value="a4">A4</v-btn>
-          <v-btn value="letter">Letter</v-btn>
-        </v-btn-toggle>
+      <input
+        ref="fileInput"
+        type="file"
+        accept="image/*"
+        class="d-none"
+        @change="onFileInput"
+      />
+    </div>
+
+    <template v-else>
+      <p class="text-body-2 mb-0">
+        <b>Drag the four handles onto the sheet corners.</b> The trace scale
+        comes from these corners.
+      </p>
+      <canvas
+        ref="canvas"
+        class="photo-canvas"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
+      />
+      <div class="d-flex align-center flex-wrap ga-3">
+        <div>
+          <div class="text-caption text-medium-emphasis">Sheet size</div>
+          <v-btn-toggle v-model="paperKind" mandatory density="comfortable" variant="outlined">
+            <v-btn value="a4">A4</v-btn>
+            <v-btn value="letter">Letter</v-btn>
+          </v-btn-toggle>
+        </div>
         <v-btn
           variant="outlined"
           :disabled="busy"
@@ -300,69 +301,61 @@ async function confirm(): Promise<void> {
         >
           Detect corners again
         </v-btn>
+        <v-btn
+          variant="outlined"
+          prepend-icon="mdi-image-refresh-outline"
+          :disabled="busy"
+          @click="fileInput?.click()"
+        >
+          Choose a different photo
+        </v-btn>
         <v-btn color="primary" variant="flat" :loading="busy" @click="confirm">
           Confirm sheet
         </v-btn>
-      </template>
-      <p v-if="busyText !== ''" class="text-body-2 text-medium-emphasis mb-0">
-        {{ busyText }}
-      </p>
-      <v-progress-linear v-if="busy" indeterminate />
-      <v-alert v-if="errorMessage" type="error" density="compact">
-        {{ errorMessage }}
-      </v-alert>
-      <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis readout">
-        <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
+        <input
+          ref="fileInput"
+          type="file"
+          accept="image/*"
+          class="d-none"
+          @change="onFileInput"
+        />
       </div>
+    </template>
+
+    <v-alert
+      v-if="detectionNote !== null"
+      type="info"
+      variant="tonal"
+      density="compact"
+    >
+      {{ detectionNote }}
+    </v-alert>
+    <p v-if="busyText !== ''" class="text-body-2 text-medium-emphasis mb-0">
+      {{ busyText }}
+    </p>
+    <v-progress-linear v-if="busy" indeterminate />
+    <v-alert v-if="errorMessage" type="error" density="compact">
+      {{ errorMessage }}
+    </v-alert>
+    <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis readout">
+      <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.stage-panes {
-  display: flex;
-  gap: 24px;
-  align-items: flex-start;
-}
-
-.canvas-pane {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.rail {
-  flex: 0 0 360px;
-  max-width: 360px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-@media (max-width: 959px) {
-  .stage-panes {
-    flex-direction: column;
-  }
-
-  .rail {
-    flex: 1 1 auto;
-    max-width: none;
-    width: 100%;
-  }
-}
-
-.canvas-placeholder {
-  border: 1px dashed rgba(var(--v-theme-on-surface), 0.3);
-  border-radius: 8px;
-  min-height: 260px;
-}
-
 .drop-zone {
   border: 1px dashed rgba(var(--v-theme-on-surface), 0.3);
   border-radius: 8px;
+  min-height: 320px;
 }
 
 .drop-zone.over {
   border-color: rgb(var(--v-theme-primary));
+}
+
+.guidance {
+  max-width: 480px;
 }
 
 .photo-canvas {
@@ -370,14 +363,6 @@ async function confirm(): Promise<void> {
   border-radius: 8px;
   touch-action: none;
   cursor: crosshair;
-}
-
-.readout > div {
-  display: flex;
-  gap: 12px;
-}
-
-.readout span:first-child {
-  min-width: 160px;
+  align-self: flex-start;
 }
 </style>

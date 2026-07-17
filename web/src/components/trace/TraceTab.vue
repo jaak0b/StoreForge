@@ -17,10 +17,12 @@ import ToolRail from './ToolRail.vue';
 /**
  * The Tool trace tab of the add-bin card, in two stages: a Photo stage
  * (photograph tools on a reference sheet, confirm its corners) and a
- * trace-and-lay-out workspace (one canvas switching between click-to-trace
- * and bin layout, beside a rail with the tools, bin options, preview and
- * queue actions). The trace state lives in the toolTrace store so it
- * survives tab switches; the photo itself stays in the vision worker.
+ * trace-and-lay-out workspace with two gated modes: Trace mode fills the
+ * whole tab with the click-to-trace canvas, and Layout mode (reachable only
+ * once at least one tool exists) shows the layout canvas beside a rail with
+ * the tools, bin options, preview and queue actions. The trace state lives
+ * in the toolTrace store so it survives tab switches; the photo itself
+ * stays in the vision worker.
  */
 
 const app = useApp();
@@ -154,6 +156,24 @@ function onSheetConfirmed(): void {
   trace.workspaceMode = 'trace';
 }
 
+// Layout mode needs at least one tool; when the last one is removed the
+// workspace falls back to Trace mode if tracing is possible. Without a
+// photo (layout-only editing) the layout stays up so a basic shape can
+// still be added from the rail.
+watch(
+  () => tools.value.length,
+  (count) => {
+    if (
+      stage.value === 2 &&
+      count === 0 &&
+      workspaceMode.value === 'layout' &&
+      traceModeAvailable.value
+    ) {
+      void setWorkspaceMode('trace');
+    }
+  },
+);
+
 /** Switches the workspace canvas, resuming the stored photo when needed. */
 async function setWorkspaceMode(mode: 'trace' | 'layout'): Promise<void> {
   if (mode === 'trace' && !embedReady.value) {
@@ -214,19 +234,26 @@ function restart(): void {
 
     <div v-else class="stage-panes">
       <div class="canvas-pane">
-        <v-btn-toggle
-          :model-value="workspaceMode"
-          mandatory
-          density="comfortable"
-          variant="outlined"
-          class="mb-3"
-          @update:model-value="setWorkspaceMode($event as 'trace' | 'layout')"
-        >
-          <v-btn value="trace" :disabled="!traceModeAvailable" :loading="resumeBusy">
-            Trace
+        <div v-if="tools.length > 0" class="mb-3">
+          <v-btn
+            v-if="workspaceMode === 'trace'"
+            variant="outlined"
+            prepend-icon="mdi-arrow-left"
+            @click="setWorkspaceMode('layout')"
+          >
+            Back to layout
           </v-btn>
-          <v-btn value="layout">Layout</v-btn>
-        </v-btn-toggle>
+          <v-btn
+            v-else
+            variant="outlined"
+            prepend-icon="mdi-plus"
+            :disabled="!traceModeAvailable"
+            :loading="resumeBusy"
+            @click="setWorkspaceMode('trace')"
+          >
+            Trace another tool
+          </v-btn>
+        </div>
         <p
           v-if="editingEntry !== null && photoMissing && !embedReady"
           class="text-body-2 text-medium-emphasis"
@@ -250,6 +277,7 @@ function restart(): void {
         <LayoutCanvas v-show="workspaceMode === 'layout'" />
       </div>
       <ToolRail
+        v-show="workspaceMode === 'layout'"
         class="rail"
         :editing-entry="editingEntry"
         :retrace-available="traceModeAvailable"
