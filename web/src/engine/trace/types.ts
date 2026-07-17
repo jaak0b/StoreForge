@@ -48,12 +48,17 @@ export interface TracedOutline {
 /**
  * A finger hole punched through the tool pocket so the tool can be lifted
  * out. Coordinates are tool-local millimeters (the same frame as the tool's
- * outline points); the pocket generator subtracts the circle from the pocket
- * floor region.
+ * outline points); the pocket generator subtracts the hole's outline from the
+ * pocket floor region. The hole is a capsule: a circle of diameterMm swept
+ * from (x, y) to the optional second endpoint (x2, y2). When the second
+ * endpoint is absent or equals the first, the hole is a plain circle.
  */
 export interface FingerHole {
   x: number;
   y: number;
+  /** Second endpoint of an elongated (slot) hole; absent for a circle. */
+  x2?: number;
+  y2?: number;
   diameterMm: number;
 }
 

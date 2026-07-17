@@ -1,28 +1,31 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { AUTO_SIZE_MARGIN_MM, useToolTrace } from '../../stores/toolTrace';
-import { autoPocketGridSize } from '../../workerClient';
+import { useToolTrace } from '../../stores/toolTrace';
 import { boundsOf, transformTool } from '../../engine/trace/edit';
 import { binInteriorSizeMm, PITCH } from '../../engine/gridfinity/constants';
-import type { MmPoint, TracedTool } from '../../engine/trace/types';
+import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
 
 /**
  * The Layout mode of the trace-and-layout workspace: a top-down view of the
  * bin interior with draggable tools and dotted 42 mm cell boundaries. While
- * the rail's finger-hole mode is active, a click on a tool places a hole
- * instead. The footprint auto-sizes to the layout until the user types a
- * size in the rail.
+ * the rail's finger-hole mode is active, a pointer drag on a tool draws a
+ * finger hole (a short drag places a circle, a longer one an elongated slot);
+ * outside that mode existing holes can be dragged to move them. Footprint
+ * auto-sizing lives in the rail's preview pipeline; when it changes the grid
+ * mid-drag, the drag reference point is rebased so the tool stays under the
+ * pointer.
  */
 
 const store = useToolTrace();
-const { tools, placements, selectedToolId, gridX, gridY, gridManual, fingerHoleMode } =
-  storeToRefs(store);
+const { tools, placements, selectedToolId, gridX, gridY, fingerHoleMode } = storeToRefs(store);
 
 const canvas = ref<HTMLCanvasElement | null>(null);
-const errorMessage = ref<string | null>(null);
 
 const CANVAS_WIDTH = 640;
+
+/** Drags shorter than this in mm commit a circular hole, not a slot. */
+const SLOT_MIN_DRAG_MM = 3;
 
 // mm to canvas pixel mapping, bin centre at canvas centre.
 function mmScale(): number {
@@ -33,6 +36,27 @@ function mmScale(): number {
     (CANVAS_WIDTH - pad) / interiorX,
     ((CANVAS_WIDTH * interiorY) / interiorX - pad) / interiorY,
   );
+}
+
+/** Traces a finger hole (circle or capsule) as the current canvas path. */
+function holePath(
+  ctx: CanvasRenderingContext2D,
+  toPx: (p: MmPoint) => [number, number],
+  s: number,
+  hole: FingerHole,
+): void {
+  const [ax, ay] = toPx({ x: hole.x, y: hole.y });
+  const [bx, by] = toPx({ x: hole.x2 ?? hole.x, y: hole.y2 ?? hole.y });
+  const r = (hole.diameterMm / 2) * s;
+  ctx.beginPath();
+  if (Math.hypot(bx - ax, by - ay) < 1e-6) {
+    ctx.arc(ax, ay, r, 0, 2 * Math.PI);
+  } else {
+    const theta = Math.atan2(by - ay, bx - ax);
+    ctx.arc(bx, by, r, theta - Math.PI / 2, theta + Math.PI / 2);
+    ctx.arc(ax, ay, r, theta + Math.PI / 2, theta + (3 * Math.PI) / 2);
+    ctx.closePath();
+  }
 }
 
 function draw(): void {
@@ -102,9 +126,19 @@ function draw(): void {
     ctx.closePath();
     ctx.fill();
     for (const hole of tool.fingerHoles) {
-      const [x, y] = toPx({ x: hole.x + placement.xMm, y: hole.y + placement.yMm });
-      ctx.beginPath();
-      ctx.arc(x, y, (hole.diameterMm / 2) * s, 0, 2 * Math.PI);
+      holePath(
+        ctx,
+        toPx,
+        s,
+        {
+          ...hole,
+          x: hole.x + placement.xMm,
+          y: hole.y + placement.yMm,
+          ...(hole.x2 !== undefined && hole.y2 !== undefined
+            ? { x2: hole.x2 + placement.xMm, y2: hole.y2 + placement.yMm }
+            : {}),
+        },
+      );
       ctx.strokeStyle = '#9c27b0';
       ctx.lineWidth = 1.5;
       ctx.stroke();
@@ -119,47 +153,32 @@ watch(
 );
 onMounted(() => void nextTick(draw));
 
-// Auto footprint sizing, debounced, disabled once the user typed a size.
-let autoSizeHandle: ReturnType<typeof setTimeout> | null = null;
-watch(
-  [tools, placements, gridManual],
-  () => {
-    if (gridManual.value || placements.value.length === 0) return;
-    if (autoSizeHandle !== null) clearTimeout(autoSizeHandle);
-    autoSizeHandle = setTimeout(async () => {
-      autoSizeHandle = null;
-      try {
-        const size = await autoPocketGridSize(
-          tools.value,
-          placements.value,
-          AUTO_SIZE_MARGIN_MM,
-        );
-        errorMessage.value = null;
-        gridX.value = size.gridX;
-        gridY.value = size.gridY;
-      } catch (error) {
-        errorMessage.value =
-          error instanceof Error ? error.message : 'Sizing the bin failed.';
-      }
-    }, 300);
-  },
-  { deep: true, immediate: true },
-);
-
-// Dragging tools on the canvas.
+// Pointer interaction. All three drags (move a tool, move a hole, stretch a
+// new hole) advance by mm deltas from the last pointer position; when the
+// auto-sized footprint changes mid-drag the last position is recomputed under
+// the new scale, so nothing jumps.
+type DragKind = 'tool' | 'hole' | 'place';
+let dragKind: DragKind | null = null;
 let draggingToolId: string | null = null;
-let dragStart: MmPoint | null = null;
-let dragOrigin: MmPoint | null = null;
+let draggingHole: FingerHole | null = null;
+let lastClient: { x: number; y: number } | null = null;
+let lastMm: MmPoint | null = null;
 
-function canvasMm(event: PointerEvent | MouseEvent): MmPoint {
+function clientToMm(clientX: number, clientY: number): MmPoint {
   const el = canvas.value!;
   const rect = el.getBoundingClientRect();
   const s = mmScale();
   return {
-    x: (((event.clientX - rect.left) / rect.width) * el.width - el.width / 2) / s,
-    y: (((event.clientY - rect.top) / rect.height) * el.height - el.height / 2) / s,
+    x: (((clientX - rect.left) / rect.width) * el.width - el.width / 2) / s,
+    y: (((clientY - rect.top) / rect.height) * el.height - el.height / 2) / s,
   };
 }
+
+watch([gridX, gridY], () => {
+  if (dragKind !== null && lastClient !== null) {
+    lastMm = clientToMm(lastClient.x, lastClient.y);
+  }
+});
 
 function toolAt(p: MmPoint): TracedTool | null {
   // Last drawn wins, so iterate back to front.
@@ -180,54 +199,142 @@ function toolAt(p: MmPoint): TracedTool | null {
   return null;
 }
 
-function onPointerDown(event: PointerEvent): void {
-  const p = canvasMm(event);
-  const tool = toolAt(p);
-  if (fingerHoleMode.value) {
-    if (tool !== null) {
-      const placement = store.placementOf(tool.id)!;
-      tool.fingerHoles.push({
-        x: p.x - placement.xMm,
-        y: p.y - placement.yMm,
-        diameterMm: store.fingerHoleDiameterMm,
-      });
-      selectedToolId.value = tool.id;
+/** Distance from a point to the segment between a and b. */
+function segmentDistance(p: MmPoint, a: MmPoint, b: MmPoint): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  const t =
+    lengthSq < 1e-12
+      ? 0
+      : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** The topmost finger hole (circle or capsule) under the point, with its tool. */
+function holeAt(p: MmPoint): { tool: TracedTool; hole: FingerHole } | null {
+  for (let i = tools.value.length - 1; i >= 0; i -= 1) {
+    const tool = tools.value[i];
+    const placement = store.placementOf(tool.id);
+    if (placement === undefined) continue;
+    for (const hole of tool.fingerHoles) {
+      const a = { x: hole.x + placement.xMm, y: hole.y + placement.yMm };
+      const b = {
+        x: (hole.x2 ?? hole.x) + placement.xMm,
+        y: (hole.y2 ?? hole.y) + placement.yMm,
+      };
+      if (segmentDistance(p, a, b) <= hole.diameterMm / 2) {
+        return { tool, hole };
+      }
     }
+  }
+  return null;
+}
+
+function onPointerDown(event: PointerEvent): void {
+  const p = clientToMm(event.clientX, event.clientY);
+  lastClient = { x: event.clientX, y: event.clientY };
+  lastMm = p;
+  if (fingerHoleMode.value) {
+    const tool = toolAt(p);
+    if (tool === null) return;
+    const placement = store.placementOf(tool.id)!;
+    const hole: FingerHole = {
+      x: p.x - placement.xMm,
+      y: p.y - placement.yMm,
+      x2: p.x - placement.xMm,
+      y2: p.y - placement.yMm,
+      diameterMm: store.fingerHoleDiameterMm,
+    };
+    tool.fingerHoles.push(hole);
+    // The pushed object becomes reactive inside the store; drag the reactive
+    // one so mutations redraw the canvas.
+    draggingHole = tool.fingerHoles[tool.fingerHoles.length - 1];
+    draggingToolId = tool.id;
+    dragKind = 'place';
+    selectedToolId.value = tool.id;
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
     return;
   }
+  const holeHit = holeAt(p);
+  if (holeHit !== null) {
+    draggingHole = holeHit.hole;
+    draggingToolId = holeHit.tool.id;
+    dragKind = 'hole';
+    selectedToolId.value = holeHit.tool.id;
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
+    return;
+  }
+  const tool = toolAt(p);
   if (tool === null) {
     selectedToolId.value = null;
     return;
   }
   selectedToolId.value = tool.id;
-  const placement = store.placementOf(tool.id)!;
   draggingToolId = tool.id;
-  dragStart = p;
-  dragOrigin = { x: placement.xMm, y: placement.yMm };
+  dragKind = 'tool';
   (event.target as HTMLElement).setPointerCapture(event.pointerId);
 }
 
 function onPointerMove(event: PointerEvent): void {
-  if (draggingToolId === null || dragStart === null || dragOrigin === null) return;
-  const p = canvasMm(event);
-  const placement = store.placementOf(draggingToolId);
+  if (dragKind === null || lastMm === null) return;
+  const p = clientToMm(event.clientX, event.clientY);
+  const dx = p.x - lastMm.x;
+  const dy = p.y - lastMm.y;
+  lastClient = { x: event.clientX, y: event.clientY };
+  lastMm = p;
+  if (dragKind === 'tool') {
+    const placement = draggingToolId !== null ? store.placementOf(draggingToolId) : undefined;
+    if (placement === undefined) return;
+    placement.xMm += dx;
+    placement.yMm += dy;
+    return;
+  }
+  if (draggingHole === null) return;
+  if (dragKind === 'hole') {
+    draggingHole.x += dx;
+    draggingHole.y += dy;
+    if (draggingHole.x2 !== undefined && draggingHole.y2 !== undefined) {
+      draggingHole.x2 += dx;
+      draggingHole.y2 += dy;
+    }
+    return;
+  }
+  // 'place': the start stays put and the drag stretches the second endpoint.
+  const placement = draggingToolId !== null ? store.placementOf(draggingToolId) : undefined;
   if (placement === undefined) return;
-  placement.xMm = dragOrigin.x + (p.x - dragStart.x);
-  placement.yMm = dragOrigin.y + (p.y - dragStart.y);
+  draggingHole.x2 = p.x - placement.xMm;
+  draggingHole.y2 = p.y - placement.yMm;
 }
 
 function onPointerUp(): void {
+  if (dragKind === 'place' && draggingHole !== null) {
+    const length = Math.hypot(
+      (draggingHole.x2 ?? draggingHole.x) - draggingHole.x,
+      (draggingHole.y2 ?? draggingHole.y) - draggingHole.y,
+    );
+    if (length < SLOT_MIN_DRAG_MM) {
+      delete draggingHole.x2;
+      delete draggingHole.y2;
+    }
+  }
+  dragKind = null;
   draggingToolId = null;
-  dragStart = null;
-  dragOrigin = null;
+  draggingHole = null;
+  lastClient = null;
+  lastMm = null;
 }
 </script>
 
 <template>
   <div>
     <p class="text-body-2 mb-2">
-      <b>Drag each tool to its place in the bin.</b> The footprint grows
-      automatically until you type a size yourself.
+      <b>Drag each tool to its place in the bin.</b> The footprint grows and
+      shrinks with the layout until you type a size yourself.
+    </p>
+    <p v-if="fingerHoleMode" class="text-body-2 mb-2">
+      <b>Press on a tool to place a finger hole.</b> Drag before releasing to
+      stretch it into a slot.
     </p>
     <canvas
       ref="canvas"
@@ -242,9 +349,6 @@ function onPointerUp(): void {
       Trace a tool in the Trace mode above, or add a basic shape from the
       panel beside the canvas.
     </p>
-    <v-alert v-if="errorMessage" type="error" density="compact" class="mt-2">
-      {{ errorMessage }}
-    </v-alert>
   </div>
 </template>
 

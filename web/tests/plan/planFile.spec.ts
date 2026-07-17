@@ -533,4 +533,24 @@ describe('pockets in plan files', () => {
       'entry t1: a pocket placement needs xMm, yMm and a pocketDepthMm above 0',
     );
   });
+
+  it('round-trips a traced entry whose finger hole is an elongated slot', () => {
+    const withSlot = pockets();
+    withSlot.tools[0].fingerHoles = [{ x: 0, y: 0, x2: 12, y2: -3, diameterMm: 20 }];
+    const traced = tracedEntry({ pockets: withSlot });
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [traced], batches: [] } });
+  });
+
+  it('accepts a circular finger hole without slot endpoints (old plans)', () => {
+    expect(validateEntry(tracedEntry())).toBeNull();
+  });
+
+  it('rejects a finger hole with only one slot coordinate', () => {
+    const bad = pockets();
+    bad.tools[0].fingerHoles = [{ x: 0, y: 0, x2: 12, diameterMm: 20 }];
+    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+      'entry t1: pocket tool t1: an elongated finger hole needs both x2 and y2 as numbers',
+    );
+  });
 });

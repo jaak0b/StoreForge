@@ -290,15 +290,43 @@ export function primitiveOutline(
 }
 
 /**
- * Circle outline for a finger-hole cutout, centered at the hole's tool-local
- * position, flattened under the same chordal rule as the primitives. The
- * pocket generator subtracts this from the pocket floor.
+ * Outline for a finger-hole cutout in the hole's tool-local frame, flattened
+ * under the same chordal rule as the primitives. A hole without a second
+ * endpoint (or with both endpoints equal) is a circle; otherwise the outline
+ * is a capsule (slot): a semicircle cap at each endpoint joined by the two
+ * tangent lines, so the bounds span the endpoint distance plus one diameter
+ * along the slot and exactly one diameter across it. The pocket generator
+ * subtracts this from the pocket floor.
  */
 export function fingerHoleOutline(hole: FingerHole): TracedOutline {
   if (hole.diameterMm <= 0) {
     throw new RangeError(`finger hole diameter must be > 0, got ${hole.diameterMm}`);
   }
-  return circleOutline(hole.x, hole.y, hole.diameterMm);
+  const x2 = hole.x2 ?? hole.x;
+  const y2 = hole.y2 ?? hole.y;
+  const dx = x2 - hole.x;
+  const dy = y2 - hole.y;
+  if (Math.hypot(dx, dy) < 1e-9) {
+    return circleOutline(hole.x, hole.y, hole.diameterMm);
+  }
+  const r = hole.diameterMm / 2;
+  const theta = Math.atan2(dy, dx);
+  // Half a full circle's segments per cap keeps the chordal rule intact.
+  const capSteps = circleSegments(r) / 2;
+  const outer: MmPoint[] = [];
+  const cap = (cx: number, cy: number, startAngle: number): void => {
+    for (let k = 0; k <= capSteps; k += 1) {
+      const angle = startAngle + (Math.PI * k) / capSteps;
+      outer.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+    }
+  };
+  // Counterclockwise traversal (positive shoelace area, the outer-loop
+  // convention): the cap around the second endpoint from theta - 90 degrees
+  // to theta + 90 degrees, then the cap around the first endpoint over the
+  // opposite half; the tangent lines are the implicit edges between the caps.
+  cap(x2, y2, theta - Math.PI / 2);
+  cap(hole.x, hole.y, theta + Math.PI / 2);
+  return { outer, holes: [] };
 }
 
 /**

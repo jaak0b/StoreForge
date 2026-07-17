@@ -199,6 +199,12 @@ export function validatePockets(raw: unknown, subject: string): string | null {
       ) {
         return `${subject}: pocket tool ${tool.id}: a finger hole needs x, y and a diameterMm above 0`;
       }
+      if (
+        (hole.x2 !== undefined || hole.y2 !== undefined) &&
+        (!isFiniteNumber(hole.x2) || !isFiniteNumber(hole.y2))
+      ) {
+        return `${subject}: pocket tool ${tool.id}: an elongated finger hole needs both x2 and y2 as numbers`;
+      }
     }
   }
   if (!Array.isArray(pockets.placements)) {
@@ -246,6 +252,9 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
       fingerHoles: (tool.fingerHoles as FingerHole[]).map((hole) => ({
         x: hole.x,
         y: hole.y,
+        ...(hole.x2 !== undefined && hole.y2 !== undefined
+          ? { x2: hole.x2, y2: hole.y2 }
+          : {}),
         diameterMm: hole.diameterMm,
       })),
     };

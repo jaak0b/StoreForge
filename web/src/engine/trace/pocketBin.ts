@@ -75,6 +75,9 @@ export function placeTools(
         ...hole,
         x: hole.x + placement.xMm,
         y: hole.y + placement.yMm,
+        ...(hole.x2 !== undefined && hole.y2 !== undefined
+          ? { x2: hole.x2 + placement.xMm, y2: hole.y2 + placement.yMm }
+          : {}),
       })),
       pocketDepthMm: placement.pocketDepthMm,
     };
@@ -253,8 +256,8 @@ export function autoGridSize(
     }
     for (const hole of pocket.fingerHoles) {
       const r = hole.diameterMm / 2;
-      halfX = Math.max(halfX, Math.abs(hole.x) + r);
-      halfY = Math.max(halfY, Math.abs(hole.y) + r);
+      halfX = Math.max(halfX, Math.abs(hole.x) + r, Math.abs(hole.x2 ?? hole.x) + r);
+      halfY = Math.max(halfY, Math.abs(hole.y) + r, Math.abs(hole.y2 ?? hole.y) + r);
     }
   }
 

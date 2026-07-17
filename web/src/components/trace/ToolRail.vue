@@ -4,13 +4,14 @@ import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
-import { useToolTrace } from '../../stores/toolTrace';
+import { AUTO_SIZE_MARGIN_MM, useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
-import { generatePocketBin } from '../../workerClient';
+import { autoPocketGridSize, generatePocketBin } from '../../workerClient';
+import type { LabeledBinMeshes } from '../../engine/gridfinity/types';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import type { BinPockets, TracePaper, TracedBin } from '../../engine/plan/types';
-import type { PaperCorners } from '../../engine/trace/types';
+import type { FingerHole, PaperCorners } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
 import BinViewport from '../BinViewport.vue';
@@ -44,8 +45,16 @@ const trace = useToolTrace();
 const queue = useBinQueue();
 
 const { labelText, labelIcon, heightUnits, notes } = storeToRefs(designer);
-const { tools, selectedToolId, gridX, gridY, defaultDepthMm, fingerHoleMode, fingerHoleDiameterMm } =
-  storeToRefs(trace);
+const {
+  tools,
+  selectedToolId,
+  gridX,
+  gridY,
+  gridManual,
+  defaultDepthMm,
+  fingerHoleMode,
+  fingerHoleDiameterMm,
+} = storeToRefs(trace);
 
 const quantity = ref(1);
 
@@ -72,6 +81,24 @@ function setGridManually(axis: 'x' | 'y', value: number): void {
   else gridY.value = cells;
 }
 
+/**
+ * Hands footprint control back to auto sizing and resizes right away, since
+ * the preview pipeline only reruns when the layout changes.
+ */
+async function enableAutoSize(): Promise<void> {
+  trace.gridManual = false;
+  if (trace.placements.length === 0) return;
+  try {
+    const size = await autoPocketGridSize(trace.tools, trace.placements, AUTO_SIZE_MARGIN_MM);
+    gridX.value = size.gridX;
+    gridY.value = size.gridY;
+  } catch (error) {
+    // Sizing problems (overlapping or off-centre tools) are user-fixable;
+    // surface them in the rail's warning alert.
+    addError.value = error instanceof Error ? error.message : 'Sizing the bin failed.';
+  }
+}
+
 function applyDefaultDepth(value: number): void {
   if (!Number.isFinite(value) || value <= 0) return;
   defaultDepthMm.value = value;
@@ -80,6 +107,23 @@ function applyDefaultDepth(value: number): void {
 
 function removeFingerHole(tool: { fingerHoles: unknown[] }, index: number): void {
   tool.fingerHoles.splice(index, 1);
+}
+
+/** True when the hole is an elongated slot rather than a circle. */
+function isSlot(hole: FingerHole): boolean {
+  return hole.x2 !== undefined && hole.y2 !== undefined;
+}
+
+/** Overall slot length in mm: the endpoint distance plus one diameter. */
+function holeLengthMm(hole: FingerHole): number {
+  return (
+    Math.hypot((hole.x2 ?? hole.x) - hole.x, (hole.y2 ?? hole.y) - hole.y) + hole.diameterMm
+  );
+}
+
+function setHoleDiameter(hole: FingerHole, value: number): void {
+  if (!Number.isFinite(value) || value <= 0) return;
+  hole.diameterMm = value;
 }
 
 // Custom primitive dialog.
@@ -142,11 +186,29 @@ const pocketParams = computed<PocketBinParams>(() => ({
   placements: JSON.parse(JSON.stringify(trace.placements)),
 }));
 
+/**
+ * Auto-sizes the footprint and generates the preview in one pipeline: the
+ * layout is always validated against the freshly sized footprint, so dragging
+ * a tool past the wall grows the bin (and moving tools together shrinks it)
+ * instead of raising the wall error. Manual mode skips the sizing and keeps
+ * the wall validation.
+ */
+async function generateSizedPreview(raw: unknown): Promise<LabeledBinMeshes> {
+  let params = raw as PocketBinParams;
+  if (!gridManual.value && params.placements.length > 0) {
+    const size = await autoPocketGridSize(params.tools, params.placements, AUTO_SIZE_MARGIN_MM);
+    gridX.value = size.gridX;
+    gridY.value = size.gridY;
+    params = { ...params, gridX: size.gridX, gridY: size.gridY };
+  }
+  return generatePocketBin(params);
+}
+
 // The preview generation always runs so the layout is validated; the heavy
 // viewport itself mounts only once the preview card is expanded.
 const { meshes, errorMessage } = useBinPreview(
   () => pocketParams.value,
-  (params) => generatePocketBin(params as PocketBinParams),
+  (params) => generateSizedPreview(params),
 );
 const previewOpen = ref(false);
 
@@ -322,11 +384,28 @@ function cancelEdit(): void {
             <div
               v-for="(hole, index) in tool.fingerHoles"
               :key="index"
-              class="d-flex align-center ga-2"
+              class="d-flex align-center ga-2 mt-1"
             >
-              <span class="text-caption">
-                {{ hole.diameterMm }} mm at {{ hole.x.toFixed(0) }}, {{ hole.y.toFixed(0) }}
+              <span class="text-caption flex-grow-1">
+                <template v-if="isSlot(hole)">
+                  Slot, {{ holeLengthMm(hole).toFixed(0) }} mm long, at
+                  {{ hole.x.toFixed(0) }}, {{ hole.y.toFixed(0) }}
+                </template>
+                <template v-else>
+                  Circle at {{ hole.x.toFixed(0) }}, {{ hole.y.toFixed(0) }}
+                </template>
               </span>
+              <v-text-field
+                :model-value="hole.diameterMm"
+                type="number"
+                min="1"
+                step="1"
+                label="Diameter (mm)"
+                density="compact"
+                hide-details
+                class="hole-field"
+                @update:model-value="setHoleDiameter(hole, Number($event))"
+              />
               <v-btn icon size="x-small" variant="text" color="error" @click="removeFingerHole(tool, index)">
                 <v-icon icon="mdi-close" size="14" />
               </v-btn>
@@ -364,6 +443,16 @@ function cancelEdit(): void {
           class="small-field"
           @update:model-value="setGridManually('y', Number($event))"
         />
+        <v-btn
+          v-if="gridManual"
+          size="small"
+          variant="outlined"
+          prepend-icon="mdi-arrow-collapse-all"
+          title="Size the footprint from the layout again."
+          @click="enableAutoSize"
+        >
+          Auto size
+        </v-btn>
         <v-text-field
           :model-value="defaultDepthMm"
           type="number"
@@ -384,7 +473,7 @@ function cancelEdit(): void {
           prepend-icon="mdi-circle-outline"
           @click="toggleFingerHoleMode"
         >
-          {{ fingerHoleMode ? 'Placing finger holes: click a tool' : 'Add finger hole' }}
+          {{ fingerHoleMode ? 'Placing finger holes: press on a tool' : 'Add finger hole' }}
         </v-btn>
         <v-text-field
           v-if="fingerHoleMode"
@@ -553,6 +642,11 @@ function cancelEdit(): void {
 
 .small-field {
   max-width: 160px;
+}
+
+.hole-field {
+  max-width: 110px;
+  flex: 0 0 110px;
 }
 
 .preview-toggle {

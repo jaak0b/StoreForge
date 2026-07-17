@@ -230,6 +230,40 @@ describe('fingerHoleOutline', () => {
     expect(bounds.width).toBeCloseTo(12, 6);
     expect(bounds.height).toBeCloseTo(12, 6);
   });
+
+  it('falls back to a circle when the second endpoint equals the first', () => {
+    const outline = fingerHoleOutline({ x: 5, y: 7, x2: 5, y2: 7, diameterMm: 12 });
+    for (const p of outline.outer) {
+      expect(Math.hypot(p.x - 5, p.y - 7)).toBeCloseTo(6, 9);
+    }
+  });
+
+  it('produces a capsule spanning the endpoint distance plus a diameter', () => {
+    // Horizontal slot from (5, 7) to (15, 7), 8 mm diameter: 10 mm between
+    // the endpoints plus 8 mm of caps is 18 mm long, 8 mm across, spanning
+    // x 1..19 and y 3..11 (hand values).
+    const outline = fingerHoleOutline({ x: 5, y: 7, x2: 15, y2: 7, diameterMm: 8 });
+    expect(outline.holes).toHaveLength(0);
+    expect(signedArea(outline.outer)).toBeGreaterThan(0);
+    const bounds = boundsOf(outline);
+    expect(bounds.minX).toBeCloseTo(1, 6);
+    expect(bounds.maxX).toBeCloseTo(19, 6);
+    expect(bounds.minY).toBeCloseTo(3, 6);
+    expect(bounds.maxY).toBeCloseTo(11, 6);
+  });
+
+  it('keeps every capsule vertex exactly one radius from the centre segment', () => {
+    // Diagonal slot from (0, 0) to (6, 8), 6 mm diameter. Every boundary
+    // vertex of a capsule lies exactly on the swept circle, 3 mm from the
+    // segment between the endpoints.
+    const outline = fingerHoleOutline({ x: 0, y: 0, x2: 6, y2: 8, diameterMm: 6 });
+    for (const p of outline.outer) {
+      // Distance from p to the segment (0,0)-(6,8), computed geometrically.
+      const t = Math.max(0, Math.min(1, (p.x * 6 + p.y * 8) / 100));
+      const d = Math.hypot(p.x - 6 * t, p.y - 8 * t);
+      expect(d).toBeCloseTo(3, 9);
+    }
+  });
 });
 
 describe('resolvedToolOutline', () => {

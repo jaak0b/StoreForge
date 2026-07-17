@@ -104,6 +104,28 @@ describe('buildPocketBinSolids', () => {
     body.delete();
   });
 
+  it('produces a watertight solid when a finger hole is an elongated slot', () => {
+    const tool = lTool({
+      // Slot along the bottom arm, tool-local, from (5, 5) to (25, 5).
+      fingerHoles: [{ x: 5, y: 5, x2: 25, y2: 5, diameterMm: 8 }],
+    });
+    const { body } = buildPocketBinSolids(m, font, params({ tools: [tool] }));
+    expect(body.status()).toBe('NoError');
+    expect(body.isEmpty()).toBe(false);
+    body.delete();
+  });
+
+  it('rejects a slot finger hole whose far end reaches into the bin wall', () => {
+    // The slot's second endpoint lands at bin-local x 65; with its 6 mm
+    // radius it reaches far past the 2x1 interior's 40.8 mm half-width.
+    const tool = lTool({
+      fingerHoles: [{ x: 20, y: 5, x2: 80, y2: 5, diameterMm: 12 }],
+    });
+    expect(() => buildPocketBinSolids(m, font, params({ tools: [tool] }))).toThrow(
+      /into the bin wall/,
+    );
+  });
+
   it('places the pocket bottom exactly at the bin top minus the pocket depth', () => {
     // heightUnits 3 puts the bin top at 21 mm; a 5 mm pocket bottoms at 16 mm.
     const { body } = buildPocketBinSolids(m, font, params());
@@ -225,6 +247,16 @@ describe('autoGridSize', () => {
     });
     const placement: ToolPlacement = { toolId: 'bar', xMm: -35, yMm: -6, pocketDepthMm: 5 };
     expect(autoGridSize(m, [bar], [placement], 2)).toEqual({ gridX: 2, gridY: 1 });
+  });
+
+  it('grows the footprint for a slot finger hole reaching past the interior', () => {
+    // The slot's far cap reaches bin-local x 31 (endpoint 25 plus the 6 mm
+    // radius); one cell's 19.8 mm interior half-width cannot hold that plus
+    // the 2 mm margin, two cells' 40.8 mm can.
+    const tool = lTool({
+      fingerHoles: [{ x: 15, y: 5, x2: 40, y2: 5, diameterMm: 12 }],
+    });
+    expect(autoGridSize(m, [tool], [centeredL], 2)).toEqual({ gridX: 2, gridY: 1 });
   });
 
   it('rejects overlapping placements', () => {
