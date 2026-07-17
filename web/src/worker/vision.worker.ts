@@ -8,6 +8,13 @@ import * as ort from 'onnxruntime-web/wasm';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 import { loadOpenCv } from './opencvLoader';
 import type { CvNamespace } from './opencvLoader';
+import { detectPaper, rectifyPaper } from '../engine/trace/paper';
+import type {
+  PaperCalibration,
+  PaperCorners,
+  PaperDetectionResult,
+  PaperKind,
+} from '../engine/trace/types';
 
 /** Absolute URLs of the MobileSAM ONNX models, resolved on the main thread. */
 export interface VisionModelUrls {
@@ -63,6 +70,17 @@ function loadDecoder(): Promise<ort.InferenceSession> {
 // (paper detection, embedding, segmentation) can reuse it without transfers.
 let photo: InstanceType<CvNamespace['Mat']> | null = null;
 
+// The rectified top-down sheet image, kept worker-side so the segmentation
+// stages can run on it without shipping pixels back and forth.
+let rectified: InstanceType<CvNamespace['Mat']> | null = null;
+let rectifiedCalibration: PaperCalibration | null = null;
+
+/** The rectified sheet plus a preview the UI can draw directly. */
+export interface RectifyResult {
+  calibration: PaperCalibration;
+  preview: ImageData;
+}
+
 async function toImageData(source: ImageBitmap | ArrayBuffer): Promise<ImageData> {
   const bitmap =
     source instanceof ImageBitmap
@@ -98,6 +116,45 @@ const api = {
     }
     photo = mat;
     return { width: mat.cols, height: mat.rows };
+  },
+
+  /**
+   * Propose sheet corners in the loaded photo. The result is a proposal only;
+   * the UI lets the user drag-correct corners before calling rectify().
+   */
+  async detectPaper(): Promise<PaperDetectionResult> {
+    const cv = await loadOpenCv();
+    if (!photo) {
+      throw new Error('detectPaper called before loadPhoto supplied a photo.');
+    }
+    return detectPaper(cv, photo);
+  },
+
+  /**
+   * Rectify the loaded photo to a top-down sheet image using the given
+   * corners (detected or user-adjusted), keep it worker-side for later
+   * segmentation, and return the calibration plus a drawable preview.
+   */
+  async rectify(corners: PaperCorners, kind: PaperKind): Promise<RectifyResult> {
+    const cv = await loadOpenCv();
+    if (!photo) {
+      throw new Error('rectify called before loadPhoto supplied a photo.');
+    }
+    const result = rectifyPaper(cv, photo, corners, kind);
+    if (rectified) {
+      rectified.delete();
+    }
+    rectified = result.rectified;
+    rectifiedCalibration = result.calibration;
+    const preview = new ImageData(
+      new Uint8ClampedArray(rectified.data),
+      rectified.cols,
+      rectified.rows,
+    );
+    return Comlink.transfer(
+      { calibration: rectifiedCalibration, preview },
+      [preview.data.buffer],
+    );
   },
 
   /** Load OpenCV and both ONNX sessions, returning raw readiness diagnostics. */

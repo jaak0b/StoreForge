@@ -1,10 +1,16 @@
 import * as Comlink from 'comlink';
 import type {
   PhotoInfo,
+  RectifyResult,
   VisionModelUrls,
   VisionSelfTestReport,
   VisionWorkerApi,
 } from './worker/vision.worker';
+import type {
+  PaperCorners,
+  PaperDetectionResult,
+  PaperKind,
+} from './engine/trace/types';
 
 // Model URLs are resolved here because the worker script lives under assets/,
 // so a BASE_URL-relative path would resolve against the wrong directory there.
@@ -44,6 +50,25 @@ export async function loadPhoto(
   const transfer: Transferable[] =
     source instanceof ImageBitmap ? [source] : [source];
   return worker.loadPhoto(Comlink.transfer(source, transfer));
+}
+
+/** Propose paper sheet corners in the loaded photo; the user may adjust them. */
+export async function detectPaper(): Promise<PaperDetectionResult> {
+  const worker = await getReadyWorker();
+  return worker.detectPaper();
+}
+
+/**
+ * Rectify the loaded photo to a top-down sheet image using the given corners.
+ * The rectified image stays in the worker for segmentation; the returned
+ * preview is for on-screen display only.
+ */
+export async function rectifyPaper(
+  corners: PaperCorners,
+  kind: PaperKind,
+): Promise<RectifyResult> {
+  const worker = await getReadyWorker();
+  return worker.rectify(corners, kind);
 }
 
 /** Verify that OpenCV and both MobileSAM ONNX sessions load in the worker. */
