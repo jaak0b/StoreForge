@@ -1,4 +1,17 @@
 import type { LabeledBinParams } from '../gridfinity/types';
+import type { TracedTool, ToolPlacement } from '../trace/types';
+
+/**
+ * Tool pockets sunk into a bin's interior, as designed on the Tool trace tab.
+ * Plain JSON throughout so it serializes with the plan file. Each placement's
+ * pocketDepthMm carries the depth, so no separate depth field lives here.
+ */
+export interface BinPockets {
+  /** The traced (or primitive) tools the placements refer to. */
+  tools: TracedTool[];
+  /** Where each tool's pocket sits in the bin, with its depth. */
+  placements: ToolPlacement[];
+}
 
 /**
  * One bin in the print queue, with its design parameters. Every queue entry
@@ -34,6 +47,8 @@ export interface BinEntry {
   createdAt: string;
   /** Free-form notes on the entry. */
   notes?: string;
+  /** Tool pockets sunk into the bin, when the entry came from a tool trace. */
+  pockets?: BinPockets;
 }
 
 /**
@@ -52,6 +67,8 @@ export interface BatchItem {
   count: number;
   /** Id of the queue entry the item was created from, if it still exists. */
   sourceEntryId?: string;
+  /** Snapshot of the entry's tool pockets, when it had any. */
+  pockets?: BinPockets;
 }
 
 /** A named set of bins sent to a printer as one build plate. */

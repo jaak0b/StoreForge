@@ -23,7 +23,7 @@ import {
   manifoldToMeshData,
   roundedRectPolygon,
 } from '../gridfinity/binGenerator';
-import type { LabeledBinMeshes, LabeledBinParams } from '../gridfinity/types';
+import type { LabeledBinMeshes, LabeledBinParams, MeshData } from '../gridfinity/types';
 
 /** A labeled bin plus the tools whose pockets are sunk into its interior. */
 export interface PocketBinParams extends LabeledBinParams {
@@ -401,5 +401,30 @@ export function generatePocketBin(
   } finally {
     body.delete();
     label?.delete();
+  }
+}
+
+/**
+ * Generate a pocket bin as one unioned mesh, mirroring
+ * generateLabeledBinUnion for the single-mesh STL download.
+ */
+export function generatePocketBinUnion(
+  m: ManifoldToplevel,
+  font: Font,
+  params: PocketBinParams,
+): MeshData {
+  const { body, label } = buildPocketBinSolids(m, font, params);
+  let union: Manifold | null = null;
+  try {
+    if (!label) return manifoldToMeshData(body);
+    union = m.Manifold.union([body, label]);
+    if (union.status() !== 'NoError') {
+      throw new Error(`Pocket bin union produced an invalid solid: ${union.status()}`);
+    }
+    return manifoldToMeshData(union);
+  } finally {
+    body.delete();
+    label?.delete();
+    union?.delete();
   }
 }

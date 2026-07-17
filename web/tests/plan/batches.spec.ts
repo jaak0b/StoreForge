@@ -177,3 +177,61 @@ describe('failBatchItem', () => {
     expect(result.batch!.items.map((i) => i.id)).toEqual(['item2']);
   });
 });
+
+describe('pockets in batches', () => {
+  function pockets(): NonNullable<BinEntry['pockets']> {
+    return {
+      tools: [
+        {
+          id: 't1',
+          name: 'Wrench',
+          outline: {
+            outer: [
+              { x: -10, y: -5 },
+              { x: 10, y: -5 },
+              { x: 0, y: 5 },
+            ],
+            holes: [],
+          },
+          rotationDeg: 0,
+          offsetMm: 0.5,
+          mirrored: false,
+          fingerHoles: [],
+        },
+      ],
+      placements: [{ toolId: 't1', xMm: 0, yMm: 0, pocketDepthMm: 12 }],
+    };
+  }
+
+  it('snapshots the pockets into the batch item without aliasing the entry', () => {
+    const source = entry({ pockets: pockets() });
+    const result = makeBatch([source], [{ entryId: 'a1', count: 2 }]);
+    const item = result.batch!.items[0];
+    expect(item.pockets).toEqual(pockets());
+    item.pockets!.placements[0].xMm = 99;
+    expect(source.pockets!.placements[0].xMm).toBe(0);
+  });
+
+  it('leaves the pockets field off items from entries without pockets', () => {
+    const result = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]);
+    expect('pockets' in result.batch!.items[0]).toBe(false);
+  });
+
+  it('recreates a failed item as an entry that keeps its pockets', () => {
+    const source = entry({ pockets: pockets() });
+    const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
+    const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
+    expect(failed.entries).toHaveLength(1);
+    expect(failed.entries[0].pockets).toEqual(pockets());
+  });
+
+  it('does not merge a failed pocket item into a pocketless entry with equal params', () => {
+    const plain = entry({ id: 'other' });
+    const source = entry({ pockets: pockets() });
+    const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
+    const failed = failBatchItem([plain], made.batch!, 'item1', idFactory('new'));
+    expect(failed.entries).toHaveLength(2);
+    expect(failed.entries[0].quantity).toBe(5);
+    expect(failed.entries[1].pockets).toEqual(pockets());
+  });
+});

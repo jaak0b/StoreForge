@@ -3,9 +3,11 @@ import {
   PLAN_FILE_VERSION,
   type BatchItem,
   type BinEntry,
+  type BinPockets,
   type PlanFile,
   type PrintBatch,
 } from './types';
+import type { FingerHole, MmPoint, TracedTool, ToolPlacement } from '../trace/types';
 
 /** Result of parsing a plan file: either the plan or a user-worded error. */
 export type PlanParseResult =
@@ -82,6 +84,147 @@ export function pickBinParams(raw: Record<string, unknown>): LabeledBinParams {
   };
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isMmPointList(value: unknown): value is MmPoint[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (p) =>
+        typeof p === 'object' &&
+        p !== null &&
+        isFiniteNumber((p as Record<string, unknown>).x) &&
+        isFiniteNumber((p as Record<string, unknown>).y),
+    )
+  );
+}
+
+/**
+ * Validates a raw value as a BinPockets object (tools plus placements).
+ * Returns null when it is valid, otherwise a message naming the first
+ * offending part, prefixed with the given subject. Older plan files simply
+ * omit the pockets field; this only runs when it is present.
+ */
+export function validatePockets(raw: unknown, subject: string): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: pockets must be an object`;
+  }
+  const pockets = raw as Record<string, unknown>;
+  if (!Array.isArray(pockets.tools)) {
+    return `${subject}: pockets is missing its tools list`;
+  }
+  const toolIds = new Set<string>();
+  for (const rawTool of pockets.tools) {
+    if (typeof rawTool !== 'object' || rawTool === null || Array.isArray(rawTool)) {
+      return `${subject}: a pocket tool is not an object`;
+    }
+    const tool = rawTool as Record<string, unknown>;
+    if (typeof tool.id !== 'string' || tool.id.length === 0) {
+      return `${subject}: a pocket tool is missing its id`;
+    }
+    if (toolIds.has(tool.id)) {
+      return `${subject}: pocket tool id ${tool.id} appears twice`;
+    }
+    toolIds.add(tool.id);
+    if (typeof tool.name !== 'string') {
+      return `${subject}: pocket tool ${tool.id}: name must be a string`;
+    }
+    const outline = tool.outline as Record<string, unknown> | null | undefined;
+    if (typeof outline !== 'object' || outline === null || Array.isArray(outline)) {
+      return `${subject}: pocket tool ${tool.id}: outline must be an object`;
+    }
+    if (!isMmPointList(outline.outer) || (outline.outer as MmPoint[]).length < 3) {
+      return `${subject}: pocket tool ${tool.id}: outline needs at least 3 outer points`;
+    }
+    if (
+      !Array.isArray(outline.holes) ||
+      !outline.holes.every((loop) => isMmPointList(loop) && loop.length >= 3)
+    ) {
+      return `${subject}: pocket tool ${tool.id}: outline holes must be lists of points`;
+    }
+    if (!isFiniteNumber(tool.rotationDeg)) {
+      return `${subject}: pocket tool ${tool.id}: rotationDeg must be a number`;
+    }
+    if (!isFiniteNumber(tool.offsetMm) || tool.offsetMm < 0) {
+      return `${subject}: pocket tool ${tool.id}: offsetMm must be a number of at least 0`;
+    }
+    if (typeof tool.mirrored !== 'boolean') {
+      return `${subject}: pocket tool ${tool.id}: mirrored must be true or false`;
+    }
+    if (!Array.isArray(tool.fingerHoles)) {
+      return `${subject}: pocket tool ${tool.id}: fingerHoles must be a list`;
+    }
+    for (const rawHole of tool.fingerHoles) {
+      const hole = rawHole as Record<string, unknown> | null;
+      if (
+        typeof hole !== 'object' ||
+        hole === null ||
+        !isFiniteNumber(hole.x) ||
+        !isFiniteNumber(hole.y) ||
+        !isFiniteNumber(hole.diameterMm) ||
+        hole.diameterMm <= 0
+      ) {
+        return `${subject}: pocket tool ${tool.id}: a finger hole needs x, y and a diameterMm above 0`;
+      }
+    }
+  }
+  if (!Array.isArray(pockets.placements)) {
+    return `${subject}: pockets is missing its placements list`;
+  }
+  for (const rawPlacement of pockets.placements) {
+    const placement = rawPlacement as Record<string, unknown> | null;
+    if (typeof placement !== 'object' || placement === null) {
+      return `${subject}: a pocket placement is not an object`;
+    }
+    if (typeof placement.toolId !== 'string' || !toolIds.has(placement.toolId)) {
+      return `${subject}: a pocket placement refers to a tool that is not in the pockets`;
+    }
+    if (
+      !isFiniteNumber(placement.xMm) ||
+      !isFiniteNumber(placement.yMm) ||
+      !isFiniteNumber(placement.pocketDepthMm) ||
+      placement.pocketDepthMm <= 0
+    ) {
+      return `${subject}: a pocket placement needs xMm, yMm and a pocketDepthMm above 0`;
+    }
+  }
+  return null;
+}
+
+/** Copies only the known BinPockets fields from a validated raw object. */
+export function pickPockets(raw: Record<string, unknown>): BinPockets {
+  const tools = (raw.tools as Record<string, unknown>[]).map((tool): TracedTool => {
+    const outline = tool.outline as Record<string, unknown>;
+    return {
+      id: tool.id as string,
+      name: tool.name as string,
+      outline: {
+        outer: (outline.outer as MmPoint[]).map((p) => ({ x: p.x, y: p.y })),
+        holes: (outline.holes as MmPoint[][]).map((loop) => loop.map((p) => ({ x: p.x, y: p.y }))),
+      },
+      rotationDeg: tool.rotationDeg as number,
+      offsetMm: tool.offsetMm as number,
+      mirrored: tool.mirrored as boolean,
+      fingerHoles: (tool.fingerHoles as FingerHole[]).map((hole) => ({
+        x: hole.x,
+        y: hole.y,
+        diameterMm: hole.diameterMm,
+      })),
+    };
+  });
+  const placements = (raw.placements as Record<string, unknown>[]).map(
+    (placement): ToolPlacement => ({
+      toolId: placement.toolId as string,
+      xMm: placement.xMm as number,
+      yMm: placement.yMm as number,
+      pocketDepthMm: placement.pocketDepthMm as number,
+    }),
+  );
+  return { tools, placements };
+}
+
 /**
  * Validates one raw object as a BinEntry. Returns null when it is valid,
  * otherwise a message naming the first offending field. Version-1 lifecycle
@@ -108,6 +251,10 @@ export function validateEntry(raw: unknown): string | null {
   if (entry.notes !== undefined && typeof entry.notes !== 'string') {
     return `entry ${id}: notes must be a string`;
   }
+  if (entry.pockets !== undefined) {
+    const pocketsProblem = validatePockets(entry.pockets, `entry ${id}`);
+    if (pocketsProblem !== null) return pocketsProblem;
+  }
   return null;
 }
 
@@ -120,6 +267,9 @@ function pickEntry(raw: Record<string, unknown>): BinEntry {
     createdAt: raw.createdAt as string,
   };
   if (raw.notes !== undefined) entry.notes = raw.notes as string;
+  if (raw.pockets !== undefined) {
+    entry.pockets = pickPockets(raw.pockets as Record<string, unknown>);
+  }
   return entry;
 }
 
@@ -167,6 +317,10 @@ export function validateBatch(raw: unknown): string | null {
     if (item.sourceEntryId !== undefined && typeof item.sourceEntryId !== 'string') {
       return `batch ${id}: item ${item.id}: sourceEntryId must be a string`;
     }
+    if (item.pockets !== undefined) {
+      const pocketsProblem = validatePockets(item.pockets, `batch ${id}: item ${item.id}`);
+      if (pocketsProblem !== null) return pocketsProblem;
+    }
   }
   return null;
 }
@@ -181,6 +335,9 @@ function pickBatch(raw: Record<string, unknown>): PrintBatch {
     };
     if (rawItem.sourceEntryId !== undefined) {
       item.sourceEntryId = rawItem.sourceEntryId as string;
+    }
+    if (rawItem.pockets !== undefined) {
+      item.pockets = pickPockets(rawItem.pockets as Record<string, unknown>);
     }
     return item;
   });

@@ -13,6 +13,8 @@ import { useBinDesigner } from '../stores/binDesigner';
 const props = defineProps<{
   perBinFields: boolean;
   quantity?: number;
+  /** Hides the divider fields; a pocket bin cannot have divider walls. */
+  hideDividers?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -56,6 +58,7 @@ const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, note
           @update:model-value="emit('update:quantity', Number($event))"
         />
         <v-text-field
+          v-if="!props.hideDividers"
           v-model.number="dividerCountX"
           type="number"
           min="0"
@@ -65,6 +68,7 @@ const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, note
           hide-details
         />
         <v-text-field
+          v-if="!props.hideDividers"
           v-model.number="dividerCountY"
           type="number"
           min="0"

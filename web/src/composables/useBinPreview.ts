@@ -8,7 +8,10 @@ import type { LabeledBinMeshes, LabeledBinParams } from '../engine/gridfinity/ty
  * results are discarded by ticket so a slow generation never overwrites a
  * newer one.
  */
-export function useBinPreview(params: () => LabeledBinParams): {
+export function useBinPreview(
+  params: () => LabeledBinParams,
+  generate: (params: LabeledBinParams) => Promise<LabeledBinMeshes> = generateLabeledBin,
+): {
   meshes: Ref<LabeledBinMeshes | null>;
   generating: Ref<boolean>;
   errorMessage: Ref<string | null>;
@@ -25,7 +28,7 @@ export function useBinPreview(params: () => LabeledBinParams): {
     generating.value = true;
     errorMessage.value = null;
     try {
-      const result = await generateLabeledBin(params());
+      const result = await generate(params());
       if (ticket === generationCounter) meshes.value = result;
     } catch (error) {
       if (ticket === generationCounter) {

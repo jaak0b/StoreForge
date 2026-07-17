@@ -1,5 +1,5 @@
 import type { LabeledBinParams } from '../gridfinity/types';
-import type { BatchItem, BinEntry, PrintBatch } from './types';
+import type { BatchItem, BinEntry, BinPockets, PrintBatch } from './types';
 
 /**
  * Pure print-batch operations over the plan's entries and batches. A batch
@@ -33,8 +33,15 @@ export function snapshotParams(entry: BinEntry): LabeledBinParams {
   };
 }
 
+/** Deep JSON copy of an entry's pockets, so a batch snapshot never aliases the queue row. */
+export function snapshotPockets(entry: BinEntry): BinPockets | undefined {
+  return entry.pockets === undefined
+    ? undefined
+    : (JSON.parse(JSON.stringify(entry.pockets)) as BinPockets);
+}
+
 /** Stable key identifying a bin design, for grouping identical bins. */
-export function binParamsKey(params: LabeledBinParams): string {
+export function binParamsKey(params: LabeledBinParams, pockets?: BinPockets): string {
   return JSON.stringify([
     params.gridX,
     params.gridY,
@@ -46,6 +53,7 @@ export function binParamsKey(params: LabeledBinParams): string {
     params.labelText,
     params.labelText2,
     params.labelIcon,
+    pockets ?? null,
   ]);
 }
 
@@ -76,12 +84,15 @@ export function createBatch(
     const entry = entries.find((e) => e.id === selection.entryId);
     if (entry === undefined) continue;
     const count = Math.min(Math.max(1, Math.floor(selection.count)), entry.quantity);
-    items.push({
+    const item: BatchItem = {
       id: ids.itemId(),
       params: snapshotParams(entry),
       count,
       sourceEntryId: entry.id,
-    });
+    };
+    const pockets = snapshotPockets(entry);
+    if (pockets !== undefined) item.pockets = pockets;
+    items.push(item);
     remaining.set(entry.id, entry.quantity - count);
   }
   if (items.length === 0) return { entries, batch: null };
@@ -141,19 +152,26 @@ export function failBatchItem(
 ): FailBatchItemResult {
   const item = batch.items.find((i) => i.id === itemId);
   if (item === undefined) return { entries, batch };
+  const itemKey = binParamsKey(item.params, item.pockets);
   const target =
     entries.find((entry) => entry.id === item.sourceEntryId) ??
-    entries.find((entry) => binParamsKey(snapshotParams(entry)) === binParamsKey(item.params));
+    entries.find((entry) => binParamsKey(snapshotParams(entry), entry.pockets) === itemKey);
   let updatedEntries: BinEntry[];
   if (target !== undefined) {
     updatedEntries = entries.map((entry) =>
       entry.id === target.id ? { ...entry, quantity: entry.quantity + item.count } : entry,
     );
   } else {
-    updatedEntries = [
-      ...entries,
-      { id: newEntryId(), ...item.params, quantity: item.count, createdAt },
-    ];
+    const recreated: BinEntry = {
+      id: newEntryId(),
+      ...item.params,
+      quantity: item.count,
+      createdAt,
+    };
+    if (item.pockets !== undefined) {
+      recreated.pockets = JSON.parse(JSON.stringify(item.pockets)) as BinPockets;
+    }
+    updatedEntries = [...entries, recreated];
   }
   const items = batch.items.filter((i) => i.id !== itemId);
   return { entries: updatedEntries, batch: items.length === 0 ? null : { ...batch, items } };

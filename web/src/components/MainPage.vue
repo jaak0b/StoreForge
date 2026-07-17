@@ -96,8 +96,8 @@ async function downloadRow(entry: BinEntry, format: 'stl' | '3mf'): Promise<void
   errorMessage.value = null;
   try {
     const params = snapshotParams(entry);
-    if (format === 'stl') await downloadBinStl(params);
-    else await downloadBin3mf(params);
+    if (format === 'stl') await downloadBinStl(params, entry.pockets);
+    else await downloadBin3mf(params, entry.pockets);
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : 'The download failed.';
@@ -185,6 +185,16 @@ function removeRow(entry: BinEntry): void {
             {{ entry.labelText2 }}
           </span>
         </span>
+        <v-chip
+          v-if="entry.pockets !== undefined"
+          size="x-small"
+          variant="tonal"
+          color="primary"
+          class="flex-grow-0"
+        >
+          {{ entry.pockets.placements.length }}
+          {{ entry.pockets.placements.length === 1 ? 'pocket' : 'pockets' }}
+        </v-chip>
         <span class="row-dims">{{ entry.labelText !== '' ? sizeText(entry) : '' }}</span>
         <span class="qty-badge">x{{ entry.quantity }}</span>
         <div v-if="selectedIds.has(entry.id)" class="d-flex align-center ga-1" @click.stop>

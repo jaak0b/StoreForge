@@ -272,3 +272,88 @@ describe('mergeBatches', () => {
     expect(merged[1].name).toBe('new name');
   });
 });
+
+describe('pockets in plan files', () => {
+  function pockets(): NonNullable<BinEntry['pockets']> {
+    return {
+      tools: [
+        {
+          id: 't1',
+          name: 'Wrench',
+          outline: {
+            outer: [
+              { x: -10, y: -5 },
+              { x: 10, y: -5 },
+              { x: 10, y: 5 },
+              { x: -10, y: 5 },
+            ],
+            holes: [
+              [
+                { x: -2, y: -1 },
+                { x: -2, y: 1 },
+                { x: 2, y: 1 },
+                { x: 2, y: -1 },
+              ],
+            ],
+          },
+          rotationDeg: 90,
+          offsetMm: 0.5,
+          mirrored: true,
+          fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
+        },
+      ],
+      placements: [{ toolId: 't1', xMm: 3, yMm: -4, pocketDepthMm: 12 }],
+    };
+  }
+
+  it('round-trips an entry with pockets through serialize and parse', () => {
+    const withPockets = entry({ pockets: pockets() });
+    const result = parsePlanFile(serializePlanFile([withPockets], []));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.entries).toEqual([withPockets]);
+  });
+
+  it('round-trips a batch item with pockets through serialize and parse', () => {
+    const withPockets = batch({ items: [batchItem({ pockets: pockets() })] });
+    const result = parsePlanFile(serializePlanFile([], [withPockets]));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.batches).toEqual([withPockets]);
+  });
+
+  it('accepts an entry without pockets unchanged', () => {
+    const plain = entry();
+    const result = parsePlanFile(serializePlanFile([plain], []));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.entries[0].pockets).toBeUndefined();
+  });
+
+  it('rejects a placement naming a tool that is not in the pockets', () => {
+    const bad = pockets();
+    bad.placements[0].toolId = 'ghost';
+    expect(validateEntry(entry({ pockets: bad }))).toBe(
+      'entry a1: a pocket placement refers to a tool that is not in the pockets',
+    );
+  });
+
+  it('rejects an outline with fewer than 3 outer points', () => {
+    const bad = pockets();
+    bad.tools[0].outline.outer = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+    ];
+    expect(validateEntry(entry({ pockets: bad }))).toBe(
+      'entry a1: pocket tool t1: outline needs at least 3 outer points',
+    );
+  });
+
+  it('rejects a pocket depth of zero', () => {
+    const bad = pockets();
+    bad.placements[0].pocketDepthMm = 0;
+    expect(validateEntry(entry({ pockets: bad }))).toBe(
+      'entry a1: a pocket placement needs xMm, yMm and a pocketDepthMm above 0',
+    );
+  });
+});

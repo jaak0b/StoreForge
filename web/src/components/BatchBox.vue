@@ -81,7 +81,11 @@ async function download(format: BatchFormat): Promise<void> {
   try {
     await downloadBatch(
       // Custom icon paths are resolved inside the worker client.
-      props.batch.items.map((item) => ({ params: item.params, count: item.count })),
+      props.batch.items.map((item) => ({
+        params: item.params,
+        count: item.count,
+        pockets: item.pockets,
+      })),
       format,
       props.batch.name,
       (text) => {
