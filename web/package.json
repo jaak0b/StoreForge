@@ -9,9 +9,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@techstark/opencv-js": "^5.0.0-release.1",
     "comlink": "^4.4.2",
     "fflate": "^0.8.3",
     "manifold-3d": "^3.2.1",
+    "onnxruntime-web": "^1.27.0",
     "opentype.js": "^2.0.0",
     "pinia": "^3.0.3",
     "three": "^0.178.0",
