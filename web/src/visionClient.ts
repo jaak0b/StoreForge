@@ -1,7 +1,9 @@
 import * as Comlink from 'comlink';
 import type {
+  EmbedResult,
   PhotoInfo,
   RectifyResult,
+  SegmentResult,
   VisionModelUrls,
   VisionSelfTestReport,
   VisionWorkerApi,
@@ -10,6 +12,7 @@ import type {
   PaperCorners,
   PaperDetectionResult,
   PaperKind,
+  SamPoint,
 } from './engine/trace/types';
 
 // Model URLs are resolved here because the worker script lives under assets/,
@@ -69,6 +72,24 @@ export async function rectifyPaper(
 ): Promise<RectifyResult> {
   const worker = await getReadyWorker();
   return worker.rectify(corners, kind);
+}
+
+/**
+ * Prepare the rectified sheet for click-to-segment by running the MobileSAM
+ * encoder in the worker. The embedding is cached there until the next rectify.
+ */
+export async function embedImage(): Promise<EmbedResult> {
+  const worker = await getReadyWorker();
+  return worker.embedImage();
+}
+
+/**
+ * Segment the tool at the given click prompts (rectified-image pixels) and
+ * return its outline in sheet millimeters plus a mask overlay preview.
+ */
+export async function segmentAt(points: SamPoint[]): Promise<SegmentResult> {
+  const worker = await getReadyWorker();
+  return worker.segmentAt(points);
 }
 
 /** Verify that OpenCV and both MobileSAM ONNX sessions load in the worker. */

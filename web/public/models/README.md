@@ -69,3 +69,11 @@ Outputs:
 | `masks` | `[1, num_masks, orig_h, orig_w]` | float32 |
 | `iou_predictions` | `[1, num_masks]` | float32 |
 | `low_res_masks` | `[1, num_masks, 256, 256]` | float32 |
+
+**Export quirk: `masks` is only correct for 683 x 1024 encoder inputs.** The decoder's mask
+upsampling was traced with SAM's demo image (resized to 683 x 1024), which froze the crop of the
+padded 1024 x 1024 frame into the graph. Verified empirically (2026-07-17) by feeding synthetic
+images at other aspect ratios: the `masks` output comes back scaled by 683 / actual-height along y.
+Consumers must ignore `masks` and instead upsample `low_res_masks` themselves (the low-res planes
+cover the full padded 1024 x 1024 frame with no baked-in crop); `engine/trace/sam.ts`
+`lowResMaskToMat` does this.

@@ -20,6 +20,31 @@ export type PaperDetectionResult =
   | { ok: true; corners: PaperCorners; confidence: number }
   | { ok: false; error: string };
 
+/** A click prompt for segmentation, in rectified-image pixels. Label 1 includes, 0 excludes. */
+export interface SamPoint {
+  x: number;
+  y: number;
+  label: 0 | 1;
+}
+
+/** A point in millimeters on the physical sheet, y increasing downward as in the image. */
+export interface MmPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * A traced tool outline in sheet millimeters. Coordinates live in the
+ * rectified image frame (origin at the sheet's top-left corner, y increasing
+ * downward). The outer loop has positive shoelace area and each hole has
+ * negative shoelace area, so an EvenOdd or NonZero fill of outer plus holes
+ * reproduces the tool silhouette with its through-holes.
+ */
+export interface TracedOutline {
+  outer: MmPoint[];
+  holes: MmPoint[][];
+}
+
 /** Scale calibration derived from rectifying the sheet to a top-down image. */
 export interface PaperCalibration {
   /** The photo-pixel corners the rectification was computed from. */
