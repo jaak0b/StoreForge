@@ -1,18 +1,22 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
 import type { SamPoint, TracedOutline } from '../../engine/trace/types';
 
 /**
- * Step 2 of the Tool trace tab: click a tool on the rectified sheet to
- * segment it, refine with include and exclude clicks, then accept the traced
- * outline as a tool.
+ * The Trace mode of the trace-and-layout workspace: click a tool on the
+ * rectified sheet to segment it, refine with include and exclude clicks,
+ * then accept the traced outline as a tool. A re-trace request from the tool
+ * rail preloads an existing tool's stored clicks; accepting then replaces
+ * that tool's outline instead of adding a duplicate.
  */
 
 const store = useToolTrace();
 const { rectifiedPreview, calibration, embedReady } = storeToRefs(store);
+
+const emit = defineEmits<{ accepted: [] }>();
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const points = ref<SamPoint[]>([]);
@@ -24,24 +28,24 @@ const errorMessage = ref<string | null>(null);
 
 let maskPreview: ImageData | null = null;
 
-// Id of the existing tool being re-traced from its stored clicks; accepting
-// then replaces that tool's outline instead of adding a duplicate.
+// Id of the existing tool being re-traced from its stored clicks.
 const retraceToolId = ref<string | null>(null);
 
-/** The selected tool, when its stored clicks allow re-tracing on this sheet. */
-const retraceableTool = computed(() => {
-  const tool = store.tools.find((t) => t.id === store.selectedToolId) ?? null;
-  return tool !== null && tool.clicks.length > 0 ? tool : null;
-});
-
-/** Loads the selected tool's stored clicks and re-runs the segmentation. */
-function retraceSelected(): void {
-  const tool = retraceableTool.value;
-  if (tool === null || segmenting.value) return;
-  points.value = JSON.parse(JSON.stringify(tool.clicks)) as SamPoint[];
-  retraceToolId.value = tool.id;
-  void runSegment();
-}
+// The rail's re-trace button posts the tool id into the store; consume it
+// here (also on mount, since the canvas may mount after the request).
+watch(
+  () => store.retraceRequestId,
+  (toolId) => {
+    if (toolId === null || segmenting.value) return;
+    const tool = store.tools.find((t) => t.id === toolId);
+    store.retraceRequestId = null;
+    if (tool === undefined || tool.clicks.length === 0) return;
+    points.value = JSON.parse(JSON.stringify(tool.clicks)) as SamPoint[];
+    retraceToolId.value = tool.id;
+    void runSegment();
+  },
+  { immediate: true },
+);
 
 function draw(): void {
   const el = canvas.value;
@@ -149,6 +153,7 @@ function acceptTool(): void {
     store.addTool(outline.value, undefined, clicks);
   }
   clearClicks();
+  emit('accepted');
 }
 </script>
 
@@ -172,14 +177,6 @@ function acceptTool(): void {
         @click="acceptTool"
       >
         {{ retraceToolId !== null ? 'Replace tool outline' : 'Accept tool' }}
-      </v-btn>
-      <v-btn
-        v-if="retraceableTool !== null && retraceToolId !== retraceableTool.id"
-        variant="outlined"
-        :disabled="segmenting"
-        @click="retraceSelected"
-      >
-        Re-trace "{{ retraceableTool.name }}"
       </v-btn>
       <v-btn variant="outlined" :disabled="points.length === 0" @click="clearClicks">
         Clear clicks

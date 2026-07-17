@@ -1,44 +1,37 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { useDisplay } from 'vuetify';
 import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
-import { useBinPreview } from '../../composables/useBinPreview';
-import { generatePocketBin } from '../../workerClient';
-import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
-import type { PocketBinParams } from '../../engine/trace/pocketBin';
-import type { BinPockets, TracePaper, TracedBin } from '../../engine/plan/types';
+import type { TracedBin } from '../../engine/plan/types';
 import type { PaperCorners } from '../../engine/trace/types';
-import { getPhoto, putPhoto } from '../../photoStore';
+import { getPhoto } from '../../photoStore';
 import { embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
-import BinViewport from '../BinViewport.vue';
-import IconPicker from '../IconPicker.vue';
-import MoreOptions from '../MoreOptions.vue';
-import PhotoStep from './PhotoStep.vue';
-import TraceStep from './TraceStep.vue';
-import LayoutStep from './LayoutStep.vue';
+import PhotoStage from './PhotoStage.vue';
+import TraceCanvas from './TraceCanvas.vue';
+import LayoutCanvas from './LayoutCanvas.vue';
+import ToolRail from './ToolRail.vue';
 
 /**
- * The Tool trace tab of the add-bin card: photograph tools on a reference
- * sheet, trace them by clicking, lay the pockets out in a bin, and queue the
- * result. The trace state lives in the toolTrace store so it survives tab
- * switches; the photo itself stays in the vision worker.
+ * The Tool trace tab of the add-bin card, in two stages: a Photo stage
+ * (photograph tools on a reference sheet, confirm its corners) and a
+ * trace-and-lay-out workspace (one canvas switching between click-to-trace
+ * and bin layout, beside a rail with the tools, bin options, preview and
+ * queue actions). The trace state lives in the toolTrace store so it
+ * survives tab switches; the photo itself stays in the vision worker.
  */
 
 const app = useApp();
 const designer = useBinDesigner();
 const trace = useToolTrace();
 const queue = useBinQueue();
-const { smAndDown } = useDisplay();
 
-const { labelText, labelIcon, heightUnits, notes } = storeToRefs(designer);
-const { rectifiedPreview, embedReady, encodeMs, tools } = storeToRefs(trace);
+const { rectifiedPreview, embedReady, tools, workspaceMode } = storeToRefs(trace);
 
-const quantity = ref(1);
-const previewLoaded = ref(!smAndDown.value);
+/** 1 shows the Photo stage, 2 the trace-and-lay-out workspace. */
+const stage = ref<1 | 2>(1);
 
 /** The queue entry being edited on this tab, or null when designing a new bin. */
 const editingEntry = computed(() => {
@@ -76,7 +69,7 @@ async function lookUpStoredPhoto(entry: TracedBin): Promise<void> {
 /**
  * Loads the stored photo back into the vision worker, applies the entry's
  * saved sheet corners and size (no re-detection), and rectifies plus embeds
- * so the trace step can restore each tool's clicks.
+ * so the trace canvas can restore each tool's clicks.
  */
 async function resumeTrace(): Promise<void> {
   const entry = editingEntry.value;
@@ -111,10 +104,11 @@ async function resumeTrace(): Promise<void> {
   }
 }
 
-// Editing a traced queue row opens the tab at the layout step: the entry's
-// tools, placements, footprint, height and shared options are rehydrated into
-// the trace and designer stores. The photo is looked up in the photo store;
-// when found, the trace itself can be resumed from step 1.
+// Editing a traced queue row opens the workspace stage in layout mode: the
+// entry's tools, placements, footprint, height and shared options are
+// rehydrated into the trace and designer stores. The photo is looked up in
+// the photo store; when found, the trace can be resumed on demand (switching
+// to Trace mode or re-tracing a tool loads it back into the vision worker).
 watch(
   () => (app.editingKind === 'traced' ? app.editingEntryId : null),
   (entryId) => {
@@ -138,279 +132,165 @@ watch(
       labelIcon: entry.labelIcon,
       notes: entry.notes ?? '',
     });
-    quantity.value = entry.quantity;
+    stage.value = 2;
+    trace.workspaceMode = 'layout';
   },
   { immediate: true },
 );
 
-const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
-
-/** The pocket-bin parameters of the current design, as plain JSON. */
-const pocketParams = computed<PocketBinParams>(() => ({
-  gridX: trace.gridX,
-  gridY: trace.gridY,
-  heightUnits: designer.heightUnits,
-  stackingLip: designer.stackingLip,
-  magnetHoles: designer.magnetHoles,
-  // The pocket generator rejects divider walls, so a pocket bin never has any.
-  dividerCountX: 0,
-  dividerCountY: 0,
-  labelText: designer.labelText,
-  labelText2: designer.labelText2,
-  labelIcon: designer.labelIcon,
-  tools: JSON.parse(JSON.stringify(trace.tools)),
-  placements: JSON.parse(JSON.stringify(trace.placements)),
-}));
-
-const { meshes, errorMessage } = useBinPreview(
-  () => pocketParams.value,
-  (params) => generatePocketBin(params as PocketBinParams),
+/** True once the workspace stage has anything to show. */
+const workspaceReady = computed(
+  () =>
+    rectifiedPreview.value !== null || tools.value.length > 0 || editingEntry.value !== null,
 );
 
-const addError = ref<string | null>(null);
-/** Note about photo storage shown near step 1; survives the form reset. */
-const photoNote = ref<string | null>(null);
+/** True when Trace mode can run now or after resuming the stored photo. */
+const traceModeAvailable = computed(
+  () => embedReady.value || storedPhoto.value !== null,
+);
 
-/**
- * The trace-source fields to save with the entry: when a photo with a
- * confirmed sheet is loaded, its bytes go into the photo store (a fresh
- * upload under a new id, a resumed photo under its existing one). Without a
- * photo the fields stay untouched (an edit keeps the entry's stored ones).
- */
-async function storeTraceSource(): Promise<{ traceSourceId?: string; paper?: TracePaper }> {
-  if (trace.photoBlob === null || trace.calibration === null) return {};
-  const traceSourceId = trace.sourceId ?? crypto.randomUUID();
-  const paper: TracePaper = {
-    corners: JSON.parse(JSON.stringify(trace.calibration.corners)) as PaperCorners,
-    kind: trace.calibration.kind,
-  };
-  try {
-    await putPhoto(traceSourceId, trace.photoBlob);
-  } catch (error) {
-    // The bin is still saved; without the stored photo it is layout-only
-    // editable later, and the note says so.
-    const detail = error instanceof Error ? error.message : String(error);
-    photoNote.value = `Storing the trace photo failed (${detail}). The bin was saved, but its trace cannot be edited later without the photo.`;
-    return {};
-  }
-  return { traceSourceId, paper };
+function onSheetConfirmed(): void {
+  stage.value = 2;
+  trace.workspaceMode = 'trace';
 }
 
-async function addToQueue(): Promise<void> {
-  addError.value = null;
-  photoNote.value = null;
-  if (trace.placements.length === 0) {
-    addError.value = 'Trace and place at least one tool before adding the bin.';
-    return;
+/** Switches the workspace canvas, resuming the stored photo when needed. */
+async function setWorkspaceMode(mode: 'trace' | 'layout'): Promise<void> {
+  if (mode === 'trace' && !embedReady.value) {
+    if (storedPhoto.value === null) return;
+    await resumeTrace();
+    if (!trace.embedReady) return;
   }
-  if (errorMessage.value !== null) {
-    addError.value = 'Fix the layout problem shown by the preview first.';
-    return;
-  }
-  const params = pocketParams.value;
-  const pockets: BinPockets = { tools: params.tools, placements: params.placements };
-  const cleanNotes = notes.value.trim();
-  const binParams = {
-    gridX: params.gridX,
-    gridY: params.gridY,
-    heightUnits: params.heightUnits,
-    stackingLip: params.stackingLip,
-    magnetHoles: params.magnetHoles,
-    dividerCountX: 0,
-    dividerCountY: 0,
-    labelText: params.labelText,
-    labelText2: params.labelText2,
-    labelIcon: params.labelIcon,
-  };
-  // The photo must be stored before the queue mutation: persisting the plan
-  // sweeps stored photos no entry references, so the reference and the photo
-  // have to land in that order.
-  const source = await storeTraceSource();
-  if (editingEntry.value !== null) {
-    const { dividerCountX, dividerCountY, ...shared } = binParams;
-    void dividerCountX;
-    void dividerCountY;
-    queue.update(editingEntry.value.id, {
-      ...shared,
-      pockets,
-      ...source,
-      quantity: quantity.value,
-      notes: cleanNotes === '' ? undefined : cleanNotes,
-    });
-    app.stopEditing();
-  } else {
-    const id = queue.add(binParams, quantity.value, { kind: 'traced', pockets, ...source });
-    if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
-  }
-  trace.reset();
-  quantity.value = 1;
+  workspaceMode.value = mode;
 }
 
-function cancelEdit(): void {
-  app.stopEditing();
-  trace.reset();
-  quantity.value = 1;
+/** Re-traces a tool from its stored clicks, resuming the photo when needed. */
+async function onRetrace(toolId: string): Promise<void> {
+  if (!embedReady.value) {
+    if (storedPhoto.value === null) return;
+    await resumeTrace();
+    if (!trace.embedReady) return;
+  }
+  trace.selectedToolId = toolId;
+  trace.retraceRequestId = toolId;
+  workspaceMode.value = 'trace';
+}
+
+/** After a save or a cancelled edit the tab starts over at the Photo stage. */
+function restart(): void {
+  stage.value = 1;
+  storedPhoto.value = null;
+  photoMissing.value = false;
+  resumeError.value = null;
 }
 </script>
 
 <template>
-  <div class="d-flex flex-column ga-5">
-    <div>
-      <div class="step-head">1. Photo</div>
-      <template v-if="editingEntry !== null && rectifiedPreview === null">
-        <div v-if="storedPhoto !== null" class="mb-3">
-          <p class="text-body-2 text-medium-emphasis mb-2">
-            Load the stored photo of this trace to re-trace tools with their
-            saved clicks, or upload a new photo below.
-          </p>
-          <v-btn
-            color="primary"
-            variant="tonal"
-            :loading="resumeBusy"
-            prepend-icon="mdi-image-refresh-outline"
-            @click="resumeTrace"
-          >
-            Edit trace
+  <div class="d-flex flex-column ga-4">
+    <div class="d-flex align-center ga-1 breadcrumb">
+      <v-chip
+        :variant="stage === 1 ? 'flat' : 'outlined'"
+        :color="stage === 1 ? 'primary' : undefined"
+        size="small"
+        label
+        @click="stage = 1"
+      >
+        Photo
+      </v-chip>
+      <v-icon icon="mdi-chevron-right" size="16" class="text-medium-emphasis" />
+      <v-chip
+        :variant="stage === 2 ? 'flat' : 'outlined'"
+        :color="stage === 2 ? 'primary' : undefined"
+        :disabled="!workspaceReady"
+        size="small"
+        label
+        @click="stage = 2"
+      >
+        Trace and lay out
+      </v-chip>
+    </div>
+
+    <PhotoStage v-if="stage === 1" @confirmed="onSheetConfirmed" />
+
+    <div v-else class="stage-panes">
+      <div class="canvas-pane">
+        <v-btn-toggle
+          :model-value="workspaceMode"
+          mandatory
+          density="comfortable"
+          variant="outlined"
+          class="mb-3"
+          @update:model-value="setWorkspaceMode($event as 'trace' | 'layout')"
+        >
+          <v-btn value="trace" :disabled="!traceModeAvailable" :loading="resumeBusy">
+            Trace
           </v-btn>
-          <v-alert v-if="resumeError" type="error" density="compact" class="mt-2">
-            {{ resumeError }}
-          </v-alert>
-        </div>
-        <p v-else-if="photoMissing" class="text-body-2 text-medium-emphasis mb-2">
-          Edit the layout below, or upload a new photo to trace more tools; the
-          original photo of this trace is not stored on this device.
+          <v-btn value="layout">Layout</v-btn>
+        </v-btn-toggle>
+        <p
+          v-if="editingEntry !== null && photoMissing && !embedReady"
+          class="text-body-2 text-medium-emphasis"
+        >
+          The original photo of this trace is not stored on this device, so its
+          tools cannot be re-traced. Edit the layout here, or load a new photo
+          in the Photo stage to trace more tools.
         </p>
-      </template>
-      <PhotoStep />
-      <v-alert v-if="photoNote" type="warning" density="compact" class="mt-2">
-        {{ photoNote }}
-      </v-alert>
-      <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis mt-1 readout">
-        <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
+        <v-alert v-if="resumeError" type="error" density="compact" class="mb-2">
+          {{ resumeError }}
+        </v-alert>
+        <p v-if="resumeBusy" class="text-body-2 text-medium-emphasis">
+          Restoring the stored trace photo.
+        </p>
+        <v-progress-linear v-if="resumeBusy" indeterminate class="mb-2" />
+        <TraceCanvas
+          v-if="embedReady"
+          v-show="workspaceMode === 'trace'"
+          @accepted="workspaceMode = 'layout'"
+        />
+        <LayoutCanvas v-show="workspaceMode === 'layout'" />
       </div>
-    </div>
-
-    <div v-if="rectifiedPreview !== null && embedReady">
-      <div class="step-head">2. Trace tools</div>
-      <TraceStep />
-    </div>
-
-    <div v-if="tools.length > 0 || rectifiedPreview !== null">
-      <div class="step-head">3. Lay out the bin</div>
-      <LayoutStep />
-    </div>
-
-    <div v-if="tools.length > 0">
-      <div class="step-head">4. Bin options and queue</div>
-      <v-row>
-        <v-col cols="12" md="6">
-          <v-text-field
-            v-model.number="heightUnits"
-            type="number"
-            min="2"
-            step="1"
-            label="Height (units of 7 mm)"
-            density="comfortable"
-            :hint="`Pockets can be at most ${depthLimit} mm deep at this height.`"
-            persistent-hint
-          />
-          <v-text-field
-            v-model="labelText"
-            label="Label"
-            placeholder="What's inside?"
-            density="comfortable"
-            class="mt-2"
-            hint="Embossed on the label shelf; long text shrinks to fit."
-          />
-          <div class="text-caption text-medium-emphasis mt-2 mb-1">Label icon</div>
-          <IconPicker v-model="labelIcon" />
-          <MoreOptions
-            per-bin-fields
-            hide-dividers
-            :quantity="quantity"
-            @update:quantity="quantity = $event"
-          />
-          <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">
-            {{ errorMessage }}
-          </v-alert>
-          <v-alert v-if="addError" type="warning" class="mt-2" density="compact">
-            {{ addError }}
-          </v-alert>
-          <div class="d-flex ga-2 mt-4">
-            <v-btn
-              color="primary"
-              variant="flat"
-              size="large"
-              class="flex-grow-1"
-              @click="addToQueue"
-            >
-              {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
-            </v-btn>
-            <v-btn
-              v-if="editingEntry !== null"
-              variant="outlined"
-              size="large"
-              @click="cancelEdit"
-            >
-              Cancel edit
-            </v-btn>
-          </div>
-          <v-alert
-            v-if="editingEntry !== null"
-            type="info"
-            variant="tonal"
-            density="compact"
-            class="mt-2"
-          >
-            Editing "{{ editingEntry.labelText !== '' ? editingEntry.labelText : `${editingEntry.gridX} x ${editingEntry.gridY} x ${editingEntry.heightUnits}` }}"; saving updates the queue row.
-          </v-alert>
-        </v-col>
-        <v-col cols="12" md="6">
-          <v-card variant="outlined" class="preview-card">
-            <BinViewport
-              v-if="previewLoaded"
-              :mesh="meshes?.body ?? null"
-              :label="meshes?.label ?? null"
-            />
-            <div
-              v-else
-              class="d-flex flex-column align-center justify-center text-center fill-height pa-8"
-            >
-              <v-icon icon="mdi-cube-outline" size="64" class="mb-4 text-medium-emphasis" />
-              <p class="text-body-2 text-medium-emphasis mb-4">
-                The 3D preview is paused on small screens.
-              </p>
-              <v-btn color="primary" variant="tonal" @click="previewLoaded = true">
-                Load preview
-              </v-btn>
-            </div>
-          </v-card>
-        </v-col>
-      </v-row>
+      <ToolRail
+        class="rail"
+        :editing-entry="editingEntry"
+        :retrace-available="traceModeAvailable"
+        @retrace="onRetrace"
+        @saved="restart"
+        @cancelled="restart"
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
-.step-head {
-  font-weight: 700;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: rgb(var(--v-theme-primary));
-  margin-bottom: 8px;
+.breadcrumb .v-chip {
+  cursor: pointer;
 }
 
-.preview-card {
-  min-height: 320px;
-}
-
-.readout > div {
+.stage-panes {
   display: flex;
-  gap: 12px;
+  gap: 24px;
+  align-items: flex-start;
 }
 
-.readout span:first-child {
-  min-width: 160px;
+.canvas-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rail {
+  flex: 0 0 360px;
+  max-width: 360px;
+}
+
+@media (max-width: 959px) {
+  .stage-panes {
+    flex-direction: column;
+  }
+
+  .rail {
+    flex: 1 1 auto;
+    max-width: none;
+    width: 100%;
+  }
 }
 </style>

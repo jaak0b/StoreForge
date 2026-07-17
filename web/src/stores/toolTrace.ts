@@ -54,6 +54,18 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const placements = ref<ToolPlacement[]>([]);
   const selectedToolId = ref<string | null>(null);
 
+  /** Which canvas the trace-and-layout workspace shows. */
+  const workspaceMode = ref<'trace' | 'layout'>('layout');
+  /**
+   * Id of a tool whose stored clicks should be reloaded into the trace
+   * canvas; set by the tool rail's re-trace button and consumed by the
+   * canvas once the embedding is ready.
+   */
+  const retraceRequestId = ref<string | null>(null);
+  /** True while a click on the layout canvas places a finger hole. */
+  const fingerHoleMode = ref(false);
+  const fingerHoleDiameterMm = ref(DEFAULT_FINGER_HOLE_DIAMETER_MM);
+
   /** Bin footprint of the layout; kept in step with autoGridSize unless overridden. */
   const gridX = ref(1);
   const gridY = ref(1);
@@ -164,6 +176,10 @@ export const useToolTrace = defineStore('toolTrace', () => {
     tools.value = [];
     placements.value = [];
     selectedToolId.value = null;
+    workspaceMode.value = 'layout';
+    retraceRequestId.value = null;
+    fingerHoleMode.value = false;
+    fingerHoleDiameterMm.value = DEFAULT_FINGER_HOLE_DIAMETER_MM;
     gridX.value = 1;
     gridY.value = 1;
     gridManual.value = false;
@@ -185,6 +201,10 @@ export const useToolTrace = defineStore('toolTrace', () => {
     tools,
     placements,
     selectedToolId,
+    workspaceMode,
+    retraceRequestId,
+    fingerHoleMode,
+    fingerHoleDiameterMm,
     gridX,
     gridY,
     gridManual,
