@@ -73,12 +73,29 @@ const selectedPlacement = computed(() =>
 
 const CLEARANCE_CHOICES = [0, 0.5, 1.5, 3, 4.5];
 
+/**
+ * The smallest footprint that fits the current layout, kept in step by the
+ * preview pipeline; manual entries clamp to it so the size fields can never
+ * make a tool reach into the bin wall. Null until the first layout is sized.
+ */
+const requiredGrid = ref<{ gridX: number; gridY: number } | null>(null);
+
+/** Bumped to remount a size field whose typed value was clamped away. */
+const gridFieldRefresh = ref(0);
+
 function setGridManually(axis: 'x' | 'y', value: number): void {
   const cells = Math.max(1, Math.floor(value));
   if (!Number.isFinite(cells)) return;
   trace.gridManual = true;
-  if (axis === 'x') gridX.value = cells;
-  else gridY.value = cells;
+  const minimum = axis === 'x' ? requiredGrid.value?.gridX ?? 1 : requiredGrid.value?.gridY ?? 1;
+  const clamped = Math.max(minimum, cells);
+  const target = axis === 'x' ? gridX : gridY;
+  const rejected = clamped !== cells;
+  target.value = clamped;
+  // When the typed value was below the minimum and the store value did not
+  // change, the field still shows the typed text; remount it so it shows
+  // the clamped value again.
+  if (rejected) gridFieldRefresh.value += 1;
 }
 
 /**
@@ -90,6 +107,7 @@ async function enableAutoSize(): Promise<void> {
   if (trace.placements.length === 0) return;
   try {
     const size = await autoPocketGridSize(trace.tools, trace.placements, AUTO_SIZE_MARGIN_MM);
+    requiredGrid.value = size;
     gridX.value = size.gridX;
     gridY.value = size.gridY;
   } catch (error) {
@@ -195,11 +213,19 @@ const pocketParams = computed<PocketBinParams>(() => ({
  */
 async function generateSizedPreview(raw: unknown): Promise<LabeledBinMeshes> {
   let params = raw as PocketBinParams;
-  if (!gridManual.value && params.placements.length > 0) {
+  if (params.placements.length > 0) {
     const size = await autoPocketGridSize(params.tools, params.placements, AUTO_SIZE_MARGIN_MM);
-    gridX.value = size.gridX;
-    gridY.value = size.gridY;
-    params = { ...params, gridX: size.gridX, gridY: size.gridY };
+    requiredGrid.value = size;
+    // In manual mode the required size is only a floor: the layout growing
+    // past a manually typed footprint pushes the footprint out with it, so
+    // the wall error stays unreachable through the size fields.
+    const nextX = gridManual.value ? Math.max(gridX.value, size.gridX) : size.gridX;
+    const nextY = gridManual.value ? Math.max(gridY.value, size.gridY) : size.gridY;
+    gridX.value = nextX;
+    gridY.value = nextY;
+    params = { ...params, gridX: nextX, gridY: nextY };
+  } else {
+    requiredGrid.value = null;
   }
   return generatePocketBin(params);
 }
@@ -211,6 +237,21 @@ const { meshes, errorMessage } = useBinPreview(
   (params) => generateSizedPreview(params),
 );
 const previewOpen = ref(false);
+
+/**
+ * Why the queue action is unavailable right now, or null when it can run.
+ * The button is disabled with this as its tooltip, so an invalid layout can
+ * never be queued.
+ */
+const submitBlocker = computed<string | null>(() => {
+  if (trace.placements.length === 0) {
+    return 'Trace and place at least one tool before adding the bin.';
+  }
+  if (errorMessage.value !== null) {
+    return 'Fix the layout problem shown by the preview first.';
+  }
+  return null;
+});
 
 const addError = ref<string | null>(null);
 /** Note about photo storage; survives the form reset. */
@@ -244,12 +285,9 @@ async function storeTraceSource(): Promise<{ traceSourceId?: string; paper?: Tra
 async function addToQueue(): Promise<void> {
   addError.value = null;
   photoNote.value = null;
-  if (trace.placements.length === 0) {
-    addError.value = 'Trace and place at least one tool before adding the bin.';
-    return;
-  }
-  if (errorMessage.value !== null) {
-    addError.value = 'Fix the layout problem shown by the preview first.';
+  // The button is disabled while a blocker stands; this guard backs it up.
+  if (submitBlocker.value !== null) {
+    addError.value = submitBlocker.value;
     return;
   }
   const params = pocketParams.value;
@@ -422,9 +460,10 @@ function cancelEdit(): void {
       <div class="rail-head">Footprint</div>
       <div class="d-flex align-center flex-wrap ga-2">
         <v-text-field
+          :key="`grid-x-${gridFieldRefresh}`"
           :model-value="gridX"
           type="number"
-          min="1"
+          :min="requiredGrid?.gridX ?? 1"
           step="1"
           label="Width (grid units)"
           density="compact"
@@ -433,9 +472,10 @@ function cancelEdit(): void {
           @update:model-value="setGridManually('x', Number($event))"
         />
         <v-text-field
+          :key="`grid-y-${gridFieldRefresh}`"
           :model-value="gridY"
           type="number"
-          min="1"
+          :min="requiredGrid?.gridY ?? 1"
           step="1"
           label="Depth (grid units)"
           density="compact"
@@ -551,15 +591,22 @@ function cancelEdit(): void {
         {{ photoNote }}
       </v-alert>
       <div class="d-flex ga-2">
-        <v-btn
-          color="primary"
-          variant="flat"
-          size="large"
-          class="flex-grow-1"
-          @click="addToQueue"
-        >
-          {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
-        </v-btn>
+        <v-tooltip :disabled="submitBlocker === null" :text="submitBlocker ?? ''" location="top">
+          <template #activator="{ props: tooltipProps }">
+            <div v-bind="tooltipProps" class="flex-grow-1 d-flex">
+              <v-btn
+                color="primary"
+                variant="flat"
+                size="large"
+                class="flex-grow-1"
+                :disabled="submitBlocker !== null"
+                @click="addToQueue"
+              >
+                {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
+              </v-btn>
+            </div>
+          </template>
+        </v-tooltip>
         <v-btn
           v-if="editingEntry !== null"
           variant="outlined"

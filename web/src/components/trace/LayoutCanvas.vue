@@ -9,9 +9,9 @@ import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
 /**
  * The Layout mode of the trace-and-layout workspace: a top-down view of the
  * bin interior with draggable tools and dotted 42 mm cell boundaries. While
- * the rail's finger-hole mode is active, a pointer drag on a tool draws a
- * finger hole (a short drag places a circle, a longer one an elongated slot);
- * outside that mode existing holes can be dragged to move them. Footprint
+ * the rail's finger-hole mode is active, a pointer drag on free tool area
+ * draws a finger hole (a short drag places a circle, a longer one an
+ * elongated slot); in either mode a drag on an existing hole moves it. Footprint
  * auto-sizing lives in the rail's preview pipeline; when it changes the grid
  * mid-drag, the drag reference point is rebased so the tool stays under the
  * pointer.
@@ -235,6 +235,17 @@ function onPointerDown(event: PointerEvent): void {
   const p = clientToMm(event.clientX, event.clientY);
   lastClient = { x: event.clientX, y: event.clientY };
   lastMm = p;
+  // An existing hole under the pointer is dragged in either mode; in
+  // finger-hole mode only a press on free tool area places a new hole.
+  const holeHit = holeAt(p);
+  if (holeHit !== null) {
+    draggingHole = holeHit.hole;
+    draggingToolId = holeHit.tool.id;
+    dragKind = 'hole';
+    selectedToolId.value = holeHit.tool.id;
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
+    return;
+  }
   if (fingerHoleMode.value) {
     const tool = toolAt(p);
     if (tool === null) return;
@@ -256,15 +267,6 @@ function onPointerDown(event: PointerEvent): void {
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
     return;
   }
-  const holeHit = holeAt(p);
-  if (holeHit !== null) {
-    draggingHole = holeHit.hole;
-    draggingToolId = holeHit.tool.id;
-    dragKind = 'hole';
-    selectedToolId.value = holeHit.tool.id;
-    (event.target as HTMLElement).setPointerCapture(event.pointerId);
-    return;
-  }
   const tool = toolAt(p);
   if (tool === null) {
     selectedToolId.value = null;
@@ -276,8 +278,25 @@ function onPointerDown(event: PointerEvent): void {
   (event.target as HTMLElement).setPointerCapture(event.pointerId);
 }
 
+/** Cursor over the canvas: grab over draggable holes and tools. */
+const hoverCursor = ref('default');
+
+function updateHoverCursor(p: MmPoint): void {
+  if (holeAt(p) !== null) {
+    hoverCursor.value = 'grab';
+  } else if (fingerHoleMode.value) {
+    hoverCursor.value = toolAt(p) !== null ? 'crosshair' : 'default';
+  } else {
+    hoverCursor.value = toolAt(p) !== null ? 'grab' : 'default';
+  }
+}
+
 function onPointerMove(event: PointerEvent): void {
-  if (dragKind === null || lastMm === null) return;
+  if (dragKind === null || lastMm === null) {
+    updateHoverCursor(clientToMm(event.clientX, event.clientY));
+    return;
+  }
+  hoverCursor.value = 'grabbing';
   const p = clientToMm(event.clientX, event.clientY);
   const dx = p.x - lastMm.x;
   const dy = p.y - lastMm.y;
@@ -334,12 +353,12 @@ function onPointerUp(): void {
     </p>
     <p v-if="fingerHoleMode" class="text-body-2 mb-2">
       <b>Press on a tool to place a finger hole.</b> Drag before releasing to
-      stretch it into a slot.
+      stretch it into a slot. Drag an existing hole to move it instead.
     </p>
     <canvas
       ref="canvas"
       class="layout-canvas"
-      :class="{ 'finger-mode': fingerHoleMode }"
+      :style="{ cursor: hoverCursor }"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
@@ -358,10 +377,5 @@ function onPointerUp(): void {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 8px;
   touch-action: none;
-  cursor: grab;
-}
-
-.layout-canvas.finger-mode {
-  cursor: crosshair;
 }
 </style>

@@ -156,19 +156,16 @@ function onSheetConfirmed(): void {
   trace.workspaceMode = 'trace';
 }
 
-// Layout mode needs at least one tool; when the last one is removed the
-// workspace falls back to Trace mode if tracing is possible. Without a
-// photo (layout-only editing) the layout stays up so a basic shape can
-// still be added from the rail.
+// Layout mode needs at least one tool; whenever the workspace would show
+// the layout with zero tools (the last tool was removed, or the stage was
+// reached through the breadcrumb with the store still in layout mode) it
+// falls back to Trace mode if tracing is possible. Without a photo
+// (layout-only editing) the layout stays up so a basic shape can still be
+// added from the rail.
 watch(
-  () => tools.value.length,
-  (count) => {
-    if (
-      stage.value === 2 &&
-      count === 0 &&
-      workspaceMode.value === 'layout' &&
-      traceModeAvailable.value
-    ) {
+  [stage, workspaceMode, () => tools.value.length],
+  ([stageNow, mode, count]) => {
+    if (stageNow === 2 && count === 0 && mode === 'layout' && traceModeAvailable.value) {
       void setWorkspaceMode('trace');
     }
   },
@@ -196,12 +193,27 @@ async function onRetrace(toolId: string): Promise<void> {
   workspaceMode.value = 'trace';
 }
 
+/**
+ * Opens the Photo stage. During an edit whose photo is stored but not yet
+ * loaded, the photo is first restored into the workspace, so the stage shows
+ * it with the saved sheet corners instead of the empty dropzone.
+ */
+async function openPhotoStage(): Promise<void> {
+  if (trace.photoUrl === null && storedPhoto.value !== null) {
+    await resumeTrace();
+  }
+  stage.value = 1;
+}
+
 /** After a save or a cancelled edit the tab starts over at the Photo stage. */
 function restart(): void {
   stage.value = 1;
   storedPhoto.value = null;
   photoMissing.value = false;
   resumeError.value = null;
+  // The store is already reset by the rail on save and cancel; resetting
+  // again is a no-op there and guarantees a blank tab from any other path.
+  trace.reset();
 }
 </script>
 
@@ -213,7 +225,7 @@ function restart(): void {
         :color="stage === 1 ? 'primary' : undefined"
         size="small"
         label
-        @click="stage = 1"
+        @click="openPhotoStage"
       >
         Photo
       </v-chip>
@@ -230,7 +242,13 @@ function restart(): void {
       </v-chip>
     </div>
 
-    <PhotoStage v-if="stage === 1" @confirmed="onSheetConfirmed" />
+    <template v-if="stage === 1">
+      <v-alert v-if="resumeError" type="error" density="compact">
+        {{ resumeError }}
+      </v-alert>
+      <v-progress-linear v-if="resumeBusy" indeterminate />
+      <PhotoStage @confirmed="onSheetConfirmed" />
+    </template>
 
     <div v-else class="stage-panes">
       <div class="canvas-pane">
