@@ -89,9 +89,15 @@ Numbered for unambiguous reference; do not cite rule numbers in shipped source o
 9. **Never downscale or corrupt exported geometry.** Meshes go to STL/3MF exactly as generated; scaling
    or decimation is allowed only for on-screen preview.
 
-10. **Extend the concept's existing home; never bolt a duplicate beside a symptom.** A figure the codebase
-    already derives (pitch, interior size, label sizing) is computed in exactly one engine module; a second
-    computation of it anywhere is a defect. Cross-cutting changes land in every consumer, not one flow.
+10. **Extend the concept's existing home; never bolt a duplicate beside a symptom.** Before adding or
+    fixing logic, find the module that already owns the concept (search for the concept, not just the
+    symptom site) and extend it. Never compute a value the codebase already derives elsewhere: if a
+    figure (pitch, interior size, label sizing, px/mm, scale reference, orientation) is produced in two
+    places, unify on the single source. A concern shared across flows lives in a shared engine module
+    wired into all consumers, never patched into one flow; always ask whether every other flow would
+    want the same. A minimal local guard that duplicates existing logic is a defect, not a small change.
+    Any non-trivial engine or cross-cutting change gets a short written design first (its canonical
+    home, what it extends, what it must not duplicate) for owner approval before implementation.
 
 11. **Subagent discipline.** Give every subagent a correct, specific title; never run more than 1 Fable
     agent at a time (hard budget limit). Sonnet is fine for parallel design/research work.
