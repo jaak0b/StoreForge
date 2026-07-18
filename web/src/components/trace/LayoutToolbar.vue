@@ -127,7 +127,7 @@ function removeTool(): void {
           @update:model-value="setDepth"
         >
           <template #prepend-inner>
-            <span class="field-tag">Depth mm</span>
+            <span class="field-tag">Depth (mm)</span>
           </template>
         </v-text-field>
         <v-btn
@@ -252,25 +252,39 @@ function removeTool(): void {
 .tool-name {
   max-width: 160px;
   margin-right: 4px;
+  line-height: 40px;
 }
 
+/* One common 40 px centerline for text, fields and the icon buttons. */
 .toolbar-field {
   flex: 0 0 auto;
 }
 
+.toolbar-field :deep(.v-field) {
+  align-items: center;
+}
+
 .toolbar-field :deep(.v-field__input) {
-  padding-top: 4px;
-  padding-bottom: 4px;
-  min-height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+  min-height: 40px;
+  align-items: center;
   font-size: 0.8125rem;
 }
 
+.toolbar-field :deep(.v-field__prepend-inner),
+.toolbar-field :deep(.v-field__append-inner) {
+  padding-top: 0;
+  align-items: center;
+  align-self: center;
+}
+
 .clearance-field {
-  width: 128px;
+  width: 150px;
 }
 
 .depth-field {
-  width: 110px;
+  width: 130px;
 }
 
 .field-tag {
@@ -278,19 +292,40 @@ function removeTool(): void {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: rgba(var(--v-theme-on-surface), 0.6);
-  margin-right: 4px;
+  margin-right: 6px;
+  white-space: nowrap;
   align-self: center;
 }
 
 .field-value {
   white-space: nowrap;
+  margin-right: 6px;
 }
 
-/* Narrow bar: icons only; the value fields live in the drawer's Trace tab. */
+/*
+ * Narrow bar: icons only (the value fields live in the drawer's Trace tab),
+ * and the two halves center on their wrapped rows instead of splitting
+ * ragged left and right.
+ */
 @container (max-width: 600px) {
   .tool-name,
   .value-field {
     display: none;
+  }
+
+  .layout-toolbar {
+    justify-content: center;
+  }
+
+  .flex-spacer {
+    display: none;
+  }
+
+  .selection-half,
+  .cluster-half {
+    flex: 1 1 auto;
+    justify-content: center;
+    margin-left: 0;
   }
 }
 </style>
