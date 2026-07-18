@@ -102,21 +102,33 @@ describe('buildInsertSolids', () => {
     body.delete();
   });
 
-  it('inlays the label flush with the plate top as a separate welded solid', () => {
+  it('raises the label from a recessed field back to the plate top', () => {
     const { body, label } = buildInsertSolids(m, font, { text: 'M3 x 20', icon: null }, 1);
     expect(label).not.toBeNull();
     expect(body.status()).toBe('NoError');
     expect(label!.status()).toBe('NoError');
-    // Flush top: neither part rises above the 0.8 mm plate.
+    // The rim keeps the plate at its full 0.8 mm; the raised label reaches
+    // the same top, so a filament swap paused at the recess floor colors it.
     expect(body.boundingBox().max[2]).toBeCloseTo(0.8, 6);
     expect(label!.boundingBox().max[2]).toBeCloseTo(0.8, 6);
-    // Welded: the inlay reaches into the plate below its pocket floor.
+    // The label stands on the recess floor: 0.4 below the top on the
+    // reference insert, minus the 0.05 weld into the plate.
+    expect(label!.boundingBox().min[2]).toBeCloseTo(0.35, 6);
+    // Welded: the face reaches into the plate below the recess floor.
     const overlap = label!.intersect(body);
     expect(overlap.isEmpty()).toBe(false);
     overlap.delete();
-    // The pocket removes material from the plate.
+    // The field recess removes material from the plate.
     const blank = buildInsertSolids(m, font, { text: '', icon: null }, 1);
     expect(body.volume()).toBeLessThan(blank.body.volume());
+    // The recess floor lies 0.4 under the top: probing the field just above
+    // the floor finds open air beside the text (measured recess depth 0.4,
+    // opening inset 0.5 from the plate face on the reference insert).
+    const probe = m.Manifold.cube([1, 1, 0.2], true).translate(-15, 3.5, 0.7);
+    const inField = body.intersect(probe);
+    expect(Math.abs(inField.volume())).toBeLessThan(1e-9);
+    inField.delete();
+    probe.delete();
     blank.body.delete();
     body.delete();
     label!.delete();

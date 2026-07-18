@@ -99,11 +99,19 @@ export const TAB_POCKET_WIDTH = 6.7;
 export const POCKET_CEILING_THICKNESS = 0.65;
 
 /**
- * How deep the label face is inlaid into the insert's top, and how far the
- * inlay solid reaches below its pocket floor so the two solids are welded.
+ * The insert's label relief, matching the reference insert's top structure:
+ * the field inside a rim is recessed into the plate top, and the label face
+ * rises from the recess floor back up to the full plate top. The text is
+ * physical relief, so it stays readable on a single-color print, and a
+ * filament swap paused at the recess floor height colors the raised text
+ * (and the rim top) in the second color. Measured on the reference insert:
+ * recess 0.4 deep, rim 0.5 wide at full height.
  */
-export const INSERT_INLAY_DEPTH = 0.4;
-export const INSERT_INLAY_WELD = 0.05;
+export const INSERT_FIELD_RECESS_DEPTH = 0.4;
+export const INSERT_FIELD_RIM_WIDTH = 0.5;
+
+/** How far the label face reaches below the recess floor so the two solids are welded. */
+export const INSERT_TEXT_WELD = 0.05;
 
 /** Overall length of the label insert (tabs included) for a bin spanning `cells` grid cells. */
 export function insertLengthMm(cells: number): number {
@@ -324,9 +332,9 @@ export function applySlotToBody(
 
 /** The two parts of a label insert, kept separate for per-part coloring. */
 export interface InsertSolids {
-  /** The insert plate with the label face pocketed out of its top. */
+  /** The insert plate, its field recessed under the label when one is set. */
   body: Manifold;
-  /** The label face inlay, flush with the plate top, or null for a blank insert. */
+  /** The raised label face on the recess floor, or null for a blank insert. */
   label: Manifold | null;
 }
 
@@ -380,10 +388,14 @@ function buildInsertPlate(m: ManifoldToplevel, cells: number): Manifold {
 
 /**
  * Build a label insert: a flat plate with end tabs (resting on z = 0,
- * centred on the origin, ready to print) with the label face inlaid flush
- * into its top as a separate solid, so the face prints in a second filament.
- * An empty spec yields a blank insert with a null label. The caller owns
- * both manifolds.
+ * centred on the origin, ready to print) whose labeled top follows the
+ * reference insert's relief: the field inside the rim is recessed
+ * INSERT_FIELD_RECESS_DEPTH into the plate, and the label face rises from
+ * the recess floor back up to the plate top as a separate solid, so it can
+ * print in a second filament (by slot on a toolchanger, or by a pause and
+ * filament swap at the recess floor height on a single-extruder printer).
+ * An empty spec yields a plain flat plate with a null label. The caller
+ * owns both manifolds.
  */
 export function buildInsertSolids(
   m: ManifoldToplevel,
@@ -401,35 +413,51 @@ export function buildInsertSolids(
     return { body, label: null };
   }
 
-  // The label lays out on the plate between the tabs, so the inlay never
-  // reaches the tab region or the push-out holes.
+  // Recess the field inside the rim. The recess outline insets the plate
+  // outline (not the tabs, which lie outside it) by the rim width; measured
+  // on the reference insert: opening 34.8 x 10.5 for the one-cell insert.
+  const plateLength = length - 2 * INSERT_TAB_LENGTH;
+  const recessFloor = INSERT_THICKNESS - INSERT_FIELD_RECESS_DEPTH;
+  const recessCutter = m.Manifold.extrude(
+    [
+      roundedRectPolygon(
+        plateLength - 2 * INSERT_FIELD_RIM_WIDTH,
+        INSERT_DEPTH - 2 * INSERT_FIELD_RIM_WIDTH,
+        INSERT_CORNER_RADIUS - INSERT_FIELD_RIM_WIDTH,
+      ),
+    ],
+    INSERT_FIELD_RECESS_DEPTH + eps,
+  ).translate(0, 0, recessFloor);
+  const recessed = m.Manifold.difference(body, recessCutter);
+  body.delete();
+  recessCutter.delete();
+  body = recessed;
+
+  // The label lays out on the plate between the tabs, so it never reaches
+  // the tab region, the push-out holes, or the rim.
   const parts = layoutLabelFace(
     font,
     spec,
     length - 2 * INSERT_TAB_LENGTH - 2 * LABEL_MARGIN,
     INSERT_DEPTH - 2 * SHELF_DEPTH_MARGIN,
   ).map((part) => boldenText(m, part));
-  const pocketTop = INSERT_THICKNESS - INSERT_INLAY_DEPTH;
 
+  // The face rises from the recess floor to the plate top, reaching
+  // INSERT_TEXT_WELD below the floor so the union with the plate is one
+  // welded solid.
   const faceSolids = parts.map((part) =>
-    extrudeLabel(m, part.polygons, INSERT_INLAY_DEPTH + INSERT_INLAY_WELD + eps, part.fillRule),
+    extrudeLabel(
+      m,
+      part.polygons,
+      INSERT_FIELD_RECESS_DEPTH + INSERT_TEXT_WELD,
+      part.fillRule,
+    ),
   );
   const face = faceSolids.length === 1 ? faceSolids[0] : m.Manifold.union(faceSolids);
   if (faceSolids.length > 1) {
     for (const solid of faceSolids) solid.delete();
   }
-
-  // Pocket the plate from the top down to the inlay depth, and let the inlay
-  // reach INSERT_INLAY_WELD below the pocket floor so the union of the two
-  // parts is one welded solid with a flush top.
-  const pocketCutter = face.translate(0, 0, pocketTop);
-  const pocketed = m.Manifold.difference(body, pocketCutter);
-  body.delete();
-  pocketCutter.delete();
-  body = pocketed;
-  const label = face
-    .translate(0, 0, pocketTop - INSERT_INLAY_WELD)
-    .trimByPlane([0, 0, -1], -INSERT_THICKNESS);
+  const label = face.translate(0, 0, recessFloor - INSERT_TEXT_WELD);
   face.delete();
   if (body.status() !== 'NoError' || label.status() !== 'NoError') {
     const status = body.status() !== 'NoError' ? body.status() : label.status();
