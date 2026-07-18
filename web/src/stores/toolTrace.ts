@@ -20,6 +20,13 @@ import * as layout from '../engine/trace/layoutModel';
 export const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
 
 /**
+ * Pocket clearance presets in mm around a traced outline, from a snug fit to
+ * a loose drop-in; the selection toolbar and the advanced drawer offer the
+ * same list.
+ */
+export const CLEARANCE_CHOICES = [0, 0.5, 1.5, 3, 4.5];
+
+/**
  * State of the Tool trace tab, kept in a store because the add-bin card's
  * tabs unmount when switched away; the photo itself stays in the vision
  * worker, so this carries only what the UI needs to redraw. The large

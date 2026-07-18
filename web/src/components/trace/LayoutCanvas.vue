@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue';
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { boundsOf, transformTool } from '../../engine/trace/edit';
@@ -10,7 +10,7 @@ import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
  * The Layout mode of the trace-and-layout workspace: a top-down view of the
  * world frame with draggable tools; the bin interior outline and its dotted
  * 42 mm cell boundaries are derived from the layout and move and resize
- * around the tools as they are dragged. While the rail's finger-hole mode is
+ * around the tools as they are dragged. While finger-hole mode is
  * active, a pointer drag on free tool area draws a finger hole (a short drag
  * places a circle, a longer one an elongated slot); in either mode a drag on
  * an existing hole moves it. All layout mutations go through the store's
@@ -23,9 +23,22 @@ const store = useToolTrace();
 const { tools, placements, selectedToolId, gridX, gridY, gridManual, fingerHoleMode } =
   storeToRefs(store);
 
+const emit = defineEmits<{
+  /**
+   * Where the selected tool sits on the canvas, as fractions of the canvas
+   * box (x at the tool's centre, y at its top edge), or null while nothing
+   * is selected; the workspace anchors the floating toolbar to it.
+   */
+  selectionAnchor: [anchor: { xFrac: number; yFrac: number } | null];
+}>();
+
 const canvas = ref<HTMLCanvasElement | null>(null);
 
-const CANVAS_WIDTH = 640;
+/** Canvas pixel width, following the container width (full-bleed layout). */
+const canvasWidth = ref(640);
+
+/** The view never grows taller than this, however wide the container is. */
+const MAX_HEIGHT_PX = 640;
 
 /** Drags shorter than this in mm commit a circular hole, not a slot. */
 const SLOT_MIN_DRAG_MM = 3;
@@ -46,7 +59,9 @@ function fitView(): ViewTransform {
   const bin = store.binPlacement;
   const w = bin.widthMm + 2 * VIEW_SLACK_MM;
   const h = bin.heightMm + 2 * VIEW_SLACK_MM;
-  const s = CANVAS_WIDTH / w;
+  // Fill the container width, but never taller than the height cap; the
+  // spare width just shows more world around the bin.
+  const s = Math.min(canvasWidth.value / w, MAX_HEIGHT_PX / h);
   return {
     s,
     cxMm: bin.minX + bin.widthMm / 2,
@@ -89,7 +104,7 @@ function draw(): void {
   const view = currentView();
   const bin = store.binPlacement;
   const s = view.s;
-  el.width = CANVAS_WIDTH;
+  el.width = canvasWidth.value;
   el.height = view.heightPx;
   const ctx = el.getContext('2d');
   if (!ctx) return;
@@ -172,14 +187,47 @@ function draw(): void {
       ctx.stroke();
     }
   }
+  // Report where the selected tool sits, for the floating toolbar.
+  const selected =
+    selectedToolId.value !== null
+      ? tools.value.find((t) => t.id === selectedToolId.value) ?? null
+      : null;
+  const selectedPlacement = selected !== null ? store.placementOf(selected.id) : undefined;
+  if (selected === null || selectedPlacement === undefined) {
+    emit('selectionAnchor', null);
+  } else {
+    const bounds = boundsOf(
+      transformTool(selected.outline, selected.rotationDeg, selected.mirrored),
+    );
+    const [x, y] = toPx({
+      x: (bounds.minX + bounds.maxX) / 2 + selectedPlacement.xMm,
+      y: bounds.minY + selectedPlacement.yMm,
+    });
+    emit('selectionAnchor', { xFrac: x / el.width, yFrac: y / el.height });
+  }
 }
 
 watch(
-  [tools, placements, gridX, gridY, gridManual, selectedToolId],
+  [tools, placements, gridX, gridY, gridManual, selectedToolId, canvasWidth],
   () => void nextTick(draw),
   { deep: true },
 );
-onMounted(() => void nextTick(draw));
+
+// The canvas fills its container; a ResizeObserver keeps the pixel width in
+// step with the layout (drawer opening and closing, window resizes).
+let resizeObserver: ResizeObserver | null = null;
+onMounted(() => {
+  const parent = canvas.value?.parentElement;
+  if (parent) {
+    resizeObserver = new ResizeObserver((entries) => {
+      const width = Math.floor(entries[0].contentRect.width);
+      if (width > 0) canvasWidth.value = Math.max(320, width);
+    });
+    resizeObserver.observe(parent);
+  }
+  void nextTick(draw);
+});
+onUnmounted(() => resizeObserver?.disconnect());
 
 // Pointer interaction. All three drags (move a tool, move a hole, stretch a
 // new hole) advance by mm deltas from the last pointer position. The view
@@ -356,33 +404,20 @@ function onPointerUp(): void {
 </script>
 
 <template>
-  <div>
-    <p class="text-body-2 mb-2">
-      <b>Drag each tool to its place.</b> The bin outline grows and shrinks
-      around the tools as you drag; tools themselves never move on their own.
-    </p>
-    <p v-if="fingerHoleMode" class="text-body-2 mb-2">
-      <b>Press on a tool to place a finger hole.</b> Drag before releasing to
-      stretch it into a slot. Drag an existing hole to move it instead.
-    </p>
-    <canvas
-      ref="canvas"
-      class="layout-canvas"
-      :style="{ cursor: hoverCursor }"
-      @pointerdown="onPointerDown"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
-    />
-    <p v-if="tools.length === 0" class="text-body-2 text-medium-emphasis mt-2">
-      Trace a tool in the Trace mode above, or add a basic shape from the
-      panel beside the canvas.
-    </p>
-  </div>
+  <canvas
+    ref="canvas"
+    class="layout-canvas"
+    :style="{ cursor: hoverCursor }"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerUp"
+    @pointercancel="onPointerUp"
+  />
 </template>
 
 <style scoped>
 .layout-canvas {
+  display: block;
   max-width: 100%;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 8px;
