@@ -11,7 +11,7 @@ import {
   generateLabeledBinUnion,
 } from '../engine/gridfinity/binGenerator';
 import { autoGridSize, generatePocketBin, generatePocketBinUnion } from '../engine/trace/pocketBin';
-import type { PocketBinParams } from '../engine/trace/pocketBin';
+import type { AutoGridResult, PocketBinParams } from '../engine/trace/pocketBin';
 import type { TracedTool, ToolPlacement } from '../engine/trace/types';
 import type {
   BinParams,
@@ -89,7 +89,7 @@ const api = {
     tools: TracedTool[],
     placements: ToolPlacement[],
     marginMm: number,
-  ): Promise<{ gridX: number; gridY: number }> {
+  ): Promise<AutoGridResult> {
     const m = await loadManifold();
     return autoGridSize(m, tools, placements, marginMm);
   },

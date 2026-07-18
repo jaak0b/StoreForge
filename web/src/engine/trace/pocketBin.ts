@@ -208,21 +208,33 @@ export function validatePocketLayout(
   }
 }
 
+/** Result of autoGridSize: the footprint plus the layout-centring offset. */
+export interface AutoGridResult {
+  gridX: number;
+  gridY: number;
+  /** Add to every placement's xMm to centre the layout in the bin. */
+  offsetX: number;
+  /** Add to every placement's yMm to centre the layout in the bin. */
+  offsetY: number;
+}
+
 /**
  * The smallest gridX by gridY footprint whose interior cavity contains every
  * placed pocket (outline and finger holes) with at least marginMm of clear
- * interior around it. Placements are bin-local mm about the origin, so the
- * fit is checked at the given positions. Also rejects overlapping placements.
- * The first guess comes from the bounding box; the rounded interior corners
- * can push a corner-hugging layout one grid unit up, so the exact containment
- * check drives the final answer.
+ * interior around it, sized from the layout's bounding box rather than its
+ * position: the returned offset is the translation that moves the box centre
+ * onto the bin origin, and the fit is checked with that offset applied. The
+ * caller owns the placements and applies the offset itself. Also rejects
+ * overlapping placements. The first guess comes from the bounding box; the
+ * rounded interior corners can push a corner-hugging layout one grid unit up,
+ * so the exact containment check drives the final answer.
  */
 export function autoGridSize(
   m: ManifoldToplevel,
   tools: TracedTool[],
   placements: ToolPlacement[],
   marginMm: number,
-): { gridX: number; gridY: number } {
+): AutoGridResult {
   if (marginMm < 0) {
     throw new RangeError(`margin must be >= 0, got ${marginMm}`);
   }
@@ -246,20 +258,32 @@ export function autoGridSize(
     }
   }
 
-  // Bounding half-extent of everything the pockets cut, about the origin.
-  let halfX = 0;
-  let halfY = 0;
+  // True bounding box of everything the pockets cut, wherever it sits.
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
   for (const pocket of placed) {
     for (const p of pocket.outline.outer) {
-      halfX = Math.max(halfX, Math.abs(p.x));
-      halfY = Math.max(halfY, Math.abs(p.y));
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
     }
     for (const hole of pocket.fingerHoles) {
       const r = hole.diameterMm / 2;
-      halfX = Math.max(halfX, Math.abs(hole.x) + r, Math.abs(hole.x2 ?? hole.x) + r);
-      halfY = Math.max(halfY, Math.abs(hole.y) + r, Math.abs(hole.y2 ?? hole.y) + r);
+      minX = Math.min(minX, hole.x - r, (hole.x2 ?? hole.x) - r);
+      maxX = Math.max(maxX, hole.x + r, (hole.x2 ?? hole.x) + r);
+      minY = Math.min(minY, hole.y - r, (hole.y2 ?? hole.y) - r);
+      maxY = Math.max(maxY, hole.y + r, (hole.y2 ?? hole.y) + r);
     }
   }
+  // The offset that moves the box centre onto the origin; the subtraction
+  // from zero keeps a centred layout's offset at positive zero.
+  const offsetX = 0 - (minX + maxX) / 2;
+  const offsetY = 0 - (minY + maxY) / 2;
+  const halfX = (maxX - minX) / 2;
+  const halfY = (maxY - minY) / 2;
 
   const cellsFor = (halfExtent: number): number => {
     let cells = 1;
@@ -269,8 +293,9 @@ export function autoGridSize(
   const guessX = cellsFor(halfX);
   const guessY = cellsFor(halfY);
 
-  // Margin-grown cut section: containment of this inside the interior gives
-  // marginMm of clear interior all round, including at the rounded corners.
+  // Margin-grown cut section, recentred by the offset: containment of this
+  // inside the interior gives marginMm of clear interior all round in the
+  // recentred layout, including at the rounded corners.
   let grownCut: CrossSection | null = null;
   for (const pocket of placed) {
     const section = placedCutSection(m, pocket);
@@ -285,6 +310,9 @@ export function autoGridSize(
       grownCut = merged;
     }
   }
+  const recentredCut: CrossSection = grownCut!.translate([offsetX, offsetY]);
+  grownCut!.delete();
+  grownCut = recentredCut;
 
   try {
     // The bounding-box guess can only miss because of the interior corner
@@ -298,14 +326,14 @@ export function autoGridSize(
     candidates.sort((a, b) => a.gridX * a.gridY - b.gridX * b.gridY);
     for (const candidate of candidates) {
       const interior = interiorSection(m, candidate.gridX, candidate.gridY);
-      const outside = grownCut!.subtract(interior);
+      const outside = grownCut.subtract(interior);
       const fits = outside.isEmpty();
       outside.delete();
       interior.delete();
-      if (fits) return candidate;
+      if (fits) return { ...candidate, offsetX, offsetY };
     }
     throw new Error(
-      'The placed tools do not fit a bin centred on the layout. Move the tools closer to the centre.',
+      'The placed tools do not fit a bin sized to the layout. Move the tools closer together.',
     );
   } finally {
     grownCut?.delete();

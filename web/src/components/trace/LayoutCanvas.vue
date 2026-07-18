@@ -12,9 +12,9 @@ import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
  * the rail's finger-hole mode is active, a pointer drag on free tool area
  * draws a finger hole (a short drag places a circle, a longer one an
  * elongated slot); in either mode a drag on an existing hole moves it. Footprint
- * auto-sizing lives in the rail's preview pipeline; when it changes the grid
- * mid-drag, the drag reference point is rebased so the tool stays under the
- * pointer.
+ * auto-sizing and layout recentring live in the rail's preview pipeline; the
+ * store's dragging flag defers both to the pointer release, so the grid and
+ * the layout never move under an active drag.
  */
 
 const store = useToolTrace();
@@ -154,14 +154,13 @@ watch(
 onMounted(() => void nextTick(draw));
 
 // Pointer interaction. All three drags (move a tool, move a hole, stretch a
-// new hole) advance by mm deltas from the last pointer position; when the
-// auto-sized footprint changes mid-drag the last position is recomputed under
-// the new scale, so nothing jumps.
+// new hole) advance by mm deltas from the last pointer position; the store's
+// dragging flag keeps the footprint and layout fixed until the release, so
+// the mm scale never changes mid-drag.
 type DragKind = 'tool' | 'hole' | 'place';
 let dragKind: DragKind | null = null;
 let draggingToolId: string | null = null;
 let draggingHole: FingerHole | null = null;
-let lastClient: { x: number; y: number } | null = null;
 let lastMm: MmPoint | null = null;
 
 function clientToMm(clientX: number, clientY: number): MmPoint {
@@ -173,12 +172,6 @@ function clientToMm(clientX: number, clientY: number): MmPoint {
     y: (((clientY - rect.top) / rect.height) * el.height - el.height / 2) / s,
   };
 }
-
-watch([gridX, gridY], () => {
-  if (dragKind !== null && lastClient !== null) {
-    lastMm = clientToMm(lastClient.x, lastClient.y);
-  }
-});
 
 function toolAt(p: MmPoint): TracedTool | null {
   // Last drawn wins, so iterate back to front.
@@ -233,7 +226,6 @@ function holeAt(p: MmPoint): { tool: TracedTool; hole: FingerHole } | null {
 
 function onPointerDown(event: PointerEvent): void {
   const p = clientToMm(event.clientX, event.clientY);
-  lastClient = { x: event.clientX, y: event.clientY };
   lastMm = p;
   // An existing hole under the pointer is dragged in either mode; in
   // finger-hole mode only a press on free tool area places a new hole.
@@ -243,6 +235,7 @@ function onPointerDown(event: PointerEvent): void {
     draggingToolId = holeHit.tool.id;
     dragKind = 'hole';
     selectedToolId.value = holeHit.tool.id;
+    store.dragging = true;
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
     return;
   }
@@ -264,6 +257,7 @@ function onPointerDown(event: PointerEvent): void {
     draggingToolId = tool.id;
     dragKind = 'place';
     selectedToolId.value = tool.id;
+    store.dragging = true;
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
     return;
   }
@@ -275,6 +269,7 @@ function onPointerDown(event: PointerEvent): void {
   selectedToolId.value = tool.id;
   draggingToolId = tool.id;
   dragKind = 'tool';
+  store.dragging = true;
   (event.target as HTMLElement).setPointerCapture(event.pointerId);
 }
 
@@ -300,11 +295,13 @@ function onPointerMove(event: PointerEvent): void {
   const p = clientToMm(event.clientX, event.clientY);
   const dx = p.x - lastMm.x;
   const dy = p.y - lastMm.y;
-  lastClient = { x: event.clientX, y: event.clientY };
   lastMm = p;
   if (dragKind === 'tool') {
     const placement = draggingToolId !== null ? store.placementOf(draggingToolId) : undefined;
     if (placement === undefined) return;
+    // Moving a tool means size-to-fit: a manually typed footprint is
+    // discarded and auto sizing takes over again on release.
+    store.gridManual = false;
     placement.xMm += dx;
     placement.yMm += dy;
     return;
@@ -340,16 +337,17 @@ function onPointerUp(): void {
   dragKind = null;
   draggingToolId = null;
   draggingHole = null;
-  lastClient = null;
   lastMm = null;
+  // Cleared last: the rail commits the deferred resize and recentring on this.
+  store.dragging = false;
 }
 </script>
 
 <template>
   <div>
     <p class="text-body-2 mb-2">
-      <b>Drag each tool to its place in the bin.</b> The footprint grows and
-      shrinks with the layout until you type a size yourself.
+      <b>Drag each tool to its place in the bin.</b> The bin sizes itself to
+      the layout after every drag; a typed footprint holds until the next drag.
     </p>
     <p v-if="fingerHoleMode" class="text-body-2 mb-2">
       <b>Press on a tool to place a finger hole.</b> Drag before releasing to

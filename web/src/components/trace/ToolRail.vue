@@ -99,23 +99,45 @@ function setGridManually(axis: 'x' | 'y', value: number): void {
 }
 
 /**
+ * Sizes the footprint from the current layout and commits the result to the
+ * store: the placements are shifted together so the layout is centred in the
+ * bin, and the size fields follow (in manual mode only as a floor).
+ */
+async function applyAutoSize(): Promise<void> {
+  if (trace.placements.length === 0) return;
+  try {
+    const size = await autoPocketGridSize(trace.tools, trace.placements, AUTO_SIZE_MARGIN_MM);
+    requiredGrid.value = { gridX: size.gridX, gridY: size.gridY };
+    if (size.offsetX !== 0 || size.offsetY !== 0) {
+      trace.shiftPlacements(size.offsetX, size.offsetY);
+    }
+    gridX.value = gridManual.value ? Math.max(gridX.value, size.gridX) : size.gridX;
+    gridY.value = gridManual.value ? Math.max(gridY.value, size.gridY) : size.gridY;
+  } catch (error) {
+    // Sizing problems (overlapping tools) are user-fixable; surface them in
+    // the rail's warning alert.
+    addError.value = error instanceof Error ? error.message : 'Sizing the bin failed.';
+  }
+}
+
+/**
  * Hands footprint control back to auto sizing and resizes right away, since
  * the preview pipeline only reruns when the layout changes.
  */
 async function enableAutoSize(): Promise<void> {
   trace.gridManual = false;
-  if (trace.placements.length === 0) return;
-  try {
-    const size = await autoPocketGridSize(trace.tools, trace.placements, AUTO_SIZE_MARGIN_MM);
-    requiredGrid.value = size;
-    gridX.value = size.gridX;
-    gridY.value = size.gridY;
-  } catch (error) {
-    // Sizing problems (overlapping or off-centre tools) are user-fixable;
-    // surface them in the rail's warning alert.
-    addError.value = error instanceof Error ? error.message : 'Sizing the bin failed.';
-  }
+  await applyAutoSize();
 }
+
+// Resizing and recentring wait out a drag so the layout never moves under the
+// pointer; the release commits them (the preview pipeline alone would only
+// rerun on a further layout change).
+watch(
+  () => trace.dragging,
+  (dragging, wasDragging) => {
+    if (wasDragging && !dragging) void applyAutoSize();
+  },
+);
 
 function applyDefaultDepth(value: number): void {
   if (!Number.isFinite(value) || value <= 0) return;
@@ -206,24 +228,40 @@ const pocketParams = computed<PocketBinParams>(() => ({
 
 /**
  * Auto-sizes the footprint and generates the preview in one pipeline: the
- * layout is always validated against the freshly sized footprint, so dragging
- * a tool past the wall grows the bin (and moving tools together shrinks it)
- * instead of raising the wall error. Manual mode skips the sizing and keeps
- * the wall validation.
+ * bin is sized to the layout's bounding box, the layout is recentred in it,
+ * and the preview is always generated from that recentred, sized layout, so
+ * dragging a tool past the wall grows the bin (and moving tools together
+ * shrinks it) instead of raising the wall error. The recentring and the size
+ * fields are committed to the store only between drags; mid-drag the preview
+ * shows the coming result while the canvas layout stays under the pointer.
  */
 async function generateSizedPreview(raw: unknown): Promise<LabeledBinMeshes> {
   let params = raw as PocketBinParams;
   if (params.placements.length > 0) {
     const size = await autoPocketGridSize(params.tools, params.placements, AUTO_SIZE_MARGIN_MM);
-    requiredGrid.value = size;
+    requiredGrid.value = { gridX: size.gridX, gridY: size.gridY };
     // In manual mode the required size is only a floor: the layout growing
     // past a manually typed footprint pushes the footprint out with it, so
     // the wall error stays unreachable through the size fields.
     const nextX = gridManual.value ? Math.max(gridX.value, size.gridX) : size.gridX;
     const nextY = gridManual.value ? Math.max(gridY.value, size.gridY) : size.gridY;
-    gridX.value = nextX;
-    gridY.value = nextY;
-    params = { ...params, gridX: nextX, gridY: nextY };
+    if (!trace.dragging) {
+      if (size.offsetX !== 0 || size.offsetY !== 0) {
+        trace.shiftPlacements(size.offsetX, size.offsetY);
+      }
+      gridX.value = nextX;
+      gridY.value = nextY;
+    }
+    params = {
+      ...params,
+      gridX: nextX,
+      gridY: nextY,
+      placements: params.placements.map((p) => ({
+        ...p,
+        xMm: p.xMm + size.offsetX,
+        yMm: p.yMm + size.offsetY,
+      })),
+    };
   } else {
     requiredGrid.value = null;
   }

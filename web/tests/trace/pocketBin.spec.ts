@@ -225,8 +225,44 @@ describe('validatePocketLayout', () => {
 });
 
 describe('autoGridSize', () => {
-  it('fits the centred L tool with margin into a 1x1 bin', () => {
-    expect(autoGridSize(m, [lTool()], [centeredL], 2)).toEqual({ gridX: 1, gridY: 1 });
+  it('fits the centred L tool with margin into a 1x1 bin with no offset', () => {
+    expect(autoGridSize(m, [lTool()], [centeredL], 2)).toEqual({
+      gridX: 1,
+      gridY: 1,
+      offsetX: 0,
+      offsetY: 0,
+    });
+  });
+
+  it('sizes an off-centre tool from its bounding box and recentres it', () => {
+    // The L's 30 x 25 box sits at bin-local 50..80 by 40..65: the box alone
+    // (15 mm half-width plus the 2 mm margin) fits one cell's 19.8 mm
+    // interior half-width, and the offset moves the box centre (65, 52.5)
+    // onto the origin.
+    const placement: ToolPlacement = { toolId: 'l-tool', xMm: 50, yMm: 40, pocketDepthMm: 5 };
+    expect(autoGridSize(m, [lTool()], [placement], 2)).toEqual({
+      gridX: 1,
+      gridY: 1,
+      offsetX: -65,
+      offsetY: -52.5,
+    });
+  });
+
+  it('sizes two off-centre tools from their combined box, not their distance from the origin', () => {
+    // Two L tools whose boxes span bin-local 100..170 by 0..25: the 70 mm
+    // combined width plus margins needs two cells' 81.6 mm interior, however
+    // far from the origin the pair sits.
+    const tools = [lTool(), lTool({ id: 'l-2', name: 'Second wrench' })];
+    const placements: ToolPlacement[] = [
+      { toolId: 'l-tool', xMm: 100, yMm: 0, pocketDepthMm: 5 },
+      { toolId: 'l-2', xMm: 140, yMm: 0, pocketDepthMm: 5 },
+    ];
+    expect(autoGridSize(m, tools, placements, 2)).toEqual({
+      gridX: 2,
+      gridY: 1,
+      offsetX: -135,
+      offsetY: -12.5,
+    });
   });
 
   it('grows along X for a wide tool', () => {
@@ -246,17 +282,45 @@ describe('autoGridSize', () => {
       },
     });
     const placement: ToolPlacement = { toolId: 'bar', xMm: -35, yMm: -6, pocketDepthMm: 5 };
-    expect(autoGridSize(m, [bar], [placement], 2)).toEqual({ gridX: 2, gridY: 1 });
+    expect(autoGridSize(m, [bar], [placement], 2)).toEqual({
+      gridX: 2,
+      gridY: 1,
+      offsetX: 0,
+      offsetY: 0,
+    });
   });
 
-  it('grows the footprint for a slot finger hole reaching past the interior', () => {
+  it('includes a slot finger hole reaching past the outline in the box', () => {
     // The slot's far cap reaches bin-local x 31 (endpoint 25 plus the 6 mm
-    // radius); one cell's 19.8 mm interior half-width cannot hold that plus
-    // the 2 mm margin, two cells' 40.8 mm can.
+    // radius) and its underside dips to y -13.5, so the box spans -15..31 by
+    // -13.5..12.5: 46 mm wide plus margins needs two cells, and the offset
+    // recentres the box.
     const tool = lTool({
       fingerHoles: [{ x: 15, y: 5, x2: 40, y2: 5, diameterMm: 12 }],
     });
-    expect(autoGridSize(m, [tool], [centeredL], 2)).toEqual({ gridX: 2, gridY: 1 });
+    expect(autoGridSize(m, [tool], [centeredL], 2)).toEqual({
+      gridX: 2,
+      gridY: 1,
+      offsetX: -8,
+      offsetY: 0.5,
+    });
+  });
+
+  it('returns a size whose recentred layout passes the exact wall validation', () => {
+    const tool = lTool({
+      fingerHoles: [{ x: 15, y: 5, x2: 40, y2: 5, diameterMm: 12 }],
+    });
+    const size = autoGridSize(m, [tool], [centeredL], 2);
+    const recentred: ToolPlacement = {
+      ...centeredL,
+      xMm: centeredL.xMm + size.offsetX,
+      yMm: centeredL.yMm + size.offsetY,
+    };
+    const p = params({ gridX: size.gridX, gridY: size.gridY, tools: [tool], placements: [recentred] });
+    expect(() => validatePocketLayout(m, p, placeTools(m, p.tools, p.placements))).not.toThrow();
+    // The recentred layout is already centred: sizing it again moves nothing.
+    const again = autoGridSize(m, [tool], [recentred], 2);
+    expect(again).toEqual({ ...size, offsetX: 0, offsetY: 0 });
   });
 
   it('rejects overlapping placements', () => {

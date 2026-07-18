@@ -64,6 +64,12 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const retraceRequestId = ref<string | null>(null);
   /** True while a click on the layout canvas places a finger hole. */
   const fingerHoleMode = ref(false);
+  /**
+   * True while a pointer drag on the layout canvas is in progress; footprint
+   * resizing and layout recentring wait for the release so they never move
+   * the layout under the pointer.
+   */
+  const dragging = ref(false);
   const fingerHoleDiameterMm = ref(DEFAULT_FINGER_HOLE_DIAMETER_MM);
 
   /** Bin footprint of the layout; kept in step with autoGridSize unless overridden. */
@@ -157,6 +163,14 @@ export const useToolTrace = defineStore('toolTrace', () => {
     selectedToolId.value = copy.id;
   }
 
+  /** Moves every placement by the given offset, keeping the arrangement. */
+  function shiftPlacements(offsetX: number, offsetY: number): void {
+    for (const placement of placements.value) {
+      placement.xMm += offsetX;
+      placement.yMm += offsetY;
+    }
+  }
+
   function placementOf(toolId: string): ToolPlacement | undefined {
     return placements.value.find((p) => p.toolId === toolId);
   }
@@ -179,6 +193,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     workspaceMode.value = 'layout';
     retraceRequestId.value = null;
     fingerHoleMode.value = false;
+    dragging.value = false;
     fingerHoleDiameterMm.value = DEFAULT_FINGER_HOLE_DIAMETER_MM;
     gridX.value = 1;
     gridY.value = 1;
@@ -204,6 +219,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     workspaceMode,
     retraceRequestId,
     fingerHoleMode,
+    dragging,
     fingerHoleDiameterMm,
     gridX,
     gridY,
@@ -213,6 +229,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     replaceToolOutline,
     removeTool,
     duplicateTool,
+    shiftPlacements,
     placementOf,
     reset,
   };
