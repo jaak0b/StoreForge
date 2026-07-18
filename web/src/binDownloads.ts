@@ -83,9 +83,7 @@ function partName(part: PrintablePart): string {
     return text !== '' ? `${text} label insert` : `${part.insert.cells}u label insert`;
   }
   const size = `${part.bin.gridX}x${part.bin.gridY}x${part.bin.heightUnits}`;
-  return part.bin.insert !== null && part.bin.insert.text !== ''
-    ? `${part.bin.insert.text} (${size})`
-    : size;
+  return part.labelText !== undefined ? `${part.labelText} (${size})` : size;
 }
 
 /** File name stem of a single-product download. */

@@ -169,21 +169,23 @@ function editingTitle(entry: QueueEntry): string {
 }
 
 /** Everything the preview depends on, regenerated on any change. */
-const previewSpec = computed<{ insertOnly: boolean; bin: SlottedBinParams; cells: number }>(
-  () => ({
-    insertOnly: insertOnly.value,
-    bin: store.binParams,
-    cells: store.gridX,
-  }),
-);
-
-function generatePreview(spec: {
+interface PreviewSpec {
   insertOnly: boolean;
   bin: SlottedBinParams;
   cells: number;
-}): Promise<PartMeshes> {
+  content: { text: string; text2: string; icon: string | null };
+}
+
+const previewSpec = computed<PreviewSpec>(() => ({
+  insertOnly: insertOnly.value,
+  bin: store.binParams,
+  cells: store.gridX,
+  content: store.content,
+}));
+
+function generatePreview(spec: PreviewSpec): Promise<PartMeshes> {
   if (spec.insertOnly) {
-    return generateInsert({ cells: spec.cells, content: store.content });
+    return generateInsert({ cells: spec.cells, content: spec.content });
   }
   return generateSlottedBin(spec.bin);
 }

@@ -54,6 +54,17 @@ const trace = useToolTrace();
 const queue = useBinQueue();
 
 const { notes } = storeToRefs(designer);
+
+// The product choice is shared designer state; the trace tab cannot produce
+// a standalone insert (pockets need a bin), so a leftover insert-only choice
+// from another tab falls back to the bin-with-insert default here.
+watch(
+  () => designer.productChoice,
+  (choice) => {
+    if (choice === 'insert') designer.productChoice = 'binWithInsert';
+  },
+  { immediate: true },
+);
 const { tools, fingerHoleMode, selectedToolId } = storeToRefs(trace);
 
 const quantity = ref(1);

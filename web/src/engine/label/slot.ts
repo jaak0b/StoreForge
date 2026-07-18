@@ -257,7 +257,9 @@ export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold
   pocketed.delete();
   outline.delete();
   if (shelf.status() !== 'NoError') {
-    throw new Error(`Slot shelf construction produced an invalid solid: ${shelf.status()}`);
+    const status = shelf.status();
+    shelf.delete();
+    throw new Error(`Slot shelf construction produced an invalid solid: ${status}`);
   }
   return shelf;
 }
@@ -313,7 +315,9 @@ export function applySlotToBody(
   cleared.delete();
   shelf.delete();
   if (slotted.status() !== 'NoError') {
-    throw new Error(`Slot construction produced an invalid solid: ${slotted.status()}`);
+    const status = slotted.status();
+    slotted.delete();
+    throw new Error(`Slot construction produced an invalid solid: ${status}`);
   }
   return slotted;
 }

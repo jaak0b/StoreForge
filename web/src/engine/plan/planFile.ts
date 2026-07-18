@@ -744,6 +744,11 @@ function legacyProductOf(
   // slot stays a bin alone; embossed and slot-insert keep their label as the
   // paired insert, unless the label was empty anyway.
   if (mode === 'slot' || !hasContent) {
+    if (mode === 'slot' && hasContent) {
+      warnings.push(
+        `${subject} was a slotted bin that still carried unused label text; the text was dropped, because a bin without its insert has no label.`,
+      );
+    }
     return { kind: 'bin', bin };
   }
   return { kind: 'binWithInsert', bin, insert: content };

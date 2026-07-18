@@ -12,7 +12,13 @@ import { assertNever, insertOf, type Bin, type BinPockets, type Product } from '
 
 /** One printable part of a product: a bin body or a label insert. */
 export type PrintablePart =
-  | { part: 'bin'; bin: SlottedBinParams; pockets?: BinPockets }
+  | {
+      part: 'bin';
+      bin: SlottedBinParams;
+      pockets?: BinPockets;
+      /** Display name source: the paired insert's text, for slicer object names. */
+      labelText?: string;
+    }
   | { part: 'insert'; insert: InsertParams };
 
 /** The geometry parameters of a bin, with the paired insert content given. */
@@ -48,8 +54,14 @@ export function partsOf(product: Product): PrintablePart[] {
     case 'binWithInsert': {
       const pockets = product.bin.origin === 'traced' ? product.bin.pockets : undefined;
       const insert = insertOf(product)!;
+      const bin: PrintablePart = {
+        part: 'bin',
+        bin: toSlottedBinParams(product.bin, null),
+        pockets,
+      };
+      if (insert.content.text !== '') bin.labelText = insert.content.text;
       return [
-        { part: 'bin', bin: toSlottedBinParams(product.bin, null), pockets },
+        bin,
         { part: 'insert', insert: { cells: insert.cells, content: insert.content } },
       ];
     }
