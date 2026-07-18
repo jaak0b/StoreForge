@@ -99,19 +99,21 @@ export const TAB_POCKET_WIDTH = 6.7;
 export const POCKET_CEILING_THICKNESS = 0.65;
 
 /**
- * The insert's label relief: the whole field between the tabs is recessed
- * into the plate top, and the label face rises from the recess floor back up
- * to the full plate top. The text is physical relief, so it stays readable
- * on a single-color print, and a filament swap paused at the recess floor
- * height colors exactly the raised text in the second color. The recess
- * depth is the reference insert's measured 0.4; unlike the reference we
- * recess the full field with no raised rim (our own design), so nothing but
- * the text stands at full height. The top structure does not touch the slot
- * fit, so interchange with the reference bins is unaffected.
+ * The insert's label relief: the plate keeps its full constant thickness
+ * (so every insert sits identically in the slot), and the label face stands
+ * proud of the plate top by exactly the channel's vertical clearance,
+ * SLOT_HEIGHT minus INSERT_THICKNESS (0.2 mm). The text is physical relief,
+ * so it stays readable on a single-color print, and a filament swap paused
+ * at the plate top height colors exactly the raised text in the second
+ * color. The raised top ends flush with the nominal bin top, the plane a
+ * stacked bin's foot rests on, so the text cannot rise any higher; unlike
+ * the reference insert (which recesses the field instead) the text touches
+ * that plane with zero clearance. The plate itself is unchanged, so
+ * interchange with the reference bins is unaffected.
  */
-export const INSERT_FIELD_RECESS_DEPTH = 0.4;
+export const INSERT_TEXT_RAISE = SLOT_HEIGHT - INSERT_THICKNESS;
 
-/** How far the label face reaches below the recess floor so the two solids are welded. */
+/** How far the label face reaches below the plate top so the two solids are welded. */
 export const INSERT_TEXT_WELD = 0.05;
 
 /** Overall length of the label insert (tabs included) for a bin spanning `cells` grid cells. */
@@ -333,9 +335,9 @@ export function applySlotToBody(
 
 /** The two parts of a label insert, kept separate for per-part coloring. */
 export interface InsertSolids {
-  /** The insert plate, its field recessed under the label when one is set. */
+  /** The insert plate, always at its full constant thickness. */
   body: Manifold;
-  /** The raised label face on the recess floor, or null for a blank insert. */
+  /** The label face raised above the plate top, or null for a blank insert. */
   label: Manifold | null;
 }
 
@@ -389,14 +391,12 @@ function buildInsertPlate(m: ManifoldToplevel, cells: number): Manifold {
 
 /**
  * Build a label insert: a flat plate with end tabs (resting on z = 0,
- * centred on the origin, ready to print) whose labeled top follows the
- * reference insert's relief: the field inside the rim is recessed
- * INSERT_FIELD_RECESS_DEPTH into the plate, and the label face rises from
- * the recess floor back up to the plate top as a separate solid, so it can
- * print in a second filament (by slot on a toolchanger, or by a pause and
- * filament swap at the recess floor height on a single-extruder printer).
- * An empty spec yields a plain flat plate with a null label. The caller
- * owns both manifolds.
+ * centred on the origin, ready to print) at its full constant thickness,
+ * with the label face standing INSERT_TEXT_RAISE proud of the plate top as
+ * a separate solid, so it can print in a second filament (by slot on a
+ * toolchanger, or by a pause and filament swap at the plate top height on a
+ * single-extruder printer). An empty spec yields the same plate with a null
+ * label. The caller owns both manifolds.
  */
 export function buildInsertSolids(
   m: ManifoldToplevel,
@@ -405,8 +405,7 @@ export function buildInsertSolids(
   cells: number,
 ): InsertSolids {
   const length = insertLengthMm(cells);
-  const eps = 0.01;
-  let body = buildInsertPlate(m, cells);
+  const body = buildInsertPlate(m, cells);
   if (!specHasLabel(spec)) {
     if (body.status() !== 'NoError') {
       throw new Error(`Insert generation produced an invalid solid: ${body.status()}`);
@@ -414,22 +413,8 @@ export function buildInsertSolids(
     return { body, label: null };
   }
 
-  // Recess the whole field between the tabs. The recess outline is the
-  // plate outline itself (the tabs lie outside it and keep their full
-  // thickness for the pocket retention).
-  const plateLength = length - 2 * INSERT_TAB_LENGTH;
-  const recessFloor = INSERT_THICKNESS - INSERT_FIELD_RECESS_DEPTH;
-  const recessCutter = m.Manifold.extrude(
-    [roundedRectPolygon(plateLength, INSERT_DEPTH, INSERT_CORNER_RADIUS)],
-    INSERT_FIELD_RECESS_DEPTH + eps,
-  ).translate(0, 0, recessFloor);
-  const recessed = m.Manifold.difference(body, recessCutter);
-  body.delete();
-  recessCutter.delete();
-  body = recessed;
-
   // The label lays out on the plate between the tabs, so it never reaches
-  // the tab region, the push-out holes, or the rim.
+  // the tab region or the push-out holes.
   const parts = layoutLabelFace(
     font,
     spec,
@@ -437,22 +422,16 @@ export function buildInsertSolids(
     INSERT_DEPTH - 2 * SHELF_DEPTH_MARGIN,
   ).map((part) => boldenText(m, part));
 
-  // The face rises from the recess floor to the plate top, reaching
-  // INSERT_TEXT_WELD below the floor so the union with the plate is one
-  // welded solid.
+  // The face stands on the plate top, reaching INSERT_TEXT_WELD below it so
+  // the union with the plate is one welded solid.
   const faceSolids = parts.map((part) =>
-    extrudeLabel(
-      m,
-      part.polygons,
-      INSERT_FIELD_RECESS_DEPTH + INSERT_TEXT_WELD,
-      part.fillRule,
-    ),
+    extrudeLabel(m, part.polygons, INSERT_TEXT_RAISE + INSERT_TEXT_WELD, part.fillRule),
   );
   const face = faceSolids.length === 1 ? faceSolids[0] : m.Manifold.union(faceSolids);
   if (faceSolids.length > 1) {
     for (const solid of faceSolids) solid.delete();
   }
-  const label = face.translate(0, 0, recessFloor - INSERT_TEXT_WELD);
+  const label = face.translate(0, 0, INSERT_THICKNESS - INSERT_TEXT_WELD);
   face.delete();
   if (body.status() !== 'NoError' || label.status() !== 'NoError') {
     const status = body.status() !== 'NoError' ? body.status() : label.status();

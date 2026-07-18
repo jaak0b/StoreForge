@@ -102,45 +102,38 @@ describe('buildInsertSolids', () => {
     body.delete();
   });
 
-  it('raises the label from a recessed field back to the plate top', () => {
+  it('raises the label above the constant-thickness plate', () => {
     const { body, label } = buildInsertSolids(m, font, { text: 'M3 x 20', icon: null }, 1);
     expect(label).not.toBeNull();
     expect(body.status()).toBe('NoError');
     expect(label!.status()).toBe('NoError');
-    // The rim keeps the plate at its full 0.8 mm; the raised label reaches
-    // the same top, so a filament swap paused at the recess floor colors it.
+    // The plate keeps its full 0.8 mm; the label stands 0.2 proud of it
+    // (the channel's vertical clearance: 1.0 slot height minus the 0.8
+    // plate), ending flush with the nominal bin top when seated.
     expect(body.boundingBox().max[2]).toBeCloseTo(0.8, 6);
-    expect(label!.boundingBox().max[2]).toBeCloseTo(0.8, 6);
-    // The label stands on the recess floor: 0.4 below the top on the
-    // reference insert, minus the 0.05 weld into the plate.
-    expect(label!.boundingBox().min[2]).toBeCloseTo(0.35, 6);
-    // Welded: the face reaches into the plate below the recess floor.
+    expect(label!.boundingBox().max[2]).toBeCloseTo(1.0, 6);
+    // The label reaches the 0.05 weld below the plate top.
+    expect(label!.boundingBox().min[2]).toBeCloseTo(0.75, 6);
+    // Welded: the face reaches into the plate below its top.
     const overlap = label!.intersect(body);
     expect(overlap.isEmpty()).toBe(false);
     overlap.delete();
-    // The field recess removes material from the plate.
+    // The plate itself is identical with and without a label.
     const blank = buildInsertSolids(m, font, { text: '', icon: null }, 1);
-    expect(body.volume()).toBeLessThan(blank.body.volume());
-    // The recess floor lies 0.4 under the top: probing the field just above
-    // the floor finds open air beside the text (measured recess depth 0.4,
-    // opening inset 0.5 from the plate face on the reference insert).
-    const probe = m.Manifold.cube([1, 1, 0.2], true).translate(-15, 3.5, 0.7);
-    const inField = body.intersect(probe);
-    expect(Math.abs(inField.volume())).toBeLessThan(1e-9);
-    inField.delete();
-    probe.delete();
+    expect(body.volume()).toBeCloseTo(blank.body.volume(), 6);
     blank.body.delete();
     body.delete();
     label!.delete();
   });
 
-  it('unions to one watertight solid with a flat top for the STL download', () => {
+  it('unions to one watertight solid with the raised text on top for the STL download', () => {
     const mesh = generateInsertUnion(m, font, { cells: 1, content: { text: 'M3 x 20', icon: null } });
     let maxZ = -Infinity;
     for (let i = 2; i < mesh.vertices.length; i += 3) {
       maxZ = Math.max(maxZ, mesh.vertices[i]);
     }
-    expect(maxZ).toBeCloseTo(0.8, 6);
+    // Plate 0.8 plus the 0.2 raised text.
+    expect(maxZ).toBeCloseTo(1.0, 6);
     expect(mesh.indices.length).toBeGreaterThan(0);
   });
 });
@@ -263,15 +256,15 @@ describe('generateSlottedBin with and without a paired insert', () => {
   it('previews the paired insert with only its raised label face on the label mesh', () => {
     const result = generateSlottedBin(m, font, params());
     expect(result.label).not.toBeNull();
-    // The label mesh is the raised face alone: it stands on the recess
-    // floor 0.4 under the insert top, welded 0.05 into the plate, so its
-    // lowest point is 20.35 for a 3-unit bin (channel floor at 20.0). The
+    // The label mesh is the raised face alone: it stands on the plate top
+    // 0.8 above the channel floor, welded 0.05 into the plate, so its
+    // lowest point is 20.75 for a 3-unit bin (channel floor at 20.0). The
     // plate itself joins the body mesh and rests on the channel floor.
     let minZ = Infinity;
     for (let i = 2; i < result.label!.vertices.length; i += 3) {
       minZ = Math.min(minZ, result.label!.vertices[i]);
     }
-    expect(minZ).toBeCloseTo(20.35, 5);
+    expect(minZ).toBeCloseTo(20.75, 5);
     let bodyMinAtFront = Infinity;
     for (let i = 0; i < result.body.vertices.length; i += 3) {
       const y = result.body.vertices[i + 1];
@@ -288,8 +281,9 @@ describe('generateSlottedBin with and without a paired insert', () => {
     expect(placed.plate.status()).toBe('NoError');
     expect(placed.plate.boundingBox().min[2]).toBeCloseTo(20.0, 6);
     expect(placed.label).not.toBeNull();
-    // The raised label face reaches the plate top: 20.8 in the slot.
-    expect(placed.label!.boundingBox().max[2]).toBeCloseTo(20.8, 6);
+    // The raised label face ends flush with the nominal bin top: 21.0 for a
+    // 3-unit bin.
+    expect(placed.label!.boundingBox().max[2]).toBeCloseTo(21.0, 6);
     placed.plate.delete();
     placed.label!.delete();
   });
