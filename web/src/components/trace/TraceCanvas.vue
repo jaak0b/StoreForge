@@ -118,33 +118,27 @@ function drawGhosts(
     let minX = Infinity;
     let minY = Infinity;
     ctx.save();
-    ctx.globalAlpha = 0.55;
-    ctx.strokeStyle = '#c97a2e';
-    ctx.fillStyle = '#c97a2e';
-    ctx.lineWidth = 2;
+    // Translucent orange fill in the layout canvas's tool colour, with the
+    // holes cut out by an EvenOdd fill of outer plus holes.
+    const path = new Path2D();
     for (const loop of [ghost.outer, ...ghost.holes]) {
-      ctx.beginPath();
       loop.forEach((p, i) => {
         const x = p.x / mmPerPixel;
         const y = p.y / mmPerPixel;
         if (x < minX) minX = x;
         if (y < minY) minY = y;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (i === 0) path.moveTo(x, y);
+        else path.lineTo(x, y);
       });
-      ctx.closePath();
-      ctx.stroke();
+      path.closePath();
     }
-    ctx.globalAlpha = 0.1;
-    ctx.beginPath();
-    ghost.outer.forEach((p, i) => {
-      const x = p.x / mmPerPixel;
-      const y = p.y / mmPerPixel;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.closePath();
-    ctx.fill();
+    ctx.fillStyle = 'rgba(255, 152, 0, 0.3)';
+    ctx.fill(path, 'evenodd');
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = '#c97a2e';
+    ctx.fillStyle = '#c97a2e';
+    ctx.lineWidth = 2;
+    ctx.stroke(path);
     // Numbered badge at the outline's bounding-box top-left corner, clamped
     // so it stays inside the canvas.
     const r = 11;
@@ -247,6 +241,25 @@ const helperText = computed(() => {
   return `Click the next tool in the photo to start Tool ${tools.value.length + 1}.`;
 });
 
+/** The label of the finish button, which accepts only when an outline is pending. */
+const finishLabel = computed(() => {
+  if (outline.value === null) return 'Finish';
+  return retraceToolId.value !== null ? 'Replace and finish' : 'Accept and finish';
+});
+
+/**
+ * Accepts the pending outline and returns to Layout mode; with no pending
+ * outline it just leaves, discarding any pending re-trace selection.
+ */
+function finishTracing(): void {
+  if (outline.value !== null) {
+    acceptTool(true);
+    return;
+  }
+  clearClicks();
+  emit('accepted');
+}
+
 /**
  * Saves the traced outline as a tool (or replaces the re-traced tool's
  * outline). With finish the workspace returns to Layout mode; without it the
@@ -307,34 +320,32 @@ function acceptTool(finish: boolean): void {
       @click="onClick($event, false)"
       @contextmenu.prevent="onClick($event, true)"
     />
-    <div class="d-flex align-center flex-wrap ga-2 mt-2">
-      <v-btn
-        color="primary"
-        variant="flat"
-        :disabled="outline === null || segmenting"
-        @click="acceptTool(false)"
-      >
-        {{ retraceToolId !== null ? 'Replace and continue' : 'Accept and trace next' }}
-      </v-btn>
-      <v-btn
-        variant="outlined"
-        :disabled="outline === null || segmenting"
-        @click="acceptTool(true)"
-      >
-        {{ retraceToolId !== null ? 'Replace and finish' : 'Accept and finish' }}
-      </v-btn>
-      <v-btn variant="outlined" :disabled="points.length === 0" @click="clearClicks">
-        Clear clicks
-      </v-btn>
-      <v-progress-circular v-if="segmenting" indeterminate size="20" width="2" />
+    <div class="action-island">
+      <div class="d-flex align-center flex-wrap ga-2">
+        <v-btn
+          color="primary"
+          variant="flat"
+          :disabled="outline === null || segmenting"
+          @click="acceptTool(false)"
+        >
+          {{ retraceToolId !== null ? 'Replace and continue' : 'Accept and trace next' }}
+        </v-btn>
+        <v-btn variant="outlined" :disabled="segmenting" @click="finishTracing">
+          {{ finishLabel }}
+        </v-btn>
+        <v-btn variant="outlined" :disabled="points.length === 0" @click="clearClicks">
+          Clear clicks
+        </v-btn>
+        <v-progress-circular v-if="segmenting" indeterminate size="20" width="2" />
+      </div>
+      <div v-if="iouScore !== null" class="text-caption text-medium-emphasis mt-2 readout">
+        <div><span>Mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
+        <div><span>Decode time</span><span>{{ decodeMs!.toFixed(0) }} ms</span></div>
+      </div>
+      <v-alert v-if="errorMessage" type="error" density="compact" class="mt-2">
+        {{ errorMessage }}
+      </v-alert>
     </div>
-    <div v-if="iouScore !== null" class="text-caption text-medium-emphasis mt-2 readout">
-      <div><span>Mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
-      <div><span>Decode time</span><span>{{ decodeMs!.toFixed(0) }} ms</span></div>
-    </div>
-    <v-alert v-if="errorMessage" type="error" density="compact" class="mt-2">
-      {{ errorMessage }}
-    </v-alert>
   </div>
 </template>
 
@@ -343,6 +354,27 @@ function acceptTool(finish: boolean): void {
   max-width: 100%;
   border-radius: 8px;
   cursor: crosshair;
+  display: block;
+}
+
+/*
+ * The action buttons and readouts float in an island pinned to the bottom of
+ * the visible viewport while the trace area is scrolled, so the primary
+ * action stays reachable on photos taller than the screen. It stays inside
+ * the card because sticky positioning is bounded by the component's box.
+ */
+.action-island {
+  position: sticky;
+  bottom: 12px;
+  z-index: 2;
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  margin: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 
 .readout > div {

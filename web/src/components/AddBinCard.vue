@@ -63,3 +63,20 @@ function tabDisabled(name: TabName): boolean {
     </v-card-text>
   </v-card>
 </template>
+
+<style scoped>
+/*
+ * The card and the tabs window clip their content by default, which stops
+ * position: sticky children (the trace screen's floating action island) from
+ * pinning to the viewport. The slide transition is disabled, so the window
+ * never needs the clip; the card only loses corner clipping of flat content.
+ */
+.v-card {
+  overflow: visible;
+}
+
+.v-card :deep(.v-window),
+.v-card :deep(.v-window-item) {
+  overflow: visible;
+}
+</style>
