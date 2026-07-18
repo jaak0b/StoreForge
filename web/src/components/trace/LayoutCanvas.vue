@@ -23,15 +23,6 @@ const store = useToolTrace();
 const { tools, placements, selectedToolId, gridX, gridY, gridManual, fingerHoleMode } =
   storeToRefs(store);
 
-const emit = defineEmits<{
-  /**
-   * Where the selected tool sits on the canvas, as fractions of the canvas
-   * box (x at the tool's centre, y at its top edge), or null while nothing
-   * is selected; the workspace anchors the floating toolbar to it.
-   */
-  selectionAnchor: [anchor: { xFrac: number; yFrac: number } | null];
-}>();
-
 const canvas = ref<HTMLCanvasElement | null>(null);
 
 /** Canvas pixel width, following the container width (full-bleed layout). */
@@ -187,23 +178,33 @@ function draw(): void {
       ctx.stroke();
     }
   }
-  // Report where the selected tool sits, for the floating toolbar.
+  // A dashed bounding box marks the selected tool, so the docked toolbar's
+  // target stays clear on the canvas.
   const selected =
     selectedToolId.value !== null
       ? tools.value.find((t) => t.id === selectedToolId.value) ?? null
       : null;
   const selectedPlacement = selected !== null ? store.placementOf(selected.id) : undefined;
-  if (selected === null || selectedPlacement === undefined) {
-    emit('selectionAnchor', null);
-  } else {
+  if (selected !== null && selectedPlacement !== undefined) {
     const bounds = boundsOf(
       transformTool(selected.outline, selected.rotationDeg, selected.mirrored),
     );
-    const [x, y] = toPx({
-      x: (bounds.minX + bounds.maxX) / 2 + selectedPlacement.xMm,
+    const [x0, y0] = toPx({
+      x: bounds.minX + selectedPlacement.xMm,
       y: bounds.minY + selectedPlacement.yMm,
     });
-    emit('selectionAnchor', { xFrac: x / el.width, yFrac: y / el.height });
+    ctx.save();
+    ctx.strokeStyle = '#42a5f5';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    const pad = 4;
+    ctx.strokeRect(
+      x0 - pad,
+      y0 - pad,
+      (bounds.maxX - bounds.minX) * s + 2 * pad,
+      (bounds.maxY - bounds.minY) * s + 2 * pad,
+    );
+    ctx.restore();
   }
 }
 

@@ -14,15 +14,15 @@ import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
 import BinViewport from '../BinViewport.vue';
 import LayoutCanvas from './LayoutCanvas.vue';
-import SelectionToolbar from './SelectionToolbar.vue';
+import LayoutToolbar from './LayoutToolbar.vue';
 import AdvancedDrawer from './AdvancedDrawer.vue';
 
 /**
  * The Layout mode of the trace-and-layout workspace: a full-bleed layout
- * canvas with floating controls over it (the selection toolbar near the
- * selected tool, an icon cluster top right, the queue action bottom right)
- * and a slide-in advanced drawer with the Trace and Bin tabs. The canvas
- * swaps in place to the 3D preview via the cluster's 3D toggle.
+ * canvas under a docked toolbar strip (selection controls on the left, the
+ * global actions on the right), the queue action floating bottom right, and
+ * a slide-in advanced drawer with the Trace and Bin tabs. The canvas swaps
+ * in place to the 3D preview via the toolbar's 3D toggle.
  */
 
 const props = defineProps<{
@@ -59,9 +59,6 @@ watch(
   },
   { immediate: true },
 );
-
-/** Anchor of the selected tool on the canvas, for the floating toolbar. */
-const selectionAnchor = ref<{ xFrac: number; yFrac: number } | null>(null);
 
 const drawerOpen = ref(false);
 const show3d = ref(false);
@@ -246,51 +243,19 @@ function cancelEdit(): void {
 <template>
   <div class="workspace">
     <div class="canvas-area">
+      <LayoutToolbar
+        v-model:show3d="show3d"
+        v-model:drawer-open="drawerOpen"
+        :retrace-available="retraceAvailable"
+        @retrace="emit('retrace', $event)"
+        @trace-another="emit('traceAnother')"
+        @add-shape="primitiveDialog = true"
+      />
       <div v-show="!show3d" class="canvas-wrap">
-        <LayoutCanvas @selection-anchor="selectionAnchor = $event" />
-        <SelectionToolbar
-          :anchor="selectionAnchor"
-          :retrace-available="retraceAvailable"
-          @retrace="emit('retrace', $event)"
-        />
+        <LayoutCanvas />
       </div>
       <div v-if="show3d" class="preview-body">
         <BinViewport :mesh="meshes?.body ?? null" :label="meshes?.label ?? null" />
-      </div>
-
-      <div class="corner-cluster">
-        <v-btn icon size="small" variant="tonal" :disabled="!retraceAvailable" @click="emit('traceAnother')">
-          <v-icon icon="mdi-plus" size="20" />
-          <v-tooltip activator="parent" location="bottom">Trace another tool</v-tooltip>
-        </v-btn>
-        <v-btn icon size="small" variant="tonal" @click="primitiveDialog = true">
-          <v-icon icon="mdi-shape-outline" size="20" />
-          <v-tooltip activator="parent" location="bottom">Add a basic shape</v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          :variant="show3d ? 'flat' : 'tonal'"
-          :color="show3d ? 'primary' : undefined"
-          @click="show3d = !show3d"
-        >
-          <v-icon icon="mdi-video-3d" size="20" />
-          <v-tooltip activator="parent" location="bottom">
-            {{ show3d ? 'Back to the 2D layout' : 'Show the 3D preview' }}
-          </v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          :variant="drawerOpen ? 'flat' : 'tonal'"
-          :color="drawerOpen ? 'primary' : undefined"
-          @click="drawerOpen = !drawerOpen"
-        >
-          <v-icon icon="mdi-pencil" size="20" />
-          <v-tooltip activator="parent" location="bottom">
-            {{ drawerOpen ? 'Close the editing drawer' : 'Open the editing drawer' }}
-          </v-tooltip>
-        </v-btn>
       </div>
 
       <div class="canvas-hint text-caption text-medium-emphasis">
@@ -413,15 +378,6 @@ function cancelEdit(): void {
   min-height: 420px;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 8px;
-}
-
-.corner-cluster {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  display: flex;
-  gap: 8px;
-  z-index: 4;
 }
 
 .canvas-hint {
