@@ -258,7 +258,7 @@ function restart(): void {
 
     <div v-else>
       <div v-show="workspaceMode === 'trace'">
-        <div v-if="tools.length > 0" class="d-flex align-center flex-wrap ga-3 mb-3">
+        <div v-if="tools.length > 0" class="mb-3">
           <v-btn
             variant="outlined"
             prepend-icon="mdi-arrow-left"
@@ -266,9 +266,6 @@ function restart(): void {
           >
             Back to layout
           </v-btn>
-          <span class="text-body-2 text-medium-emphasis">
-            {{ tools.length === 1 ? 'One tool is traced so far.' : `${tools.length} tools are traced so far.` }}
-          </span>
         </div>
         <TraceCanvas v-if="embedReady" @accepted="workspaceMode = 'layout'" />
       </div>

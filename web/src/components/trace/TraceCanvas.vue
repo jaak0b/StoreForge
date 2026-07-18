@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
@@ -14,7 +14,7 @@ import type { SamPoint, TracedOutline } from '../../engine/trace/types';
  */
 
 const store = useToolTrace();
-const { rectifiedPreview, calibration, embedReady } = storeToRefs(store);
+const { rectifiedPreview, calibration, embedReady, tools } = storeToRefs(store);
 
 const emit = defineEmits<{ accepted: [] }>();
 
@@ -30,6 +30,17 @@ let maskPreview: ImageData | null = null;
 
 // Id of the existing tool being re-traced from its stored clicks.
 const retraceToolId = ref<string | null>(null);
+
+// The 1-based number of the tool saved by "Accept and trace next", shown in
+// the helper caption until the next click starts the following tool.
+const justSavedNumber = ref<number | null>(null);
+
+// Sheet-frame outlines of tools accepted on the current photo, keyed by tool
+// id. The store recentres each accepted outline to tool-local mm, discarding
+// its sheet position, so the position is kept here for the ghost overlays.
+// Tools rehydrated from a saved plan entry have no known sheet position and
+// get no ghost until they are re-traced.
+const ghostOutlines = new Map<string, TracedOutline>();
 
 // The rail's re-trace button posts the tool id into the store; consume it
 // here (also on mount, since the canvas may mount after the request).
@@ -66,9 +77,10 @@ function draw(): void {
     }
   }
   const cal = calibration.value;
+  if (cal !== null) drawGhosts(ctx, el, cal.mmPerPixel);
   if (outline.value !== null && cal !== null) {
     ctx.strokeStyle = '#ff9800';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     for (const loop of [outline.value.outer, ...outline.value.holes]) {
       ctx.beginPath();
       loop.forEach((p, i) => {
@@ -92,14 +104,78 @@ function draw(): void {
   }
 }
 
+/** Strokes each accepted tool's outline in muted orange with a numbered badge. */
+function drawGhosts(
+  ctx: CanvasRenderingContext2D,
+  el: HTMLCanvasElement,
+  mmPerPixel: number,
+): void {
+  tools.value.forEach((tool, index) => {
+    // A tool being re-traced is not ghosted; its outline is being replaced.
+    if (tool.id === retraceToolId.value) return;
+    const ghost = ghostOutlines.get(tool.id);
+    if (ghost === undefined) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = '#c97a2e';
+    ctx.fillStyle = '#c97a2e';
+    ctx.lineWidth = 2;
+    for (const loop of [ghost.outer, ...ghost.holes]) {
+      ctx.beginPath();
+      loop.forEach((p, i) => {
+        const x = p.x / mmPerPixel;
+        const y = p.y / mmPerPixel;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 0.1;
+    ctx.beginPath();
+    ghost.outer.forEach((p, i) => {
+      const x = p.x / mmPerPixel;
+      const y = p.y / mmPerPixel;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fill();
+    // Numbered badge at the outline's bounding-box top-left corner, clamped
+    // so it stays inside the canvas.
+    const r = 11;
+    const bx = Math.min(Math.max(minX, r + 2), el.width - r - 2);
+    const by = Math.min(Math.max(minY, r + 2), el.height - r - 2);
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.arc(bx, by, r, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(index + 1), bx, by);
+    ctx.restore();
+  });
+}
+
 watch(rectifiedPreview, () => {
+  ghostOutlines.clear();
   clearClicks();
   void nextTick(draw);
 });
+// Tools can change from Layout mode (removal, re-trace) while this canvas
+// stays mounted; redraw so the ghost overlays track the store.
+watch(tools, () => draw(), { deep: true });
 onMounted(() => void nextTick(draw));
 
 function clearClicks(): void {
   retraceToolId.value = null;
+  justSavedNumber.value = null;
   points.value = [];
   outline.value = null;
   iouScore.value = null;
@@ -139,29 +215,91 @@ function onClick(event: MouseEvent, exclude: boolean): void {
   const rect = el.getBoundingClientRect();
   const x = ((event.clientX - rect.left) / rect.width) * el.width;
   const y = ((event.clientY - rect.top) / rect.height) * el.height;
+  justSavedNumber.value = null;
   const label: 0 | 1 = exclude || event.shiftKey ? 0 : 1;
   points.value = [...points.value, { x, y, label }];
   void runSegment();
 }
 
-function acceptTool(): void {
+/** The 1-based number of the tool the canvas is currently tracing. */
+const activeToolNumber = computed(() => {
+  if (retraceToolId.value !== null) {
+    const index = tools.value.findIndex((t) => t.id === retraceToolId.value);
+    if (index >= 0) return index + 1;
+  }
+  return tools.value.length + 1;
+});
+
+/** The state-dependent instruction line above the canvas. */
+const helperText = computed(() => {
+  if (outline.value !== null) {
+    return retraceToolId.value !== null
+      ? 'Add more clicks to refine the outline, or replace the saved outline for this tool.'
+      : 'Add more clicks to refine the outline, or accept it to save this tool.';
+  }
+  if (justSavedNumber.value !== null) {
+    return (
+      `Tool ${justSavedNumber.value} was saved. ` +
+      `Click the next tool in the photo to start Tool ${justSavedNumber.value + 1}.`
+    );
+  }
+  if (tools.value.length === 0) return 'Click a tool in the photo to start tracing it.';
+  return `Click the next tool in the photo to start Tool ${tools.value.length + 1}.`;
+});
+
+/**
+ * Saves the traced outline as a tool (or replaces the re-traced tool's
+ * outline). With finish the workspace returns to Layout mode; without it the
+ * canvas clears for tracing the next tool.
+ */
+function acceptTool(finish: boolean): void {
   if (outline.value === null) return;
   const clicks = JSON.parse(JSON.stringify(points.value)) as SamPoint[];
+  const sheetOutline = JSON.parse(JSON.stringify(outline.value)) as TracedOutline;
+  let savedNumber: number;
   if (retraceToolId.value !== null) {
-    store.replaceToolOutline(retraceToolId.value, outline.value, clicks);
+    const toolId = retraceToolId.value;
+    store.replaceToolOutline(toolId, outline.value, clicks);
+    ghostOutlines.set(toolId, sheetOutline);
+    const index = tools.value.findIndex((t) => t.id === toolId);
+    savedNumber = index >= 0 ? index + 1 : tools.value.length;
   } else {
-    store.addTool(outline.value, undefined, clicks);
+    const tool = store.addTool(outline.value, undefined, clicks);
+    ghostOutlines.set(tool.id, sheetOutline);
+    savedNumber = tools.value.length;
   }
   clearClicks();
-  emit('accepted');
+  if (finish) {
+    emit('accepted');
+  } else {
+    justSavedNumber.value = savedNumber;
+    draw();
+  }
 }
 </script>
 
 <template>
   <div>
-    <p class="text-body-2 mb-2">
-      <b>Click on a tool to trace it.</b> Shift-click or right-click marks a
-      spot to exclude when the selection grabs too much.
+    <div class="d-flex align-center flex-wrap ga-1 mb-2">
+      <template v-for="(tool, i) in tools" :key="tool.id">
+        <v-chip
+          v-if="tool.id !== retraceToolId"
+          size="small"
+          label
+          variant="tonal"
+          prepend-icon="mdi-check"
+          class="text-medium-emphasis"
+        >
+          Tool {{ i + 1 }}
+        </v-chip>
+      </template>
+      <v-chip size="small" label variant="flat" color="primary">
+        Tool {{ activeToolNumber }}
+      </v-chip>
+    </div>
+    <p class="text-body-2 mb-1">{{ helperText }}</p>
+    <p class="text-caption text-medium-emphasis mb-2">
+      Shift-click or right-click a point to exclude it from the outline.
     </p>
     <canvas
       ref="canvas"
@@ -174,9 +312,16 @@ function acceptTool(): void {
         color="primary"
         variant="flat"
         :disabled="outline === null || segmenting"
-        @click="acceptTool"
+        @click="acceptTool(false)"
       >
-        {{ retraceToolId !== null ? 'Replace tool outline' : 'Accept tool' }}
+        {{ retraceToolId !== null ? 'Replace and continue' : 'Accept and trace next' }}
+      </v-btn>
+      <v-btn
+        variant="outlined"
+        :disabled="outline === null || segmenting"
+        @click="acceptTool(true)"
+      >
+        {{ retraceToolId !== null ? 'Replace and finish' : 'Accept and finish' }}
       </v-btn>
       <v-btn variant="outlined" :disabled="points.length === 0" @click="clearClicks">
         Clear clicks
