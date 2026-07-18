@@ -4,10 +4,10 @@ import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
-import { AUTO_SIZE_MARGIN_MM, useToolTrace } from '../../stores/toolTrace';
+import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
-import { autoPocketGridSize, generatePocketBin } from '../../workerClient';
-import type { LabeledBinMeshes } from '../../engine/gridfinity/types';
+import { generatePocketBin } from '../../workerClient';
+import { AUTO_SIZE_MARGIN_MM, requiredFootprint } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import type { BinPockets, TracePaper, TracedBin } from '../../engine/plan/types';
@@ -74,79 +74,42 @@ const selectedPlacement = computed(() =>
 const CLEARANCE_CHOICES = [0, 0.5, 1.5, 3, 4.5];
 
 /**
- * The smallest footprint that fits the current layout, kept in step by the
- * preview pipeline; manual entries clamp to it so the size fields can never
- * make a tool reach into the bin wall. Null until the first layout is sized.
+ * The smallest footprint that fits the current layout, straight from the
+ * layout model; the size fields show it as their minimum. Null while no tool
+ * is placed.
  */
-const requiredGrid = ref<{ gridX: number; gridY: number } | null>(null);
+const requiredGrid = computed(() =>
+  trace.placements.length > 0
+    ? requiredFootprint(trace.tools, trace.placements, AUTO_SIZE_MARGIN_MM)
+    : null,
+);
 
-/** Bumped to remount a size field whose typed value was clamped away. */
-const gridFieldRefresh = ref(0);
+// The size fields edit local mirrors of the store footprint: the store
+// clamps a typed value to the required minimum and returns what it applied,
+// and writing that back into the mirror re-renders the field even when the
+// store value itself did not change (a typed value below an unchanged
+// minimum), so the field always echoes the applied size.
+const gridXField = ref(gridX.value);
+const gridYField = ref(gridY.value);
+watch(gridX, (value) => {
+  gridXField.value = value;
+});
+watch(gridY, (value) => {
+  gridYField.value = value;
+});
 
 function setGridManually(axis: 'x' | 'y', value: number): void {
-  const cells = Math.max(1, Math.floor(value));
-  if (!Number.isFinite(cells)) return;
-  trace.gridManual = true;
-  const minimum = axis === 'x' ? requiredGrid.value?.gridX ?? 1 : requiredGrid.value?.gridY ?? 1;
-  const clamped = Math.max(minimum, cells);
-  const target = axis === 'x' ? gridX : gridY;
-  const rejected = clamped !== cells;
-  target.value = clamped;
-  // When the typed value was below the minimum and the store value did not
-  // change, the field still shows the typed text; remount it so it shows
-  // the clamped value again.
-  if (rejected) gridFieldRefresh.value += 1;
+  const applied = trace.setGridManually(axis, value);
+  if (axis === 'x') gridXField.value = applied;
+  else gridYField.value = applied;
 }
-
-/**
- * Sizes the footprint from the current layout and commits the result to the
- * store: the placements are shifted together only as far as needed to fit
- * inside the bin, and the size fields follow (in manual mode only as a floor).
- */
-async function applyAutoSize(): Promise<void> {
-  if (trace.placements.length === 0) return;
-  try {
-    const size = await autoPocketGridSize(trace.tools, trace.placements, AUTO_SIZE_MARGIN_MM);
-    requiredGrid.value = { gridX: size.gridX, gridY: size.gridY };
-    if (size.offsetX !== 0 || size.offsetY !== 0) {
-      trace.shiftPlacements(size.offsetX, size.offsetY);
-    }
-    gridX.value = gridManual.value ? Math.max(gridX.value, size.gridX) : size.gridX;
-    gridY.value = gridManual.value ? Math.max(gridY.value, size.gridY) : size.gridY;
-  } catch (error) {
-    // Sizing problems (overlapping tools) are user-fixable; surface them in
-    // the rail's warning alert.
-    addError.value = error instanceof Error ? error.message : 'Sizing the bin failed.';
-  }
-}
-
-/**
- * Hands footprint control back to auto sizing and resizes right away, since
- * the preview pipeline only reruns when the layout changes.
- */
-async function enableAutoSize(): Promise<void> {
-  trace.gridManual = false;
-  await applyAutoSize();
-}
-
-// Resizing and recentring wait out a drag so the layout never moves under the
-// pointer; the release commits them (the preview pipeline alone would only
-// rerun on a further layout change).
-watch(
-  () => trace.dragging,
-  (dragging, wasDragging) => {
-    if (wasDragging && !dragging) void applyAutoSize();
-  },
-);
 
 function applyDefaultDepth(value: number): void {
   if (!Number.isFinite(value) || value <= 0) return;
   defaultDepthMm.value = value;
-  for (const placement of trace.placements) placement.pocketDepthMm = value;
-}
-
-function removeFingerHole(tool: { fingerHoles: unknown[] }, index: number): void {
-  tool.fingerHoles.splice(index, 1);
+  for (const placement of trace.placements) {
+    trace.setPocketDepth(placement.toolId, value);
+  }
 }
 
 /** True when the hole is an elongated slot rather than a circle. */
@@ -162,8 +125,7 @@ function holeLengthMm(hole: FingerHole): number {
 }
 
 function setHoleDiameter(hole: FingerHole, value: number): void {
-  if (!Number.isFinite(value) || value <= 0) return;
-  hole.diameterMm = value;
+  trace.setFingerHoleDiameter(hole, value);
 }
 
 // Custom primitive dialog.
@@ -226,53 +188,14 @@ const pocketParams = computed<PocketBinParams>(() => ({
   placements: JSON.parse(JSON.stringify(trace.placements)),
 }));
 
-/**
- * Auto-sizes the footprint and generates the preview in one pipeline: the
- * bin is sized to the layout's bounding box, the layout is recentred in it,
- * and the preview is always generated from that recentred, sized layout, so
- * dragging a tool past the wall grows the bin (and moving tools together
- * shrinks it) instead of raising the wall error. The recentring and the size
- * fields are committed to the store only between drags; mid-drag the preview
- * shows the coming result while the canvas layout stays under the pointer.
- */
-async function generateSizedPreview(raw: unknown): Promise<LabeledBinMeshes> {
-  let params = raw as PocketBinParams;
-  if (params.placements.length > 0) {
-    const size = await autoPocketGridSize(params.tools, params.placements, AUTO_SIZE_MARGIN_MM);
-    requiredGrid.value = { gridX: size.gridX, gridY: size.gridY };
-    // In manual mode the required size is only a floor: the layout growing
-    // past a manually typed footprint pushes the footprint out with it, so
-    // the wall error stays unreachable through the size fields.
-    const nextX = gridManual.value ? Math.max(gridX.value, size.gridX) : size.gridX;
-    const nextY = gridManual.value ? Math.max(gridY.value, size.gridY) : size.gridY;
-    if (!trace.dragging) {
-      if (size.offsetX !== 0 || size.offsetY !== 0) {
-        trace.shiftPlacements(size.offsetX, size.offsetY);
-      }
-      gridX.value = nextX;
-      gridY.value = nextY;
-    }
-    params = {
-      ...params,
-      gridX: nextX,
-      gridY: nextY,
-      placements: params.placements.map((p) => ({
-        ...p,
-        xMm: p.xMm + size.offsetX,
-        yMm: p.yMm + size.offsetY,
-      })),
-    };
-  } else {
-    requiredGrid.value = null;
-  }
-  return generatePocketBin(params);
-}
-
-// The preview generation always runs so the layout is validated; the heavy
-// viewport itself mounts only once the preview card is expanded.
+// The preview generation always runs so the layout is validated (the
+// worker's exact CSG containment check is the final authority over the
+// layout model's bounding-box sizing); the heavy viewport itself mounts only
+// once the preview card is expanded. Its error alert is the single surface
+// for layout validation problems.
 const { meshes, errorMessage } = useBinPreview(
   () => pocketParams.value,
-  (params) => generateSizedPreview(params),
+  (params) => generatePocketBin(params as PocketBinParams),
 );
 const previewOpen = ref(false);
 
@@ -420,24 +343,26 @@ function cancelEdit(): void {
             />
             <div class="d-flex align-center flex-wrap ga-2">
               <v-text-field
-                v-model.number="tool.rotationDeg"
+                :model-value="tool.rotationDeg"
                 type="number"
                 step="5"
                 label="Rotation (degrees)"
                 density="compact"
                 hide-details
                 class="small-field"
+                @update:model-value="trace.setToolTransform(tool.id, { rotationDeg: Number($event) })"
               />
               <v-select
-                v-model="tool.offsetMm"
+                :model-value="tool.offsetMm"
                 :items="CLEARANCE_CHOICES"
                 label="Clearance (mm)"
                 density="compact"
                 hide-details
                 class="small-field"
+                @update:model-value="trace.setToolTransform(tool.id, { offsetMm: Number($event) })"
               />
               <v-text-field
-                v-model.number="selectedPlacement.pocketDepthMm"
+                :model-value="selectedPlacement.pocketDepthMm"
                 type="number"
                 min="1"
                 step="1"
@@ -445,14 +370,16 @@ function cancelEdit(): void {
                 density="compact"
                 hide-details
                 class="small-field"
+                @update:model-value="trace.setPocketDepth(tool.id, Number($event))"
               />
             </div>
             <v-switch
-              v-model="tool.mirrored"
+              :model-value="tool.mirrored"
               color="primary"
               density="compact"
               hide-details
               label="Mirrored"
+              @update:model-value="trace.setToolTransform(tool.id, { mirrored: $event === true })"
             />
             <div v-if="tool.fingerHoles.length > 0" class="text-caption text-medium-emphasis mt-1">
               Finger holes
@@ -482,7 +409,7 @@ function cancelEdit(): void {
                 class="hole-field"
                 @update:model-value="setHoleDiameter(hole, Number($event))"
               />
-              <v-btn icon size="x-small" variant="text" color="error" @click="removeFingerHole(tool, index)">
+              <v-btn icon size="x-small" variant="text" color="error" @click="trace.removeFingerHole(tool, index)">
                 <v-icon icon="mdi-close" size="14" />
               </v-btn>
             </div>
@@ -498,8 +425,7 @@ function cancelEdit(): void {
       <div class="rail-head">Footprint</div>
       <div class="d-flex align-center flex-wrap ga-2">
         <v-text-field
-          :key="`grid-x-${gridFieldRefresh}`"
-          :model-value="gridX"
+          :model-value="gridXField"
           type="number"
           :min="requiredGrid?.gridX ?? 1"
           step="1"
@@ -510,8 +436,7 @@ function cancelEdit(): void {
           @update:model-value="setGridManually('x', Number($event))"
         />
         <v-text-field
-          :key="`grid-y-${gridFieldRefresh}`"
-          :model-value="gridY"
+          :model-value="gridYField"
           type="number"
           :min="requiredGrid?.gridY ?? 1"
           step="1"
@@ -527,7 +452,7 @@ function cancelEdit(): void {
           variant="outlined"
           prepend-icon="mdi-arrow-collapse-all"
           title="Size the footprint from the layout again."
-          @click="enableAutoSize"
+          @click="trace.enableAutoSize()"
         >
           Auto size
         </v-btn>

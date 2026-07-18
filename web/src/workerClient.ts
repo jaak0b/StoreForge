@@ -7,8 +7,7 @@ import type {
   LabeledBinParams,
   MeshData,
 } from './engine/gridfinity/types';
-import type { AutoGridResult, PocketBinParams } from './engine/trace/pocketBin';
-import type { TracedTool, ToolPlacement } from './engine/trace/types';
+import type { PocketBinParams } from './engine/trace/pocketBin';
 
 let remote: Comlink.Remote<GeometryWorkerApi> | null = null;
 
@@ -53,21 +52,4 @@ export async function generatePocketBinUnion(
   params: PocketBinParams,
 ): Promise<MeshData> {
   return getWorker().generatePocketBinUnion(withResolvedIconPath(params));
-}
-
-/**
- * Smallest bin footprint whose interior fits every placed pocket with the
- * margin, plus the offset that centres the layout in that footprint.
- */
-export async function autoPocketGridSize(
-  tools: TracedTool[],
-  placements: ToolPlacement[],
-  marginMm: number,
-): Promise<AutoGridResult> {
-  // Deep JSON copies strip Vue reactivity proxies, which structured clone rejects.
-  return getWorker().autoPocketGridSize(
-    JSON.parse(JSON.stringify(tools)) as TracedTool[],
-    JSON.parse(JSON.stringify(placements)) as ToolPlacement[],
-    marginMm,
-  );
 }

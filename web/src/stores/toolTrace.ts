@@ -8,8 +8,10 @@ import type {
   TracedOutline,
   TracedTool,
   ToolPlacement,
+  FingerHole,
 } from '../engine/trace/types';
-import { boundsOf } from '../engine/trace/edit';
+import type { LayoutState } from '../engine/trace/layoutModel';
+import * as layout from '../engine/trace/layoutModel';
 
 /**
  * Community shadow boards use a finger relief around 25 mm across; that
@@ -18,17 +20,13 @@ import { boundsOf } from '../engine/trace/edit';
 export const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
 
 /**
- * Clear interior kept around the pockets when the bin footprint is
- * auto-sized: the gap between the pocket outline and the bin wall so the
- * wall line does not touch the pocket edge.
- */
-export const AUTO_SIZE_MARGIN_MM = 2;
-
-/**
  * State of the Tool trace tab, kept in a store because the add-bin card's
  * tabs unmount when switched away; the photo itself stays in the vision
  * worker, so this carries only what the UI needs to redraw. The large
  * rectified preview is deliberately non-reactive (shallowRef) pixel data.
+ * All layout mutations (placement, sizing, transforms, finger holes) are
+ * thin wrappers over engine/trace/layoutModel, which is the single home for
+ * that logic.
  */
 export const useToolTrace = defineStore('toolTrace', () => {
   /** Object URL of the loaded photo file, for drawing the corner-picking canvas. */
@@ -68,15 +66,9 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const retraceRequestId = ref<string | null>(null);
   /** True while a click on the layout canvas places a finger hole. */
   const fingerHoleMode = ref(false);
-  /**
-   * True while a pointer drag on the layout canvas is in progress; footprint
-   * resizing and layout recentring wait for the release so they never move
-   * the layout under the pointer.
-   */
-  const dragging = ref(false);
   const fingerHoleDiameterMm = ref(DEFAULT_FINGER_HOLE_DIAMETER_MM);
 
-  /** Bin footprint of the layout; kept in step with autoGridSize unless overridden. */
+  /** Bin footprint of the layout; kept in step with the layout model unless overridden. */
   const gridX = ref(1);
   const gridY = ref(1);
   /** True when the user typed a footprint; auto sizing stops updating it. */
@@ -91,94 +83,122 @@ export const useToolTrace = defineStore('toolTrace', () => {
   let toolCounter = 0;
 
   /**
-   * Adds a tool from an outline in sheet mm: the outline is recentered on its
-   * bounding-box middle so tool-local coordinates sit about the origin, and
-   * the tool is placed at the layout origin with the default pocket depth.
+   * The store's reactive refs presented as the layout model's mutable state:
+   * the model's actions mutate this view and the changes land in the refs.
    */
-  function recentred(outline: TracedOutline): TracedOutline {
-    const bounds = boundsOf(outline);
-    const cx = (bounds.minX + bounds.maxX) / 2;
-    const cy = (bounds.minY + bounds.maxY) / 2;
-    const recentre = (p: { x: number; y: number }) => ({ x: p.x - cx, y: p.y - cy });
-    return {
-      outer: outline.outer.map(recentre),
-      holes: outline.holes.map((loop) => loop.map(recentre)),
-    };
-  }
+  const layoutState: LayoutState = {
+    get tools() {
+      return tools.value;
+    },
+    set tools(value) {
+      tools.value = value;
+    },
+    get placements() {
+      return placements.value;
+    },
+    set placements(value) {
+      placements.value = value;
+    },
+    get gridX() {
+      return gridX.value;
+    },
+    set gridX(value) {
+      gridX.value = value;
+    },
+    get gridY() {
+      return gridY.value;
+    },
+    set gridY(value) {
+      gridY.value = value;
+    },
+    get gridManual() {
+      return gridManual.value;
+    },
+    set gridManual(value) {
+      gridManual.value = value;
+    },
+  };
 
   function addTool(outline: TracedOutline, name?: string, clicks: SamPoint[] = []): TracedTool {
     toolCounter += 1;
-    const tool: TracedTool = {
-      id: crypto.randomUUID(),
-      name: name ?? `Tool ${toolCounter}`,
-      outline: recentred(outline),
+    const tool = layout.addTool(
+      layoutState,
+      outline,
+      name ?? `Tool ${toolCounter}`,
+      defaultDepthMm.value,
       clicks,
-      rotationDeg: 0,
-      // 0.5 mm is a typical FDM XY fit clearance: enough to slide the tool
-      // into the pocket snugly without binding on printer dimensional error.
-      offsetMm: 0.5,
-      mirrored: false,
-      fingerHoles: [],
-    };
-    tools.value.push(tool);
-    placements.value.push({
-      toolId: tool.id,
-      xMm: 0,
-      yMm: 0,
-      pocketDepthMm: defaultDepthMm.value,
-    });
+    );
     selectedToolId.value = tool.id;
     return tool;
   }
 
-  /**
-   * Replaces an existing tool's outline and clicks after re-tracing it from
-   * the stored photo; the placement, name and editing parameters stay.
-   */
   function replaceToolOutline(
     toolId: string,
     outline: TracedOutline,
     clicks: SamPoint[],
   ): void {
-    const tool = tools.value.find((t) => t.id === toolId);
-    if (tool === undefined) return;
-    tool.outline = recentred(outline);
-    tool.clicks = clicks;
+    layout.replaceToolOutline(layoutState, toolId, outline, clicks);
   }
 
   function removeTool(toolId: string): void {
-    tools.value = tools.value.filter((tool) => tool.id !== toolId);
-    placements.value = placements.value.filter((p) => p.toolId !== toolId);
+    layout.removeTool(layoutState, toolId);
     if (selectedToolId.value === toolId) selectedToolId.value = null;
   }
 
   function duplicateTool(toolId: string): void {
-    const source = tools.value.find((tool) => tool.id === toolId);
-    const placement = placements.value.find((p) => p.toolId === toolId);
-    if (source === undefined || placement === undefined) return;
-    toolCounter += 1;
-    const copy: TracedTool = {
-      ...(JSON.parse(JSON.stringify(source)) as TracedTool),
-      id: crypto.randomUUID(),
-      name: `${source.name} copy`,
-    };
-    tools.value.push(copy);
-    // The copy lands offset from the original so the two are both visible.
-    placements.value.push({
-      toolId: copy.id,
-      xMm: placement.xMm + 10,
-      yMm: placement.yMm + 10,
-      pocketDepthMm: placement.pocketDepthMm,
-    });
-    selectedToolId.value = copy.id;
+    const copy = layout.duplicateTool(layoutState, toolId);
+    if (copy !== null) selectedToolId.value = copy.id;
   }
 
-  /** Moves every placement by the given offset, keeping the arrangement. */
-  function shiftPlacements(offsetX: number, offsetY: number): void {
-    for (const placement of placements.value) {
-      placement.xMm += offsetX;
-      placement.yMm += offsetY;
-    }
+  function moveTool(toolId: string, xMm: number, yMm: number): void {
+    layout.moveTool(layoutState, toolId, xMm, yMm);
+  }
+
+  function dropTool(): void {
+    layout.dropTool(layoutState);
+  }
+
+  function enableAutoSize(): void {
+    layout.enableAutoSize(layoutState);
+  }
+
+  function setGridManually(axis: 'x' | 'y', value: number): number {
+    return layout.setGridManually(layoutState, axis, value);
+  }
+
+  function setToolTransform(
+    toolId: string,
+    patch: Partial<Pick<TracedTool, 'rotationDeg' | 'mirrored' | 'offsetMm'>>,
+  ): void {
+    layout.setToolTransform(layoutState, toolId, patch);
+  }
+
+  function setPocketDepth(toolId: string, depthMm: number): void {
+    layout.setPocketDepth(layoutState, toolId, depthMm);
+  }
+
+  function addFingerHole(toolId: string, hole: FingerHole): FingerHole | null {
+    return layout.addFingerHole(layoutState, toolId, hole);
+  }
+
+  function moveFingerHole(hole: FingerHole, dxMm: number, dyMm: number): void {
+    layout.moveFingerHole(layoutState, hole, dxMm, dyMm);
+  }
+
+  function stretchFingerHole(hole: FingerHole, x2Mm: number, y2Mm: number): void {
+    layout.stretchFingerHole(layoutState, hole, x2Mm, y2Mm);
+  }
+
+  function finishFingerHole(hole: FingerHole, minSlotMm: number): void {
+    layout.finishFingerHole(layoutState, hole, minSlotMm);
+  }
+
+  function removeFingerHole(tool: TracedTool, index: number): void {
+    layout.removeFingerHole(layoutState, tool, index);
+  }
+
+  function setFingerHoleDiameter(hole: FingerHole, diameterMm: number): void {
+    layout.setFingerHoleDiameter(layoutState, hole, diameterMm);
   }
 
   function placementOf(toolId: string): ToolPlacement | undefined {
@@ -203,7 +223,6 @@ export const useToolTrace = defineStore('toolTrace', () => {
     workspaceMode.value = 'layout';
     retraceRequestId.value = null;
     fingerHoleMode.value = false;
-    dragging.value = false;
     fingerHoleDiameterMm.value = DEFAULT_FINGER_HOLE_DIAMETER_MM;
     gridX.value = 1;
     gridY.value = 1;
@@ -229,7 +248,6 @@ export const useToolTrace = defineStore('toolTrace', () => {
     workspaceMode,
     retraceRequestId,
     fingerHoleMode,
-    dragging,
     fingerHoleDiameterMm,
     gridX,
     gridY,
@@ -239,7 +257,18 @@ export const useToolTrace = defineStore('toolTrace', () => {
     replaceToolOutline,
     removeTool,
     duplicateTool,
-    shiftPlacements,
+    moveTool,
+    dropTool,
+    enableAutoSize,
+    setGridManually,
+    setToolTransform,
+    setPocketDepth,
+    addFingerHole,
+    moveFingerHole,
+    stretchFingerHole,
+    finishFingerHole,
+    removeFingerHole,
+    setFingerHoleDiameter,
     placementOf,
     reset,
   };

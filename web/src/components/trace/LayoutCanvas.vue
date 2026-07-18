@@ -11,10 +11,10 @@ import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
  * bin interior with draggable tools and dotted 42 mm cell boundaries. While
  * the rail's finger-hole mode is active, a pointer drag on free tool area
  * draws a finger hole (a short drag places a circle, a longer one an
- * elongated slot); in either mode a drag on an existing hole moves it. Footprint
- * auto-sizing and layout recentring live in the rail's preview pipeline; the
- * store's dragging flag defers both to the pointer release, so the grid and
- * the layout never move under an active drag.
+ * elongated slot); in either mode a drag on an existing hole moves it. All
+ * layout mutations go through the store's layout-model wrappers; the mm
+ * scale is frozen at drag start so the mapping under the pointer never
+ * changes mid-drag, and a tool drop commits the footprint re-size.
  */
 
 const store = useToolTrace();
@@ -154,19 +154,21 @@ watch(
 onMounted(() => void nextTick(draw));
 
 // Pointer interaction. All three drags (move a tool, move a hole, stretch a
-// new hole) advance by mm deltas from the last pointer position; the store's
-// dragging flag keeps the footprint and layout fixed until the release, so
-// the mm scale never changes mid-drag.
+// new hole) advance by mm deltas from the last pointer position. The mm
+// scale is captured at drag start and held until the drop, so even when a
+// finger-hole edit re-sizes the footprint mid-drag the pointer mapping does
+// not rescale under the pointer.
 type DragKind = 'tool' | 'hole' | 'place';
 let dragKind: DragKind | null = null;
 let draggingToolId: string | null = null;
 let draggingHole: FingerHole | null = null;
 let lastMm: MmPoint | null = null;
+let dragScale: number | null = null;
 
 function clientToMm(clientX: number, clientY: number): MmPoint {
   const el = canvas.value!;
   const rect = el.getBoundingClientRect();
-  const s = mmScale();
+  const s = dragScale ?? mmScale();
   return {
     x: (((clientX - rect.left) / rect.width) * el.width - el.width / 2) / s,
     y: (((clientY - rect.top) / rect.height) * el.height - el.height / 2) / s,
@@ -225,6 +227,7 @@ function holeAt(p: MmPoint): { tool: TracedTool; hole: FingerHole } | null {
 }
 
 function onPointerDown(event: PointerEvent): void {
+  dragScale = mmScale();
   const p = clientToMm(event.clientX, event.clientY);
   lastMm = p;
   // An existing hole under the pointer is dragged in either mode; in
@@ -235,7 +238,6 @@ function onPointerDown(event: PointerEvent): void {
     draggingToolId = holeHit.tool.id;
     dragKind = 'hole';
     selectedToolId.value = holeHit.tool.id;
-    store.dragging = true;
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
     return;
   }
@@ -243,21 +245,19 @@ function onPointerDown(event: PointerEvent): void {
     const tool = toolAt(p);
     if (tool === null) return;
     const placement = store.placementOf(tool.id)!;
-    const hole: FingerHole = {
+    // The store returns the pushed hole, reactive inside the store; drag the
+    // reactive one so mutations redraw the canvas.
+    draggingHole = store.addFingerHole(tool.id, {
       x: p.x - placement.xMm,
       y: p.y - placement.yMm,
       x2: p.x - placement.xMm,
       y2: p.y - placement.yMm,
       diameterMm: store.fingerHoleDiameterMm,
-    };
-    tool.fingerHoles.push(hole);
-    // The pushed object becomes reactive inside the store; drag the reactive
-    // one so mutations redraw the canvas.
-    draggingHole = tool.fingerHoles[tool.fingerHoles.length - 1];
+    });
+    if (draggingHole === null) return;
     draggingToolId = tool.id;
     dragKind = 'place';
     selectedToolId.value = tool.id;
-    store.dragging = true;
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
     return;
   }
@@ -269,7 +269,6 @@ function onPointerDown(event: PointerEvent): void {
   selectedToolId.value = tool.id;
   draggingToolId = tool.id;
   dragKind = 'tool';
-  store.dragging = true;
   (event.target as HTMLElement).setPointerCapture(event.pointerId);
 }
 
@@ -299,47 +298,37 @@ function onPointerMove(event: PointerEvent): void {
   if (dragKind === 'tool') {
     const placement = draggingToolId !== null ? store.placementOf(draggingToolId) : undefined;
     if (placement === undefined) return;
-    // Moving a tool means size-to-fit: a manually typed footprint is
-    // discarded and auto sizing takes over again on release.
-    store.gridManual = false;
-    placement.xMm += dx;
-    placement.yMm += dy;
+    // A tool move never re-sizes; the drop commits the size-to-fit.
+    store.moveTool(placement.toolId, placement.xMm + dx, placement.yMm + dy);
     return;
   }
   if (draggingHole === null) return;
   if (dragKind === 'hole') {
-    draggingHole.x += dx;
-    draggingHole.y += dy;
-    if (draggingHole.x2 !== undefined && draggingHole.y2 !== undefined) {
-      draggingHole.x2 += dx;
-      draggingHole.y2 += dy;
-    }
+    store.moveFingerHole(draggingHole, dx, dy);
     return;
   }
   // 'place': the start stays put and the drag stretches the second endpoint.
   const placement = draggingToolId !== null ? store.placementOf(draggingToolId) : undefined;
   if (placement === undefined) return;
-  draggingHole.x2 = p.x - placement.xMm;
-  draggingHole.y2 = p.y - placement.yMm;
+  store.stretchFingerHole(draggingHole, p.x - placement.xMm, p.y - placement.yMm);
 }
 
 function onPointerUp(): void {
   if (dragKind === 'place' && draggingHole !== null) {
-    const length = Math.hypot(
-      (draggingHole.x2 ?? draggingHole.x) - draggingHole.x,
-      (draggingHole.y2 ?? draggingHole.y) - draggingHole.y,
-    );
-    if (length < SLOT_MIN_DRAG_MM) {
-      delete draggingHole.x2;
-      delete draggingHole.y2;
-    }
+    // A short drag collapses back to a circular hole.
+    store.finishFingerHole(draggingHole, SLOT_MIN_DRAG_MM);
+  }
+  if (dragKind === 'tool') {
+    // Moving a tool means size-to-fit: a manually typed footprint is
+    // discarded and the drop applies the re-sized footprint and the minimal
+    // fit-in shift.
+    store.dropTool();
   }
   dragKind = null;
   draggingToolId = null;
   draggingHole = null;
   lastMm = null;
-  // Cleared last: the rail commits the deferred resize and recentring on this.
-  store.dragging = false;
+  dragScale = null;
 }
 </script>
 
