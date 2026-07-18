@@ -1,11 +1,15 @@
 // The layout model of the trace tab: one synchronous, framework-agnostic
 // home for footprint sizing and every layout mutation (tool placement,
-// transforms, finger holes, manual size). The UI store delegates here; the
-// worker's CSG validation (validatePocketLayout, run by every preview
-// generation) remains the final authority on whether a layout actually fits
-// the bin's rounded interior. No manifold dependency: sizing works on
-// bounding boxes (see requiredFootprint), which can disagree with the exact
-// rounded-rect containment only within the interior corner radius, in
+// transforms, finger holes, manual size). Placements live in a fixed world
+// frame: dragging moves a tool and nothing else; the model never shifts,
+// recentres, or snaps a placement. The bin follows the layout instead: its
+// footprint and world position are derived from the layout's bounding box
+// (binPlacement), recomputed live on every change. The UI store delegates
+// here; the worker's CSG validation (validatePocketLayout, run by every
+// preview generation) remains the final authority on whether a layout
+// actually fits the bin's rounded interior. No manifold dependency: sizing
+// works on bounding boxes (see layoutBounds), which can disagree with the
+// exact rounded-rect containment only within the interior corner radius, in
 // practice covered by the AUTO_SIZE_MARGIN_MM margin; a genuine miss still
 // surfaces as the preview's validation error.
 import type { FingerHole, MmPoint, SamPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
@@ -29,31 +33,52 @@ export const DEFAULT_CLEARANCE_MM = 0.5;
 /** The layout state the model's actions operate on, mutated in place. */
 export interface LayoutState {
   tools: TracedTool[];
+  /** Tool placements in the fixed world frame, in mm. */
   placements: ToolPlacement[];
+  /**
+   * Bin footprint in cells. While gridManual is false this tracks the
+   * required footprint of the layout; while true it holds the typed size,
+   * a floor the derived footprint (binPlacement) never goes below.
+   */
   gridX: number;
   gridY: number;
-  /** True when the user typed a footprint; auto sizing stops updating it. */
+  /** True when the user typed a footprint; the typed size acts as a floor. */
   gridManual: boolean;
 }
 
-/** Result of requiredFootprint: the footprint plus the minimal fit-in shift. */
+/** Axis-aligned bounding box of a layout, in world mm. */
+export interface LayoutBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** The smallest footprint whose interior contains the layout with margin. */
 export interface RequiredFootprint {
   gridX: number;
   gridY: number;
-  /** Add to every placement's xMm to bring the layout inside the bin. */
-  offsetX: number;
-  /** Add to every placement's yMm to bring the layout inside the bin. */
-  offsetY: number;
 }
 
 /**
- * The smallest gridX by gridY footprint whose interior contains every placed
- * pocket (outline, clearance and finger holes) with at least marginMm of
- * clear interior around it, sized from the layout's bounding box rather than
- * its position, plus the smallest per-axis translation that brings the
- * margin-grown box inside the chosen interior (zero on an axis where the
- * layout already fits where it lies, so a layout the user nudged around
- * inside the bin stays put).
+ * Where the bin sits in the world frame: its footprint in cells plus its
+ * interior rectangle in world mm.
+ */
+export interface BinPlacement {
+  gridX: number;
+  gridY: number;
+  /** World mm of the interior rectangle's minimum corner. */
+  minX: number;
+  minY: number;
+  /** Interior extent in mm (binInteriorSizeMm of the footprint). */
+  widthMm: number;
+  heightMm: number;
+}
+
+/**
+ * Bounding box of everything placed: each tool's resolved outline grown by
+ * its clearance, plus its finger holes (circle or capsule extents), all in
+ * world mm.
  *
  * Synchronous and manifold-free: the tool's clearance (engine-side a
  * CrossSection.offset with Round joins, a Minkowski sum with a disk of
@@ -61,18 +86,9 @@ export interface RequiredFootprint {
  * offsetMm on each side. For axis-aligned bounds this is EXACT: the bounding
  * box of a Minkowski sum with a disk is the summand's bounding box grown by
  * exactly the disk radius in every direction. Finger holes get no clearance,
- * matching the pocket generator. The interior is treated as its bounding
- * rectangle; the worker's exact rounded-corner containment check remains the
- * final validator (see the module comment).
+ * matching the pocket generator.
  */
-export function requiredFootprint(
-  tools: TracedTool[],
-  placements: ToolPlacement[],
-  marginMm: number,
-): RequiredFootprint {
-  if (marginMm < 0) {
-    throw new RangeError(`margin must be >= 0, got ${marginMm}`);
-  }
+export function layoutBounds(tools: TracedTool[], placements: ToolPlacement[]): LayoutBounds {
   if (placements.length === 0) {
     throw new Error('Place at least one tool before sizing the bin.');
   }
@@ -103,84 +119,149 @@ export function requiredFootprint(
       maxY = Math.max(maxY, Math.max(hole.y, y2) + r + placement.yMm);
     }
   }
+  return { minX, minY, maxX, maxY };
+}
 
+/**
+ * The smallest gridX by gridY footprint whose interior contains the layout's
+ * bounding box with at least marginMm of clear interior on every side. Sized
+ * from the box's extent alone; where the bin then sits is binPlacement's
+ * job. The interior is treated as its bounding rectangle; the worker's exact
+ * rounded-corner containment check remains the final validator (see the
+ * module comment).
+ */
+export function requiredFootprint(
+  tools: TracedTool[],
+  placements: ToolPlacement[],
+  marginMm: number,
+): RequiredFootprint {
+  if (marginMm < 0) {
+    throw new RangeError(`margin must be >= 0, got ${marginMm}`);
+  }
+  const b = layoutBounds(tools, placements);
   // Smallest cell count whose interior spans the extent plus both margins.
-  const cellsFor = (halfExtent: number): number => {
+  const cellsFor = (extent: number): number => {
     let cells = 1;
-    while (binInteriorSizeMm(cells) / 2 < halfExtent + marginMm) cells += 1;
+    while (binInteriorSizeMm(cells) < extent + 2 * marginMm) cells += 1;
     return cells;
   };
-  const gridX = cellsFor((maxX - minX) / 2);
-  const gridY = cellsFor((maxY - minY) / 2);
-
-  // The smallest shift that brings [min, max] grown by marginMm inside a
-  // centred interior of the given size: zero when it already fits there.
-  const minimalShift = (min: number, max: number, interiorMm: number): number => {
-    const lo = -interiorMm / 2 + marginMm - min;
-    const hi = interiorMm / 2 - marginMm - max;
-    if (lo > 0) return lo;
-    if (hi < 0) return hi;
-    return 0;
-  };
   return {
-    gridX,
-    gridY,
-    offsetX: minimalShift(minX, maxX, binInteriorSizeMm(gridX)),
-    offsetY: minimalShift(minY, maxY, binInteriorSizeMm(gridY)),
+    gridX: cellsFor(b.maxX - b.minX),
+    gridY: cellsFor(b.maxY - b.minY),
   };
 }
 
 /**
- * Re-sizes the footprint from the layout and applies the minimal fit-in
- * shift to every placement, unless the footprint is manual or the layout is
- * empty. The single commit point every layout-changing action funnels into.
+ * Derives where the bin sits in the world frame. The footprint is the
+ * layout's required footprint, floored at the typed size while the footprint
+ * is manual; the interior rectangle is placed around the layout's bounding
+ * box with the cell-rounding slack split evenly per axis, so the interior
+ * centre coincides with the box centre. With no tools placed, the current
+ * footprint sits centred on the world origin. Pure and deterministic; the
+ * single home for the bin's world position.
+ */
+export function binPlacement(state: LayoutState): BinPlacement {
+  if (state.placements.length === 0) {
+    const widthMm = binInteriorSizeMm(state.gridX);
+    const heightMm = binInteriorSizeMm(state.gridY);
+    return {
+      gridX: state.gridX,
+      gridY: state.gridY,
+      minX: -widthMm / 2,
+      minY: -heightMm / 2,
+      widthMm,
+      heightMm,
+    };
+  }
+  const b = layoutBounds(state.tools, state.placements);
+  const required = requiredFootprint(state.tools, state.placements, AUTO_SIZE_MARGIN_MM);
+  const gridX = state.gridManual ? Math.max(state.gridX, required.gridX) : required.gridX;
+  const gridY = state.gridManual ? Math.max(state.gridY, required.gridY) : required.gridY;
+  const widthMm = binInteriorSizeMm(gridX);
+  const heightMm = binInteriorSizeMm(gridY);
+  return {
+    gridX,
+    gridY,
+    minX: (b.minX + b.maxX) / 2 - widthMm / 2,
+    minY: (b.minY + b.maxY) / 2 - heightMm / 2,
+    widthMm,
+    heightMm,
+  };
+}
+
+/**
+ * Converts the world-frame layout into the pocket generator's bin-centred
+ * coordinates: the derived footprint plus every placement translated so the
+ * bin interior centre (from binPlacement) is the origin. The single home for
+ * the world-to-bin conversion; preview generation and entry saving both go
+ * through it, so stored plan entries keep bin-centred placements.
+ */
+export function toBinLocal(state: LayoutState): {
+  gridX: number;
+  gridY: number;
+  placements: ToolPlacement[];
+} {
+  const bin = binPlacement(state);
+  const cx = bin.minX + bin.widthMm / 2;
+  const cy = bin.minY + bin.heightMm / 2;
+  return {
+    gridX: bin.gridX,
+    gridY: bin.gridY,
+    placements: state.placements.map((p) => ({ ...p, xMm: p.xMm - cx, yMm: p.yMm - cy })),
+  };
+}
+
+/**
+ * Converts a stored entry's bin-centred placements back into world-frame
+ * placements by putting the layout's bounding-box centre on the world
+ * origin, so a resumed edit derives the same bin around the same layout.
+ */
+export function worldFromEntry(tools: TracedTool[], placements: ToolPlacement[]): ToolPlacement[] {
+  if (placements.length === 0) return [];
+  const b = layoutBounds(tools, placements);
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  return placements.map((p) => ({ ...p, xMm: p.xMm - cx, yMm: p.yMm - cy }));
+}
+
+/**
+ * Keeps state.gridX/gridY tracking the layout's required footprint while
+ * auto-sized; while manual the typed floor is left alone (binPlacement
+ * applies the floor). Placements are never touched.
  */
 function refit(state: LayoutState): void {
   if (state.gridManual || state.placements.length === 0) return;
   const size = requiredFootprint(state.tools, state.placements, AUTO_SIZE_MARGIN_MM);
   state.gridX = size.gridX;
   state.gridY = size.gridY;
-  if (size.offsetX !== 0 || size.offsetY !== 0) {
-    for (const placement of state.placements) {
-      placement.xMm += size.offsetX;
-      placement.yMm += size.offsetY;
-    }
-  }
 }
 
 /**
- * Moves a tool to an absolute bin-local position. Never re-sizes: mid-drag
- * the footprint and the other placements stay put so the layout does not
- * move under the pointer; the drop commits the re-size.
+ * Moves a tool to an absolute world position. Only that placement changes;
+ * the footprint is recomputed live so the bin grows and shrinks around the
+ * layout as the tool moves.
  */
 export function moveTool(state: LayoutState, toolId: string, xMm: number, yMm: number): void {
   const placement = state.placements.find((p) => p.toolId === toolId);
   if (placement === undefined) return;
   placement.xMm = xMm;
   placement.yMm = yMm;
-}
-
-/**
- * Commits a finished tool drag: moving a tool means size-to-fit, so a
- * manually typed footprint is discarded and the footprint plus the minimal
- * fit-in shift are applied to the whole layout.
- */
-export function dropTool(state: LayoutState): void {
-  if (state.placements.length === 0) return;
-  state.gridManual = false;
   refit(state);
 }
 
-/** Hands footprint control back to auto sizing and re-sizes right away. */
+/** Drops the typed footprint floor: the footprint follows the layout again. */
 export function enableAutoSize(state: LayoutState): void {
-  dropTool(state);
+  state.gridManual = false;
+  refit(state);
 }
 
 /**
  * Applies a typed footprint on one axis: marks the footprint manual and
  * clamps the value to the smallest footprint that fits the current layout,
- * so the size fields can never make a tool reach into the bin wall. Returns
- * the applied cell count so the field can echo a clamped entry.
+ * so the size fields can never make a tool reach into the bin wall. The
+ * typed size is a floor: the bin never shrinks below it while manual, but
+ * still grows past it when the layout demands. Returns the applied cell
+ * count so the field can echo a clamped entry.
  */
 export function setGridManually(state: LayoutState, axis: 'x' | 'y', value: number): number {
   const current = axis === 'x' ? state.gridX : state.gridY;
@@ -213,7 +294,7 @@ function recentred(outline: TracedOutline): TracedOutline {
 /**
  * Adds a tool from an outline in sheet mm: the outline is recentered so
  * tool-local coordinates sit about the origin, and the tool is placed at the
- * layout origin with the given pocket depth. Re-sizes unless manual.
+ * world origin with the given pocket depth. Re-sizes unless manual.
  */
 export function addTool(
   state: LayoutState,

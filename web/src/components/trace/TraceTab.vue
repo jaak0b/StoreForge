@@ -7,6 +7,7 @@ import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import type { TracedBin } from '../../engine/plan/types';
 import type { PaperCorners } from '../../engine/trace/types';
+import { worldFromEntry } from '../../engine/trace/layoutModel';
 import { getPhoto } from '../../photoStore';
 import { embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
 import PhotoStage from './PhotoStage.vue';
@@ -119,11 +120,16 @@ watch(
     if (entry === null || entry.kind !== 'traced') return;
     void lookUpStoredPhoto(entry);
     trace.tools = JSON.parse(JSON.stringify(entry.pockets.tools));
-    trace.placements = JSON.parse(JSON.stringify(entry.pockets.placements));
+    // Stored placements are bin-centred; the layout model works in the world
+    // frame, so put the resumed layout at the world origin.
+    trace.placements = worldFromEntry(
+      trace.tools,
+      JSON.parse(JSON.stringify(entry.pockets.placements)),
+    );
     trace.selectedToolId = null;
+    // The stored footprint is a floor; the layout can still demand more.
     trace.gridX = entry.gridX;
     trace.gridY = entry.gridY;
-    // The stored footprint is authoritative; auto sizing must not shrink it.
     trace.gridManual = true;
     designer.$patch({
       heightUnits: entry.heightUnits,

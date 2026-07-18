@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, shallowRef } from 'vue';
+import { computed, ref, shallowRef } from 'vue';
 import type {
   PaperCalibration,
   PaperCorners,
@@ -68,10 +68,14 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const fingerHoleMode = ref(false);
   const fingerHoleDiameterMm = ref(DEFAULT_FINGER_HOLE_DIAMETER_MM);
 
-  /** Bin footprint of the layout; kept in step with the layout model unless overridden. */
+  /**
+   * Bin footprint in cells: the layout's required footprint while auto-sized,
+   * the typed floor while gridManual is true. The derived footprint
+   * (binPlacement) is what the canvas and the generated bin use.
+   */
   const gridX = ref(1);
   const gridY = ref(1);
-  /** True when the user typed a footprint; auto sizing stops updating it. */
+  /** True when the user typed a footprint; the typed size acts as a floor. */
   const gridManual = ref(false);
   /**
    * Pocket depth applied to newly placed tools, in mm. 20 mm fits most hand
@@ -154,8 +158,12 @@ export const useToolTrace = defineStore('toolTrace', () => {
     layout.moveTool(layoutState, toolId, xMm, yMm);
   }
 
-  function dropTool(): void {
-    layout.dropTool(layoutState);
+  /** Where the bin sits in the world frame, derived live from the layout. */
+  const binPlacement = computed(() => layout.binPlacement(layoutState));
+
+  /** The layout in the pocket generator's bin-centred coordinates. */
+  function toBinLocal(): ReturnType<typeof layout.toBinLocal> {
+    return layout.toBinLocal(layoutState);
   }
 
   function enableAutoSize(): void {
@@ -258,7 +266,8 @@ export const useToolTrace = defineStore('toolTrace', () => {
     removeTool,
     duplicateTool,
     moveTool,
-    dropTool,
+    binPlacement,
+    toBinLocal,
     enableAutoSize,
     setGridManually,
     setToolTransform,

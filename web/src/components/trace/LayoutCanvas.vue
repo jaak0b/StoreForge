@@ -3,22 +3,25 @@ import { nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { boundsOf, transformTool } from '../../engine/trace/edit';
-import { binInteriorSizeMm, PITCH } from '../../engine/gridfinity/constants';
+import { PITCH } from '../../engine/gridfinity/constants';
 import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
 
 /**
  * The Layout mode of the trace-and-layout workspace: a top-down view of the
- * bin interior with draggable tools and dotted 42 mm cell boundaries. While
- * the rail's finger-hole mode is active, a pointer drag on free tool area
- * draws a finger hole (a short drag places a circle, a longer one an
- * elongated slot); in either mode a drag on an existing hole moves it. All
- * layout mutations go through the store's layout-model wrappers; the mm
- * scale is frozen at drag start so the mapping under the pointer never
- * changes mid-drag, and a tool drop commits the footprint re-size.
+ * world frame with draggable tools; the bin interior outline and its dotted
+ * 42 mm cell boundaries are derived from the layout and move and resize
+ * around the tools as they are dragged. While the rail's finger-hole mode is
+ * active, a pointer drag on free tool area draws a finger hole (a short drag
+ * places a circle, a longer one an elongated slot); in either mode a drag on
+ * an existing hole moves it. All layout mutations go through the store's
+ * layout-model wrappers; the view transform is frozen at drag start so the
+ * mapping under the pointer never changes mid-drag, and between drags the
+ * view is fitted to the bin plus some slack.
  */
 
 const store = useToolTrace();
-const { tools, placements, selectedToolId, gridX, gridY, fingerHoleMode } = storeToRefs(store);
+const { tools, placements, selectedToolId, gridX, gridY, gridManual, fingerHoleMode } =
+  storeToRefs(store);
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 
@@ -27,15 +30,36 @@ const CANVAS_WIDTH = 640;
 /** Drags shorter than this in mm commit a circular hole, not a slot. */
 const SLOT_MIN_DRAG_MM = 3;
 
-// mm to canvas pixel mapping, bin centre at canvas centre.
-function mmScale(): number {
-  const interiorX = binInteriorSizeMm(gridX.value);
-  const interiorY = binInteriorSizeMm(gridY.value);
-  const pad = 20;
-  return Math.min(
-    (CANVAS_WIDTH - pad) / interiorX,
-    ((CANVAS_WIDTH * interiorY) / interiorX - pad) / interiorY,
-  );
+/** World mm shown around the bin interior when fitting the view. */
+const VIEW_SLACK_MM = 15;
+
+/** The world-to-canvas mapping: scale plus the world point at canvas centre. */
+interface ViewTransform {
+  s: number;
+  cxMm: number;
+  cyMm: number;
+  heightPx: number;
+}
+
+/** Fits the view to the derived bin plus slack on every side. */
+function fitView(): ViewTransform {
+  const bin = store.binPlacement;
+  const w = bin.widthMm + 2 * VIEW_SLACK_MM;
+  const h = bin.heightMm + 2 * VIEW_SLACK_MM;
+  const s = CANVAS_WIDTH / w;
+  return {
+    s,
+    cxMm: bin.minX + bin.widthMm / 2,
+    cyMm: bin.minY + bin.heightMm / 2,
+    heightPx: Math.round(h * s),
+  };
+}
+
+/** Frozen at pointerdown so the viewport never moves mid-drag. */
+let frozenView: ViewTransform | null = null;
+
+function currentView(): ViewTransform {
+  return frozenView ?? fitView();
 }
 
 /** Traces a finger hole (circle or capsule) as the current canvas path. */
@@ -62,39 +86,43 @@ function holePath(
 function draw(): void {
   const el = canvas.value;
   if (!el) return;
-  const interiorX = binInteriorSizeMm(gridX.value);
-  const interiorY = binInteriorSizeMm(gridY.value);
-  const s = mmScale();
+  const view = currentView();
+  const bin = store.binPlacement;
+  const s = view.s;
   el.width = CANVAS_WIDTH;
-  el.height = Math.round((CANVAS_WIDTH * interiorY) / interiorX);
+  el.height = view.heightPx;
   const ctx = el.getContext('2d');
   if (!ctx) return;
   ctx.clearRect(0, 0, el.width, el.height);
-  const cx = el.width / 2;
-  const cy = el.height / 2;
-  const toPx = (p: MmPoint): [number, number] => [cx + p.x * s, cy + p.y * s];
-  // Interior outline.
+  const toPx = (p: MmPoint): [number, number] => [
+    el.width / 2 + (p.x - view.cxMm) * s,
+    el.height / 2 + (p.y - view.cyMm) * s,
+  ];
+  // Interior outline, at the bin's derived world position.
+  const [binX, binY] = toPx({ x: bin.minX, y: bin.minY });
   ctx.strokeStyle = 'rgba(128, 128, 128, 0.9)';
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(cx - (interiorX / 2) * s, cy - (interiorY / 2) * s, interiorX * s, interiorY * s);
+  ctx.strokeRect(binX, binY, bin.widthMm * s, bin.heightMm * s);
   // Dotted lines on the 42 mm cell boundaries, so it is visible which grid
   // cells the layout occupies and where to drag tools to shrink the bin.
   ctx.save();
   ctx.strokeStyle = 'rgba(128, 128, 128, 0.5)';
   ctx.lineWidth = 1;
   ctx.setLineDash([3, 4]);
-  for (let k = 1; k < gridX.value; k++) {
-    const x = cx + (k - gridX.value / 2) * PITCH * s;
+  const binCxMm = bin.minX + bin.widthMm / 2;
+  const binCyMm = bin.minY + bin.heightMm / 2;
+  for (let k = 1; k < bin.gridX; k++) {
+    const [x] = toPx({ x: binCxMm + (k - bin.gridX / 2) * PITCH, y: 0 });
     ctx.beginPath();
-    ctx.moveTo(x, cy - (interiorY / 2) * s);
-    ctx.lineTo(x, cy + (interiorY / 2) * s);
+    ctx.moveTo(x, binY);
+    ctx.lineTo(x, binY + bin.heightMm * s);
     ctx.stroke();
   }
-  for (let k = 1; k < gridY.value; k++) {
-    const y = cy + (k - gridY.value / 2) * PITCH * s;
+  for (let k = 1; k < bin.gridY; k++) {
+    const [, y] = toPx({ x: 0, y: binCyMm + (k - bin.gridY / 2) * PITCH });
     ctx.beginPath();
-    ctx.moveTo(cx - (interiorX / 2) * s, y);
-    ctx.lineTo(cx + (interiorX / 2) * s, y);
+    ctx.moveTo(binX, y);
+    ctx.lineTo(binX + bin.widthMm * s, y);
     ctx.stroke();
   }
   ctx.restore();
@@ -147,31 +175,30 @@ function draw(): void {
 }
 
 watch(
-  [tools, placements, gridX, gridY, selectedToolId],
+  [tools, placements, gridX, gridY, gridManual, selectedToolId],
   () => void nextTick(draw),
   { deep: true },
 );
 onMounted(() => void nextTick(draw));
 
 // Pointer interaction. All three drags (move a tool, move a hole, stretch a
-// new hole) advance by mm deltas from the last pointer position. The mm
-// scale is captured at drag start and held until the drop, so even when a
-// finger-hole edit re-sizes the footprint mid-drag the pointer mapping does
-// not rescale under the pointer.
+// new hole) advance by mm deltas from the last pointer position. The view
+// transform is captured at drag start and held until the drop, so even
+// while the derived bin resizes mid-drag the pointer mapping does not move
+// under the pointer.
 type DragKind = 'tool' | 'hole' | 'place';
 let dragKind: DragKind | null = null;
 let draggingToolId: string | null = null;
 let draggingHole: FingerHole | null = null;
 let lastMm: MmPoint | null = null;
-let dragScale: number | null = null;
 
 function clientToMm(clientX: number, clientY: number): MmPoint {
   const el = canvas.value!;
   const rect = el.getBoundingClientRect();
-  const s = dragScale ?? mmScale();
+  const view = currentView();
   return {
-    x: (((clientX - rect.left) / rect.width) * el.width - el.width / 2) / s,
-    y: (((clientY - rect.top) / rect.height) * el.height - el.height / 2) / s,
+    x: view.cxMm + (((clientX - rect.left) / rect.width) * el.width - el.width / 2) / view.s,
+    y: view.cyMm + (((clientY - rect.top) / rect.height) * el.height - el.height / 2) / view.s,
   };
 }
 
@@ -227,7 +254,7 @@ function holeAt(p: MmPoint): { tool: TracedTool; hole: FingerHole } | null {
 }
 
 function onPointerDown(event: PointerEvent): void {
-  dragScale = mmScale();
+  frozenView = fitView();
   const p = clientToMm(event.clientX, event.clientY);
   lastMm = p;
   // An existing hole under the pointer is dragged in either mode; in
@@ -318,25 +345,21 @@ function onPointerUp(): void {
     // A short drag collapses back to a circular hole.
     store.finishFingerHole(draggingHole, SLOT_MIN_DRAG_MM);
   }
-  if (dragKind === 'tool') {
-    // Moving a tool means size-to-fit: a manually typed footprint is
-    // discarded and the drop applies the re-sized footprint and the minimal
-    // fit-in shift.
-    store.dropTool();
-  }
   dragKind = null;
   draggingToolId = null;
   draggingHole = null;
   lastMm = null;
-  dragScale = null;
+  // Unfreeze and refit the view to wherever the bin ended up.
+  frozenView = null;
+  draw();
 }
 </script>
 
 <template>
   <div>
     <p class="text-body-2 mb-2">
-      <b>Drag each tool to its place in the bin.</b> The bin sizes itself to
-      the layout after every drag; a typed footprint holds until the next drag.
+      <b>Drag each tool to its place.</b> The bin outline grows and shrinks
+      around the tools as you drag; tools themselves never move on their own.
     </p>
     <p v-if="fingerHoleMode" class="text-body-2 mb-2">
       <b>Press on a tool to place a finger hole.</b> Drag before releasing to

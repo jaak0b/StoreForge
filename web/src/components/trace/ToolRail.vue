@@ -48,8 +48,6 @@ const { labelText, labelIcon, heightUnits, notes } = storeToRefs(designer);
 const {
   tools,
   selectedToolId,
-  gridX,
-  gridY,
   gridManual,
   defaultDepthMm,
   fingerHoleMode,
@@ -84,19 +82,26 @@ const requiredGrid = computed(() =>
     : null,
 );
 
-// The size fields edit local mirrors of the store footprint: the store
-// clamps a typed value to the required minimum and returns what it applied,
-// and writing that back into the mirror re-renders the field even when the
-// store value itself did not change (a typed value below an unchanged
-// minimum), so the field always echoes the applied size.
-const gridXField = ref(gridX.value);
-const gridYField = ref(gridY.value);
-watch(gridX, (value) => {
-  gridXField.value = value;
-});
-watch(gridY, (value) => {
-  gridYField.value = value;
-});
+// The size fields edit local mirrors of the derived footprint (the typed
+// floor grown to whatever the layout demands): the store clamps a typed
+// value to the required minimum and returns what it applied, and writing
+// that back into the mirror re-renders the field even when the derived
+// value itself did not change (a typed value below an unchanged minimum),
+// so the field always echoes the applied size.
+const gridXField = ref(trace.binPlacement.gridX);
+const gridYField = ref(trace.binPlacement.gridY);
+watch(
+  () => trace.binPlacement.gridX,
+  (value) => {
+    gridXField.value = value;
+  },
+);
+watch(
+  () => trace.binPlacement.gridY,
+  (value) => {
+    gridYField.value = value;
+  },
+);
 
 function setGridManually(axis: 'x' | 'y', value: number): void {
   const applied = trace.setGridManually(axis, value);
@@ -171,22 +176,30 @@ function toggleFingerHoleMode(): void {
 
 const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
 
-/** The pocket-bin parameters of the current design, as plain JSON. */
-const pocketParams = computed<PocketBinParams>(() => ({
-  gridX: trace.gridX,
-  gridY: trace.gridY,
-  heightUnits: designer.heightUnits,
-  stackingLip: designer.stackingLip,
-  magnetHoles: designer.magnetHoles,
-  // The pocket generator rejects divider walls, so a pocket bin never has any.
-  dividerCountX: 0,
-  dividerCountY: 0,
-  labelText: designer.labelText,
-  labelText2: designer.labelText2,
-  labelIcon: designer.labelIcon,
-  tools: JSON.parse(JSON.stringify(trace.tools)),
-  placements: JSON.parse(JSON.stringify(trace.placements)),
-}));
+/**
+ * The pocket-bin parameters of the current design, as plain JSON. The layout
+ * model converts the world-frame layout to the pocket generator's
+ * bin-centred coordinates (toBinLocal), so previews and saved entries share
+ * one conversion.
+ */
+const pocketParams = computed<PocketBinParams>(() => {
+  const local = trace.toBinLocal();
+  return {
+    gridX: local.gridX,
+    gridY: local.gridY,
+    heightUnits: designer.heightUnits,
+    stackingLip: designer.stackingLip,
+    magnetHoles: designer.magnetHoles,
+    // The pocket generator rejects divider walls, so a pocket bin never has any.
+    dividerCountX: 0,
+    dividerCountY: 0,
+    labelText: designer.labelText,
+    labelText2: designer.labelText2,
+    labelIcon: designer.labelIcon,
+    tools: JSON.parse(JSON.stringify(trace.tools)),
+    placements: JSON.parse(JSON.stringify(local.placements)),
+  };
+});
 
 // The preview generation always runs so the layout is validated (the
 // worker's exact CSG containment check is the final authority over the
@@ -451,7 +464,7 @@ function cancelEdit(): void {
           size="small"
           variant="outlined"
           prepend-icon="mdi-arrow-collapse-all"
-          title="Size the footprint from the layout again."
+          title="Drop the typed minimum size; the footprint follows the layout alone."
           @click="trace.enableAutoSize()"
         >
           Auto size
