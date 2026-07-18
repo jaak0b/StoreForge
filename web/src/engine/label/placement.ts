@@ -5,9 +5,12 @@ import { svgPathToPolygons } from './svgPath';
 import type { LabelIcon } from './icons';
 import type { LabelFillRule } from './extrude';
 import {
+  binInteriorSizeMm,
   binOuterSizeMm,
+  FLOOR_TOP,
   HEIGHT_UNIT,
   OUTER_CORNER_RADIUS,
+  PITCH,
   WALL_THICKNESS,
 } from '../gridfinity/constants';
 import { roundedRectPolygon } from '../gridfinity/binGenerator';
@@ -20,8 +23,12 @@ import type { BinParams } from '../gridfinity/types';
  * the insert channel floor along the bin's interior front wall.
  */
 
-/** Thickness of the flat shelf plate, matching the bin wall thickness. */
-export const SHELF_THICKNESS = WALL_THICKNESS;
+/**
+ * Thickness of the flat shelf plate. Measured from the Pred reference bin
+ * (printables.com/model/592545, 1x1x6 mesh): channel floor at z 36.25 with
+ * the plate underside at z 35.25, a 1.0 mm plate.
+ */
+export const SHELF_THICKNESS = 1.0;
 
 /** Cap height of the label text at full size, in millimetres. */
 export const LABEL_TEXT_HEIGHT = 6;
@@ -227,72 +234,89 @@ export function boldenText(m: ManifoldToplevel, part: LabelFacePart): LabelFaceP
 }
 
 /**
- * Widest unsupported gap allowed between two shelf ribs, in millimetres. The
- * plate's top face is a flat bridge between rib tops; 16 mm is a short,
- * reliable bridging distance for any common filament.
+ * Thickness of one shelf support rib. Measured from the Pred reference bin
+ * (1x1x6 mesh, plan section at y 33): rib slabs span x 9.962..10.762,
+ * 20.475..21.275 and 30.987..31.788, each 0.8 mm thick.
  */
-export const RIB_MAX_CLEAR_SPAN = 16;
-
-/** Thickness of one shelf support rib, matching the bin wall thickness. */
-export const RIB_THICKNESS = WALL_THICKNESS;
+export const RIB_THICKNESS = 0.8;
 
 /**
- * Number of support ribs under a shelf plate spanning the given width: the
- * smallest count that keeps every clear gap between neighbouring ribs at or
- * under RIB_MAX_CLEAR_SPAN, with one rib flush against each end. Solving
- * (width - n * t) / (n - 1) <= span for the rib count n.
+ * Centre-to-centre spacing of the shelf support ribs: a quarter of the grid
+ * pitch. Measured from the Pred reference bin (1x1x6 mesh): rib centres
+ * 10.51 mm apart, three ribs across the one-cell interior.
  */
-export function shelfRibCount(spanWidth: number): number {
-  return Math.max(
-    2,
-    Math.ceil((spanWidth + RIB_MAX_CLEAR_SPAN) / (RIB_MAX_CLEAR_SPAN + RIB_THICKNESS)),
-  );
+export const RIB_PITCH = PITCH / 4;
+
+/**
+ * X centres of the support ribs under a bin spanning `cells` grid cells:
+ * every multiple of RIB_PITCH (centred on the bin, like the reference) whose
+ * rib lies fully inside the clear interior. The reference 1x1 bin gets three
+ * ribs, matching its measured mesh; the plate top bridges the 9.7 mm clear
+ * spans between ribs and the slightly wider spans to the side walls.
+ */
+export function shelfRibCentresMm(cells: number): number[] {
+  const interiorHalf = binInteriorSizeMm(cells) / 2;
+  const centres: number[] = [];
+  const maxIndex = Math.floor((interiorHalf - RIB_THICKNESS / 2) / RIB_PITCH);
+  for (let i = -maxIndex; i <= maxIndex; i++) centres.push(i * RIB_PITCH);
+  return centres;
 }
 
 /**
- * The shared plate-and-ribs shelf structure: a flat plate along the interior
- * front wall, full interior width, the given depth, with its top face at the
- * given height. Instead of a solid support wedge under the full plate, the
- * plate rests on evenly spaced triangular gussets (our own design, not taken
- * from any reference implementation): each rib keeps the 45-degree profile
- * from the plate's inner bottom edge down to the front wall, so ribs and
- * plate print without supports, and the plate top bridges the short spans
- * between ribs. A rib sits flush at each end so the plate is anchored at the
- * side walls. The profile reaches into the front wall so unioning it with
- * the bin body welds them, and the solid is clipped to the bin's rounded
- * outer outline so it also welds to the side walls without protruding
- * outside the bin. The slot shelf (see ./slot.ts) places it one slot height
- * below the nominal bin top as the floor of the insert channel.
+ * The shared shelf structure carrying the insert channel floor, ported from
+ * the measured Pred reference bin (1x1x6 mesh): a SHELF_THICKNESS plate along
+ * the interior front wall whose back edge is a 45-degree chamfer rising from
+ * the underside at rampStartY (the channel's back edge) to the plate top
+ * (measured chamfer from y 27.15 at the underside to y 26.15 at the floor
+ * level, against the end stop's back at 26.25), resting on RIB_PITCH-spaced
+ * triangular ribs: each rib runs a 45-degree hypotenuse from the plate's
+ * underside at rampStartY down to the front wall's interior face (measured
+ * from (y 27.15, z 35.25) to the wall face at (40.25, 22.15), exactly 45
+ * degrees), so plate and ribs print without supports. On a bin too short for
+ * the full hypotenuse the rib is truncated at the interior floor top and
+ * rests on the floor plate instead of the wall (the same triangle, clipped by
+ * the floor it welds into), so shallow bins stay valid watertight solids.
+ * The profiles reach into the front wall (and, when truncated, just into the
+ * floor plate) so unioning with the bin body welds them, and the solid is
+ * clipped to the bin's rounded outer outline so it also welds to the side
+ * walls without protruding outside the bin. The slot shelf (see ./slot.ts)
+ * places it one slot height below the nominal bin top as the floor of the
+ * insert channel.
  */
 export function buildShelfStructure(
   m: ManifoldToplevel,
   params: BinParams,
   plateTop: number,
-  shelfDepth: number,
+  rampStartY: number,
 ): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
+  const eps = 0.01;
 
   const yOuter = -outerDepth / 2;
   const yInner = yOuter + WALL_THICKNESS;
-  const yBack = yInner + shelfDepth;
   const plateBottom = plateTop - SHELF_THICKNESS;
-  const chamferBottom = plateBottom - shelfDepth;
 
-  // Profiles in the (y, z) plane. The plate is the solid label surface; each
-  // rib is the 45-degree support triangle that used to run the full width.
+  // Profiles in the (y, z) plane. The plate carries the measured 45-degree
+  // back chamfer under the end stop; each rib is the measured 45-degree
+  // support triangle.
   const plateProfile: SimplePolygon = [
     [yOuter, plateTop],
-    [yBack, plateTop],
-    [yBack, plateBottom],
+    [rampStartY + SHELF_THICKNESS, plateTop],
+    [rampStartY, plateBottom],
     [yOuter, plateBottom],
   ];
+  // Truncation rule: the rib's 45-degree hypotenuse ends at the front wall's
+  // interior face, or at the interior floor top (reaching eps into the floor
+  // plate for the weld) when the wall intersection would lie below the floor.
+  const ribDrop = Math.min(rampStartY - yInner, plateBottom - (FLOOR_TOP - eps));
+  const ribBottom = plateBottom - ribDrop;
   const ribProfile: SimplePolygon = [
     [yOuter, plateBottom],
-    [yBack, plateBottom],
-    [yInner, chamferBottom],
-    [yOuter, chamferBottom],
+    [rampStartY, plateBottom],
+    [rampStartY - ribDrop, ribBottom],
+    [yOuter, ribBottom],
   ];
 
   // Extrude along +Z, then permute axes (x, y, z) -> (z, x, y) so the
@@ -309,16 +333,12 @@ export function buildShelfStructure(
   const parts: Manifold[] = [
     prismFromProfile(plateProfile, outerWidth).translate(-outerWidth / 2, 0, 0),
   ];
-  const ribCount = shelfRibCount(outerWidth);
-  const ribStep = (outerWidth - RIB_THICKNESS) / (ribCount - 1);
-  for (let i = 0; i < ribCount; i++) {
-    parts.push(
-      prismFromProfile(ribProfile, RIB_THICKNESS).translate(
-        -outerWidth / 2 + i * ribStep,
-        0,
-        0,
-      ),
-    );
+  if (ribDrop > 0) {
+    for (const centre of shelfRibCentresMm(params.gridX)) {
+      parts.push(
+        prismFromProfile(ribProfile, RIB_THICKNESS).translate(centre - RIB_THICKNESS / 2, 0, 0),
+      );
+    }
   }
   const prism = m.Manifold.union(parts);
   for (const part of parts) part.delete();

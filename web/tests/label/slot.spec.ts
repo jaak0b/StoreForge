@@ -186,6 +186,38 @@ describe('slotted bin front region (measured against the Pred 1x1x6 mesh)', () =
     body.delete();
   });
 
+  it('carries the measured support ribs under the shelf plate', () => {
+    // Reference 1x1x6 mesh: 1.0 mm plate (channel floor z 36.25, underside
+    // 35.25) on three 0.8 mm ribs at quarter-pitch centres, each rib a 45
+    // degree triangle from the channel's back edge at the underside down to
+    // the front wall (plan section y 33: rib slabs x 20.475..21.275 solid
+    // from z 29.4 up to 35.25, air between ribs at x 3.5). Mapped to our
+    // 1x1x6 frame (bin centred, z up from the bed, nominal top 42): the
+    // centre rib at x 0 is solid at (0, -12, 36), and x 5 between ribs is
+    // air. The previous rib layout (wall-thickness ribs, flush ends, 16 mm
+    // max span) left air at x 0.
+    const body = buildSlottedBinBody(m, binParams({ heightUnits: 6 }));
+    const inRib = probeVolume(body, [-0.2, -12.2, 35.8], [0.2, -11.8, 36.2]);
+    expect(inRib).toBeCloseTo(0.4 * 0.4 * 0.4, 4);
+    const betweenRibs = probeVolume(body, [4.8, -12.2, 35.8], [5.2, -11.8, 36.2]);
+    expect(Math.abs(betweenRibs)).toBeLessThan(1e-9);
+    body.delete();
+  });
+
+  it('truncates the ribs at the interior floor on a shallow bin and stays watertight', () => {
+    // heightUnits 2 (14 mm): the full 45 degree hypotenuse would end below
+    // the floor, so the rib is clipped at the floor top (7 mm) and rests on
+    // the floor plate. Plate underside at 12; at z 7.5 the centre rib is
+    // solid at y -12 (between the wall and the hypotenuse, which lies at
+    // y -10.65 there).
+    const body = buildSlottedBinBody(m, binParams({ heightUnits: 2 }));
+    expect(body.status()).toBe('NoError');
+    expect(body.genus()).toBe(0);
+    const inRib = probeVolume(body, [-0.2, -12.2, 7.3], [0.2, -11.8, 7.7]);
+    expect(inRib).toBeCloseTo(0.4 * 0.4 * 0.4, 4);
+    body.delete();
+  });
+
   it('keeps the lip support band solid in front of the channel', () => {
     // The channel front edge is flush with the lip's inner support face,
     // 2.6 (LIP_DEPTH) behind the outer face: measured on the reference bin

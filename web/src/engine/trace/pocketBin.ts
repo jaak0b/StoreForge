@@ -24,12 +24,7 @@ import {
   manifoldToMeshData,
   roundedRectPolygon,
 } from '../gridfinity/binGenerator';
-import {
-  applySlotToBody,
-  RETAINER_BASE_DEPTH,
-  SLOT_DEPTH,
-  slotFrontInsetMm,
-} from '../label/slot';
+import { applySlotToBody, slotReachDepthMm } from '../label/slot';
 import type { BinParams, MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 
 /** A slotted bin plus the tools whose pockets are sunk into its interior. */
@@ -182,14 +177,17 @@ export function validatePocketLayout(
   }
   const interior = interiorSection(m, params.gridX, params.gridY);
   const cutSections = placed.map((pocket) => placedCutSection(m, pocket));
-  // The insert seat cannot be cut into (the slot floor must stay whole for
-  // the insert to rest on), so pockets must stay clear of the slot region.
-  // A bin without the slot has no such region to protect.
+  // The insert seat and its support structure cannot be cut into (the slot
+  // floor must stay whole for the insert to rest on, and the shelf's plate
+  // chamfer and support ribs under it must stay solid), so pockets must stay
+  // clear of the slot structure's full plan reach: pockets are cut from the
+  // bin top down, and slotReachDepthMm is the structure's widest plan extent
+  // at every depth. A bin without the slot has no such region to protect.
   let slotStrip: CrossSection | null = null;
   if (params.labelSlot !== false) {
     const outerWidth = binOuterSizeMm(params.gridX);
     const outerDepth = binOuterSizeMm(params.gridY);
-    const stripDepth = slotFrontInsetMm(params) + SLOT_DEPTH + RETAINER_BASE_DEPTH;
+    const stripDepth = slotReachDepthMm(params);
     slotStrip = new m.CrossSection(
       [
         [

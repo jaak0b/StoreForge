@@ -229,4 +229,22 @@ describe('validatePocketLayout', () => {
     const placed = placeTools(m, p.tools, p.placements);
     expect(() => validatePocketLayout(m, p, placed)).toThrow(/label insert slot/);
   });
+
+  it('rejects a pocket that clears the end stop but cuts the shelf back chamfer', () => {
+    // The protected strip reaches to the shelf plate's 45 degree back
+    // chamfer, one 1.0 mm plate thickness behind the channel's back edge
+    // (measured on the reference 1x1x6 mesh, chamfer top y 26.15 against the
+    // stop base's back at 26.25), 0.1 mm deeper than the end stop base. On
+    // this lipless 2x1 bin the strip ends at y -6.8; a pocket starting at
+    // y -6.89 clears the old stop-depth strip (to -6.9) but shaves the
+    // chamfer, and one starting at y -6.75 is fine.
+    const rejected = params({ placements: [{ ...centeredL, yMm: -6.89 }] });
+    const placedRejected = placeTools(m, rejected.tools, rejected.placements);
+    expect(() => validatePocketLayout(m, rejected, placedRejected)).toThrow(
+      /label insert slot/,
+    );
+    const accepted = params({ placements: [{ ...centeredL, yMm: -6.75 }] });
+    const placedAccepted = placeTools(m, accepted.tools, accepted.placements);
+    expect(() => validatePocketLayout(m, accepted, placedAccepted)).not.toThrow();
+  });
 });
