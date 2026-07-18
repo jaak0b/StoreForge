@@ -48,8 +48,10 @@ function tabDisabled(name: TabName): boolean {
     <v-divider />
     <v-card-text>
       <!-- The slide transition is disabled: the tabs hold live 3D previews,
-           and animating them across is more distracting than useful. -->
-      <v-window v-model="tab">
+           and animating them across is more distracting than useful. Touch
+           swiping is disabled too: on the trace canvases a finger drag is the
+           interaction itself and must never switch tabs. -->
+      <v-window v-model="tab" :touch="false">
         <v-window-item value="manual" :transition="false" :reverse-transition="false">
           <ManualBinTab />
         </v-window-item>
