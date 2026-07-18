@@ -26,9 +26,14 @@ import {
   FOOT_UPPER_CHAMFER,
   FOOT_VERTICAL,
   HEIGHT_UNIT,
-  LIP_HEIGHT,
-  LIP_TOP_THICKNESS,
-  LIP_VERTICAL,
+  LIP_CREST_HEIGHT,
+  LIP_DEPTH,
+  LIP_FILLET_RADIUS,
+  LIP_GROOVE_INSET,
+  LIP_GROOVE_VERTICAL,
+  LIP_LOWER_TAPER,
+  LIP_SEAT_VERTICAL,
+  LIP_SUPPORT_HEIGHT,
   MAGNET_HOLE_DEPTH,
   MAGNET_HOLE_DIAMETER,
   MAGNET_HOLE_FROM_CELL_EDGE,
@@ -341,18 +346,101 @@ function footMagnetCutters(m: ManifoldToplevel): Manifold {
   return m.Manifold.union(cutters);
 }
 
+/** Number of straight segments approximating the lip crest fillet arc. */
+const LIP_FILLET_SEGMENTS = 4;
+
+/**
+ * Chained convex loft: the union of hullBetween prisms over consecutive
+ * sections, each section a rounded rectangle inset from the bin's outer
+ * outline by `inset` at height `z`. Sections with equal insets produce plain
+ * vertical bands; differing insets produce 45-degree (or arc-sampled)
+ * transitions.
+ */
+function loftChain(
+  m: ManifoldToplevel,
+  outerWidth: number,
+  outerDepth: number,
+  sections: Array<{ inset: number; z: number }>,
+): Manifold {
+  const polys = sections.map(({ inset }) =>
+    roundedRectPolygon(
+      outerWidth - 2 * inset,
+      outerDepth - 2 * inset,
+      OUTER_CORNER_RADIUS - inset,
+    ),
+  );
+  const parts: Manifold[] = [];
+  for (let i = 0; i + 1 < sections.length; i++) {
+    parts.push(hullBetween(m, polys[i], sections[i].z, polys[i + 1], sections[i + 1].z));
+  }
+  return m.Manifold.union(parts);
+}
+
+/**
+ * Inset of the lip crest fillet arc from the outer face at arc parameter
+ * `angle` (0 at the tangent with the vertical outer face, PI/2 at the apex,
+ * 3*PI/4 at the tangent with the seat's upper taper), with the matching
+ * height above the nominal bin top.
+ */
+function crestArcPoint(angle: number): { inset: number; rise: number } {
+  return {
+    inset: LIP_FILLET_RADIUS * (1 - Math.cos(angle)),
+    rise: LIP_CREST_HEIGHT - LIP_FILLET_RADIUS + LIP_FILLET_RADIUS * Math.sin(angle),
+  };
+}
+
+/**
+ * The bin's outer wall envelope from the top of the feet up: a plain prism
+ * of the outer outline to the nominal top for a flat-topped bin. With the
+ * stacking lip, the outer face carries the measured rim groove below the
+ * nominal top (LIP_GROOVE_INSET / LIP_GROOVE_VERTICAL, measured from the
+ * Pred reference bin), runs straight through the lip band, and closes in the
+ * crest fillet (LIP_FILLET_RADIUS, sampled as LIP_FILLET_SEGMENTS chords)
+ * ending at the apex LIP_CREST_HEIGHT above the nominal top. Also the shape
+ * the slot shelf and dividers are clipped to, so nothing pokes through the
+ * groove or past the crest.
+ */
+export function buildOuterEnvelope(m: ManifoldToplevel, params: BinParams): Manifold {
+  const outerWidth = binOuterSizeMm(params.gridX);
+  const outerDepth = binOuterSizeMm(params.gridY);
+  const bodyTop = params.heightUnits * HEIGHT_UNIT;
+  if (!params.stackingLip) {
+    return loftChain(m, outerWidth, outerDepth, [
+      { inset: 0, z: FOOT_HEIGHT },
+      { inset: 0, z: bodyTop },
+    ]);
+  }
+  const sections: Array<{ inset: number; z: number }> = [
+    { inset: 0, z: FOOT_HEIGHT },
+    // Measured rim groove: 45-degree step in, vertical band ending at the
+    // nominal top, 45-degree step back out.
+    { inset: 0, z: bodyTop - LIP_GROOVE_VERTICAL - LIP_GROOVE_INSET },
+    { inset: LIP_GROOVE_INSET, z: bodyTop - LIP_GROOVE_VERTICAL },
+    { inset: LIP_GROOVE_INSET, z: bodyTop },
+    { inset: 0, z: bodyTop + LIP_GROOVE_INSET },
+    // Straight outer face up to where the crest fillet starts.
+    { inset: 0, z: bodyTop + LIP_CREST_HEIGHT - LIP_FILLET_RADIUS },
+  ];
+  // Outer branch of the crest fillet, up to the apex.
+  for (let i = 1; i <= LIP_FILLET_SEGMENTS; i++) {
+    const { inset, rise } = crestArcPoint((i / LIP_FILLET_SEGMENTS) * (Math.PI / 2));
+    sections.push({ inset, z: bodyTop + rise });
+  }
+  return loftChain(m, outerWidth, outerDepth, sections);
+}
+
 /**
  * Interior divider walls. dividerCountX walls stand perpendicular to the X
  * axis (splitting the width into dividerCountX + 1 equal compartments), and
  * likewise for Y. Each wall is DIVIDER_THICKNESS thick, rises from inside the
  * floor slab (top of the feet) to the nominal bin top (below the stacking lip
- * seat), and is trimmed to the outer wall outline so it welds into the walls
- * and floor without poking outside the bin.
+ * seat), and is trimmed to the outer wall envelope so it welds into the walls
+ * and floor without poking outside the bin or through the rim groove.
  */
 function buildDividers(
   m: ManifoldToplevel,
   params: BinParams,
-  outerPoly: SimplePolygon,
+  envelope: Manifold,
   outerWidth: number,
   outerDepth: number,
   bodyTop: number,
@@ -384,8 +472,7 @@ function buildDividers(
       ),
     );
   }
-  const outline = m.Manifold.extrude([outerPoly], height).translate(0, 0, zBottom);
-  return m.Manifold.intersection(m.Manifold.union(walls), outline);
+  return m.Manifold.intersection(m.Manifold.union(walls), envelope);
 }
 
 /**
@@ -407,7 +494,6 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   const outerWidth = binOuterSizeMm(gridX);
   const outerDepth = binOuterSizeMm(gridY);
   const bodyTop = heightUnits * HEIGHT_UNIT;
-  const solidTop = stackingLip ? bodyTop + LIP_HEIGHT : bodyTop;
 
   // Feet: one stacking foot per grid cell, plus optional magnet holes.
   let foot = buildFoot(m);
@@ -423,48 +509,59 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
     }
   }
 
-  // Body: rounded-rectangle prism from the top of the feet to the top of the
-  // walls (including the lip band when the stacking lip is enabled).
-  const outerPoly = roundedRectPolygon(outerWidth, outerDepth, OUTER_CORNER_RADIUS);
-  const body = m.Manifold.extrude([outerPoly], solidTop - FOOT_HEIGHT).translate(
-    0,
-    0,
-    FOOT_HEIGHT,
-  );
+  // Body: the outer wall envelope from the top of the feet to the top of the
+  // walls (rim groove and crest fillet included when the lip is enabled).
+  const envelope = buildOuterEnvelope(m, params);
+  const solid = m.Manifold.union([...feet, envelope]);
 
-  const solid = m.Manifold.union([...feet, body]);
-
-  // Interior cavity: the outer shape inset by the wall thickness, cut from the
-  // top of the floor upward. The inset corner radius is the internal fillet.
-  const innerPoly = roundedRectPolygon(
-    outerWidth - 2 * WALL_THICKNESS,
-    outerDepth - 2 * WALL_THICKNESS,
-    OUTER_CORNER_RADIUS - WALL_THICKNESS,
-  );
   const eps = 0.01;
   const cutters: Manifold[] = [];
   if (stackingLip) {
-    // Cavity up to the start of the lip's opening chamfer.
-    cutters.push(
-      m.Manifold.extrude([innerPoly], bodyTop + LIP_VERTICAL - FLOOR_TOP).translate(
-        0,
-        0,
-        FLOOR_TOP,
-      ),
-    );
-    // Simplified stacking lip: over the top 0.5 mm the inner rim chamfers
-    // outward at 45 degrees, widening the opening from a wall-thickness inset
-    // to a 0.7 mm rim at the very top so a stacked bin's foot self-centres.
-    const rimPoly = roundedRectPolygon(
-      outerWidth - 2 * LIP_TOP_THICKNESS,
-      outerDepth - 2 * LIP_TOP_THICKNESS,
-      OUTER_CORNER_RADIUS - LIP_TOP_THICKNESS,
-    );
-    const chamferBottomZ = bodyTop + LIP_VERTICAL;
-    const chamfer = hullBetween(m, innerPoly, chamferBottomZ, rimPoly, solidTop);
-    const above = m.Manifold.extrude([rimPoly], eps).translate(0, 0, solidTop);
-    cutters.push(m.Manifold.union([chamfer, above]));
+    // Interior cavity ending in the stacking lip's inner seat, the negative
+    // of the stacking foot (kennetek STACKING_LIP_LINE with its support): the
+    // wall-thickness interior rises to where the 45-degree support taper
+    // narrows the opening to the lip tip at LIP_DEPTH, holds vertical for
+    // LIP_SUPPORT_HEIGHT up to the nominal top, then opens back out through
+    // the seat profile (45-degree taper, vertical band, 45-degree taper). The
+    // seat's upper taper is cut past the crest, whose fillet the envelope
+    // already carries; the cutter follows the fillet's inner arc branch so
+    // the crest closes in the round crest instead of a knife edge.
+    const tangent = crestArcPoint((3 / 4) * Math.PI);
+    const sections: Array<{ inset: number; z: number }> = [
+      { inset: WALL_THICKNESS, z: FLOOR_TOP },
+      {
+        inset: WALL_THICKNESS,
+        z: bodyTop - LIP_SUPPORT_HEIGHT - (LIP_DEPTH - WALL_THICKNESS),
+      },
+      { inset: LIP_DEPTH, z: bodyTop - LIP_SUPPORT_HEIGHT },
+      { inset: LIP_DEPTH, z: bodyTop },
+      { inset: LIP_DEPTH - LIP_LOWER_TAPER, z: bodyTop + LIP_LOWER_TAPER },
+      {
+        inset: LIP_DEPTH - LIP_LOWER_TAPER,
+        z: bodyTop + LIP_LOWER_TAPER + LIP_SEAT_VERTICAL,
+      },
+      // Upper taper up to its tangent with the crest fillet, then the
+      // fillet's inner arc branch to the apex.
+      { inset: tangent.inset, z: bodyTop + tangent.rise },
+    ];
+    const innerFilletSegments = Math.ceil(LIP_FILLET_SEGMENTS / 2);
+    for (let i = 1; i <= innerFilletSegments; i++) {
+      const angle = (3 / 4) * Math.PI - (i / innerFilletSegments) * (Math.PI / 4);
+      const { inset, rise } = crestArcPoint(angle);
+      sections.push({ inset, z: bodyTop + rise });
+    }
+    // Past the apex the cutter continues straight up to clear the top face.
+    sections.push({
+      inset: LIP_FILLET_RADIUS,
+      z: bodyTop + LIP_CREST_HEIGHT + eps,
+    });
+    cutters.push(loftChain(m, outerWidth, outerDepth, sections));
   } else {
+    const innerPoly = roundedRectPolygon(
+      outerWidth - 2 * WALL_THICKNESS,
+      outerDepth - 2 * WALL_THICKNESS,
+      OUTER_CORNER_RADIUS - WALL_THICKNESS,
+    );
     cutters.push(
       m.Manifold.extrude([innerPoly], bodyTop - FLOOR_TOP + eps).translate(
         0,
@@ -483,7 +580,7 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   let result = m.Manifold.difference(solid, m.Manifold.union(cutters));
 
   if (dividerCountX > 0 || dividerCountY > 0) {
-    const dividers = buildDividers(m, params, outerPoly, outerWidth, outerDepth, bodyTop);
+    const dividers = buildDividers(m, params, envelope, outerWidth, outerDepth, bodyTop);
     result = m.Manifold.union([result, dividers]);
   }
 

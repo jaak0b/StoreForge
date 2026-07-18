@@ -220,9 +220,11 @@ describe('insert in slot', () => {
     const slotted = buildSlottedBinBody(m, p);
     const plain = buildSlottedBinBody(m, { ...p, labelSlot: false });
     // Probe the shelf plate region under the channel floor (heightUnits 3:
-    // floor at 20.0, plate below it, at the interior front wall): the
-    // slotted bin has material there, the plain bin's interior is open.
-    const probe = m.Manifold.cube([4, 3, 0.5], true).translate(0, -16.75, 19.5);
+    // floor at 20.0, plate below it, inside the front interior): the slotted
+    // bin has material there, the plain bin's interior is open. The probe
+    // stays clear of the front wall, whose stacking lip support bulges 2.6
+    // inward from the outer face (18.15 from centre) near the top.
+    const probe = m.Manifold.cube([4, 3, 0.5], true).translate(0, -15, 19.5);
     const inSlotted = slotted.intersect(probe);
     const inPlain = plain.intersect(probe);
     expect(inSlotted.volume()).toBeGreaterThan(0.01);

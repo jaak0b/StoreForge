@@ -3,10 +3,9 @@ import type { Font } from 'opentype.js';
 import {
   binOuterSizeMm,
   HEIGHT_UNIT,
-  OUTER_CORNER_RADIUS,
   WALL_THICKNESS,
 } from '../gridfinity/constants';
-import { roundedRectPolygon } from '../gridfinity/binGenerator';
+import { buildOuterEnvelope, roundedRectPolygon } from '../gridfinity/binGenerator';
 import type { BinParams } from '../gridfinity/types';
 import { extrudeLabel } from './extrude';
 import {
@@ -259,11 +258,10 @@ export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold
   prism.delete();
   voidUnion.delete();
 
-  // Clip to the bin's rounded outer outline, so nothing pokes outside.
-  const outline = m.Manifold.extrude(
-    [roundedRectPolygon(outerWidth, outerDepth, OUTER_CORNER_RADIUS)],
-    blockTop,
-  );
+  // Clip to the bin's outer wall envelope, so nothing pokes outside; the
+  // side blocks get trimmed to the rim groove, which the reference bin runs
+  // continuously through the slot corners.
+  const outline = buildOuterEnvelope(m, params);
   const shelf = m.Manifold.intersection(pocketed, outline);
   pocketed.delete();
   outline.delete();

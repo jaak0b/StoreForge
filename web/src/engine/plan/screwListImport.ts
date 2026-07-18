@@ -1,4 +1,4 @@
-import { binInteriorSizeMm } from '../gridfinity/constants';
+import { binTopOpeningMm } from '../gridfinity/constants';
 
 /**
  * Screw-list shorthand parsing and bin sizing for the "add bins from a screw
@@ -481,21 +481,16 @@ export function composeLabelText(
 export const HANDLING_CLEARANCE_MM = 4;
 
 /**
- * Interior width of a bin spanning `units` grid cells, from the single home
- * for that figure in the gridfinity constants module.
- */
-export function interiorWidthMm(units: number): number {
-  return binInteriorSizeMm(units);
-}
-
-/**
- * The smallest bin width in grid units whose interior fits a fastener of the
- * given length plus HANDLING_CLEARANCE_MM.
+ * The smallest bin width in grid units whose clear top opening passes a
+ * fastener of the given length plus HANDLING_CLEARANCE_MM. The screw is
+ * dropped in through the top, and queued bins carry the stacking lip, whose
+ * seat overhangs the interior: the narrowed opening at the lip tip
+ * (binTopOpeningMm) is what the screw must clear, not the interior below.
  */
 export function computeBinWidthUnits(lengthMm: number): number {
   const needed = lengthMm + HANDLING_CLEARANCE_MM;
   let units = 1;
-  while (interiorWidthMm(units) < needed) units += 1;
+  while (binTopOpeningMm(units) < needed) units += 1;
   return units;
 }
 

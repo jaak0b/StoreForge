@@ -310,23 +310,27 @@ describe('composeLabelText', () => {
 });
 
 describe('computeBinWidthUnits', () => {
-  // One-unit interior width is 39.6 mm (42 - 0.5 - 2 * 0.95) and the handling
-  // clearance is 4 mm, so 35 mm is the longest screw a one-unit bin fits.
-  it('fits a 35 mm screw in one unit', () => {
-    expect(computeBinWidthUnits(35)).toBe(1);
+  // Sizing uses the clear top opening under the stacking lip, not the wider
+  // interior below: the lip tip overhangs 2.6 mm per side (kennetek
+  // STACKING_LIP_SIZE.x), so a one-unit opening is 36.3 mm (41.5 - 2 * 2.6).
+  // With the 4 mm handling clearance, 32 mm is the longest one-unit screw
+  // (35 mm fitted before the lip seat narrowed the drop-in opening).
+  it('fits a 32 mm screw in one unit', () => {
+    expect(computeBinWidthUnits(32)).toBe(1);
   });
 
-  it('forces two units at 36 mm', () => {
-    expect(computeBinWidthUnits(36)).toBe(2);
+  it('forces two units at 33 mm', () => {
+    expect(computeBinWidthUnits(33)).toBe(2);
   });
 
-  // Two-unit interior width is 81.6 mm, so 77 mm still fits two units.
-  it('fits a 77 mm screw in two units', () => {
-    expect(computeBinWidthUnits(77)).toBe(2);
+  // The two-unit opening is 78.3 mm (83.5 - 2 * 2.6), so 74 mm still fits
+  // two units (77 mm fitted before the lip seat narrowed the opening).
+  it('fits a 74 mm screw in two units', () => {
+    expect(computeBinWidthUnits(74)).toBe(2);
   });
 
-  it('forces three units at 78 mm', () => {
-    expect(computeBinWidthUnits(78)).toBe(3);
+  it('forces three units at 75 mm', () => {
+    expect(computeBinWidthUnits(75)).toBe(3);
   });
 
   it('fits the shortest supported screw in one unit', () => {

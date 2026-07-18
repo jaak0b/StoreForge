@@ -57,14 +57,64 @@ export const FLOOR_TOP = 7.0;
  */
 export const FLOOR_PLATE_THICKNESS = 2.2;
 
-/** Stacking lip total height above the nominal bin top. */
-export const LIP_HEIGHT = 4.4;
+/**
+ * Stacking lip inner seat profile, bottom to top, from the nominal bin top
+ * upward. Ported from kennetek/gridfinity-rebuilt-openscad
+ * (src/core/standard.scad, STACKING_LIP_LINE, per the published Gridfinity
+ * spec): a 45 degree outward taper (rise equals run), a vertical band, and a
+ * second 45 degree outward taper reaching the outer face. The seat is the
+ * negative of the stacking foot (0.8 / 1.8 / 2.15), leaving 0.1 to 0.35 mm
+ * of nesting clearance per side.
+ */
+export const LIP_LOWER_TAPER = 0.7;
+export const LIP_SEAT_VERTICAL = 1.8;
+export const LIP_UPPER_TAPER = 1.9;
 
-/** Height of the straight (vertical) part of the simplified stacking lip. */
-export const LIP_VERTICAL = 3.9;
+/** Stacking lip total height above the nominal bin top (kennetek STACKING_LIP_HEIGHT). */
+export const LIP_HEIGHT = LIP_LOWER_TAPER + LIP_SEAT_VERTICAL + LIP_UPPER_TAPER;
 
-/** Wall thickness at the very top of the simplified stacking lip rim. */
-export const LIP_TOP_THICKNESS = 0.7;
+/**
+ * How far the lip tip protrudes into the bin from the outer face, wall
+ * thickness included (kennetek STACKING_LIP_SIZE.x = 2.6).
+ */
+export const LIP_DEPTH = LIP_LOWER_TAPER + LIP_UPPER_TAPER;
+
+/**
+ * Height of the vertical band directly under the lip tip, below the nominal
+ * bin top, before the 45 degree support taper widens the interior back to
+ * the wall face (kennetek STACKING_LIP_SUPPORT_HEIGHT = 1.2, with its
+ * 45 degree support underneath).
+ */
+export const LIP_SUPPORT_HEIGHT = 1.2;
+
+/**
+ * Fillet radius rounding off the lip crest, where the seat's upper taper
+ * would otherwise meet the outer face in a knife edge (kennetek
+ * STACKING_LIP_FILLET_RADIUS = 0.6; the measured crest of the Pred reference
+ * bin, printables.com/model/592545, matches: apex 3.551 mm above the nominal
+ * top with the outer face vertical up to 2.951).
+ */
+export const LIP_FILLET_RADIUS = 0.6;
+
+/**
+ * Height of the filleted crest apex above the nominal bin top: the fillet is
+ * tangent to the vertical outer face and the 45 degree upper taper, placing
+ * the apex LIP_FILLET_RADIUS * sqrt(2) below the theoretical knife edge.
+ */
+export const LIP_CREST_HEIGHT = LIP_HEIGHT - LIP_FILLET_RADIUS * Math.SQRT2;
+
+/**
+ * Recessed band around the outer face at the rim, measured from the Pred
+ * reference bin (gridfinitybin_1x1x6_d1_l12_s1, vertical cross-section at
+ * mid-depth): the outer face steps inward 0.7 mm over a 45 degree chamfer,
+ * runs vertical for 1.0 mm ending at the nominal bin top, and returns to the
+ * outer face over a 45 degree chamfer ending 0.7 mm above the nominal top
+ * (measured z 35.55 / 36.25 / 37.25 / 37.95 against the 37.25 nominal top).
+ * The band runs continuously around the whole perimeter, through the label
+ * slot corners.
+ */
+export const LIP_GROOVE_INSET = 0.7;
+export const LIP_GROOVE_VERTICAL = 1.0;
 
 /** Magnet hole dimensions (MAGNET_HOLE_RADIUS = 3.25, depth 2.4). */
 export const MAGNET_HOLE_DIAMETER = 6.5;
@@ -99,4 +149,16 @@ export function binOuterSizeMm(cells: number): number {
  */
 export function binInteriorSizeMm(cells: number): number {
   return binOuterSizeMm(cells) - 2 * WALL_THICKNESS;
+}
+
+/**
+ * Clear opening in mm at the very top of the bin along one axis: the
+ * narrowest width an object dropped in through the top must pass. With a
+ * stacking lip the lip tip overhangs the interior, LIP_DEPTH in from the
+ * outer face per side; without one the opening is the interior itself. The
+ * single home for this figure.
+ */
+export function binTopOpeningMm(cells: number, stackingLip: boolean = true): number {
+  if (!stackingLip) return binInteriorSizeMm(cells);
+  return binOuterSizeMm(cells) - 2 * LIP_DEPTH;
 }

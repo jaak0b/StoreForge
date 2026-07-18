@@ -10,6 +10,7 @@ import {
 } from '../src/engine/gridfinity/binGenerator';
 import {
   BASE_WALL_THICKNESS,
+  binTopOpeningMm,
   DIVIDER_THICKNESS,
   FLOOR_PLATE_THICKNESS,
   FLOOR_TOP,
@@ -86,11 +87,58 @@ describe('buildBinManifold', () => {
     bin.delete();
   });
 
-  it('adds the lip height on top when the stacking lip is enabled', () => {
+  it('ends the stacking lip at the filleted crest apex above the nominal top', () => {
     const bin = buildBinManifold(m, params({ stackingLip: true }));
     const box = bin.boundingBox();
-    expect(box.max[2] - box.min[2]).toBeCloseTo(3 * HEIGHT_UNIT + LIP_HEIGHT, 5);
+    // The lip profile is 0.7 + 1.8 + 1.9 = 4.4 tall (kennetek
+    // STACKING_LIP_LINE), but the crest fillet (radius 0.6, kennetek
+    // STACKING_LIP_FILLET_RADIUS) rounds off the knife edge: the apex sits
+    // 4.4 - 0.6 * sqrt(2) = 3.5515 above the nominal top of 21, matching the
+    // measured Pred reference bin (crest 3.551 above its nominal top).
+    expect(box.max[2] - box.min[2]).toBeCloseTo(24.5515, 3);
     expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('recesses the outer rim groove below the nominal top of a lipped bin', () => {
+    const bin = buildBinManifold(m, params({ stackingLip: true }));
+    // Measured from the Pred reference bin: the outer face steps inward 0.7
+    // over 45 degrees, runs vertical for 1.0 ending at the nominal top, and
+    // returns to the outer face 0.7 above it. Nominal top here is 21, outer
+    // half-width 20.75. A probe 0.3 inside the outer face finds air in the
+    // groove's vertical band (z 20.0 to 21.0) and solid wall further down.
+    const grooveProbe = m.Manifold.cube([0.3, 2, 0.6], true).translate(20.75 - 0.15, 0, 20.5);
+    const inGroove = bin.intersect(grooveProbe);
+    expect(Math.abs(inGroove.volume())).toBeLessThan(1e-9);
+    inGroove.delete();
+    grooveProbe.delete();
+    const wallProbe = m.Manifold.cube([0.3, 2, 0.6], true).translate(20.75 - 0.15, 0, 17.0);
+    const inWall = bin.intersect(wallProbe);
+    expect(inWall.volume()).toBeCloseTo(0.3 * 2 * 0.6, 3);
+    inWall.delete();
+    wallProbe.delete();
+    bin.delete();
+  });
+
+  it('seats a stacked foot in the lip with clearance and self-centres it', () => {
+    const bin = buildBinManifold(m, params({ stackingLip: true }));
+    const foot = buildFoot(m);
+    // A foot resting centred at the nominal top (21 for 3 height units)
+    // nests in the lip seat without touching: the seat profile 0.7/1.8/1.9
+    // is the foot profile 0.8/1.8/2.15 plus the footprint clearance.
+    const seated = foot.translate(0, 0, 3 * HEIGHT_UNIT);
+    const seatedOverlap = bin.intersect(seated);
+    expect(Math.abs(seatedOverlap.volume())).toBeLessThan(1e-9);
+    seatedOverlap.delete();
+    seated.delete();
+    // A foot shifted 1 mm sideways collides with the seat: the lip
+    // self-centres a stacked bin (per-side nesting clearance is under 0.4).
+    const shifted = foot.translate(1, 0, 3 * HEIGHT_UNIT);
+    const shiftedOverlap = bin.intersect(shifted);
+    expect(shiftedOverlap.volume()).toBeGreaterThan(0.01);
+    shiftedOverlap.delete();
+    shifted.delete();
+    foot.delete();
     bin.delete();
   });
 
@@ -345,6 +393,20 @@ describe('interior dividers', () => {
   it('rejects negative or fractional divider counts', () => {
     expect(() => validateParams(params({ dividerCountX: -1 }))).toThrow(/dividerCountX/);
     expect(() => validateParams(params({ dividerCountY: 1.5 }))).toThrow(/dividerCountY/);
+  });
+});
+
+describe('binTopOpeningMm', () => {
+  it('narrows the opening of a lipped bin to the lip tip span', () => {
+    // Outer size 41.5 minus the 2.6 lip protrusion per side (kennetek
+    // STACKING_LIP_SIZE.x): the widest object that drops in from above.
+    expect(binTopOpeningMm(1)).toBeCloseTo(36.3, 9);
+    expect(binTopOpeningMm(2)).toBeCloseTo(78.3, 9);
+  });
+
+  it('equals the interior for a bin without a stacking lip', () => {
+    // Outer size 41.5 minus the 0.95 wall per side.
+    expect(binTopOpeningMm(1, false)).toBeCloseTo(39.6, 9);
   });
 });
 
