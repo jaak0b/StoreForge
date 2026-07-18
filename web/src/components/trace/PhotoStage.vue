@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { detectPaper, embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
@@ -7,10 +7,12 @@ import type { PaperCorners, PixelPoint } from '../../engine/trace/types';
 
 /**
  * The Photo stage of the Tool trace tab. Before a photo is loaded it shows
- * only a large upload dropzone; once one loads, the photo appears with the
- * draggable sheet-corner overlay and the sheet controls (paper size, corner
- * re-detection, confirm) underneath. Confirming rectifies the sheet and
- * prepares it for click-to-segment.
+ * only a large upload dropzone; once one loads, a docked toolbar strip
+ * (paper size, re-detect, new photo, confirm) sits above the full-width
+ * photo with the draggable sheet-corner overlay. While a corner is dragged
+ * a magnifier loupe shows a zoomed crop of the full-resolution photo around
+ * the corner. Confirming rectifies the sheet and prepares it for
+ * click-to-segment.
  */
 
 const store = useToolTrace();
@@ -26,12 +28,24 @@ const errorMessage = ref<string | null>(null);
 const detectionNote = ref<string | null>(null);
 const dragOver = ref(false);
 
-// Drawn canvas width in CSS pixels; photo pixels scale down to this.
-const CANVAS_WIDTH = 640;
+/** Visual handle radius in CSS pixels. */
 const HANDLE_RADIUS = 9;
+/** Grab radius in CSS pixels around a handle: larger on touch. */
+const GRAB_RADIUS_TOUCH = 22;
+const GRAB_RADIUS_POINTER = 14;
+/** Loupe diameter in CSS pixels and its zoom over the source photo. */
+const LOUPE_SIZE = 140;
+const LOUPE_ZOOM = 4;
+
+/** On phones and tablets the file picker offers the camera directly. */
+const coarsePointer =
+  typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
 
 let image: HTMLImageElement | null = null;
+/** Canvas backing pixels per photo pixel; set by draw(). */
 let scale = 1;
+/** Canvas backing pixels per CSS pixel; set by draw(). */
+let dpr = 1;
 
 function cornerList(c: PaperCorners): Array<keyof PaperCorners> {
   void c;
@@ -41,8 +55,11 @@ function cornerList(c: PaperCorners): Array<keyof PaperCorners> {
 function draw(): void {
   const el = canvas.value;
   if (!el || !image || photoSize.value === null) return;
-  scale = CANVAS_WIDTH / photoSize.value.width;
-  el.width = CANVAS_WIDTH;
+  const cssWidth = el.clientWidth;
+  if (cssWidth === 0) return;
+  dpr = window.devicePixelRatio || 1;
+  el.width = Math.round(cssWidth * dpr);
+  scale = el.width / photoSize.value.width;
   el.height = Math.round(photoSize.value.height * scale);
   const ctx = el.getContext('2d');
   if (!ctx) return;
@@ -50,7 +67,7 @@ function draw(): void {
   const c = corners.value;
   if (c === null) return;
   ctx.strokeStyle = '#42a5f5';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2 * dpr;
   ctx.beginPath();
   const order = cornerList(c);
   order.forEach((key, i) => {
@@ -63,7 +80,7 @@ function draw(): void {
   for (const key of order) {
     const p = c[key];
     ctx.beginPath();
-    ctx.arc(p.x * scale, p.y * scale, HANDLE_RADIUS, 0, 2 * Math.PI);
+    ctx.arc(p.x * scale, p.y * scale, HANDLE_RADIUS * dpr, 0, 2 * Math.PI);
     ctx.fillStyle = 'rgba(66, 165, 245, 0.35)';
     ctx.fill();
     ctx.strokeStyle = '#42a5f5';
@@ -72,7 +89,31 @@ function draw(): void {
 }
 
 watch([corners, photoUrl], () => void nextTick(draw), { deep: true });
+
+// The canvas fills the tab width, so it redraws whenever that width changes.
+let resizeObserver: ResizeObserver | null = null;
+watch(
+  canvas,
+  (el, previous) => {
+    if (resizeObserver === null && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => draw());
+    }
+    if (previous && resizeObserver) resizeObserver.unobserve(previous);
+    if (el && resizeObserver) resizeObserver.observe(el);
+  },
+  { immediate: true, flush: 'post' },
+);
+function onWindowResize(): void {
+  draw();
+}
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+  window.removeEventListener('resize', onWindowResize);
+});
+
 onMounted(() => {
+  window.addEventListener('resize', onWindowResize);
   if (photoUrl.value !== null) {
     image = new Image();
     image.onload = draw;
@@ -165,6 +206,10 @@ function onDrop(event: DragEvent): void {
 // Corner dragging on the canvas.
 let draggingCorner: keyof PaperCorners | null = null;
 
+const loupeCanvas = ref<HTMLCanvasElement | null>(null);
+const loupeVisible = ref(false);
+const loupeStyle = ref<{ left: string; top: string }>({ left: '0px', top: '0px' });
+
 function canvasPoint(event: PointerEvent): PixelPoint {
   const el = canvas.value!;
   const rect = el.getBoundingClientRect();
@@ -174,16 +219,113 @@ function canvasPoint(event: PointerEvent): PixelPoint {
   };
 }
 
+/**
+ * Renders the loupe: a zoomed crop of the full-resolution photo centred on
+ * the dragged corner, with the quad edges and a crosshair, and positions it
+ * near the pointer while keeping it inside the canvas.
+ */
+function updateLoupe(event: PointerEvent): void {
+  const el = canvas.value;
+  const lc = loupeCanvas.value;
+  if (!el || !lc || !image || draggingCorner === null || corners.value === null) return;
+  const corner = corners.value[draggingCorner];
+  const rect = el.getBoundingClientRect();
+  const px = event.clientX - rect.left;
+  const py = event.clientY - rect.top;
+  const margin = 20;
+  // Above and to the right of the pointer; flip when that leaves the canvas
+  // so the loupe never sits under the finger or off screen.
+  let left = px + margin;
+  let top = py - LOUPE_SIZE - margin;
+  if (left + LOUPE_SIZE > rect.width) left = px - LOUPE_SIZE - margin;
+  if (top < 0) top = py + margin;
+  left = Math.min(Math.max(0, left), Math.max(0, rect.width - LOUPE_SIZE));
+  top = Math.min(Math.max(0, top), Math.max(0, rect.height - LOUPE_SIZE));
+  loupeStyle.value = { left: `${left}px`, top: `${top}px` };
+
+  const backing = Math.round(LOUPE_SIZE * (window.devicePixelRatio || 1));
+  lc.width = backing;
+  lc.height = backing;
+  const ctx = lc.getContext('2d');
+  if (!ctx) return;
+  const s = backing / LOUPE_SIZE;
+  const half = backing / 2;
+  // Photo pixels shown across the loupe, at LOUPE_ZOOM over the source.
+  const srcSize = LOUPE_SIZE / LOUPE_ZOOM;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(half, half, half, 0, 2 * Math.PI);
+  ctx.clip();
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, backing, backing);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(
+    image,
+    corner.x - srcSize / 2,
+    corner.y - srcSize / 2,
+    srcSize,
+    srcSize,
+    0,
+    0,
+    backing,
+    backing,
+  );
+  // The current quad edges through the crop, photo pixels to loupe pixels.
+  const zoom = backing / srcSize;
+  ctx.strokeStyle = '#42a5f5';
+  ctx.lineWidth = 1.5 * s;
+  ctx.beginPath();
+  cornerList(corners.value).forEach((key, i) => {
+    const p = corners.value![key];
+    const lx = (p.x - corner.x) * zoom + half;
+    const ly = (p.y - corner.y) * zoom + half;
+    if (i === 0) ctx.moveTo(lx, ly);
+    else ctx.lineTo(lx, ly);
+  });
+  ctx.closePath();
+  ctx.stroke();
+  // Crosshair marking the exact corner point at the centre.
+  const arm = 14 * s;
+  const gap = 4 * s;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5 * s;
+  ctx.beginPath();
+  ctx.moveTo(half - arm, half);
+  ctx.lineTo(half - gap, half);
+  ctx.moveTo(half + gap, half);
+  ctx.lineTo(half + arm, half);
+  ctx.moveTo(half, half - arm);
+  ctx.lineTo(half, half - gap);
+  ctx.moveTo(half, half + gap);
+  ctx.lineTo(half, half + arm);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function onPointerDown(event: PointerEvent): void {
   const c = corners.value;
   if (c === null) return;
+  const el = canvas.value;
+  if (el === null) return;
   const p = canvasPoint(event);
-  const grabRadius = (HANDLE_RADIUS * 2) / scale;
+  const rect = el.getBoundingClientRect();
+  // CSS pixels per photo pixel on screen, from the same mapping canvasPoint uses.
+  const cssPerPhoto = (rect.width / el.width) * scale;
+  const grabCss =
+    event.pointerType === 'touch' ? GRAB_RADIUS_TOUCH : GRAB_RADIUS_POINTER;
+  const grabRadius = grabCss / cssPerPhoto;
   for (const key of cornerList(c)) {
     const corner = c[key];
     if (Math.hypot(corner.x - p.x, corner.y - p.y) <= grabRadius) {
       draggingCorner = key;
-      (event.target as HTMLElement).setPointerCapture(event.pointerId);
+      loupeVisible.value = true;
+      void nextTick(() => updateLoupe(event));
+      try {
+        (event.target as HTMLElement).setPointerCapture(event.pointerId);
+      } catch {
+        // Without pointer capture the drag still works while the pointer
+        // stays over the canvas; losing capture only ends the drag earlier.
+      }
       return;
     }
   }
@@ -199,10 +341,12 @@ function onPointerMove(event: PointerEvent): void {
       y: Math.min(Math.max(0, p.y), photoSize.value.height),
     },
   };
+  updateLoupe(event);
 }
 
 function onPointerUp(): void {
   draggingCorner = null;
+  loupeVisible.value = false;
 }
 
 async function confirm(): Promise<void> {
@@ -267,54 +411,58 @@ async function confirm(): Promise<void> {
         ref="fileInput"
         type="file"
         accept="image/*"
+        :capture="coarsePointer ? 'environment' : undefined"
         class="d-none"
         @change="onFileInput"
       />
     </div>
 
     <template v-else>
-      <div class="d-flex align-center flex-wrap ga-3">
-        <div>
-          <div class="text-caption text-medium-emphasis">Sheet size</div>
-          <v-btn-toggle v-model="paperKind" mandatory density="comfortable" variant="outlined">
+      <div class="toolbar-host">
+        <div class="photo-toolbar">
+          <v-btn-toggle
+            v-model="paperKind"
+            mandatory
+            density="comfortable"
+            variant="outlined"
+            class="paper-toggle"
+          >
             <v-btn value="a4">A4</v-btn>
             <v-btn value="letter">Letter</v-btn>
           </v-btn-toggle>
+          <v-btn variant="text" :disabled="busy" @click="redetect">
+            <v-icon icon="mdi-scan-helper" size="20" :start="true" />
+            <span class="btn-label">Re-detect</span>
+            <v-tooltip activator="parent" location="bottom">
+              Re-run corner detection on the loaded photo, discarding any manual drags.
+            </v-tooltip>
+          </v-btn>
+          <v-btn variant="text" :disabled="busy" @click="fileInput?.click()">
+            <v-icon icon="mdi-image-refresh-outline" size="20" :start="true" />
+            <span class="btn-label">New photo</span>
+            <v-tooltip activator="parent" location="bottom">
+              Choose a different photo.
+            </v-tooltip>
+          </v-btn>
+          <div class="flex-spacer" />
+          <v-btn
+            color="primary"
+            variant="flat"
+            :loading="busy"
+            @click="confirm"
+          >
+            Confirm sheet
+          </v-btn>
         </div>
-        <v-tooltip text="Re-run corner detection on the loaded photo, discarding any manual drags.">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon="mdi-scan-helper"
-              variant="outlined"
-              :disabled="busy"
-              @click="redetect"
-            />
-          </template>
-        </v-tooltip>
-        <v-tooltip text="Choose a different photo.">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon="mdi-image-refresh-outline"
-              variant="outlined"
-              :disabled="busy"
-              @click="fileInput?.click()"
-            />
-          </template>
-        </v-tooltip>
-        <input
-          ref="fileInput"
-          type="file"
-          accept="image/*"
-          class="d-none"
-          @change="onFileInput"
-        />
-        <p class="text-body-2 mb-0 flex-grow-1">
-          <b>Drag the four handles onto the sheet corners.</b> The trace scale
-          comes from these corners.
-        </p>
       </div>
+      <input
+        ref="fileInput"
+        type="file"
+        accept="image/*"
+        :capture="coarsePointer ? 'environment' : undefined"
+        class="d-none"
+        @change="onFileInput"
+      />
 
       <p v-if="busyText !== ''" class="text-body-2 text-medium-emphasis mb-0">
         {{ busyText }}
@@ -331,9 +479,6 @@ async function confirm(): Promise<void> {
       <v-alert v-if="errorMessage" type="error" density="compact">
         {{ errorMessage }}
       </v-alert>
-      <div v-if="encodeMs !== null" class="text-caption text-medium-emphasis readout">
-        <div><span>Sheet encoding time</span><span>{{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}</span></div>
-      </div>
 
       <div class="photo-canvas-wrap">
         <canvas
@@ -344,17 +489,33 @@ async function confirm(): Promise<void> {
           @pointerup="onPointerUp"
           @pointercancel="onPointerUp"
         />
-        <v-btn
-          color="primary"
-          variant="flat"
-          elevation="6"
-          class="confirm-btn"
-          :loading="busy"
-          @click="confirm"
-        >
-          Confirm sheet
-        </v-btn>
+        <canvas
+          v-show="loupeVisible"
+          ref="loupeCanvas"
+          class="loupe"
+          :style="loupeStyle"
+        />
       </div>
+
+      <p class="text-caption text-medium-emphasis mb-0">
+        Drag the corners onto the sheet edges.
+      </p>
+
+      <v-expansion-panels v-if="encodeMs !== null" class="details-panels">
+        <v-expansion-panel elevation="0">
+          <v-expansion-panel-title class="text-caption details-title">
+            Details
+          </v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <div class="readout-row text-caption">
+              <span class="text-medium-emphasis">Sheet encoding time</span>
+              <span class="readout-value">
+                {{ encodeMs === 0 ? 'reused cached embedding' : `${encodeMs.toFixed(0)} ms` }}
+              </span>
+            </div>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+      </v-expansion-panels>
     </template>
   </div>
 </template>
@@ -374,23 +535,84 @@ async function confirm(): Promise<void> {
   max-width: 480px;
 }
 
+.toolbar-host {
+  container-type: inline-size;
+}
+
+.photo-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
+}
+
+.flex-spacer {
+  flex: 1 1 auto;
+}
+
+/* Narrow bar: the text buttons drop to icons and everything centers. */
+@container (max-width: 480px) {
+  .btn-label {
+    display: none;
+  }
+
+  .photo-toolbar {
+    justify-content: center;
+  }
+
+  .flex-spacer {
+    display: none;
+  }
+}
+
 .photo-canvas-wrap {
   position: relative;
-  display: inline-block;
-  max-width: 100%;
+  width: 100%;
 }
 
 .photo-canvas {
-  max-width: 100%;
+  width: 100%;
   border-radius: 8px;
   touch-action: none;
   cursor: crosshair;
   display: block;
 }
 
-.confirm-btn {
+.loupe {
   position: absolute;
-  right: 16px;
-  bottom: 16px;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  border: 2px solid #42a5f5;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.details-panels {
+  max-width: 480px;
+}
+
+.details-panels .v-expansion-panel {
+  background: transparent;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
+  border-radius: 8px;
+}
+
+.details-title {
+  min-height: 36px;
+}
+
+.readout-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.readout-value {
+  font-family: monospace;
 }
 </style>
