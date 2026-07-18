@@ -100,8 +100,8 @@ function setGridManually(axis: 'x' | 'y', value: number): void {
 
 /**
  * Sizes the footprint from the current layout and commits the result to the
- * store: the placements are shifted together so the layout is centred in the
- * bin, and the size fields follow (in manual mode only as a floor).
+ * store: the placements are shifted together only as far as needed to fit
+ * inside the bin, and the size fields follow (in manual mode only as a floor).
  */
 async function applyAutoSize(): Promise<void> {
   if (trace.placements.length === 0) return;

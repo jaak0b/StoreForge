@@ -208,13 +208,13 @@ export function validatePocketLayout(
   }
 }
 
-/** Result of autoGridSize: the footprint plus the layout-centring offset. */
+/** Result of autoGridSize: the footprint plus the minimal fit-in shift. */
 export interface AutoGridResult {
   gridX: number;
   gridY: number;
-  /** Add to every placement's xMm to centre the layout in the bin. */
+  /** Add to every placement's xMm to bring the layout inside the bin. */
   offsetX: number;
-  /** Add to every placement's yMm to centre the layout in the bin. */
+  /** Add to every placement's yMm to bring the layout inside the bin. */
   offsetY: number;
 }
 
@@ -222,12 +222,15 @@ export interface AutoGridResult {
  * The smallest gridX by gridY footprint whose interior cavity contains every
  * placed pocket (outline and finger holes) with at least marginMm of clear
  * interior around it, sized from the layout's bounding box rather than its
- * position: the returned offset is the translation that moves the box centre
- * onto the bin origin, and the fit is checked with that offset applied. The
- * caller owns the placements and applies the offset itself. Also rejects
- * overlapping placements. The first guess comes from the bounding box; the
- * rounded interior corners can push a corner-hugging layout one grid unit up,
- * so the exact containment check drives the final answer.
+ * position. The returned offset is the smallest translation, per axis
+ * independently, that brings the margin-grown bounding box inside the chosen
+ * interior: zero on an axis where the layout already fits where it lies, so a
+ * layout the user nudged around inside the bin stays put. The caller owns the
+ * placements and applies the offset itself. Also rejects overlapping
+ * placements. The first guess comes from the bounding box; the rounded
+ * interior corners can push a corner-hugging layout one grid unit up, so the
+ * exact containment check (run against the shifted layout, with the shift
+ * recomputed for each candidate footprint) drives the final answer.
  */
 export function autoGridSize(
   m: ManifoldToplevel,
@@ -278,12 +281,18 @@ export function autoGridSize(
       maxY = Math.max(maxY, hole.y + r, (hole.y2 ?? hole.y) + r);
     }
   }
-  // The offset that moves the box centre onto the origin; the subtraction
-  // from zero keeps a centred layout's offset at positive zero.
-  const offsetX = 0 - (minX + maxX) / 2;
-  const offsetY = 0 - (minY + maxY) / 2;
   const halfX = (maxX - minX) / 2;
   const halfY = (maxY - minY) / 2;
+
+  // The smallest shift that brings [min, max] grown by marginMm inside a
+  // centred interior of the given size: zero when it already fits there.
+  const minimalShift = (min: number, max: number, interiorMm: number): number => {
+    const lo = -interiorMm / 2 + marginMm - min;
+    const hi = interiorMm / 2 - marginMm - max;
+    if (lo > 0) return lo;
+    if (hi < 0) return hi;
+    return 0;
+  };
 
   const cellsFor = (halfExtent: number): number => {
     let cells = 1;
@@ -293,9 +302,9 @@ export function autoGridSize(
   const guessX = cellsFor(halfX);
   const guessY = cellsFor(halfY);
 
-  // Margin-grown cut section, recentred by the offset: containment of this
-  // inside the interior gives marginMm of clear interior all round in the
-  // recentred layout, including at the rounded corners.
+  // Margin-grown cut section, in the layout's own position: containment of
+  // this, shifted per candidate, inside the interior gives marginMm of clear
+  // interior all round, including at the rounded corners.
   let grownCut: CrossSection | null = null;
   for (const pocket of placed) {
     const section = placedCutSection(m, pocket);
@@ -310,10 +319,6 @@ export function autoGridSize(
       grownCut = merged;
     }
   }
-  const recentredCut: CrossSection = grownCut!.translate([offsetX, offsetY]);
-  grownCut!.delete();
-  grownCut = recentredCut;
-
   try {
     // The bounding-box guess can only miss because of the interior corner
     // rounding, which one extra grid unit per axis always covers.
@@ -325,11 +330,15 @@ export function autoGridSize(
     }
     candidates.sort((a, b) => a.gridX * a.gridY - b.gridX * b.gridY);
     for (const candidate of candidates) {
+      const offsetX = minimalShift(minX, maxX, binInteriorSizeMm(candidate.gridX));
+      const offsetY = minimalShift(minY, maxY, binInteriorSizeMm(candidate.gridY));
+      const shifted = grownCut!.translate([offsetX, offsetY]);
       const interior = interiorSection(m, candidate.gridX, candidate.gridY);
-      const outside = grownCut.subtract(interior);
+      const outside = shifted.subtract(interior);
       const fits = outside.isEmpty();
       outside.delete();
       interior.delete();
+      shifted.delete();
       if (fits) return { ...candidate, offsetX, offsetY };
     }
     throw new Error(
