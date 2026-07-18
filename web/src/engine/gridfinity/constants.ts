@@ -32,15 +32,31 @@ export const FOOT_HEIGHT =
 export const WALL_THICKNESS = 0.95;
 
 /**
- * Wall thickness of everything inside the hollowed base region: the foot
- * shells, the magnet boss walls, the divider root strips, and the per-cell
- * cross walls. Our own printability choice, not a spec value: three 0.45 mm
- * extrusion lines are 1.35 mm, plus a small allowance so slicers with a
- * little line overlap still place three full perimeters; 1.5 x WALL_THICKNESS
- * gives 1.425 mm, rounded to 1.42. The bin walls above the base keep
- * WALL_THICKNESS.
+ * Wall thickness of the hollowed foot's outer shell, plus the magnet boss
+ * walls and the divider root strips. Measured from the Pred reference bin
+ * (gridfinitybin_1x1x6_d1_l12_s10, printables.com/model/592545): its foot
+ * outer wall is 3.05 to 3.14 mm at the first layer (a plan slice at the bed +
+ * 0.1 mm shows the ring 3.14 mm across at a cell mid-edge), thickening as the
+ * foot chamfer flares. Our previous value was a thinner 1.42 mm printability
+ * choice, which left the first layer as sparse lines with poor bed adhesion;
+ * the reference's thicker shell gives the first layer roughly 75 percent more
+ * contact area. The bin walls above the base keep WALL_THICKNESS.
  */
-export const BASE_WALL_THICKNESS = 1.42;
+export const BASE_WALL_THICKNESS = 3.05;
+
+/**
+ * Thickness of the internal lattice ribs standing inside the hollowed foot:
+ * the per-cell central "+" cross and the two diagonal ribs. Measured from the
+ * same Pred reference bin (first-layer plan slice): the central cross arm is
+ * 0.78 mm, the diagonal ribs are 0.70 mm, both about 0.8 mm (roughly two
+ * 0.4 mm extrusion lines). The reference fills the foot with a diamond-void
+ * lattice of these thin ribs; we reproduce the outer shell, the central cross
+ * and the two cell diagonals at the measured rib width, which reproduces the
+ * measured first-layer solid area (about 499 mm squared per cell) within a
+ * couple of percent. See binGenerator's buildBasePocket for what the lattice
+ * simplifies relative to the reference's full diamond pattern.
+ */
+export const BASE_RIB_THICKNESS = 0.8;
 
 /**
  * Height of the top of the interior floor above the bed. The floor spans from

@@ -16,6 +16,7 @@ import {
   binInteriorSizeMm,
   binOuterSizeMm,
   BASE_WALL_THICKNESS,
+  BASE_RIB_THICKNESS,
   BASE_TOP_SIZE,
   CORNER_SEGMENTS,
   DIVIDER_THICKNESS,
@@ -248,14 +249,25 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
  * strips kept under every divider wall (dividers key into the floor at the
  * foot top, so the material below their roots must remain, all the way to the
  * bed so the strips print as free-standing walls inside the hollow feet), and
- * minus a "+" of cross walls per grid cell. The cross walls are our own
- * printability design (not from a reference implementation): one wall along X
- * at the cell's Y midline and one along Y at the cell's X midline, standing
- * on the bed and rising to the underside of the floor plate, welded into the
- * surrounding foot shell so each cell becomes four closed chambers. They keep
- * the unsupported bridge span of the floor plate near 21 mm at any bin size.
- * Returns null when the base cannot be pocketed at all (foot too small for
- * the shell inset), in which case the base stays solid.
+ * minus the per-cell rib lattice kept solid inside each foot's hollow.
+ *
+ * Rib lattice, ported (simplified) from the Pred reference bin measurement
+ * (gridfinitybin_1x1x6_d1_l12_s10, first-layer plan slice): the reference
+ * fills each foot with a diamond-void lattice of thin ribs, giving its first
+ * layer about 499 mm squared of solid per cell (roughly 75 percent more than
+ * our former sparse cross). We reproduce the load-bearing rib families at the
+ * measured rib width (BASE_RIB_THICKNESS): a "+" of cross walls (one along X
+ * at the cell's Y midline, one along Y at the cell's X midline) and the cell's
+ * two diagonals. Simplification: the reference's diamond voids are replaced by
+ * these straight ribs, which reproduces the measured first-layer solid area
+ * within a couple of percent while keeping the geometry simple and watertight;
+ * above the first layer our vertical ribs stay constant width where the
+ * reference's thicken with the foot flare, so our foot is a little less dense
+ * (less filament) higher up, which does not affect first-layer adhesion. Each
+ * rib stands on the bed and rises to the underside of the floor plate, welded
+ * into the surrounding foot shell. Returns null when the base cannot be
+ * pocketed at all (foot too small for the shell inset), in which case the base
+ * stays solid.
  */
 function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | null {
   const { gridX, gridY, magnetHoles, dividerCountX, dividerCountY } = params;
@@ -301,25 +313,36 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | nul
       ),
     );
   }
-  // Per-cell "+" cross walls: kept out of the pocket, so they intersect the
+  // Per-cell rib lattice, kept out of the pocket so the ribs intersect the
   // hollow exactly and weld into the foot shell walls at their ends. Plain
-  // overlap with magnet bosses or divider root strips is intentional.
+  // overlap with magnet bosses or divider root strips is intentional. The "+"
+  // cross runs along both cell midlines; the two diagonals run corner to
+  // corner (a long rib rotated 45 degrees, clipped to the pocket automatically
+  // because it is subtracted from the pocket). All at the measured rib width.
+  const diagLength = PITCH * Math.SQRT2;
   for (let ix = 0; ix < gridX; ix++) {
     for (let iy = 0; iy < gridY; iy++) {
       const cx = (ix - (gridX - 1) / 2) * PITCH;
       const cy = (iy - (gridY - 1) / 2) * PITCH;
       strips.push(
-        m.Manifold.cube([PITCH, BASE_WALL_THICKNESS, stripHeight], true).translate(
+        m.Manifold.cube([PITCH, BASE_RIB_THICKNESS, stripHeight], true).translate(
           cx,
           cy,
           stripHeight / 2 - eps,
         ),
-        m.Manifold.cube([BASE_WALL_THICKNESS, PITCH, stripHeight], true).translate(
+        m.Manifold.cube([BASE_RIB_THICKNESS, PITCH, stripHeight], true).translate(
           cx,
           cy,
           stripHeight / 2 - eps,
         ),
       );
+      for (const angle of [45, -45]) {
+        strips.push(
+          m.Manifold.cube([diagLength, BASE_RIB_THICKNESS, stripHeight], true)
+            .rotate(0, 0, angle)
+            .translate(cx, cy, stripHeight / 2 - eps),
+        );
+      }
     }
   }
   if (strips.length > 0) {

@@ -156,10 +156,11 @@ describe('buildBinManifold', () => {
   it('magnet holes stay open inside solid bosses without breaking the solid', () => {
     const withMagnets = buildBinManifold(m, params({ magnetHoles: true }));
     expect(withMagnets.status()).toBe('NoError');
-    // Each magnet boss welds to the two foot shell walls of its corner and to
-    // the floor plate above, closing two independent loops per boss: genus 2
-    // per boss, 4 bosses on a 1x1 bin.
-    expect(withMagnets.genus()).toBe(8);
+    // With the measured 3.05 mm base wall the magnet bosses (radius 6.30 mm)
+    // fully weld into the thick foot shell and the dense rib lattice, leaving
+    // no independent through-loops: the pocketed base is a simple genus-0
+    // solid, and the blind magnet holes (checked open below) do not add genus.
+    expect(withMagnets.genus()).toBe(0);
     const offset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
     for (const sx of [-1, 1]) {
       for (const sy of [-1, 1]) {
@@ -193,9 +194,9 @@ describe('buildBinManifold', () => {
     const bin = buildBinManifold(m, params());
     expect(bin.status()).toBe('NoError');
     expect(bin.genus()).toBe(0);
-    // The foot interior is pocketed away, probed at a cell quarter point
-    // (the cell centre itself carries the "+" cross walls).
-    const hollowProbe = m.Manifold.cube([4, 4, 2], true).translate(10.5, 10.5, 2);
+    // The foot interior is pocketed away, probed inside one of the triangular
+    // void sectors of the rib lattice (off the cross arms and the diagonals).
+    const hollowProbe = m.Manifold.cube([4, 4, 2], true).translate(12, 5, 2);
     const hollow = bin.intersect(hollowProbe);
     expect(hollow.isEmpty()).toBe(true);
     hollow.delete();
@@ -220,15 +221,18 @@ describe('buildBinManifold', () => {
     bin.delete();
   });
 
-  it('keeps a "+" of cross walls inside the base pocket of every cell', () => {
+  it('keeps the rib lattice ("+" cross plus diagonals) inside every cell pocket', () => {
     const bin = buildBinManifold(m, params({ gridX: 2 }));
     expect(bin.status()).toBe('NoError');
     for (const cx of [-PITCH / 2, PITCH / 2]) {
-      // Solid on both arms of the "+" (cell midlines), probed near the bed
-      // well inside the BASE_WALL_THICKNESS of the cross walls.
+      // Solid on both arms of the "+" cross (cell midlines) and on both
+      // diagonals (a point on y = x at radius 10.5, cell-local (7.42, 7.42)),
+      // probed near the bed well inside the rib width.
       for (const [px, py] of [
         [cx + 10.5, 0],
         [cx, 10.5],
+        [cx + 7.42, 7.42],
+        [cx + 7.42, -7.42],
       ]) {
         const probe = m.Manifold.cube([0.5, 0.5, 1], true).translate(px, py, 1.5);
         const hit = bin.intersect(probe);
@@ -236,12 +240,13 @@ describe('buildBinManifold', () => {
         hit.delete();
         probe.delete();
       }
-      // Hollow chambers at the cell quarter points between the walls.
+      // Hollow triangular void sectors between the ribs (cell-local (9, 4),
+      // off both the cross arms and the diagonals).
       for (const sx of [-1, 1]) {
         for (const sy of [-1, 1]) {
           const probe = m.Manifold.cube([2, 2, 1], true).translate(
-            cx + sx * 10.5,
-            sy * 10.5,
+            cx + sx * 9,
+            sy * 4,
             1.5,
           );
           const hit = bin.intersect(probe);
@@ -278,14 +283,31 @@ describe('buildBinManifold', () => {
     bin.delete();
   });
 
+  it('gives the first layer the measured Pred base area for bed adhesion', () => {
+    const bin = buildBinManifold(m, params());
+    // First-layer plan slice, 0.1 mm above the bed, is what adheres to the
+    // build plate. The Pred reference bin (gridfinitybin_1x1x6_d1_l12_s10,
+    // printables.com/model/592545) measures 499.5 mm^2 of solid per cell at
+    // this height; our simplified rib lattice (3.05 mm shell, 0.8 mm central
+    // cross and diagonals) yields 509.8 mm^2, within about 2 percent of the
+    // reference (measured 2026-07-19). Pinning it guards the adhesion fix: a
+    // regression thinning the base back to sparse lines would fall far below.
+    const cs = bin.slice(0.1);
+    expect(cs.area()).toBeGreaterThan(505);
+    expect(cs.area()).toBeLessThan(515);
+    cs.delete();
+    bin.delete();
+  });
+
   it('keeps a 2x1 bin with magnets and dividers watertight when pocketed', () => {
     const bin = buildBinManifold(
       m,
       params({ gridX: 2, magnetHoles: true, dividerCountX: 1, dividerCountY: 1 }),
     );
     expect(bin.status()).toBe('NoError');
-    // Genus 2 per magnet boss (see the magnet hole test): 8 bosses here.
-    expect(bin.genus()).toBe(16);
+    // The magnet bosses weld fully into the thick base wall and rib lattice
+    // (see the magnet hole test), leaving a simple genus-0 solid.
+    expect(bin.genus()).toBe(0);
     bin.delete();
   });
 
