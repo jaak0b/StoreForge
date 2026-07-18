@@ -15,7 +15,7 @@ import {
   lowResMaskToMat,
   prepareEncoderInput,
 } from '../engine/trace/sam';
-import { maskToContour } from '../engine/trace/contour';
+import { maskToContours } from '../engine/trace/contour';
 import type {
   PaperCalibration,
   PaperCorners,
@@ -112,11 +112,15 @@ export interface EmbedResult {
   cached: boolean;
 }
 
-/** A traced outline from one set of click prompts, or a user-worded failure. */
+/** Traced outlines from one set of click prompts, or a user-worded failure. */
 export type SegmentResult =
   | {
       ok: true;
-      outline: TracedOutline;
+      /**
+       * One outline per distinct shape in the mask; the outline containing
+       * (or nearest) the first include click comes first.
+       */
+      outlines: TracedOutline[];
       /** The decoder's own quality estimate for the chosen mask, 0..1. */
       iouScore: number;
       /** Decoder plus post-processing wall time in milliseconds. */
@@ -283,11 +287,11 @@ const api = {
       maskHeight,
     );
     try {
-      const outline = maskToContour(cv, maskMat, {
+      const outlines = maskToContours(cv, maskMat, {
         mmPerPixel: rectifiedCalibration.mmPerPixel,
         includePoint,
       });
-      if (!outline) {
+      if (outlines.length === 0) {
         return {
           ok: false,
           error:
@@ -303,7 +307,7 @@ const api = {
       }
       const decodeMs = performance.now() - start;
       return Comlink.transfer(
-        { ok: true, outline, iouScore: iou[maskIndex], decodeMs, maskPreview },
+        { ok: true, outlines, iouScore: iou[maskIndex], decodeMs, maskPreview },
         [maskPreview.data.buffer],
       );
     } finally {

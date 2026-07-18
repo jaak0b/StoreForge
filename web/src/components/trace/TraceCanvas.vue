@@ -8,19 +8,24 @@ import type { SamPoint, TracedOutline } from '../../engine/trace/types';
 /**
  * The Trace mode of the trace-and-layout workspace: click a tool on the
  * rectified sheet to segment it, refine with include and exclude clicks,
- * then accept the traced outline as a tool. A re-trace request from the tool
- * rail preloads an existing tool's stored clicks; accepting then replaces
- * that tool's outline instead of adding a duplicate.
+ * then accept the traced outlines as tools. When the mask covers several
+ * distinct shapes, accepting adds each one as its own tool. A re-trace
+ * request from the tool rail preloads an existing tool's stored clicks;
+ * accepting then replaces that tool's outline with the shape at the first
+ * include click and adds any further shapes as new tools.
  */
 
 const store = useToolTrace();
 const { rectifiedPreview, calibration, embedReady } = storeToRefs(store);
 
-const emit = defineEmits<{ accepted: [] }>();
+const emit = defineEmits<{
+  /** Fired after accept with the number of tools added and replaced. */
+  accepted: [counts: { added: number; replaced: number }];
+}>();
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const points = ref<SamPoint[]>([]);
-const outline = ref<TracedOutline | null>(null);
+const outlines = ref<TracedOutline[]>([]);
 const iouScore = ref<number | null>(null);
 const decodeMs = ref<number | null>(null);
 const segmenting = ref(false);
@@ -66,10 +71,10 @@ function draw(): void {
     }
   }
   const cal = calibration.value;
-  if (outline.value !== null && cal !== null) {
+  if (outlines.value.length > 0 && cal !== null) {
     ctx.strokeStyle = '#ff9800';
     ctx.lineWidth = 2;
-    for (const loop of [outline.value.outer, ...outline.value.holes]) {
+    for (const loop of outlines.value.flatMap((o) => [o.outer, ...o.holes])) {
       ctx.beginPath();
       loop.forEach((p, i) => {
         const x = p.x / cal.mmPerPixel;
@@ -101,7 +106,7 @@ onMounted(() => void nextTick(draw));
 function clearClicks(): void {
   retraceToolId.value = null;
   points.value = [];
-  outline.value = null;
+  outlines.value = [];
   iouScore.value = null;
   decodeMs.value = null;
   maskPreview = null;
@@ -116,10 +121,10 @@ async function runSegment(): Promise<void> {
     const result = await segmentAt(JSON.parse(JSON.stringify(points.value)) as SamPoint[]);
     if (!result.ok) {
       errorMessage.value = result.error;
-      outline.value = null;
+      outlines.value = [];
       maskPreview = null;
     } else {
-      outline.value = result.outline;
+      outlines.value = result.outlines;
       iouScore.value = result.iouScore;
       decodeMs.value = result.decodeMs;
       maskPreview = result.maskPreview;
@@ -145,15 +150,25 @@ function onClick(event: MouseEvent, exclude: boolean): void {
 }
 
 function acceptTool(): void {
-  if (outline.value === null) return;
+  const traced = outlines.value;
+  if (traced.length === 0) return;
   const clicks = JSON.parse(JSON.stringify(points.value)) as SamPoint[];
+  let added = 0;
+  let replaced = 0;
+  let rest = traced;
   if (retraceToolId.value !== null) {
-    store.replaceToolOutline(retraceToolId.value, outline.value, clicks);
-  } else {
-    store.addTool(outline.value, undefined, clicks);
+    // The first outline is the shape at the first include click; it replaces
+    // the re-traced tool, and any further shapes become new tools.
+    store.replaceToolOutline(retraceToolId.value, traced[0], clicks);
+    replaced = 1;
+    rest = traced.slice(1);
+  }
+  for (const outline of rest) {
+    store.addTool(outline, undefined, clicks);
+    added += 1;
   }
   clearClicks();
-  emit('accepted');
+  emit('accepted', { added, replaced });
 }
 </script>
 
@@ -173,10 +188,16 @@ function acceptTool(): void {
       <v-btn
         color="primary"
         variant="flat"
-        :disabled="outline === null || segmenting"
+        :disabled="outlines.length === 0 || segmenting"
         @click="acceptTool"
       >
-        {{ retraceToolId !== null ? 'Replace tool outline' : 'Accept tool' }}
+        {{
+          retraceToolId !== null
+            ? 'Replace tool outline'
+            : outlines.length > 1
+              ? `Accept ${outlines.length} tools`
+              : 'Accept tool'
+        }}
       </v-btn>
       <v-btn variant="outlined" :disabled="points.length === 0" @click="clearClicks">
         Clear clicks

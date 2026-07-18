@@ -211,6 +211,25 @@ async function openPhotoStage(): Promise<void> {
   stage.value = 1;
 }
 
+/** Confirmation shown after accepting a trace, or null when hidden. */
+const acceptMessage = ref<string | null>(null);
+
+/** Builds the confirmation sentence and switches to Layout mode. */
+function onAccepted(counts: { added: number; replaced: number }): void {
+  if (counts.replaced > 0) {
+    acceptMessage.value =
+      counts.added === 0
+        ? 'The tool outline was replaced.'
+        : counts.added === 1
+          ? 'The tool outline was replaced, and one additional tool was traced.'
+          : `The tool outline was replaced, and ${counts.added} additional tools were traced.`;
+  } else {
+    acceptMessage.value =
+      counts.added === 1 ? 'One tool was traced.' : `${counts.added} tools were traced.`;
+  }
+  workspaceMode.value = 'layout';
+}
+
 /** After a save or a cancelled edit the tab starts over at the Photo stage. */
 function restart(): void {
   stage.value = 1;
@@ -270,7 +289,7 @@ function restart(): void {
             {{ tools.length === 1 ? 'One tool is traced so far.' : `${tools.length} tools are traced so far.` }}
           </span>
         </div>
-        <TraceCanvas v-if="embedReady" @accepted="workspaceMode = 'layout'" />
+        <TraceCanvas v-if="embedReady" @accepted="onAccepted" />
       </div>
       <div v-show="workspaceMode === 'layout'">
         <p
@@ -298,6 +317,14 @@ function restart(): void {
         />
       </div>
     </div>
+
+    <v-snackbar
+      :model-value="acceptMessage !== null"
+      timeout="4000"
+      @update:model-value="acceptMessage = null"
+    >
+      {{ acceptMessage }}
+    </v-snackbar>
   </div>
 </template>
 
