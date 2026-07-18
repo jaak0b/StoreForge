@@ -101,8 +101,8 @@ Numbered for unambiguous reference; do not cite rule numbers in shipped source o
 
 11. **Subagent discipline.** Give every subagent a correct, specific title; never run more than 1 Fable
     agent at a time (hard budget limit). Sonnet is fine for parallel design/research work.
-    The main (user-facing) agent NEVER edits repository files itself: every file change, from a
-    one-line fix to a multi-file feature, is performed by a subagent. The main agent also delegates
+    The main (user-facing) agent edits repository files itself only for tiny changes (a single
+    line); anything larger is performed by a subagent. The main agent also delegates
     other context-heavy work and consumes only conclusions: codebase exploration and broad searches,
     reading large files or external references, and reviews/audits. The main agent keeps for itself
     only what needs conversation context or judgment: talking to the owner, design decisions, writing
