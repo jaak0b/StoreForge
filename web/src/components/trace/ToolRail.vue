@@ -7,7 +7,7 @@ import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
 import { generatePocketBin } from '../../workerClient';
-import { AUTO_SIZE_MARGIN_MM, requiredFootprint } from '../../engine/trace/layoutModel';
+import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import type { BinPockets, TracePaper, TracedBin } from '../../engine/plan/types';
@@ -78,7 +78,13 @@ const CLEARANCE_CHOICES = [0, 0.5, 1.5, 3, 4.5];
  */
 const requiredGrid = computed(() =>
   trace.placements.length > 0
-    ? requiredFootprint(trace.tools, trace.placements, AUTO_SIZE_MARGIN_MM)
+    ? binPlacement({
+        tools: trace.tools,
+        placements: trace.placements,
+        gridX: trace.gridX,
+        gridY: trace.gridY,
+        gridManual: false,
+      })
     : null,
 );
 

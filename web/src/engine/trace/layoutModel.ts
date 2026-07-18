@@ -14,7 +14,7 @@
 // surfaces as the preview's validation error.
 import type { FingerHole, MmPoint, SamPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
 import { boundsOf, transformTool } from './edit';
-import { binInteriorSizeMm } from '../gridfinity/constants';
+import { binInteriorSizeMm, PITCH } from '../gridfinity/constants';
 
 /**
  * Clear interior kept around the pockets when the bin footprint is
@@ -152,38 +152,69 @@ export function requiredFootprint(
 }
 
 /**
- * Derives where the bin sits in the world frame. The footprint is the
- * layout's required footprint, floored at the typed size while the footprint
- * is manual; the interior rectangle is placed around the layout's bounding
- * box with the cell-rounding slack split evenly per axis, so the interior
- * centre coincides with the box centre. With no tools placed, the current
- * footprint sits centred on the world origin. Pure and deterministic; the
- * single home for the bin's world position.
+ * One axis of the fixed-grid bin: the cells are fixed 42 mm tiles of the
+ * world frame (cell k spans k*PITCH to (k+1)*PITCH), and the bin occupies
+ * whichever run of tiles covers the margin-grown layout extent. The interior
+ * sits centred in the occupied outer span, so a tool moving inside its cells
+ * leaves the bin outline exactly where it is; only crossing a cell boundary
+ * adds or drops a whole cell. floorCells (a typed manual size) extends the
+ * run at its far end, never below the required run.
+ */
+function gridAxis(
+  bMin: number,
+  bMax: number,
+  floorCells: number,
+): { firstCell: number; cells: number } {
+  let firstCell = Math.floor(bMin / PITCH);
+  let cells = Math.max(1, Math.ceil(bMax / PITCH) - firstCell);
+  // The interior is narrower than the outer tile span (wall inset), so an
+  // extent hugging a tile edge can need one more tile on that side. Each
+  // step grows the interior by a full pitch, so this terminates.
+  for (;;) {
+    const centre = (firstCell + cells / 2) * PITCH;
+    const half = binInteriorSizeMm(cells) / 2;
+    if (bMin < centre - half) {
+      firstCell -= 1;
+      cells += 1;
+    } else if (bMax > centre + half) {
+      cells += 1;
+    } else {
+      break;
+    }
+  }
+  if (cells < floorCells) cells = floorCells;
+  return { firstCell, cells };
+}
+
+/**
+ * Derives where the bin sits in the world frame. The bin snaps to the fixed
+ * 42 mm world grid (see gridAxis): tools moving within their cells leave the
+ * outline untouched, and crossing a cell boundary grows or shrinks the bin
+ * by whole cells. The typed manual size acts as a per-axis floor. With no
+ * tools placed, the current footprint occupies the cells starting at the
+ * world origin. Pure and deterministic; the single home for the bin's world
+ * position.
  */
 export function binPlacement(state: LayoutState): BinPlacement {
+  const floorX = state.gridManual ? state.gridX : 1;
+  const floorY = state.gridManual ? state.gridY : 1;
+  let axisX: { firstCell: number; cells: number };
+  let axisY: { firstCell: number; cells: number };
   if (state.placements.length === 0) {
-    const widthMm = binInteriorSizeMm(state.gridX);
-    const heightMm = binInteriorSizeMm(state.gridY);
-    return {
-      gridX: state.gridX,
-      gridY: state.gridY,
-      minX: -widthMm / 2,
-      minY: -heightMm / 2,
-      widthMm,
-      heightMm,
-    };
+    axisX = { firstCell: 0, cells: state.gridX };
+    axisY = { firstCell: 0, cells: state.gridY };
+  } else {
+    const b = layoutBounds(state.tools, state.placements);
+    axisX = gridAxis(b.minX - AUTO_SIZE_MARGIN_MM, b.maxX + AUTO_SIZE_MARGIN_MM, floorX);
+    axisY = gridAxis(b.minY - AUTO_SIZE_MARGIN_MM, b.maxY + AUTO_SIZE_MARGIN_MM, floorY);
   }
-  const b = layoutBounds(state.tools, state.placements);
-  const required = requiredFootprint(state.tools, state.placements, AUTO_SIZE_MARGIN_MM);
-  const gridX = state.gridManual ? Math.max(state.gridX, required.gridX) : required.gridX;
-  const gridY = state.gridManual ? Math.max(state.gridY, required.gridY) : required.gridY;
-  const widthMm = binInteriorSizeMm(gridX);
-  const heightMm = binInteriorSizeMm(gridY);
+  const widthMm = binInteriorSizeMm(axisX.cells);
+  const heightMm = binInteriorSizeMm(axisY.cells);
   return {
-    gridX,
-    gridY,
-    minX: (b.minX + b.maxX) / 2 - widthMm / 2,
-    minY: (b.minY + b.maxY) / 2 - heightMm / 2,
+    gridX: axisX.cells,
+    gridY: axisY.cells,
+    minX: (axisX.firstCell + axisX.cells / 2) * PITCH - widthMm / 2,
+    minY: (axisY.firstCell + axisY.cells / 2) * PITCH - heightMm / 2,
     widthMm,
     heightMm,
   };
@@ -213,15 +244,22 @@ export function toBinLocal(state: LayoutState): {
 
 /**
  * Converts a stored entry's bin-centred placements back into world-frame
- * placements by putting the layout's bounding-box centre on the world
- * origin, so a resumed edit derives the same bin around the same layout.
+ * placements for the entry's footprint, so a resumed edit derives the same
+ * bin around the same layout.
  */
-export function worldFromEntry(tools: TracedTool[], placements: ToolPlacement[]): ToolPlacement[] {
+export function worldFromEntry(
+  placements: ToolPlacement[],
+  gridX: number,
+  gridY: number,
+): ToolPlacement[] {
   if (placements.length === 0) return [];
-  const b = layoutBounds(tools, placements);
-  const cx = (b.minX + b.maxX) / 2;
-  const cy = (b.minY + b.maxY) / 2;
-  return placements.map((p) => ({ ...p, xMm: p.xMm - cx, yMm: p.yMm - cy }));
+  // Stored placements are bin-centred; the world bin occupies the fixed
+  // cells starting at the origin, so the layout lands centred on that bin's
+  // interior centre. This inverts toBinLocal for the same footprint, so
+  // saved pocket positions round-trip exactly.
+  const cx = (gridX * PITCH) / 2;
+  const cy = (gridY * PITCH) / 2;
+  return placements.map((p) => ({ ...p, xMm: p.xMm + cx, yMm: p.yMm + cy }));
 }
 
 /**
@@ -231,9 +269,12 @@ export function worldFromEntry(tools: TracedTool[], placements: ToolPlacement[])
  */
 function refit(state: LayoutState): void {
   if (state.gridManual || state.placements.length === 0) return;
-  const size = requiredFootprint(state.tools, state.placements, AUTO_SIZE_MARGIN_MM);
-  state.gridX = size.gridX;
-  state.gridY = size.gridY;
+  // The stored footprint mirrors the bin actually drawn around the layout,
+  // which covers whole fixed-grid cells and can exceed the extent-only
+  // required footprint when the layout straddles a cell boundary.
+  const bin = binPlacement(state);
+  state.gridX = bin.gridX;
+  state.gridY = bin.gridY;
 }
 
 /**
@@ -270,8 +311,10 @@ export function setGridManually(state: LayoutState, axis: 'x' | 'y', value: numb
   state.gridManual = true;
   let minimum = 1;
   if (state.placements.length > 0) {
-    const size = requiredFootprint(state.tools, state.placements, AUTO_SIZE_MARGIN_MM);
-    minimum = axis === 'x' ? size.gridX : size.gridY;
+    // The floor of a typed size is the fixed-grid coverage the bin actually
+    // needs, evaluated without any previously typed floor.
+    const cover = binPlacement({ ...state, gridManual: false });
+    minimum = axis === 'x' ? cover.gridX : cover.gridY;
   }
   const applied = Math.max(minimum, cells);
   if (axis === 'x') state.gridX = applied;
@@ -314,7 +357,17 @@ export function addTool(
     fingerHoles: [],
   };
   state.tools.push(tool);
-  state.placements.push({ toolId: tool.id, xMm: 0, yMm: 0, pocketDepthMm });
+  // A new tool lands with its clearance-grown box starting at the margin
+  // inside cell 0's interior, so it covers the fewest fixed grid cells its
+  // size allows instead of straddling the cell boundary at the origin.
+  const b = boundsOf(tool.outline);
+  const start = (PITCH - binInteriorSizeMm(1)) / 2 + AUTO_SIZE_MARGIN_MM;
+  state.placements.push({
+    toolId: tool.id,
+    xMm: start - (b.minX - tool.offsetMm),
+    yMm: start - (b.minY - tool.offsetMm),
+    pocketDepthMm,
+  });
   refit(state);
   return tool;
 }

@@ -164,96 +164,113 @@ describe('requiredFootprint', () => {
 });
 
 describe('binPlacement', () => {
-  it('centres the interior on the layout box, splitting the slack evenly', () => {
-    // The L placed at (0, 0) spans 0..30 by 0..25 and needs one cell. The
-    // 39.6 mm interior centres on the box centre (15, 12.5): minX is
-    // 15 - 19.8 = -4.8, minY 12.5 - 19.8 = -7.3. Equivalently, the box min
-    // 0 minus the 2 mm margin minus half the 5.6 mm X slack (39.6 - 34).
-    const s = state([lTool()], [{ toolId: 'l-tool', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
+  // The world grid is fixed: cell k spans k*42..(k+1)*42, each cell's
+  // interior inset 1.2 mm per side (42 - 39.6 = 2.4).
+
+  it('occupies exactly one fixed cell when the layout sits inside it', () => {
+    // The L at (5, 8) spans 5..35 by 8..33; grown by the 2 mm margin it is
+    // 3..37 by 6..35, inside cell 0's interior 1.2..40.8 on both axes.
+    const s = state([lTool()], [{ toolId: 'l-tool', xMm: 5, yMm: 8, pocketDepthMm: 5 }]);
     const bin = binPlacement(s);
     expect(bin.gridX).toBe(1);
     expect(bin.gridY).toBe(1);
     expect(bin.widthMm).toBeCloseTo(39.6, 9);
-    expect(bin.heightMm).toBeCloseTo(39.6, 9);
-    expect(bin.minX).toBeCloseTo(-4.8, 9);
-    expect(bin.minY).toBeCloseTo(-7.3, 9);
+    expect(bin.minX).toBeCloseTo(1.2, 9);
+    expect(bin.minY).toBeCloseTo(1.2, 9);
+  });
+
+  it('covers both cells when the layout straddles a cell boundary', () => {
+    // The L at (0, 0) grows to -2..32 by -2..27, straddling the fixed
+    // boundary at 0 on both axes: cells -1 and 0, interior centred on the
+    // two-cell outer span (centre 0), so minX = -81.6 / 2.
+    const s = state([lTool()], [{ toolId: 'l-tool', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
+    const bin = binPlacement(s);
+    expect(bin.gridX).toBe(2);
+    expect(bin.gridY).toBe(2);
+    expect(bin.minX).toBeCloseTo(-40.8, 9);
+    expect(bin.minY).toBeCloseTo(-40.8, 9);
   });
 
   it('follows the layout wherever it lies instead of moving the tools', () => {
-    // Same L shifted to (100, 50): the bin follows, the placement does not
-    // move.
+    // The L at (100, 50): grown X extent 98..132 covers cells 2..3 (outer
+    // 84..168, interior min 126 - 40.8 = 85.2); grown Y extent 48..77 sits
+    // inside cell 1 (interior 43.2..82.8). The placement never moves.
     const s = state([lTool()], [{ toolId: 'l-tool', xMm: 100, yMm: 50, pocketDepthMm: 5 }]);
     const bin = binPlacement(s);
-    expect(bin.minX).toBeCloseTo(95.2, 9);
-    expect(bin.minY).toBeCloseTo(42.7, 9);
+    expect(bin.gridX).toBe(2);
+    expect(bin.gridY).toBe(1);
+    expect(bin.minX).toBeCloseTo(85.2, 9);
+    expect(bin.minY).toBeCloseTo(43.2, 9);
     expect(s.placements[0].xMm).toBe(100);
     expect(s.placements[0].yMm).toBe(50);
   });
 
   it('never shrinks below a typed floor but still grows past it', () => {
-    // Manual 2 x 1 floor around the one-cell L: the bin holds 2 x 1 with
-    // its 81.6 mm interior centred on the box centre (15, 12.5).
-    const s = state([lTool()], [{ toolId: 'l-tool', xMm: 0, yMm: 0, pocketDepthMm: 5 }], {
+    // One-cell L (at 5, 8) with a manual 2 x 1 floor: the run keeps its
+    // first cell and extends to two cells (outer 0..84, minX 1.2).
+    const s = state([lTool()], [{ toolId: 'l-tool', xMm: 5, yMm: 8, pocketDepthMm: 5 }], {
       gridX: 2,
       gridY: 1,
       gridManual: true,
     });
     const floored = binPlacement(s);
     expect(floored.gridX).toBe(2);
+    expect(floored.gridY).toBe(1);
     expect(floored.widthMm).toBeCloseTo(81.6, 9);
-    expect(floored.minX).toBeCloseTo(-25.8, 9);
-    // A 90 degree turn makes the bar demand 2 cells along Y, past the
-    // typed 1: the derived footprint grows while the floor stays 2 x 1.
+    expect(floored.minX).toBeCloseTo(1.2, 9);
+    // A vertical 70 mm bar centred at (21, 21) spans y -16..58 grown,
+    // covering cells -1..1: the derived footprint grows to 3 past the
+    // typed 1 while the stored floor stays 2 x 1.
     s.tools = [barTool()];
-    s.placements = [{ toolId: 'bar', xMm: 0, yMm: 0, pocketDepthMm: 5 }];
+    s.placements = [{ toolId: 'bar', xMm: 21, yMm: 21, pocketDepthMm: 5 }];
     setToolTransform(s, 'bar', { rotationDeg: 90 });
     const grown = binPlacement(s);
-    expect(grown.gridX).toBe(2);
-    expect(grown.gridY).toBe(2);
+    expect(grown.gridY).toBe(3);
     expect(s.gridX).toBe(2);
     expect(s.gridY).toBe(1);
   });
 
-  it('centres the current footprint on the origin while nothing is placed', () => {
+  it('occupies the cells at the origin while nothing is placed', () => {
     const s = state([], [], { gridX: 2, gridY: 1 });
     const bin = binPlacement(s);
-    expect(bin).toEqual({
-      gridX: 2,
-      gridY: 1,
-      minX: -40.8,
-      minY: -19.8,
-      widthMm: 81.6,
-      heightMm: 39.6,
-    });
+    expect(bin.gridX).toBe(2);
+    expect(bin.gridY).toBe(1);
+    expect(bin.minX).toBeCloseTo(1.2, 9);
+    expect(bin.minY).toBeCloseTo(1.2, 9);
+    expect(bin.widthMm).toBeCloseTo(81.6, 9);
+    expect(bin.heightMm).toBeCloseTo(39.6, 9);
   });
 });
 
 describe('moveTool', () => {
   it('grows and collapses the footprint live without moving any placement', () => {
-    // Two 10 mm squares, one at the origin: with the other at x 60 the box
-    // spans -5..65, 70 mm plus margins is 74, two cells. At x 70 the box
-    // spans -5..75, 80 mm plus margins is 84, past the
-    // 81.6 mm two-cell interior, so three cells; back at 60 it collapses
-    // to two. The placements always hold exactly the dragged values.
+    // Two 10 mm squares inside cell 0 (a at 10,10; b at 26,10): one cell.
+    // Dragging b to (60, 10) reaches into cell 1's interior: two cells.
+    // At (100, 10) the grown extent 3..107 covers cells 0..2: three cells.
+    // Back at (60, 10) it collapses to two. Placements always hold exactly
+    // the dragged values.
     const s = state(
       [squareTool('a'), squareTool('b')],
       [
-        { toolId: 'a', xMm: 0, yMm: 0, pocketDepthMm: 5 },
-        { toolId: 'b', xMm: 60, yMm: 0, pocketDepthMm: 5 },
+        { toolId: 'a', xMm: 10, yMm: 10, pocketDepthMm: 5 },
+        { toolId: 'b', xMm: 26, yMm: 10, pocketDepthMm: 5 },
       ],
     );
-    moveTool(s, 'b', 60, 0);
+    moveTool(s, 'b', 26, 10);
+    expect(s.gridX).toBe(1);
+    expect(s.gridY).toBe(1);
+    moveTool(s, 'b', 60, 10);
     expect(s.gridX).toBe(2);
     expect(s.gridY).toBe(1);
-    moveTool(s, 'b', 70, 0);
+    moveTool(s, 'b', 100, 10);
     expect(s.gridX).toBe(3);
     expect(s.gridY).toBe(1);
-    expect(s.placements[0]).toEqual({ toolId: 'a', xMm: 0, yMm: 0, pocketDepthMm: 5 });
-    expect(s.placements[1]).toEqual({ toolId: 'b', xMm: 70, yMm: 0, pocketDepthMm: 5 });
-    moveTool(s, 'b', 60, 0);
+    expect(s.placements[0]).toEqual({ toolId: 'a', xMm: 10, yMm: 10, pocketDepthMm: 5 });
+    expect(s.placements[1]).toEqual({ toolId: 'b', xMm: 100, yMm: 10, pocketDepthMm: 5 });
+    moveTool(s, 'b', 60, 10);
     expect(s.gridX).toBe(2);
-    expect(s.placements[0]).toEqual({ toolId: 'a', xMm: 0, yMm: 0, pocketDepthMm: 5 });
-    expect(s.placements[1]).toEqual({ toolId: 'b', xMm: 60, yMm: 0, pocketDepthMm: 5 });
+    expect(s.placements[0]).toEqual({ toolId: 'a', xMm: 10, yMm: 10, pocketDepthMm: 5 });
+    expect(s.placements[1]).toEqual({ toolId: 'b', xMm: 60, yMm: 10, pocketDepthMm: 5 });
   });
 
   it('keeps a typed floor: a drag no longer discards the manual size', () => {
@@ -267,33 +284,36 @@ describe('moveTool', () => {
 
 describe('toBinLocal and worldFromEntry', () => {
   it('converts world placements to bin-centred ones via the derived bin', () => {
-    // The L at (7, 3) spans 7..37 by 3..28, box centre (22, 15.5); the bin
-    // centre coincides with it, so the bin-centred placement is exactly
-    // (-15, -12.5), the placement that centres the L's box on the origin.
-    const s = state([lTool()], [{ toolId: 'l-tool', xMm: 7, yMm: 3, pocketDepthMm: 5 }]);
+    // The L at (7, 4) sits inside cell 0 (grown 5..39 by 2..31), whose
+    // interior centre is (21, 21): the bin-centred placement is
+    // (7 - 21, 4 - 21).
+    const s = state([lTool()], [{ toolId: 'l-tool', xMm: 7, yMm: 4, pocketDepthMm: 5 }]);
     const local = toBinLocal(s);
     expect(local.gridX).toBe(1);
     expect(local.gridY).toBe(1);
-    expect(local.placements[0].xMm).toBeCloseTo(-15, 9);
-    expect(local.placements[0].yMm).toBeCloseTo(-12.5, 9);
+    expect(local.placements[0].xMm).toBeCloseTo(-14, 9);
+    expect(local.placements[0].yMm).toBeCloseTo(-17, 9);
     // The world state is untouched.
     expect(s.placements[0].xMm).toBe(7);
   });
 
   it('round-trips a stored entry: world in, same bin-centred placements out', () => {
-    const world = worldFromEntry([lTool()], [centeredL]);
-    // The stored layout's box centre already sits on the origin, so the
-    // placement is unchanged.
-    expect(world[0].xMm).toBeCloseTo(-15, 9);
-    expect(world[0].yMm).toBeCloseTo(-12.5, 9);
+    // A 1 x 1 entry lands in the world cells 0..1, interior centre (21, 21):
+    // the stored (-15, -12.5) becomes world (6, 8.5) and converts back
+    // exactly.
+    const world = worldFromEntry([centeredL], 1, 1);
+    expect(world[0].xMm).toBeCloseTo(6, 9);
+    expect(world[0].yMm).toBeCloseTo(8.5, 9);
     const s = state([lTool()], world);
     const local = toBinLocal(s);
+    expect(local.gridX).toBe(1);
+    expect(local.gridY).toBe(1);
     expect(local.placements[0].xMm).toBeCloseTo(-15, 9);
     expect(local.placements[0].yMm).toBeCloseTo(-12.5, 9);
   });
 
   it('returns no placements for an entry without any', () => {
-    expect(worldFromEntry([lTool()], [])).toEqual([]);
+    expect(worldFromEntry([], 1, 1)).toEqual([]);
   });
 });
 
@@ -333,11 +353,12 @@ describe('tool list and transform actions', () => {
       'Bar',
       20,
     );
-    // 70 mm plus twice the 0.5 mm default clearance and margins needs two
-    // cells; the recentred outline lands the placement at the origin.
+    // The clearance-grown box starts at 3.2 mm (cell inset 1.2 plus margin
+    // 2): the recentred 70 mm bar's placement is 3.2 + 35 + 0.5 = 38.7 by
+    // 3.2 + 6 + 0.5 = 9.7, and the grown extent 1.2..76.2 covers two cells.
     expect(s.gridX).toBe(2);
     expect(s.gridY).toBe(1);
-    expect(s.placements[0]).toEqual({ toolId: bar.id, xMm: 0, yMm: 0, pocketDepthMm: 20 });
+    expect(s.placements[0]).toEqual({ toolId: bar.id, xMm: 38.7, yMm: 9.7, pocketDepthMm: 20 });
     addTool(
       s,
       {
@@ -377,18 +398,25 @@ describe('tool list and transform actions', () => {
     );
     expect(s.gridX).toBe(1);
     expect(s.gridY).toBe(1);
-    // Both new tools land at the origin, overlapping the L: the box spans
-    // -35.5..35.5 with the bar's clearance, needing two cells, which the
-    // derived footprint reports past the floor.
-    expect(binPlacement(s).gridX).toBe(2);
+    // The L straddles the origin boundary (grown -17..17) and the added bar
+    // reaches to 76.2: together they cover cells -1..2, which the derived
+    // footprint reports past the floor.
+    expect(binPlacement(s).gridX).toBe(3);
   });
 
   it('re-sizes when a transform change swaps the layout axes', () => {
-    const s = state([barTool()], [{ toolId: 'bar', xMm: 0, yMm: 0, pocketDepthMm: 5 }], {
+    // Horizontal bar at (42, 21): grown 5..79 covers cells 0..1, Y inside
+    // cell 0: 2 x 1. Rotated 90 degrees about its centre, the grown Y
+    // extent -16..58 covers cells -1..1 and X (34..50) straddles the
+    // boundary at 42: 2 x 3.
+    const s = state([barTool()], [{ toolId: 'bar', xMm: 42, yMm: 21, pocketDepthMm: 5 }], {
       gridX: 2,
     });
+    setToolTransform(s, 'bar', { rotationDeg: 0 });
+    expect(s.gridX).toBe(2);
+    expect(s.gridY).toBe(1);
     setToolTransform(s, 'bar', { rotationDeg: 90 });
-    expect(s.gridX).toBe(1);
-    expect(s.gridY).toBe(2);
+    expect(s.gridX).toBe(2);
+    expect(s.gridY).toBe(3);
   });
 });

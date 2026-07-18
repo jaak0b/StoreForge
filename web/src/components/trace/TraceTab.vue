@@ -121,10 +121,11 @@ watch(
     void lookUpStoredPhoto(entry);
     trace.tools = JSON.parse(JSON.stringify(entry.pockets.tools));
     // Stored placements are bin-centred; the layout model works in the world
-    // frame, so put the resumed layout at the world origin.
+    // frame, so place the resumed layout inside the bin's world cells.
     trace.placements = worldFromEntry(
-      trace.tools,
       JSON.parse(JSON.stringify(entry.pockets.placements)),
+      entry.gridX,
+      entry.gridY,
     );
     trace.selectedToolId = null;
     // The stored footprint is a floor; the layout can still demand more.
