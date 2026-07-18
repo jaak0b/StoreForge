@@ -46,17 +46,19 @@ export const BASE_WALL_THICKNESS = 3.05;
 
 /**
  * Thickness of the internal lattice ribs standing inside the hollowed foot:
- * the per-cell central "+" cross and the two diagonal ribs. Measured from the
- * same Pred reference bin (first-layer plan slice): the central cross arm is
- * 0.78 mm, the diagonal ribs are 0.70 mm, both about 0.8 mm (roughly two
- * 0.4 mm extrusion lines). The reference fills the foot with a diamond-void
- * lattice of these thin ribs; we reproduce the outer shell, the central cross
- * and the two cell diagonals at the measured rib width, which reproduces the
- * measured first-layer solid area (about 499 mm squared per cell) within a
- * couple of percent. See binGenerator's buildBasePocket for what the lattice
- * simplifies relative to the reference's full diamond pattern.
+ * the per-cell central "+" cross and the two diagonal ribs. The Pred reference
+ * bin (first-layer plan slice) measures these ribs at about 0.8 mm (central
+ * cross arm 0.78 mm, diagonals 0.70 mm, roughly two 0.4 mm extrusion lines);
+ * that reference-measured 0.8 mm is the origin of this dimension. The owner
+ * has deliberately doubled it to 1.6 mm, four 0.4 mm extrusion lines wide, so
+ * the sliced first layer lays each rib as four solid perimeters instead of
+ * two: a stiffer base lattice that adheres better to the build plate. This is
+ * a printability decision by the owner, not a fudge fitted to make one scan's
+ * numbers match; the reference remains the origin, the doubling is the choice.
+ * See binGenerator's buildBasePocket for what the lattice simplifies relative
+ * to the reference's full diamond pattern.
  */
-export const BASE_RIB_THICKNESS = 0.8;
+export const BASE_RIB_THICKNESS = 1.6;
 
 /**
  * Height of the top of the interior floor above the bed. The floor spans from

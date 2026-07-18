@@ -273,8 +273,11 @@ describe('buildBinManifold', () => {
     const base = bin.trimByPlane([0, 0, -1], -FLOOR_TOP);
     const saved = solidBase.volume() - base.volume();
     // The 1x1 pocket still saves several cubic centimetres of filament even
-    // with the thicker base walls and the "+" cross walls in the pocket.
-    expect(saved).toBeGreaterThan(4000);
+    // with the thicker base walls and the rib lattice standing in the pocket.
+    // With the ribs widened to BASE_RIB_THICKNESS = 1.6 mm the ribs occupy
+    // more of the pocket, so the pocket now saves about 3804 mm^3 (measured
+    // 2026-07-19); the bound follows from the 1.6 mm rib width.
+    expect(saved).toBeGreaterThan(3500);
     expect(base.volume()).toBeGreaterThan(0);
     solidBase.delete();
     foot.delete();
@@ -286,15 +289,16 @@ describe('buildBinManifold', () => {
   it('gives the first layer the measured Pred base area for bed adhesion', () => {
     const bin = buildBinManifold(m, params());
     // First-layer plan slice, 0.1 mm above the bed, is what adheres to the
-    // build plate. The Pred reference bin (gridfinitybin_1x1x6_d1_l12_s10,
-    // printables.com/model/592545) measures 499.5 mm^2 of solid per cell at
-    // this height; our simplified rib lattice (3.05 mm shell, 0.8 mm central
-    // cross and diagonals) yields 509.8 mm^2, within about 2 percent of the
-    // reference (measured 2026-07-19). Pinning it guards the adhesion fix: a
+    // build plate. The base uses a 3.05 mm foot shell plus the rib lattice at
+    // BASE_RIB_THICKNESS = 1.6 mm (the owner's four-perimeter printability
+    // width, see constants). With the 1.6 mm central cross and diagonals the
+    // slice measures 613.37 mm^2 of solid per cell (measured 2026-07-19); the
+    // range below is pinned tightly around that value, which follows directly
+    // from the 1.6 mm rib width. Pinning it guards the adhesion fix: a
     // regression thinning the base back to sparse lines would fall far below.
     const cs = bin.slice(0.1);
-    expect(cs.area()).toBeGreaterThan(505);
-    expect(cs.area()).toBeLessThan(515);
+    expect(cs.area()).toBeGreaterThan(611);
+    expect(cs.area()).toBeLessThan(616);
     cs.delete();
     bin.delete();
   });
