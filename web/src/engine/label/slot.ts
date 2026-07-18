@@ -7,7 +7,7 @@ import {
   OUTER_CORNER_RADIUS,
   WALL_THICKNESS,
 } from '../gridfinity/constants';
-import { buildOuterEnvelope, roundedRectPolygon } from '../gridfinity/binGenerator';
+import { buildOuterEnvelope, prismFromProfile, roundedRectPolygon } from '../gridfinity/binGenerator';
 import type { BinParams } from '../gridfinity/types';
 import { extrudeLabel } from './extrude';
 import {
@@ -184,20 +184,6 @@ export function insertPositionInBin(params: BinParams): {
     y: -outerDepth / 2 + slotFrontInsetMm(params) + SLOT_DEPTH / 2,
     z: bodyTop - SLOT_HEIGHT,
   };
-}
-
-/** Extrude a (y, z) profile along X over the given width, starting at x = 0. */
-export function prismFromProfile(
-  m: ManifoldToplevel,
-  profile: SimplePolygon,
-  width: number,
-): Manifold {
-  const section = new m.CrossSection([profile], 'NonZero');
-  try {
-    return section.extrude(width).rotate(90, 0, 90);
-  } finally {
-    section.delete();
-  }
 }
 
 /** The two tab-pocket void boxes of the channel, at the given channel frame. */

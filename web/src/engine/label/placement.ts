@@ -13,7 +13,7 @@ import {
   PITCH,
   WALL_THICKNESS,
 } from '../gridfinity/constants';
-import { roundedRectPolygon } from '../gridfinity/binGenerator';
+import { prismFromProfile, roundedRectPolygon } from '../gridfinity/binGenerator';
 import type { BinParams } from '../gridfinity/types';
 
 /**
@@ -319,24 +319,13 @@ export function buildShelfStructure(
     [yOuter, ribBottom],
   ];
 
-  // Extrude along +Z, then permute axes (x, y, z) -> (z, x, y) so the
-  // profile lands in the (y, z) plane with the extrusion running along X.
-  const prismFromProfile = (profile: SimplePolygon, width: number): Manifold => {
-    const section = new m.CrossSection([profile], 'NonZero');
-    try {
-      return section.extrude(width).rotate(90, 0, 90);
-    } finally {
-      section.delete();
-    }
-  };
-
   const parts: Manifold[] = [
-    prismFromProfile(plateProfile, outerWidth).translate(-outerWidth / 2, 0, 0),
+    prismFromProfile(m, plateProfile, outerWidth).translate(-outerWidth / 2, 0, 0),
   ];
   if (ribDrop > 0) {
     for (const centre of shelfRibCentresMm(params.gridX)) {
       parts.push(
-        prismFromProfile(ribProfile, RIB_THICKNESS).translate(centre - RIB_THICKNESS / 2, 0, 0),
+        prismFromProfile(m, ribProfile, RIB_THICKNESS).translate(centre - RIB_THICKNESS / 2, 0, 0),
       );
     }
   }

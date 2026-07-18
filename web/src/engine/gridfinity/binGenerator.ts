@@ -8,12 +8,7 @@ import type {
   PartMeshes,
   SlottedBinParams,
 } from './types';
-import {
-  applySlotToBody,
-  buildInsertSolids,
-  insertPositionInBin,
-  prismFromProfile,
-} from '../label/slot';
+import { applySlotToBody, buildInsertSolids, insertPositionInBin } from '../label/slot';
 import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
@@ -396,6 +391,31 @@ function crestArcPoint(angle: number): { inset: number; rise: number } {
 }
 
 /**
+ * Height of the top of the interior vertical wall face for a stacking-lip
+ * bin: the z where the wall-thickness interior stops rising and the lip's
+ * 45-degree support taper begins narrowing the opening toward the lip tip.
+ * Measured down from the nominal bin top by the vertical support band
+ * (LIP_SUPPORT_HEIGHT) and the run of the taper (LIP_DEPTH - WALL_THICKNESS).
+ */
+function interiorWallTopZ(bodyTop: number): number {
+  return bodyTop - LIP_SUPPORT_HEIGHT - (LIP_DEPTH - WALL_THICKNESS);
+}
+
+/** Extrude a (y, z) profile along X over the given width, starting at x = 0. */
+export function prismFromProfile(
+  m: ManifoldToplevel,
+  profile: SimplePolygon,
+  width: number,
+): Manifold {
+  const section = new m.CrossSection([profile], 'NonZero');
+  try {
+    return section.extrude(width).rotate(90, 0, 90);
+  } finally {
+    section.delete();
+  }
+}
+
+/**
  * The bin's outer wall envelope from the top of the feet up: a plain prism
  * of the outer outline to the nominal top for a flat-topped bin. With the
  * stacking lip, the outer face carries the measured rim groove below the
@@ -432,6 +452,52 @@ export function buildOuterEnvelope(m: ManifoldToplevel, params: BinParams): Mani
     const { inset, rise } = crestArcPoint((i / LIP_FILLET_SEGMENTS) * (Math.PI / 2));
     sections.push({ inset, z: bodyTop + rise });
   }
+  return loftChain(m, outerWidth, outerDepth, sections);
+}
+
+/**
+ * Interior cavity cutter for a stacking-lip bin, ending in the lip's inner
+ * seat: the negative of the stacking foot (kennetek STACKING_LIP_LINE with
+ * its support), the mirror of buildOuterEnvelope's section table on the
+ * interior side. The wall-thickness interior rises to where the 45-degree
+ * support taper narrows the opening to the lip tip at LIP_DEPTH, holds
+ * vertical for LIP_SUPPORT_HEIGHT up to the nominal top, then opens back out
+ * through the seat profile (45-degree taper, vertical band, 45-degree taper).
+ * The seat's upper taper is cut past the crest, whose fillet the envelope
+ * already carries; the cutter follows the fillet's inner arc branch so the
+ * crest closes in the round crest instead of a knife edge.
+ */
+function buildInteriorCutter(m: ManifoldToplevel, params: BinParams): Manifold {
+  const outerWidth = binOuterSizeMm(params.gridX);
+  const outerDepth = binOuterSizeMm(params.gridY);
+  const bodyTop = params.heightUnits * HEIGHT_UNIT;
+  const eps = 0.01;
+  const tangent = crestArcPoint((3 / 4) * Math.PI);
+  const sections: Array<{ inset: number; z: number }> = [
+    { inset: WALL_THICKNESS, z: FLOOR_TOP },
+    { inset: WALL_THICKNESS, z: interiorWallTopZ(bodyTop) },
+    { inset: LIP_DEPTH, z: bodyTop - LIP_SUPPORT_HEIGHT },
+    { inset: LIP_DEPTH, z: bodyTop },
+    { inset: LIP_DEPTH - LIP_LOWER_TAPER, z: bodyTop + LIP_LOWER_TAPER },
+    {
+      inset: LIP_DEPTH - LIP_LOWER_TAPER,
+      z: bodyTop + LIP_LOWER_TAPER + LIP_SEAT_VERTICAL,
+    },
+    // Upper taper up to its tangent with the crest fillet, then the
+    // fillet's inner arc branch to the apex.
+    { inset: tangent.inset, z: bodyTop + tangent.rise },
+  ];
+  const innerFilletSegments = Math.ceil(LIP_FILLET_SEGMENTS / 2);
+  for (let i = 1; i <= innerFilletSegments; i++) {
+    const angle = (3 / 4) * Math.PI - (i / innerFilletSegments) * (Math.PI / 4);
+    const { inset, rise } = crestArcPoint(angle);
+    sections.push({ inset, z: bodyTop + rise });
+  }
+  // Past the apex the cutter continues straight up to clear the top face.
+  sections.push({
+    inset: LIP_FILLET_RADIUS,
+    z: bodyTop + LIP_CREST_HEIGHT + eps,
+  });
   return loftChain(m, outerWidth, outerDepth, sections);
 }
 
@@ -504,9 +570,7 @@ function buildScoop(m: ManifoldToplevel, params: BinParams, bodyTop: number): Ma
   const innerDepth = binInteriorSizeMm(params.gridY);
   // Top of the vertical interior wall face: the nominal top for a flat bin,
   // or where the lip's support taper starts narrowing the interior.
-  const wallTop = params.stackingLip
-    ? bodyTop - LIP_SUPPORT_HEIGHT - (LIP_DEPTH - WALL_THICKNESS)
-    : bodyTop;
+  const wallTop = params.stackingLip ? interiorWallTopZ(bodyTop) : bodyTop;
   const radius = Math.min(SCOOP_RADIUS, wallTop - FLOOR_TOP);
   if (radius <= 0) return null;
   // Profile in (y, z): the interior face of the back wall, the floor, and
@@ -569,45 +633,7 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   const eps = 0.01;
   const cutters: Manifold[] = [];
   if (stackingLip) {
-    // Interior cavity ending in the stacking lip's inner seat, the negative
-    // of the stacking foot (kennetek STACKING_LIP_LINE with its support): the
-    // wall-thickness interior rises to where the 45-degree support taper
-    // narrows the opening to the lip tip at LIP_DEPTH, holds vertical for
-    // LIP_SUPPORT_HEIGHT up to the nominal top, then opens back out through
-    // the seat profile (45-degree taper, vertical band, 45-degree taper). The
-    // seat's upper taper is cut past the crest, whose fillet the envelope
-    // already carries; the cutter follows the fillet's inner arc branch so
-    // the crest closes in the round crest instead of a knife edge.
-    const tangent = crestArcPoint((3 / 4) * Math.PI);
-    const sections: Array<{ inset: number; z: number }> = [
-      { inset: WALL_THICKNESS, z: FLOOR_TOP },
-      {
-        inset: WALL_THICKNESS,
-        z: bodyTop - LIP_SUPPORT_HEIGHT - (LIP_DEPTH - WALL_THICKNESS),
-      },
-      { inset: LIP_DEPTH, z: bodyTop - LIP_SUPPORT_HEIGHT },
-      { inset: LIP_DEPTH, z: bodyTop },
-      { inset: LIP_DEPTH - LIP_LOWER_TAPER, z: bodyTop + LIP_LOWER_TAPER },
-      {
-        inset: LIP_DEPTH - LIP_LOWER_TAPER,
-        z: bodyTop + LIP_LOWER_TAPER + LIP_SEAT_VERTICAL,
-      },
-      // Upper taper up to its tangent with the crest fillet, then the
-      // fillet's inner arc branch to the apex.
-      { inset: tangent.inset, z: bodyTop + tangent.rise },
-    ];
-    const innerFilletSegments = Math.ceil(LIP_FILLET_SEGMENTS / 2);
-    for (let i = 1; i <= innerFilletSegments; i++) {
-      const angle = (3 / 4) * Math.PI - (i / innerFilletSegments) * (Math.PI / 4);
-      const { inset, rise } = crestArcPoint(angle);
-      sections.push({ inset, z: bodyTop + rise });
-    }
-    // Past the apex the cutter continues straight up to clear the top face.
-    sections.push({
-      inset: LIP_FILLET_RADIUS,
-      z: bodyTop + LIP_CREST_HEIGHT + eps,
-    });
-    cutters.push(loftChain(m, outerWidth, outerDepth, sections));
+    cutters.push(buildInteriorCutter(m, params));
   } else {
     const innerPoly = roundedRectPolygon(
       outerWidth - 2 * WALL_THICKNESS,
