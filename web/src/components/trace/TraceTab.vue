@@ -12,16 +12,15 @@ import { getPhoto } from '../../photoStore';
 import { embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
 import PhotoStage from './PhotoStage.vue';
 import TraceCanvas from './TraceCanvas.vue';
-import LayoutCanvas from './LayoutCanvas.vue';
-import ToolRail from './ToolRail.vue';
+import LayoutWorkspace from './LayoutWorkspace.vue';
 
 /**
  * The Tool trace tab of the add-bin card, in two stages: a Photo stage
  * (photograph tools on a reference sheet, confirm its corners) and a
  * trace-and-lay-out workspace with two gated modes: Trace mode fills the
  * whole tab with the click-to-trace canvas, and Layout mode (reachable only
- * once at least one tool exists) shows the layout canvas beside a rail with
- * the tools, bin options, preview and queue actions. The trace state lives
+ * once at least one tool exists) is a full-bleed layout canvas with floating
+ * controls and an advanced drawer (LayoutWorkspace). The trace state lives
  * in the toolTrace store so it survives tab switches; the photo itself
  * stays in the vision worker.
  */
@@ -257,28 +256,23 @@ function restart(): void {
       <PhotoStage @confirmed="onSheetConfirmed" />
     </template>
 
-    <div v-else class="stage-panes">
-      <div class="canvas-pane">
-        <div v-if="tools.length > 0" class="mb-3">
+    <div v-else>
+      <div v-show="workspaceMode === 'trace'">
+        <div v-if="tools.length > 0" class="d-flex align-center flex-wrap ga-3 mb-3">
           <v-btn
-            v-if="workspaceMode === 'trace'"
             variant="outlined"
             prepend-icon="mdi-arrow-left"
             @click="setWorkspaceMode('layout')"
           >
             Back to layout
           </v-btn>
-          <v-btn
-            v-else
-            variant="outlined"
-            prepend-icon="mdi-plus"
-            :disabled="!traceModeAvailable"
-            :loading="resumeBusy"
-            @click="setWorkspaceMode('trace')"
-          >
-            Trace another tool
-          </v-btn>
+          <span class="text-body-2 text-medium-emphasis">
+            {{ tools.length === 1 ? 'One tool is traced so far.' : `${tools.length} tools are traced so far.` }}
+          </span>
         </div>
+        <TraceCanvas v-if="embedReady" @accepted="workspaceMode = 'layout'" />
+      </div>
+      <div v-show="workspaceMode === 'layout'">
         <p
           v-if="editingEntry !== null && photoMissing && !embedReady"
           class="text-body-2 text-medium-emphasis"
@@ -294,22 +288,15 @@ function restart(): void {
           Restoring the stored trace photo.
         </p>
         <v-progress-linear v-if="resumeBusy" indeterminate class="mb-2" />
-        <TraceCanvas
-          v-if="embedReady"
-          v-show="workspaceMode === 'trace'"
-          @accepted="workspaceMode = 'layout'"
+        <LayoutWorkspace
+          :editing-entry="editingEntry"
+          :retrace-available="traceModeAvailable"
+          @trace-another="setWorkspaceMode('trace')"
+          @retrace="onRetrace"
+          @saved="restart"
+          @cancelled="restart"
         />
-        <LayoutCanvas v-show="workspaceMode === 'layout'" />
       </div>
-      <ToolRail
-        v-show="workspaceMode === 'layout'"
-        class="rail"
-        :editing-entry="editingEntry"
-        :retrace-available="traceModeAvailable"
-        @retrace="onRetrace"
-        @saved="restart"
-        @cancelled="restart"
-      />
     </div>
   </div>
 </template>
@@ -317,33 +304,5 @@ function restart(): void {
 <style scoped>
 .breadcrumb .v-chip {
   cursor: pointer;
-}
-
-.stage-panes {
-  display: flex;
-  gap: 24px;
-  align-items: flex-start;
-}
-
-.canvas-pane {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.rail {
-  flex: 0 0 360px;
-  max-width: 360px;
-}
-
-@media (max-width: 959px) {
-  .stage-panes {
-    flex-direction: column;
-  }
-
-  .rail {
-    flex: 1 1 auto;
-    max-width: none;
-    width: 100%;
-  }
 }
 </style>

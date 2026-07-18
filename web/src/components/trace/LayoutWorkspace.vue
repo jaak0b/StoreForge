@@ -1,0 +1,467 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue';
+import { storeToRefs } from 'pinia';
+import { useApp } from '../../stores/app';
+import { useBinDesigner } from '../../stores/binDesigner';
+import { useBinQueue } from '../../stores/binQueue';
+import { useToolTrace } from '../../stores/toolTrace';
+import { useBinPreview } from '../../composables/useBinPreview';
+import { generatePocketBin } from '../../workerClient';
+import type { PocketBinParams } from '../../engine/trace/pocketBin';
+import type { BinPockets, TracePaper, TracedBin } from '../../engine/plan/types';
+import type { PaperCorners } from '../../engine/trace/types';
+import { putPhoto } from '../../photoStore';
+import { primitiveOutline } from '../../engine/trace/edit';
+import BinViewport from '../BinViewport.vue';
+import LayoutCanvas from './LayoutCanvas.vue';
+import SelectionToolbar from './SelectionToolbar.vue';
+import AdvancedDrawer from './AdvancedDrawer.vue';
+
+/**
+ * The Layout mode of the trace-and-layout workspace: a full-bleed layout
+ * canvas with floating controls over it (the selection toolbar near the
+ * selected tool, an icon cluster top right, the queue action bottom right)
+ * and a slide-in advanced drawer with the Trace and Bin tabs. The canvas
+ * swaps in place to the 3D preview via the cluster's 3D toggle.
+ */
+
+const props = defineProps<{
+  /** The queue entry being edited, or null when designing a new bin. */
+  editingEntry: TracedBin | null;
+  /** True when a tool can be re-traced (embedding ready or photo stored). */
+  retraceAvailable: boolean;
+}>();
+
+const emit = defineEmits<{
+  /** Asks the workspace to re-trace the tool from its stored clicks. */
+  retrace: [toolId: string];
+  /** Asks the workspace to switch to Trace mode for another tool. */
+  traceAnother: [];
+  saved: [];
+  cancelled: [];
+}>();
+
+const app = useApp();
+const designer = useBinDesigner();
+const trace = useToolTrace();
+const queue = useBinQueue();
+
+const { notes } = storeToRefs(designer);
+const { tools, fingerHoleMode, selectedToolId } = storeToRefs(trace);
+
+const quantity = ref(1);
+
+// Editing a traced queue row restores its quantity; a new design starts at 1.
+watch(
+  () => props.editingEntry?.id ?? null,
+  () => {
+    quantity.value = props.editingEntry !== null ? props.editingEntry.quantity : 1;
+  },
+  { immediate: true },
+);
+
+/** Anchor of the selected tool on the canvas, for the floating toolbar. */
+const selectionAnchor = ref<{ xFrac: number; yFrac: number } | null>(null);
+
+const drawerOpen = ref(false);
+const show3d = ref(false);
+
+// Selecting a tool while the 3D view is up returns to the 2D layout so the
+// selection toolbar and the drag interaction are usable again.
+watch(selectedToolId, (id) => {
+  if (id !== null) show3d.value = false;
+});
+
+// Custom primitive dialog.
+const primitiveDialog = ref(false);
+const primitiveKind = ref<'circle' | 'rectangle'>('circle');
+const primitiveDiameter = ref(20);
+const primitiveWidth = ref(40);
+const primitiveHeight = ref(20);
+const primitiveCornerRadius = ref(2);
+const primitiveError = ref<string | null>(null);
+
+function addPrimitive(): void {
+  primitiveError.value = null;
+  try {
+    const outline =
+      primitiveKind.value === 'circle'
+        ? primitiveOutline('circle', { diameterMm: primitiveDiameter.value })
+        : primitiveOutline('rectangle', {
+            widthMm: primitiveWidth.value,
+            heightMm: primitiveHeight.value,
+            cornerRadiusMm: primitiveCornerRadius.value,
+          });
+    trace.addTool(
+      outline,
+      primitiveKind.value === 'circle'
+        ? `Circle ${primitiveDiameter.value} mm`
+        : `Rectangle ${primitiveWidth.value} x ${primitiveHeight.value} mm`,
+    );
+    primitiveDialog.value = false;
+    // The new shape lands on the layout canvas.
+    trace.workspaceMode = 'layout';
+    show3d.value = false;
+  } catch (error) {
+    primitiveError.value =
+      error instanceof Error ? error.message : 'Adding the shape failed.';
+  }
+}
+
+/**
+ * The pocket-bin parameters of the current design, as plain JSON. The layout
+ * model converts the world-frame layout to the pocket generator's
+ * bin-centred coordinates (toBinLocal), so previews and saved entries share
+ * one conversion.
+ */
+const pocketParams = computed<PocketBinParams>(() => {
+  const local = trace.toBinLocal();
+  return {
+    gridX: local.gridX,
+    gridY: local.gridY,
+    heightUnits: designer.heightUnits,
+    stackingLip: designer.stackingLip,
+    magnetHoles: designer.magnetHoles,
+    // The pocket generator rejects divider walls, so a pocket bin never has any.
+    dividerCountX: 0,
+    dividerCountY: 0,
+    labelText: designer.labelText,
+    labelText2: designer.labelText2,
+    labelIcon: designer.labelIcon,
+    tools: JSON.parse(JSON.stringify(trace.tools)),
+    placements: JSON.parse(JSON.stringify(local.placements)),
+  };
+});
+
+// The preview generation always runs so the layout is validated (the
+// worker's exact CSG containment check is the final authority over the
+// layout model's bounding-box sizing); the heavy viewport itself mounts only
+// while the 3D toggle is on. Its error alert is the single surface for
+// layout validation problems.
+const { meshes, errorMessage } = useBinPreview(
+  () => pocketParams.value,
+  (params) => generatePocketBin(params as PocketBinParams),
+);
+
+/**
+ * Why the queue action is unavailable right now, or null when it can run.
+ * The button is disabled with this as its tooltip, so an invalid layout can
+ * never be queued.
+ */
+const submitBlocker = computed<string | null>(() => {
+  if (trace.placements.length === 0) {
+    return 'Trace and place at least one tool before adding the bin.';
+  }
+  if (errorMessage.value !== null) {
+    return 'Fix the layout problem shown by the preview first.';
+  }
+  return null;
+});
+
+const addError = ref<string | null>(null);
+/** Note about photo storage; survives the form reset. */
+const photoNote = ref<string | null>(null);
+
+/**
+ * The trace-source fields to save with the entry: when a photo with a
+ * confirmed sheet is loaded, its bytes go into the photo store (a fresh
+ * upload under a new id, a resumed photo under its existing one). Without a
+ * photo the fields stay untouched (an edit keeps the entry's stored ones).
+ */
+async function storeTraceSource(): Promise<{ traceSourceId?: string; paper?: TracePaper }> {
+  if (trace.photoBlob === null || trace.calibration === null) return {};
+  const traceSourceId = trace.sourceId ?? crypto.randomUUID();
+  const paper: TracePaper = {
+    corners: JSON.parse(JSON.stringify(trace.calibration.corners)) as PaperCorners,
+    kind: trace.calibration.kind,
+  };
+  try {
+    await putPhoto(traceSourceId, trace.photoBlob);
+  } catch (error) {
+    // The bin is still saved; without the stored photo it is layout-only
+    // editable later, and the note says so.
+    const detail = error instanceof Error ? error.message : String(error);
+    photoNote.value = `Storing the trace photo failed (${detail}). The bin was saved, but its trace cannot be edited later without the photo.`;
+    return {};
+  }
+  return { traceSourceId, paper };
+}
+
+async function addToQueue(): Promise<void> {
+  addError.value = null;
+  photoNote.value = null;
+  // The button is disabled while a blocker stands; this guard backs it up.
+  if (submitBlocker.value !== null) {
+    addError.value = submitBlocker.value;
+    return;
+  }
+  const params = pocketParams.value;
+  const pockets: BinPockets = { tools: params.tools, placements: params.placements };
+  const cleanNotes = notes.value.trim();
+  const binParams = {
+    gridX: params.gridX,
+    gridY: params.gridY,
+    heightUnits: params.heightUnits,
+    stackingLip: params.stackingLip,
+    magnetHoles: params.magnetHoles,
+    dividerCountX: 0,
+    dividerCountY: 0,
+    labelText: params.labelText,
+    labelText2: params.labelText2,
+    labelIcon: params.labelIcon,
+  };
+  // The photo must be stored before the queue mutation: persisting the plan
+  // sweeps stored photos no entry references, so the reference and the photo
+  // have to land in that order.
+  const source = await storeTraceSource();
+  if (props.editingEntry !== null) {
+    const { dividerCountX, dividerCountY, ...shared } = binParams;
+    void dividerCountX;
+    void dividerCountY;
+    queue.update(props.editingEntry.id, {
+      ...shared,
+      pockets,
+      ...source,
+      quantity: quantity.value,
+      notes: cleanNotes === '' ? undefined : cleanNotes,
+    });
+    app.stopEditing();
+  } else {
+    const id = queue.add(binParams, quantity.value, { kind: 'traced', pockets, ...source });
+    if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
+  }
+  trace.reset();
+  quantity.value = 1;
+  emit('saved');
+}
+
+function cancelEdit(): void {
+  app.stopEditing();
+  trace.reset();
+  quantity.value = 1;
+  emit('cancelled');
+}
+</script>
+
+<template>
+  <div class="workspace">
+    <div class="canvas-area">
+      <div v-show="!show3d" class="canvas-wrap">
+        <LayoutCanvas @selection-anchor="selectionAnchor = $event" />
+        <SelectionToolbar
+          :anchor="selectionAnchor"
+          :retrace-available="retraceAvailable"
+          @retrace="emit('retrace', $event)"
+        />
+      </div>
+      <div v-if="show3d" class="preview-body">
+        <BinViewport :mesh="meshes?.body ?? null" :label="meshes?.label ?? null" />
+      </div>
+
+      <div class="corner-cluster">
+        <v-btn icon size="small" variant="tonal" :disabled="!retraceAvailable" @click="emit('traceAnother')">
+          <v-icon icon="mdi-plus" size="20" />
+          <v-tooltip activator="parent" location="bottom">Trace another tool</v-tooltip>
+        </v-btn>
+        <v-btn icon size="small" variant="tonal" @click="primitiveDialog = true">
+          <v-icon icon="mdi-shape-outline" size="20" />
+          <v-tooltip activator="parent" location="bottom">Add a basic shape</v-tooltip>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          :variant="show3d ? 'flat' : 'tonal'"
+          :color="show3d ? 'primary' : undefined"
+          @click="show3d = !show3d"
+        >
+          <v-icon icon="mdi-video-3d" size="20" />
+          <v-tooltip activator="parent" location="bottom">
+            {{ show3d ? 'Back to the 2D layout' : 'Show the 3D preview' }}
+          </v-tooltip>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          :variant="drawerOpen ? 'flat' : 'tonal'"
+          :color="drawerOpen ? 'primary' : undefined"
+          @click="drawerOpen = !drawerOpen"
+        >
+          <v-icon icon="mdi-pencil" size="20" />
+          <v-tooltip activator="parent" location="bottom">
+            {{ drawerOpen ? 'Close the editing drawer' : 'Open the editing drawer' }}
+          </v-tooltip>
+        </v-btn>
+      </div>
+
+      <div class="canvas-hint text-caption text-medium-emphasis">
+        <template v-if="tools.length === 0">
+          Trace a tool with the plus button, or add a basic shape.
+        </template>
+        <template v-else-if="fingerHoleMode">
+          Press on a tool to place a finger hole; drag before releasing to
+          stretch it into a slot.
+        </template>
+        <template v-else>
+          Drag each tool to its place; the bin outline follows the tools.
+        </template>
+      </div>
+
+      <div class="queue-float">
+        <v-alert v-if="errorMessage" type="error" density="compact" class="mb-2 float-alert">
+          {{ errorMessage }}
+        </v-alert>
+        <v-alert v-if="addError" type="warning" density="compact" class="mb-2 float-alert">
+          {{ addError }}
+        </v-alert>
+        <v-alert v-if="photoNote" type="warning" density="compact" class="mb-2 float-alert">
+          {{ photoNote }}
+        </v-alert>
+        <div class="d-flex justify-end ga-2">
+          <v-btn v-if="editingEntry !== null" variant="outlined" @click="cancelEdit">
+            Cancel edit
+          </v-btn>
+          <v-tooltip :disabled="submitBlocker === null" :text="submitBlocker ?? ''" location="top">
+            <template #activator="{ props: tooltipProps }">
+              <div v-bind="tooltipProps" class="d-flex">
+                <v-btn
+                  color="primary"
+                  variant="flat"
+                  :disabled="submitBlocker !== null"
+                  @click="addToQueue"
+                >
+                  {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
+                </v-btn>
+              </div>
+            </template>
+          </v-tooltip>
+        </div>
+        <div v-if="editingEntry !== null" class="text-caption text-medium-emphasis text-right mt-1">
+          Editing "{{ editingEntry.labelText !== '' ? editingEntry.labelText : `${editingEntry.gridX} x ${editingEntry.gridY} x ${editingEntry.heightUnits}` }}"; saving updates the queue row.
+        </div>
+      </div>
+    </div>
+
+    <div v-if="drawerOpen" class="drawer-pane">
+      <AdvancedDrawer
+        :retrace-available="retraceAvailable"
+        :quantity="quantity"
+        @update:quantity="quantity = $event"
+        @retrace="emit('retrace', $event)"
+      />
+    </div>
+  </div>
+
+  <v-dialog v-model="primitiveDialog" max-width="360">
+    <v-card>
+      <v-card-title class="text-subtitle-1">Add a basic shape</v-card-title>
+      <v-card-text>
+        <v-btn-toggle v-model="primitiveKind" mandatory density="comfortable" variant="outlined" class="mb-3">
+          <v-btn value="circle">Circle</v-btn>
+          <v-btn value="rectangle">Rectangle</v-btn>
+        </v-btn-toggle>
+        <v-text-field
+          v-if="primitiveKind === 'circle'"
+          v-model.number="primitiveDiameter"
+          type="number"
+          min="1"
+          label="Diameter (mm)"
+          density="compact"
+        />
+        <template v-else>
+          <v-text-field v-model.number="primitiveWidth" type="number" min="1" label="Width (mm)" density="compact" />
+          <v-text-field v-model.number="primitiveHeight" type="number" min="1" label="Height (mm)" density="compact" />
+          <v-text-field
+            v-model.number="primitiveCornerRadius"
+            type="number"
+            min="0"
+            label="Corner radius (mm)"
+            density="compact"
+          />
+        </template>
+        <v-alert v-if="primitiveError" type="error" density="compact">
+          {{ primitiveError }}
+        </v-alert>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="primitiveDialog = false">Cancel</v-btn>
+        <v-btn color="primary" variant="flat" @click="addPrimitive">Add shape</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+</template>
+
+<style scoped>
+.workspace {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.canvas-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 420px;
+}
+
+.canvas-wrap {
+  position: relative;
+}
+
+.preview-body {
+  min-height: 420px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 8px;
+}
+
+.corner-cluster {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  z-index: 4;
+}
+
+.canvas-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  max-width: 45%;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.queue-float {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  max-width: min(420px, calc(100% - 24px));
+  z-index: 4;
+}
+
+.float-alert {
+  text-align: left;
+}
+
+.drawer-pane {
+  flex: 0 0 340px;
+  max-width: 340px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 8px;
+  background: rgb(var(--v-theme-surface));
+}
+
+@media (max-width: 959px) {
+  .workspace {
+    flex-direction: column;
+  }
+
+  .drawer-pane {
+    flex: 1 1 auto;
+    max-width: none;
+    width: 100%;
+  }
+}
+</style>
