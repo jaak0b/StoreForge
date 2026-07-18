@@ -101,14 +101,18 @@ Numbered for unambiguous reference; do not cite rule numbers in shipped source o
 
 11. **Subagent discipline.** Give every subagent a correct, specific title; never run more than 1 Fable
     agent at a time (hard budget limit). Sonnet is fine for parallel design/research work.
-    The main (user-facing) agent protects its own context by delegating context-heavy work to
-    subagents and consuming only their conclusions: codebase exploration and broad searches, reading
-    large files or external references, reviews/audits, and self-contained multi-file implementation
-    steps whose diff can be verified by tests. The main agent keeps for itself what needs conversation
-    context or judgment: talking to the owner, design decisions, plan approval, small surgical edits
-    (delegation overhead exceeds the edit), and final verification of results. When delegating
-    implementation, the prompt must be self-contained (files, constraints, conventions, definition of
-    done) and the main agent verifies the outcome (build/tests) rather than re-reading everything.
+    The main (user-facing) agent NEVER edits repository files itself: every file change, from a
+    one-line fix to a multi-file feature, is performed by a subagent. The main agent also delegates
+    other context-heavy work and consumes only conclusions: codebase exploration and broad searches,
+    reading large files or external references, and reviews/audits. The main agent keeps for itself
+    only what needs conversation context or judgment: talking to the owner, design decisions, writing
+    the subagent prompts, running build/tests to verify outcomes, and git commits. Exceptions where
+    the main agent may edit directly: CLAUDE.md and the memory directory (meta-configuration the
+    owner asks for), and reverting a file with git. When delegating implementation, the prompt must
+    be self-contained (files, constraints, conventions, definition of done, exact dimensions or
+    design decisions already made); iterative design loops with the owner are still driven by the
+    main agent, which re-delegates each round with the updated instructions rather than editing
+    directly because the round feels small.
 
 12. **Measurement integrity: established methods only, never a fudge.** Every change to the measurement
     pipeline (sheet/corner detection, perspective rectification and mm scale, segmentation
