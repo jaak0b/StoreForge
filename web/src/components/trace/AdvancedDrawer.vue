@@ -411,6 +411,18 @@ const iconMenuOpen = ref(false);
   height: 100%;
 }
 
+/*
+ * The tabs strip (a v-slide-group, flex: 1 1 auto) and the v-divider
+ * (flex: 1 1 100%) both grow inside this flex column when the drawer is
+ * taller than its content, opening a dead gap between the tab headers and
+ * the first section. Pin them to their natural height; spare space belongs
+ * below the body.
+ */
+.drawer > .v-tabs,
+.drawer > .v-divider {
+  flex: 0 0 auto;
+}
+
 .drawer-body {
   overflow-y: auto;
 }
