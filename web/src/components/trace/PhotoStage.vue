@@ -420,24 +420,26 @@ async function confirm(): Promise<void> {
     <template v-else>
       <div class="toolbar-host">
         <div class="photo-toolbar">
-          <v-btn-toggle
+          <v-select
             v-model="paperKind"
-            mandatory
-            density="comfortable"
+            :items="[
+              { title: 'A4', value: 'a4' },
+              { title: 'Letter', value: 'letter' },
+            ]"
+            aria-label="Sheet size"
+            density="compact"
+            hide-details
             variant="outlined"
-            class="paper-toggle"
-          >
-            <v-btn value="a4">A4</v-btn>
-            <v-btn value="letter">Letter</v-btn>
-          </v-btn-toggle>
-          <v-btn variant="text" :disabled="busy" @click="redetect">
+            class="paper-select"
+          />
+          <v-btn variant="text" class="toolbar-action" :disabled="busy" @click="redetect">
             <v-icon icon="mdi-scan-helper" size="20" :start="true" />
             <span class="btn-label">Re-detect</span>
             <v-tooltip activator="parent" location="bottom">
               Re-run corner detection on the loaded photo, discarding any manual drags.
             </v-tooltip>
           </v-btn>
-          <v-btn variant="text" :disabled="busy" @click="fileInput?.click()">
+          <v-btn variant="text" class="toolbar-action" :disabled="busy" @click="fileInput?.click()">
             <v-icon icon="mdi-image-refresh-outline" size="20" :start="true" />
             <span class="btn-label">New photo</span>
             <v-tooltip activator="parent" location="bottom">
@@ -451,7 +453,7 @@ async function confirm(): Promise<void> {
             :loading="busy"
             @click="confirm"
           >
-            Confirm sheet
+            Confirm
           </v-btn>
         </div>
       </div>
@@ -554,10 +556,40 @@ async function confirm(): Promise<void> {
   flex: 1 1 auto;
 }
 
-/* Narrow bar: the text buttons drop to icons and everything centers. */
+.paper-select {
+  flex: 0 0 auto;
+  width: 100px;
+}
+
+.paper-select :deep(.v-field__input) {
+  min-height: 36px;
+  padding-top: 0;
+  padding-bottom: 0;
+  align-items: center;
+  font-size: 0.8125rem;
+}
+
+/*
+ * Narrow bar: the text buttons drop to icons and shed their minimum width
+ * and most padding so the whole strip holds one row on phone widths; if it
+ * still wraps, the rows center. The confirm button keeps its label.
+ */
 @container (max-width: 480px) {
   .btn-label {
     display: none;
+  }
+
+  .toolbar-action {
+    min-width: 0;
+    padding: 0 8px;
+  }
+
+  .toolbar-action :deep(.v-icon--start) {
+    margin-inline: 0;
+  }
+
+  .paper-select {
+    width: 88px;
   }
 
   .photo-toolbar {
