@@ -588,21 +588,27 @@ export function buildSlottedBinBody(
 
 /**
  * Generate a bin as its body mesh plus, when the parameters carry the paired
- * insert's content, the whole insert (plate and inlay unioned) resting in the
- * slot as the second mesh, shown on the label color so it reads as the
- * separate part it is. Exports generate the bin and the insert as separately
- * placed parts instead.
+ * insert's content, the insert resting in the slot. The insert's plate joins
+ * the body mesh (it prints in the body filament) and only its raised label
+ * face goes on the label mesh, so the preview colors match the printed
+ * part. Exports generate the bin and the insert as separately placed parts
+ * instead.
  */
 export function generateSlottedBin(
   m: ManifoldToplevel,
   font: Font,
   params: SlottedBinParams,
 ): PartMeshes {
-  const body = buildSlottedBinBody(m, params);
+  let body = buildSlottedBinBody(m, params);
   let label: Manifold | null = null;
   try {
     if (params.insert !== null) {
-      label = buildInsertPlacedInSlot(m, font, params.insert, params);
+      const placed = buildInsertInSlotSolids(m, font, params.insert, params);
+      const withPlate = m.Manifold.union([body, placed.plate]);
+      body.delete();
+      placed.plate.delete();
+      body = withPlate;
+      label = placed.label;
     }
     return {
       body: manifoldToMeshData(body),
@@ -631,31 +637,30 @@ export function generateSlottedBinUnion(
 }
 
 /**
- * The whole insert (plate and inlay unioned) translated into its resting
- * place in the bin's slot, for the preview of a bin ordered together with
- * its insert.
+ * The insert's plate and raised label face, each translated into its
+ * resting place in the bin's slot, for the preview of a bin ordered
+ * together with its insert. Kept separate so the plate joins the body mesh
+ * and the label face keeps its own color. The caller owns both manifolds.
  */
-export function buildInsertPlacedInSlot(
+export function buildInsertInSlotSolids(
   m: ManifoldToplevel,
   font: Font,
   content: InsertContentParams,
   bin: BinParams,
-): Manifold {
-  const { body: plate, label: inlay } = buildInsertSolids(
-    m,
-    font,
-    labelSpecOf(content),
-    bin.gridX,
-  );
+): { plate: Manifold; label: Manifold | null } {
+  const { body, label } = buildInsertSolids(m, font, labelSpecOf(content), bin.gridX);
   const at = insertPositionInBin(bin);
-  const parts = inlay === null ? [plate] : [plate, inlay];
-  const placed = m.Manifold.union(parts).translate(at.x, at.y, at.z);
-  plate.delete();
-  inlay?.delete();
-  if (placed.status() !== 'NoError') {
-    throw new Error(`Insert placement produced an invalid solid: ${placed.status()}`);
+  const plate = body.translate(at.x, at.y, at.z);
+  body.delete();
+  const placedLabel = label === null ? null : label.translate(at.x, at.y, at.z);
+  label?.delete();
+  if (plate.status() !== 'NoError' || (placedLabel !== null && placedLabel.status() !== 'NoError')) {
+    const status = plate.status() !== 'NoError' ? plate.status() : placedLabel!.status();
+    plate.delete();
+    placedLabel?.delete();
+    throw new Error(`Insert placement produced an invalid solid: ${status}`);
   }
-  return placed;
+  return { plate, label: placedLabel };
 }
 
 /**

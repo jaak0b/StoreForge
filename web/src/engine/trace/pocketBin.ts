@@ -19,7 +19,7 @@ import {
   WALL_THICKNESS,
 } from '../gridfinity/constants';
 import {
-  buildInsertPlacedInSlot,
+  buildInsertInSlotSolids,
   buildSlottedBinBody,
   manifoldToMeshData,
   roundedRectPolygon,
@@ -317,11 +317,18 @@ export function generatePocketBin(
   font: Font,
   params: PocketBinParams,
 ): PartMeshes {
-  const body = buildPocketBinBody(m, params);
+  let body = buildPocketBinBody(m, params);
   let label: Manifold | null = null;
   try {
     if (params.insert !== null) {
-      label = buildInsertPlacedInSlot(m, font, params.insert, params);
+      // Like generateSlottedBin: the insert's plate joins the body mesh and
+      // only its raised label face keeps the label color.
+      const placed = buildInsertInSlotSolids(m, font, params.insert, params);
+      const withPlate = m.Manifold.union([body, placed.plate]);
+      body.delete();
+      placed.plate.delete();
+      body = withPlate;
+      label = placed.label;
     }
     return {
       body: manifoldToMeshData(body),

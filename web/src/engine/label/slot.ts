@@ -99,16 +99,17 @@ export const TAB_POCKET_WIDTH = 6.7;
 export const POCKET_CEILING_THICKNESS = 0.65;
 
 /**
- * The insert's label relief, matching the reference insert's top structure:
- * the field inside a rim is recessed into the plate top, and the label face
- * rises from the recess floor back up to the full plate top. The text is
- * physical relief, so it stays readable on a single-color print, and a
- * filament swap paused at the recess floor height colors the raised text
- * (and the rim top) in the second color. Measured on the reference insert:
- * recess 0.4 deep, rim 0.5 wide at full height.
+ * The insert's label relief: the whole field between the tabs is recessed
+ * into the plate top, and the label face rises from the recess floor back up
+ * to the full plate top. The text is physical relief, so it stays readable
+ * on a single-color print, and a filament swap paused at the recess floor
+ * height colors exactly the raised text in the second color. The recess
+ * depth is the reference insert's measured 0.4; unlike the reference we
+ * recess the full field with no raised rim (our own design), so nothing but
+ * the text stands at full height. The top structure does not touch the slot
+ * fit, so interchange with the reference bins is unaffected.
  */
 export const INSERT_FIELD_RECESS_DEPTH = 0.4;
-export const INSERT_FIELD_RIM_WIDTH = 0.5;
 
 /** How far the label face reaches below the recess floor so the two solids are welded. */
 export const INSERT_TEXT_WELD = 0.05;
@@ -413,19 +414,13 @@ export function buildInsertSolids(
     return { body, label: null };
   }
 
-  // Recess the field inside the rim. The recess outline insets the plate
-  // outline (not the tabs, which lie outside it) by the rim width; measured
-  // on the reference insert: opening 34.8 x 10.5 for the one-cell insert.
+  // Recess the whole field between the tabs. The recess outline is the
+  // plate outline itself (the tabs lie outside it and keep their full
+  // thickness for the pocket retention).
   const plateLength = length - 2 * INSERT_TAB_LENGTH;
   const recessFloor = INSERT_THICKNESS - INSERT_FIELD_RECESS_DEPTH;
   const recessCutter = m.Manifold.extrude(
-    [
-      roundedRectPolygon(
-        plateLength - 2 * INSERT_FIELD_RIM_WIDTH,
-        INSERT_DEPTH - 2 * INSERT_FIELD_RIM_WIDTH,
-        INSERT_CORNER_RADIUS - INSERT_FIELD_RIM_WIDTH,
-      ),
-    ],
+    [roundedRectPolygon(plateLength, INSERT_DEPTH, INSERT_CORNER_RADIUS)],
     INSERT_FIELD_RECESS_DEPTH + eps,
   ).translate(0, 0, recessFloor);
   const recessed = m.Manifold.difference(body, recessCutter);

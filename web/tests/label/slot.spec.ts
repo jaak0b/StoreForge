@@ -10,7 +10,7 @@ import {
   insertPositionInBin,
 } from '../../src/engine/label/slot';
 import {
-  buildInsertPlacedInSlot,
+  buildInsertInSlotSolids,
   buildSlottedBinBody,
   generateInsertUnion,
   generateSlottedBin,
@@ -260,23 +260,37 @@ describe('generateSlottedBin with and without a paired insert', () => {
     expect(result.body.indices.length).toBeGreaterThan(0);
   });
 
-  it('previews the insert in place on the label mesh when one is paired', () => {
+  it('previews the paired insert with only its raised label face on the label mesh', () => {
     const result = generateSlottedBin(m, font, params());
     expect(result.label).not.toBeNull();
-    // The preview insert lies in the slot: its lowest point is the channel
-    // floor at 20.0 for a 3-unit bin.
+    // The label mesh is the raised face alone: it stands on the recess
+    // floor 0.4 under the insert top, welded 0.05 into the plate, so its
+    // lowest point is 20.35 for a 3-unit bin (channel floor at 20.0). The
+    // plate itself joins the body mesh and rests on the channel floor.
     let minZ = Infinity;
     for (let i = 2; i < result.label!.vertices.length; i += 3) {
       minZ = Math.min(minZ, result.label!.vertices[i]);
     }
-    expect(minZ).toBeCloseTo(20.0, 5);
+    expect(minZ).toBeCloseTo(20.35, 5);
+    let bodyMinAtFront = Infinity;
+    for (let i = 0; i < result.body.vertices.length; i += 3) {
+      const y = result.body.vertices[i + 1];
+      const z = result.body.vertices[i + 2];
+      // Sample the channel region (front of the bin) above the shelf plate.
+      if (y < -8 && z > 19.9) bodyMinAtFront = Math.min(bodyMinAtFront, z);
+    }
+    expect(bodyMinAtFront).toBeCloseTo(20.0, 5);
   });
 
   it('placed preview insert build matches the standalone insert position', () => {
     const p = params();
-    const placed = buildInsertPlacedInSlot(m, font, p.insert!, p);
-    expect(placed.status()).toBe('NoError');
-    expect(placed.boundingBox().min[2]).toBeCloseTo(20.0, 6);
-    placed.delete();
+    const placed = buildInsertInSlotSolids(m, font, p.insert!, p);
+    expect(placed.plate.status()).toBe('NoError');
+    expect(placed.plate.boundingBox().min[2]).toBeCloseTo(20.0, 6);
+    expect(placed.label).not.toBeNull();
+    // The raised label face reaches the plate top: 20.8 in the slot.
+    expect(placed.label!.boundingBox().max[2]).toBeCloseTo(20.8, 6);
+    placed.plate.delete();
+    placed.label!.delete();
   });
 });

@@ -23,9 +23,10 @@ const material = new THREE.MeshStandardMaterial({
   roughness: 0.65,
 });
 
-// Contrasting color so the embossed label reads clearly in the preview.
+// The app's primary color (see main.ts) so the raised label face reads
+// clearly against the grey plate and matches the page accent.
 const labelMaterial = new THREE.MeshStandardMaterial({
-  color: 0xff8f00,
+  color: 0x5865f2,
   metalness: 0.05,
   roughness: 0.55,
 });
