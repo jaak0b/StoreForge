@@ -24,7 +24,12 @@ import {
   manifoldToMeshData,
   roundedRectPolygon,
 } from '../gridfinity/binGenerator';
-import { applySlotToBody, RETAINER_BASE_DEPTH, SLOT_DEPTH } from '../label/slot';
+import {
+  applySlotToBody,
+  RETAINER_BASE_DEPTH,
+  SLOT_DEPTH,
+  slotFrontInsetMm,
+} from '../label/slot';
 import type { BinParams, MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 
 /** A slotted bin plus the tools whose pockets are sunk into its interior. */
@@ -184,7 +189,7 @@ export function validatePocketLayout(
   if (params.labelSlot !== false) {
     const outerWidth = binOuterSizeMm(params.gridX);
     const outerDepth = binOuterSizeMm(params.gridY);
-    const stripDepth = WALL_THICKNESS + SLOT_DEPTH + RETAINER_BASE_DEPTH;
+    const stripDepth = slotFrontInsetMm(params) + SLOT_DEPTH + RETAINER_BASE_DEPTH;
     slotStrip = new m.CrossSection(
       [
         [

@@ -3,6 +3,8 @@ import type { Font } from 'opentype.js';
 import {
   binOuterSizeMm,
   HEIGHT_UNIT,
+  LIP_DEPTH,
+  OUTER_CORNER_RADIUS,
   WALL_THICKNESS,
 } from '../gridfinity/constants';
 import { buildOuterEnvelope, roundedRectPolygon } from '../gridfinity/binGenerator';
@@ -86,16 +88,32 @@ export const RETAINER_BASE_DEPTH = 0.9;
 /**
  * The enclosed tab pocket at each end of the channel: as deep as the tab is
  * long (the cavity keeps 0.25 mm end clearance overall), TAB_POCKET_WIDTH
- * wide (0.5 mm clearance per side over the tab), full channel height, with a
- * ceiling POCKET_CEILING_THICKNESS thick above the nominal bin top. The
- * ceilings are the vertical retention: a lifted insert hits them with its
- * tabs. Measured 1.0 deep x 6.7 wide x 1.0 high with 0.65 above the ceiling
- * on the reference bin. On a bin without a stacking lip the ceiling would
- * stand proud of the flat top, so the pockets stay open there and the insert
- * is held by gravity alone.
+ * wide (0.5 mm clearance per side over the tab), full channel height.
+ * Measured 1.0 deep x 6.7 wide x 1.0 high on the reference bin (pocket void
+ * x 1.85..2.85, y 29.8..36.5, z 36.25..37.25 on the 1x1x6 mesh). On a bin
+ * with a stacking lip the pockets sit entirely inside the side walls' thick
+ * lip support band (the pocket's inner face is flush with the band's inner
+ * face), so the band material above the nominal top forms the retaining
+ * ceiling by itself: a lifted insert hits it with its tabs. No extra
+ * material is added, exactly as in the reference bin, whose measured 0.65 mm
+ * of ceiling at the pocket midline is the lip seat's 45 degree taper
+ * overhead. On a bin without a stacking lip there is no lip material, so the
+ * pockets stay open at the flat top and the insert is held by gravity alone.
  */
 export const TAB_POCKET_WIDTH = 6.7;
-export const POCKET_CEILING_THICKNESS = 0.65;
+
+/**
+ * How far the channel's front edge sits behind the bin's outer front face.
+ * With a stacking lip this is the lip's protrusion LIP_DEPTH (2.6): the
+ * reference bin's channel front edge, measured at y 39.15 on its 41.75 mm
+ * face (x = 21 cross-section of the 1x1x6 mesh), is exactly flush with the
+ * lip's inner support face, so the full self-supporting lip profile runs
+ * unmodified across the front and nothing overhangs the channel. Without a
+ * lip the channel starts at the plain wall's inner face.
+ */
+export function slotFrontInsetMm(params: BinParams): number {
+  return params.stackingLip ? LIP_DEPTH : WALL_THICKNESS;
+}
 
 /**
  * The insert's label relief: the plate keeps its full constant thickness
@@ -144,7 +162,7 @@ export function insertPositionInBin(params: BinParams): {
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
   return {
     x: 0,
-    y: -outerDepth / 2 + WALL_THICKNESS + SLOT_DEPTH / 2,
+    y: -outerDepth / 2 + slotFrontInsetMm(params) + SLOT_DEPTH / 2,
     z: bodyTop - SLOT_HEIGHT,
   };
 }
@@ -171,8 +189,8 @@ function tabPocketVoids(
   topZ: number,
 ): Manifold[] {
   const outerDepth = binOuterSizeMm(params.gridY);
-  const yInner = -outerDepth / 2 + WALL_THICKNESS;
-  const channelCentreY = yInner + SLOT_DEPTH / 2;
+  const yFront = -outerDepth / 2 + slotFrontInsetMm(params);
+  const channelCentreY = yFront + SLOT_DEPTH / 2;
   const openHalf = slotOpenSpanMm(params.gridX) / 2;
   const cavityHalf = slotChannelWidthMm(params.gridX) / 2;
   const voids: Manifold[] = [];
@@ -192,13 +210,13 @@ function tabPocketVoids(
  * The slot shelf: the shared plate-and-ribs shelf structure with its top face
  * one channel height below the nominal bin top (forming the channel floor,
  * extended under the end stop), plus the end stop along the channel's back
- * edge and a side block at each channel end. Each side block carries the
- * enclosed tab pocket: its void is subtracted from the block, and on bins
- * with a stacking lip the block rises POCKET_CEILING_THICKNESS above the
- * nominal bin top so the pocket gets its retaining ceiling (matching the
- * reference bin's solid front corners). Without a stacking lip the block
- * stops at the flat top and the pockets stay open. Unioned with the bin
- * body; the channel itself is the open space above the plate.
+ * edge. On a bin with a stacking lip that is all the shelf adds: the channel
+ * sits flush behind the lip's inner support face (slotFrontInsetMm), so the
+ * side walls' lip band already surrounds the tab pockets and forms their
+ * ceilings, exactly as in the reference bin. Without a stacking lip the wall
+ * is thinner than the pockets are deep, so a side block flush with the flat
+ * top is added at each channel end to host the (open) pockets. Unioned with
+ * the bin body; the channel itself is the open space above the plate.
  */
 export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
@@ -210,60 +228,73 @@ export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold
   const eps = 0.01;
 
   const yOuter = -outerDepth / 2;
-  const yInner = yOuter + WALL_THICKNESS;
-  const yBack = yInner + SLOT_DEPTH;
-  const yLipBack = yBack + RETAINER_BASE_DEPTH;
-  const blockTop = params.stackingLip ? bodyTop + POCKET_CEILING_THICKNESS : bodyTop;
+  const yFront = yOuter + slotFrontInsetMm(params);
+  const yBack = yFront + SLOT_DEPTH;
+  const yStopBack = yBack + RETAINER_BASE_DEPTH;
 
   const parts: Manifold[] = [
-    buildShelfStructure(m, params, floorTop, SLOT_DEPTH + RETAINER_BASE_DEPTH),
+    buildShelfStructure(
+      m,
+      params,
+      floorTop,
+      // The shelf structure measures its depth from the wall's inner face;
+      // reach to the end stop's back edge.
+      yStopBack - (yOuter + WALL_THICKNESS),
+    ),
   ];
 
   // End stop along the channel's back edge, spanning the cavity width.
   const stopProfile: SimplePolygon = [
     [yBack, floorTop],
-    [yLipBack, floorTop],
-    [yLipBack, bodyTop],
+    [yStopBack, floorTop],
+    [yStopBack, bodyTop],
     [yBack, bodyTop],
   ];
   parts.push(prismFromProfile(m, stopProfile, cavityWidth).translate(-cavityWidth / 2, 0, 0));
 
-  // Side blocks between the open channel span and the side walls, hosting
-  // the tab pockets. They reach to the outer width and are clipped to the
-  // bin outline below, so they weld into the walls.
-  for (const side of [-1, 1]) {
-    parts.push(
-      m.Manifold.cube([outerWidth / 2 - openHalf, yLipBack - yInner, blockTop - floorTop]).translate(
-        side === -1 ? -outerWidth / 2 : openHalf,
-        yInner,
-        floorTop,
-      ),
-    );
-  }
-
-  const prism = m.Manifold.union(parts);
+  let prism = m.Manifold.union(parts);
   for (const part of parts) part.delete();
 
-  // Subtract the tab-pocket voids from the side blocks. Without a stacking
-  // lip the void reaches past the flat block top so the pocket is open.
-  const voids = tabPocketVoids(
-    m,
-    params,
-    floorTop,
-    params.stackingLip ? bodyTop : bodyTop + eps,
-  );
-  const voidUnion = m.Manifold.union(voids);
-  for (const v of voids) v.delete();
-  const pocketed = m.Manifold.difference(prism, voidUnion);
-  prism.delete();
-  voidUnion.delete();
+  if (!params.stackingLip) {
+    // Side blocks between the open channel span and the side walls, hosting
+    // the tab pockets, flush with the flat top. They reach to the outer
+    // width and are clipped to the bin outline below, so they weld into the
+    // walls. The pocket voids reach past the flat top so the pockets stay
+    // open.
+    const blocks: Manifold[] = [];
+    for (const side of [-1, 1]) {
+      blocks.push(
+        m.Manifold.cube([
+          outerWidth / 2 - openHalf,
+          yStopBack - (yOuter + WALL_THICKNESS),
+          bodyTop - floorTop,
+        ]).translate(
+          side === -1 ? -outerWidth / 2 : openHalf,
+          yOuter + WALL_THICKNESS,
+          floorTop,
+        ),
+      );
+    }
+    const blockUnion = m.Manifold.union(blocks);
+    for (const b of blocks) b.delete();
+    const voids = tabPocketVoids(m, params, floorTop, bodyTop + eps);
+    const voidUnion = m.Manifold.union(voids);
+    for (const v of voids) v.delete();
+    const pocketed = m.Manifold.difference(blockUnion, voidUnion);
+    blockUnion.delete();
+    voidUnion.delete();
+    const withBlocks = m.Manifold.union([prism, pocketed]);
+    prism.delete();
+    pocketed.delete();
+    prism = withBlocks;
+  }
 
-  // Clip to the bin's outer wall envelope, so nothing pokes outside; the
-  // side blocks get trimmed to the rim groove, which the reference bin runs
-  // continuously through the slot corners.
+  // Clip to the bin's outer wall envelope, so nothing pokes outside (the
+  // shelf plate's front edge gets trimmed to the rim groove, which the
+  // reference bin runs continuously through the slot corners).
   const outline = buildOuterEnvelope(m, params);
-  const shelf = m.Manifold.intersection(pocketed, outline);
-  pocketed.delete();
+  const shelf = m.Manifold.intersection(prism, outline);
+  prism.delete();
   outline.delete();
   if (shelf.status() !== 'NoError') {
     const status = shelf.status();
@@ -283,17 +314,42 @@ export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold
  * material above them stays.
  */
 export function slotClearanceCutter(m: ManifoldToplevel, params: BinParams): Manifold {
+  const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const floorTop = bodyTop - SLOT_HEIGHT;
   const openSpan = slotOpenSpanMm(params.gridX);
-  const yInner = -outerDepth / 2 + WALL_THICKNESS;
+  const frontInset = slotFrontInsetMm(params);
+  const yFront = -outerDepth / 2 + frontInset;
   const eps = 0.01;
-  const main = m.Manifold.cube([openSpan, SLOT_DEPTH, SLOT_HEIGHT + eps]).translate(
+  let main = m.Manifold.cube([openSpan, SLOT_DEPTH, SLOT_HEIGHT + eps]).translate(
     -openSpan / 2,
-    yInner,
+    yFront,
     floorTop,
   );
+  if (params.stackingLip) {
+    // The open span's edges are flush with the lip's inner support face, so
+    // at the bin's front corners, where that face curves with the outer
+    // corner radius, the box would carve into the lip band. Clip it to the
+    // band's inner outline instead: the reference bin's channel is bounded
+    // by the curved lip face there (measured channel floor edge at y 39.034
+    // in the x = 3.5 cross-section of the 1x1x6 mesh, on the lip face arc,
+    // versus 39.15 at mid-span).
+    const bandInner = m.Manifold.extrude(
+      [
+        roundedRectPolygon(
+          outerWidth - 2 * LIP_DEPTH,
+          outerDepth - 2 * LIP_DEPTH,
+          OUTER_CORNER_RADIUS - LIP_DEPTH,
+        ),
+      ],
+      SLOT_HEIGHT + 3 * eps,
+    ).translate(0, 0, floorTop - eps);
+    const clipped = m.Manifold.intersection(main, bandInner);
+    main.delete();
+    bandInner.delete();
+    main = clipped;
+  }
   const voids = tabPocketVoids(m, params, floorTop, bodyTop);
   const cutter = m.Manifold.union([main, ...voids]);
   main.delete();

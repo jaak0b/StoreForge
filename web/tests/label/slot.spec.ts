@@ -8,13 +8,17 @@ import {
   buildSlotShelf,
   insertLengthMm,
   insertPositionInBin,
+  SLOT_DEPTH,
+  slotFrontInsetMm,
 } from '../../src/engine/label/slot';
 import {
+  buildFoot,
   buildInsertInSlotSolids,
   buildSlottedBinBody,
   generateInsertUnion,
   generateSlottedBin,
 } from '../../src/engine/gridfinity/binGenerator';
+import { binOuterSizeMm, HEIGHT_UNIT } from '../../src/engine/gridfinity/constants';
 import type { BinParams, SlottedBinParams } from '../../src/engine/gridfinity/types';
 
 let m: ManifoldToplevel;
@@ -139,20 +143,120 @@ describe('buildInsertSolids', () => {
 });
 
 describe('buildSlotShelf', () => {
-  it('is watertight and carries the pocket ceilings above the bin top', () => {
+  it('is watertight and stops at the nominal bin top', () => {
+    // The shelf adds nothing above the nominal top: on a lipped bin the tab
+    // pockets sit inside the walls' lip support band, whose own material
+    // forms the retaining ceilings (matching the reference bin, whose
+    // ceiling is the lip seat's 45 degree taper overhead).
     const shelf = buildSlotShelf(m, binParams());
     expect(shelf.status()).toBe('NoError');
-    const box = shelf.boundingBox();
-    // heightUnits 3: nominal top 21; the tab-pocket ceilings rise 0.65 above
-    // (measured 0.65 of material over the pocket on the reference bin).
-    expect(box.max[2]).toBeCloseTo(21.65, 6);
+    expect(shelf.boundingBox().max[2]).toBeCloseTo(21, 6);
     shelf.delete();
   });
 
-  it('keeps a flat-topped bin flat: no ceilings without a stacking lip', () => {
+  it('keeps a flat-topped bin flat without a stacking lip', () => {
     const shelf = buildSlotShelf(m, binParams({ stackingLip: false }));
+    expect(shelf.status()).toBe('NoError');
     expect(shelf.boundingBox().max[2]).toBeCloseTo(21, 6);
     shelf.delete();
+  });
+});
+
+describe('slotted bin front region (measured against the Pred 1x1x6 mesh)', () => {
+  /** Intersection volume of the body with an axis-aligned probe box. */
+  function probeVolume(
+    body: Manifold,
+    min: [number, number, number],
+    max: [number, number, number],
+  ): number {
+    const probe = m.Manifold.cube([max[0] - min[0], max[1] - min[1], max[2] - min[2]]).translate(
+      ...min,
+    );
+    const overlap = body.intersect(probe);
+    const volume = overlap.volume();
+    probe.delete();
+    overlap.delete();
+    return volume;
+  }
+
+  it('is watertight with genus 0 (no handles, no internal gaps)', () => {
+    const body = buildSlottedBinBody(m, binParams());
+    expect(body.status()).toBe('NoError');
+    expect(body.genus()).toBe(0);
+    body.delete();
+  });
+
+  it('keeps the lip support band solid in front of the channel', () => {
+    // The channel front edge is flush with the lip's inner support face,
+    // 2.6 (LIP_DEPTH) behind the outer face: measured on the reference bin
+    // at y 39.15 on its 41.75 face, channel floor z 36.25, nominal top
+    // 37.25 (x = 21 cross-section). heightUnits 3: front face at -20.75,
+    // band from -18.15 outward, channel z 20..21. The band between the rim
+    // groove (0.7 deep) and the channel face must be fully solid; before
+    // the fix the channel cut a notch into it, leaving the lip overhanging
+    // the notch with a flat unsupported underside.
+    const body = buildSlottedBinBody(m, binParams());
+    const volume = probeVolume(body, [-1, -19.5, 20.1], [1, -18.3, 20.9]);
+    expect(volume).toBeCloseTo(2 * 1.2 * 0.8, 3);
+    body.delete();
+  });
+
+  it('has no material overhanging the channel: the column above the open span is empty', () => {
+    // On the reference bin nothing hangs over the channel: the lip's inner
+    // profile above the channel front edge is vertical or leans outward at
+    // 45 degrees all the way to the crest (measured faces y 39.15 vertical,
+    // 45 degree ramp to y 39.85, vertical to z 39.75, 45 degrees to the
+    // crest round, x = 21 cross-section). So the whole column above the
+    // channel's open span, from the channel floor to above the crest apex,
+    // must be empty; any material in it would print as an unsupported
+    // overhang over the slot.
+    const p = binParams();
+    const body = buildSlottedBinBody(m, p);
+    const yFront = -binOuterSizeMm(p.gridY) / 2 + slotFrontInsetMm(p);
+    const volume = probeVolume(
+      body,
+      [-17, yFront + 0.05, 20.05],
+      // Stop 0.5 short of the channel back edge to stay clear of the end
+      // stop ridge, and reach past the crest apex (21 + 3.552).
+      [17, yFront + SLOT_DEPTH - 0.5, 25],
+    );
+    expect(Math.abs(volume)).toBeLessThan(1e-9);
+    body.delete();
+  });
+
+  it('retains the lip band ceiling over the tab pockets', () => {
+    // The pocket void spans x 18.15..19.15, y -15.5..-8.8, z 20..21 on the
+    // 1x1x3 bin (reference pocket x 1.85..2.85, y 29.8..36.5, z 36.25..37.25
+    // on the 1x1x6 mesh). Above it the side wall's lip seat taper provides
+    // the ceiling: at x = 18.4..19.0 (1.75..2.35 from the side face) the
+    // taper face lies at z 21.25 or higher, so a probe just above the
+    // nominal top must be fully solid.
+    const body = buildSlottedBinBody(m, binParams());
+    for (const side of [-1, 1]) {
+      const volume = probeVolume(
+        body,
+        [side === -1 ? -19.0 : 18.4, -13, 21.02],
+        [side === -1 ? -18.4 : 19.0, -11, 21.2],
+      );
+      expect(volume).toBeCloseTo(0.6 * 2 * 0.18, 3);
+    }
+    body.delete();
+  });
+
+  it('still seats a stacked foot: the slot leaves the lip seat unobstructed', () => {
+    // The reference bin's stacking seat runs clean around the whole
+    // perimeter (plan section at z 37.6: one uniform rounded-rectangle
+    // opening). Before the fix, raised pocket blocks stood in the seat's
+    // front corners and a stacked bin could not sit down.
+    const body = buildSlottedBinBody(m, binParams());
+    const foot = buildFoot(m);
+    const seated = foot.translate(0, 0, 3 * HEIGHT_UNIT);
+    const overlap = body.intersect(seated);
+    expect(Math.abs(overlap.volume())).toBeLessThan(1e-9);
+    overlap.delete();
+    seated.delete();
+    foot.delete();
+    body.delete();
   });
 });
 
