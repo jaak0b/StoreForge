@@ -140,6 +140,7 @@ const pocketParams = computed<PocketBinParams>(() => {
     // The pocket generator rejects divider walls, so a pocket bin never has any.
     dividerCountX: 0,
     dividerCountY: 0,
+    labelSlot: designer.productChoice !== 'plainBin',
     insert:
       designer.productChoice === 'binWithInsert'
         ? {
@@ -247,7 +248,7 @@ async function addToQueue(): Promise<void> {
   const product: Product =
     params.insert !== null
       ? { kind: 'binWithInsert', bin, insert: params.insert }
-      : { kind: 'bin', bin };
+      : { kind: 'bin', bin, labelSlot: params.labelSlot };
   if (props.editingEntry !== null) {
     queue.update(props.editingEntry.id, {
       product,

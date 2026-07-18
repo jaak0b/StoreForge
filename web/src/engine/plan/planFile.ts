@@ -423,6 +423,11 @@ export function validateProduct(raw: unknown, subject: string): string | null {
   }
   const product = raw as Record<string, unknown>;
   if (product.kind === 'bin') {
+    // labelSlot was added after the first version-3 plans shipped; older
+    // files simply omit it, so undefined is accepted and means slotted.
+    if (product.labelSlot !== undefined && typeof product.labelSlot !== 'boolean') {
+      return `${subject}: labelSlot must be true or false`;
+    }
     return validateBin(product.bin, subject);
   }
   if (product.kind === 'binWithInsert') {
@@ -450,7 +455,11 @@ export function validateProduct(raw: unknown, subject: string): string | null {
 /** Copies only the known Product fields from a validated raw object. */
 export function pickProduct(raw: Record<string, unknown>): Product {
   if (raw.kind === 'bin') {
-    return { kind: 'bin', bin: pickBin(raw.bin as Record<string, unknown>) };
+    return {
+      kind: 'bin',
+      bin: pickBin(raw.bin as Record<string, unknown>),
+      labelSlot: (raw.labelSlot as boolean | undefined) ?? true,
+    };
   }
   if (raw.kind === 'binWithInsert') {
     return {
@@ -741,15 +750,19 @@ function legacyProductOf(
           }
         : { ...envelope, ...dividers, origin: 'manual' };
   }
-  // slot stays a bin alone; embossed and slot-insert keep their label as the
-  // paired insert, unless the label was empty anyway.
-  if (mode === 'slot' || !hasContent) {
-    if (mode === 'slot' && hasContent) {
+  // slot stays a slotted bin alone; embossed and slot-insert keep their
+  // label as the paired insert; an embossed entry that never had a label was
+  // physically a plain bin with no label feature, so it converts slot-less.
+  if (mode === 'slot') {
+    if (hasContent) {
       warnings.push(
         `${subject} was a slotted bin that still carried unused label text; the text was dropped, because a bin without its insert has no label.`,
       );
     }
-    return { kind: 'bin', bin };
+    return { kind: 'bin', bin, labelSlot: true };
+  }
+  if (mode === 'embossed' && !hasContent) {
+    return { kind: 'bin', bin, labelSlot: false };
   }
   return { kind: 'binWithInsert', bin, insert: content };
 }

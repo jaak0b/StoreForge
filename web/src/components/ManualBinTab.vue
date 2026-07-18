@@ -39,7 +39,9 @@ const quantity = ref(1);
 const gridXField = ref<{ focus: () => void } | null>(null);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
-const showLabelFields = computed(() => productChoice.value !== 'bin');
+const showLabelFields = computed(
+  () => productChoice.value === 'binWithInsert' || productChoice.value === 'insert',
+);
 
 function resetForm(): void {
   const keepOpen = store.moreOptionsOpen;
@@ -71,7 +73,8 @@ function loadEditingEntry(entryId: string | null): void {
     if (bin.origin !== 'manual') return;
     const content = product.kind === 'binWithInsert' ? product.insert : null;
     store.$patch({
-      productChoice: product.kind,
+      productChoice:
+        product.kind === 'binWithInsert' ? 'binWithInsert' : product.labelSlot ? 'bin' : 'plainBin',
       gridX: bin.gridX,
       gridY: bin.gridY,
       heightUnits: bin.heightUnits,
@@ -136,7 +139,7 @@ function designedProduct(): Product {
   };
   return productChoice.value === 'binWithInsert'
     ? { kind: 'binWithInsert', bin, insert: store.content }
-    : { kind: 'bin', bin };
+    : { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
 }
 
 function saveEntry(): void {

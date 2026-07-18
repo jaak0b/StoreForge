@@ -143,7 +143,12 @@ watch(
     trace.gridManual = true;
     const content = entry.product.kind === 'binWithInsert' ? entry.product.insert : null;
     designer.$patch({
-      productChoice: entry.product.kind === 'binWithInsert' ? 'binWithInsert' : 'bin',
+      productChoice:
+        entry.product.kind === 'binWithInsert'
+          ? 'binWithInsert'
+          : entry.product.kind === 'bin' && !entry.product.labelSlot
+            ? 'plainBin'
+            : 'bin',
       heightUnits: bin.heightUnits,
       stackingLip: bin.stackingLip,
       magnetHoles: bin.magnetHoles,

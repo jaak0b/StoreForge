@@ -21,9 +21,10 @@ export type PrintablePart =
     }
   | { part: 'insert'; insert: InsertParams };
 
-/** The geometry parameters of a bin, with the paired insert content given. */
+/** The geometry parameters of a bin, with the slot flag and paired insert content given. */
 export function toSlottedBinParams(
   bin: Bin,
+  labelSlot: boolean,
   insert: SlottedBinParams['insert'],
 ): SlottedBinParams {
   return {
@@ -35,6 +36,7 @@ export function toSlottedBinParams(
     // The pocket generator rejects divider walls, so a traced bin has none.
     dividerCountX: bin.origin === 'traced' ? 0 : bin.dividerCountX,
     dividerCountY: bin.origin === 'traced' ? 0 : bin.dividerCountY,
+    labelSlot,
     insert,
   };
 }
@@ -49,14 +51,16 @@ export function partsOf(product: Product): PrintablePart[] {
   switch (product.kind) {
     case 'bin': {
       const pockets = product.bin.origin === 'traced' ? product.bin.pockets : undefined;
-      return [{ part: 'bin', bin: toSlottedBinParams(product.bin, null), pockets }];
+      return [
+        { part: 'bin', bin: toSlottedBinParams(product.bin, product.labelSlot, null), pockets },
+      ];
     }
     case 'binWithInsert': {
       const pockets = product.bin.origin === 'traced' ? product.bin.pockets : undefined;
       const insert = insertOf(product)!;
       const bin: PrintablePart = {
         part: 'bin',
-        bin: toSlottedBinParams(product.bin, null),
+        bin: toSlottedBinParams(product.bin, true, null),
         pockets,
       };
       if (insert.content.text !== '') bin.labelText = insert.content.text;
@@ -83,9 +87,9 @@ export function partsOf(product: Product): PrintablePart[] {
 export function previewBinParams(product: Product): SlottedBinParams | null {
   switch (product.kind) {
     case 'bin':
-      return toSlottedBinParams(product.bin, null);
+      return toSlottedBinParams(product.bin, product.labelSlot, null);
     case 'binWithInsert':
-      return toSlottedBinParams(product.bin, product.insert);
+      return toSlottedBinParams(product.bin, true, product.insert);
     case 'insert':
       return null;
     default:

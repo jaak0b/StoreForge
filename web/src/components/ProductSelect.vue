@@ -27,8 +27,13 @@ const ALL_ITEMS: Array<{ value: ProductChoice; title: string; subtitle: string }
   },
   {
     value: 'bin',
-    title: 'Bin without label',
-    subtitle: 'A bin with an empty label slot; print inserts for it later.',
+    title: 'Bin with empty label slot',
+    subtitle: 'A bin with the label slot left empty; print inserts for it later.',
+  },
+  {
+    value: 'plainBin',
+    title: 'Bin without label slot',
+    subtitle: 'A plain bin with no label feature at all.',
   },
   {
     value: 'insert',

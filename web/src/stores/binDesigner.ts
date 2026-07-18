@@ -3,12 +3,13 @@ import type { InsertContentParams, SlottedBinParams } from '../engine/gridfinity
 import type { LabelContent } from '../engine/plan/types';
 
 /**
- * What a designer form produces: a bin with an empty slot, a bin plus its
- * matching label insert, or a standalone insert for a bin that already
- * exists. Mirrors the plan layer's Product kinds; the tab that saves the
- * entry adds its own origin.
+ * What a designer form produces: a bin plus its matching label insert, a
+ * bin with an empty slot, a plain bin without the slot, or a standalone
+ * insert for a bin that already exists. Maps onto the plan layer's Product
+ * kinds ('bin' and 'plainBin' both save as the bin product, with labelSlot
+ * true and false); the tab that saves the entry adds its own origin.
  */
-export type ProductChoice = 'bin' | 'binWithInsert' | 'insert';
+export type ProductChoice = 'binWithInsert' | 'bin' | 'plainBin' | 'insert';
 
 /**
  * Parameters of the product currently being designed, plus notes (not part
@@ -59,6 +60,7 @@ export const useBinDesigner = defineStore('binDesigner', {
         magnetHoles: state.magnetHoles,
         dividerCountX: state.dividerCountX,
         dividerCountY: state.dividerCountY,
+        labelSlot: state.productChoice !== 'plainBin',
         insert,
       };
     },

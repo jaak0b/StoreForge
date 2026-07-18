@@ -49,13 +49,15 @@ function rowText2(entry: QueueEntry): string {
   return insertOf(entry.product)?.content.text2 ?? '';
 }
 
-/** Chip text marking what the row prints beyond a plain bin, or null. */
+/** Chip text marking what the row prints beyond a slotted bin, or null. */
 function productChip(entry: QueueEntry): string | null {
   switch (entry.product.kind) {
     case 'binWithInsert':
       return 'bin + insert';
     case 'insert':
       return 'insert only';
+    case 'bin':
+      return entry.product.labelSlot ? null : 'no slot';
     default:
       return null;
   }

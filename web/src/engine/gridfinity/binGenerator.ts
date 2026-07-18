@@ -572,13 +572,17 @@ export function labelSpecOf(content: InsertContentParams): LabelSpec {
 }
 
 /**
- * Build the bin body with its label insert slot. Every bin gets the slot;
- * the paired insert, when the entry has one, is a separate solid (see
- * buildInsertPlacedInSlot for the preview and the insert generators for the
- * printable part).
+ * Build the bin body, with its label insert slot unless labelSlot is false
+ * (a plain bin with no label feature). The paired insert, when the entry has
+ * one, is a separate solid (see buildInsertPlacedInSlot for the preview and
+ * the insert generators for the printable part).
  */
-export function buildSlottedBinBody(m: ManifoldToplevel, params: BinParams): Manifold {
+export function buildSlottedBinBody(
+  m: ManifoldToplevel,
+  params: BinParams & { labelSlot?: boolean },
+): Manifold {
   const body = buildBinManifold(m, params);
+  if (params.labelSlot === false) return body;
   return applySlotToBody(m, params, body);
 }
 
@@ -614,7 +618,10 @@ export function generateSlottedBin(
  * Generate a bin as one unioned solid for the STL download. The paired
  * insert never rides along: it is its own printable part.
  */
-export function generateSlottedBinUnion(m: ManifoldToplevel, params: BinParams): MeshData {
+export function generateSlottedBinUnion(
+  m: ManifoldToplevel,
+  params: BinParams & { labelSlot?: boolean },
+): MeshData {
   const body = buildSlottedBinBody(m, params);
   try {
     return manifoldToMeshData(body);

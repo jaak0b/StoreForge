@@ -141,11 +141,19 @@ export type Bin = ManualBin | ScrewBin | TracedBin;
 // Products: what a queue row orders
 // ---------------------------------------------------------------------------
 
-/** A queue row that orders a bin body with an empty label slot. */
+/**
+ * A queue row that orders a bin body alone. labelSlot decides whether the
+ * body gets the swappable-insert channel (an empty slot to print inserts for
+ * later) or stays a plain bin with no label feature at all. The flag lives
+ * only on this product kind: a bin ordered with its insert always has the
+ * slot, so "insert but no slot" is not representable.
+ */
 export interface BinProduct {
   kind: 'bin';
   /** The bin body's design parameters. */
   bin: Bin;
+  /** Whether the body carries the empty label insert slot. */
+  labelSlot: boolean;
 }
 
 /**

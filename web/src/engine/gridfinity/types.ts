@@ -38,12 +38,16 @@ export interface InsertContentParams {
 }
 
 /**
- * Parameters describing a bin to generate. Every bin has the label insert
- * slot; insert carries the paired insert's content for the preview (shown
- * resting in the slot), or null for a bin previewed with an empty slot.
- * Exports always generate the insert as its own separately placed part.
+ * Parameters describing a bin to generate. labelSlot decides whether the
+ * body gets the swappable label insert channel or stays a plain bin; insert
+ * carries the paired insert's content for the preview (shown resting in the
+ * slot), or null for a bin previewed without one. A paired insert implies
+ * the slot. Exports always generate the insert as its own separately placed
+ * part.
  */
 export interface SlottedBinParams extends BinParams {
+  /** Whether the body carries the label insert slot. */
+  labelSlot: boolean;
   /** Content of the paired label insert, or null for a bin alone. */
   insert: InsertContentParams | null;
 }

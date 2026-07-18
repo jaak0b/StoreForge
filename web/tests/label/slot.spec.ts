@@ -210,6 +210,25 @@ describe('insert in slot', () => {
     shifted.delete();
   });
 
+  it('has no slot shelf at all on a bin built without the label slot', () => {
+    const p = binParams();
+    const slotted = buildSlottedBinBody(m, p);
+    const plain = buildSlottedBinBody(m, { ...p, labelSlot: false });
+    // Probe the shelf plate region under the channel floor (heightUnits 3:
+    // floor at 20.0, plate below it, at the interior front wall): the
+    // slotted bin has material there, the plain bin's interior is open.
+    const probe = m.Manifold.cube([4, 3, 0.5], true).translate(0, -16.75, 19.5);
+    const inSlotted = slotted.intersect(probe);
+    const inPlain = plain.intersect(probe);
+    expect(inSlotted.volume()).toBeGreaterThan(0.01);
+    expect(Math.abs(inPlain.volume())).toBeLessThan(1e-9);
+    inSlotted.delete();
+    inPlain.delete();
+    probe.delete();
+    slotted.delete();
+    plain.delete();
+  });
+
   it('cannot slide into the bin interior past the end stop', () => {
     const p = binParams();
     const body = buildSlottedBinBody(m, p);

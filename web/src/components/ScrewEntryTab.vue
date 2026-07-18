@@ -155,7 +155,7 @@ function productFor(
   };
   return productChoice.value === 'binWithInsert'
     ? { kind: 'binWithInsert', bin, insert: content }
-    : { kind: 'bin', bin };
+    : { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
 }
 
 function productSizeText(product: Product): string {
@@ -253,7 +253,12 @@ watch(
     shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
     internalUpdate = false;
     const patch: Record<string, unknown> = {
-      productChoice: product.kind,
+      productChoice:
+        product.kind === 'bin'
+          ? product.labelSlot
+            ? 'bin'
+            : 'plainBin'
+          : product.kind,
       notes: entry.notes ?? '',
     };
     if (product.kind !== 'insert' && product.bin.origin === 'screw') {
@@ -387,6 +392,7 @@ function generatePreview(product: Product): Promise<PartMeshes> {
     magnetHoles: bin.magnetHoles,
     dividerCountX: bin.origin === 'traced' ? 0 : bin.dividerCountX,
     dividerCountY: bin.origin === 'traced' ? 0 : bin.dividerCountY,
+    labelSlot: product.kind === 'bin' ? product.labelSlot : true,
     insert: product.kind === 'binWithInsert' ? product.insert : null,
   });
 }

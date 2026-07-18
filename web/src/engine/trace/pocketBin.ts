@@ -154,7 +154,7 @@ function sectionsOverlap(a: CrossSection, b: CrossSection): boolean {
  */
 export function validatePocketLayout(
   m: ManifoldToplevel,
-  params: BinParams,
+  params: BinParams & { labelSlot?: boolean },
   placed: PlacedPocket[],
 ): void {
   if (params.dividerCountX > 0 || params.dividerCountY > 0) {
@@ -179,20 +179,24 @@ export function validatePocketLayout(
   const cutSections = placed.map((pocket) => placedCutSection(m, pocket));
   // The insert seat cannot be cut into (the slot floor must stay whole for
   // the insert to rest on), so pockets must stay clear of the slot region.
-  const outerWidth = binOuterSizeMm(params.gridX);
-  const outerDepth = binOuterSizeMm(params.gridY);
-  const stripDepth = WALL_THICKNESS + SLOT_DEPTH + RETAINER_BASE_DEPTH;
-  const slotStrip: CrossSection = new m.CrossSection(
-    [
+  // A bin without the slot has no such region to protect.
+  let slotStrip: CrossSection | null = null;
+  if (params.labelSlot !== false) {
+    const outerWidth = binOuterSizeMm(params.gridX);
+    const outerDepth = binOuterSizeMm(params.gridY);
+    const stripDepth = WALL_THICKNESS + SLOT_DEPTH + RETAINER_BASE_DEPTH;
+    slotStrip = new m.CrossSection(
       [
-        [-outerWidth / 2, -outerDepth / 2],
-        [outerWidth / 2, -outerDepth / 2],
-        [outerWidth / 2, -outerDepth / 2 + stripDepth],
-        [-outerWidth / 2, -outerDepth / 2 + stripDepth],
+        [
+          [-outerWidth / 2, -outerDepth / 2],
+          [outerWidth / 2, -outerDepth / 2],
+          [outerWidth / 2, -outerDepth / 2 + stripDepth],
+          [-outerWidth / 2, -outerDepth / 2 + stripDepth],
+        ],
       ],
-    ],
-    'NonZero',
-  );
+      'NonZero',
+    );
+  }
   try {
     for (let i = 0; i < placed.length; i += 1) {
       const outside = cutSections[i].subtract(interior);
@@ -204,7 +208,7 @@ export function validatePocketLayout(
             'Move it away from the walls or use a larger bin.',
         );
       }
-      if (sectionsOverlap(cutSections[i], slotStrip)) {
+      if (slotStrip !== null && sectionsOverlap(cutSections[i], slotStrip)) {
         throw new Error(
           `The pocket for "${placed[i].tool.name}" reaches under the label insert slot. ` +
             'Move it away from the front wall or use a deeper bin.',
@@ -228,7 +232,7 @@ export function validatePocketLayout(
     }
   } finally {
     interior.delete();
-    slotStrip.delete();
+    slotStrip?.delete();
     for (const section of cutSections) section.delete();
   }
 }
@@ -291,8 +295,11 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
   } else {
     body = filled;
   }
-  // The interior fill closed the insert channel; apply the slot again.
-  body = applySlotToBody(m, params, body);
+  // The interior fill closed the insert channel; apply the slot again. A
+  // bin without the slot has no channel to restore.
+  if (params.labelSlot !== false) {
+    body = applySlotToBody(m, params, body);
+  }
   if (body.status() !== 'NoError') {
     body.delete();
     throw new Error(`Pocket bin generation produced an invalid solid: ${body.status()}`);
