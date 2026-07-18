@@ -97,6 +97,16 @@ function finishImport(mode: 'merge' | 'replace'): void {
         <v-icon icon="mdi-help-circle-outline" />
         <v-tooltip activator="parent" location="bottom">Keyboard shortcuts (?)</v-tooltip>
       </v-btn>
+      <v-btn
+        icon
+        variant="text"
+        href="https://github.com/jaak0b/StoreForge"
+        target="_blank"
+        rel="noopener"
+      >
+        <v-icon icon="mdi-github" />
+        <v-tooltip activator="parent" location="bottom">View on GitHub</v-tooltip>
+      </v-btn>
     </v-app-bar>
     <v-main>
       <MainPage />
