@@ -130,7 +130,12 @@ export const useToolTrace = defineStore('toolTrace', () => {
     },
   };
 
-  function addTool(outline: TracedOutline, name?: string, clicks: SamPoint[] = []): TracedTool {
+  function addTool(
+    outline: TracedOutline,
+    name?: string,
+    clicks: SamPoint[] = [],
+    placeAtSheetPosition = false,
+  ): TracedTool {
     toolCounter += 1;
     const tool = layout.addTool(
       layoutState,
@@ -138,6 +143,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
       name ?? `Tool ${toolCounter}`,
       defaultDepthMm.value,
       clicks,
+      placeAtSheetPosition,
     );
     selectedToolId.value = tool.id;
     return tool;

@@ -3,7 +3,8 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
-import type { SamPoint, TracedOutline } from '../../engine/trace/types';
+import type { MmPoint, SamPoint, TracedOutline } from '../../engine/trace/types';
+import { centroidOf, pointInPolygon } from '../../engine/trace/edit';
 
 /**
  * The Trace mode of the trace-and-layout workspace: click a tool on the
@@ -104,6 +105,26 @@ function draw(): void {
   }
 }
 
+/**
+ * Where a ghost's number badge sits, in sheet mm: the outer loop's area
+ * centroid, or the nearest outer-loop point when the centroid lies inside a
+ * through-hole.
+ */
+function badgeAnchor(ghost: TracedOutline): MmPoint {
+  const c = centroidOf(ghost.outer);
+  if (!ghost.holes.some((hole) => pointInPolygon(c, hole))) return c;
+  let best = ghost.outer[0];
+  let bestDist = Infinity;
+  for (const p of ghost.outer) {
+    const d = (p.x - c.x) ** 2 + (p.y - c.y) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = p;
+    }
+  }
+  return best;
+}
+
 /** Strokes each accepted tool's outline in muted orange with a numbered badge. */
 function drawGhosts(
   ctx: CanvasRenderingContext2D,
@@ -115,8 +136,6 @@ function drawGhosts(
     if (tool.id === retraceToolId.value) return;
     const ghost = ghostOutlines.get(tool.id);
     if (ghost === undefined) return;
-    let minX = Infinity;
-    let minY = Infinity;
     ctx.save();
     // Translucent orange fill in the layout canvas's tool colour, with the
     // holes cut out by an EvenOdd fill of outer plus holes.
@@ -125,8 +144,6 @@ function drawGhosts(
       loop.forEach((p, i) => {
         const x = p.x / mmPerPixel;
         const y = p.y / mmPerPixel;
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
         if (i === 0) path.moveTo(x, y);
         else path.lineTo(x, y);
       });
@@ -139,11 +156,13 @@ function drawGhosts(
     ctx.fillStyle = '#c97a2e';
     ctx.lineWidth = 2;
     ctx.stroke(path);
-    // Numbered badge at the outline's bounding-box top-left corner, clamped
-    // so it stays inside the canvas.
+    // Numbered badge on the tool itself: at the outer loop's area centroid,
+    // moved to the nearest outer-loop point when the centroid falls inside a
+    // through-hole, and clamped inside the canvas.
+    const anchor = badgeAnchor(ghost);
     const r = 11;
-    const bx = Math.min(Math.max(minX, r + 2), el.width - r - 2);
-    const by = Math.min(Math.max(minY, r + 2), el.height - r - 2);
+    const bx = Math.min(Math.max(anchor.x / mmPerPixel, r + 2), el.width - r - 2);
+    const by = Math.min(Math.max(anchor.y / mmPerPixel, r + 2), el.height - r - 2);
     ctx.globalAlpha = 1;
     ctx.beginPath();
     ctx.arc(bx, by, r, 0, 2 * Math.PI);
@@ -277,7 +296,7 @@ function acceptTool(finish: boolean): void {
     const index = tools.value.findIndex((t) => t.id === toolId);
     savedNumber = index >= 0 ? index + 1 : tools.value.length;
   } else {
-    const tool = store.addTool(outline.value, undefined, clicks);
+    const tool = store.addTool(outline.value, undefined, clicks, true);
     ghostOutlines.set(tool.id, sheetOutline);
     savedNumber = tools.value.length;
   }

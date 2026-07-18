@@ -57,8 +57,12 @@ export function boundsOf(outline: TracedOutline): OutlineBounds {
   return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
 }
 
-/** Area centroid of a simple polygon; falls back to the vertex mean for degenerate area. */
-function centroidOf(points: MmPoint[]): MmPoint {
+/**
+ * Area centroid of a simple polygon; falls back to the vertex mean for
+ * degenerate area. The single home for this figure; other modules import it
+ * from here.
+ */
+export function centroidOf(points: MmPoint[]): MmPoint {
   let area = 0;
   let cx = 0;
   let cy = 0;
@@ -80,6 +84,24 @@ function centroidOf(points: MmPoint[]): MmPoint {
     return { x: sx / points.length, y: sy / points.length };
   }
   return { x: cx / (3 * area), y: cy / (3 * area) };
+}
+
+/**
+ * Even-odd ray-cast point-in-polygon test (the standard crossing-number
+ * algorithm): a horizontal ray from the point crosses the loop's edges an odd
+ * number of times exactly when the point is inside.
+ */
+export function pointInPolygon(point: MmPoint, loop: MmPoint[]): boolean {
+  let inside = false;
+  for (let i = 0, j = loop.length - 1; i < loop.length; j = i, i += 1) {
+    const a = loop[i];
+    const b = loop[j];
+    const crosses =
+      a.y > point.y !== b.y > point.y &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
 }
 
 /**

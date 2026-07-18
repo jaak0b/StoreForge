@@ -5,6 +5,7 @@ import {
   layoutBounds,
   moveTool,
   removeTool,
+  replaceToolOutline,
   requiredFootprint,
   setGridManually,
   setToolTransform,
@@ -378,6 +379,52 @@ describe('tool list and transform actions', () => {
     expect(s.tools).toHaveLength(1);
     expect(s.gridX).toBe(1);
     expect(s.gridY).toBe(1);
+  });
+
+  it('places sheet-position tools where they lay on the paper, not stacked', () => {
+    // Two 10 mm squares traced at sheet spots (40..50, 40..50) and
+    // (150..160, 90..100): placed at their sheet positions their placements
+    // are the bounding-box middles (45, 45) and (155, 95), restoring every
+    // outline point's sheet coordinates. They stay 110 mm apart instead of
+    // stacking, and the extent grown by the 0.5 mm default clearance plus
+    // the 2 mm margin (37.5..162.5 by 37.5..102.5) covers cells 0..3 by
+    // 0..2 of the fixed world grid.
+    const s = state([], []);
+    const square = (x0: number, y0: number) => ({
+      outer: [
+        { x: x0, y: y0 },
+        { x: x0 + 10, y: y0 },
+        { x: x0 + 10, y: y0 + 10 },
+        { x: x0, y: y0 + 10 },
+      ],
+      holes: [],
+    });
+    const a = addTool(s, square(40, 40), 'A', 20, [], true);
+    const b = addTool(s, square(150, 90), 'B', 20, [], true);
+    expect(s.placements[0]).toEqual({ toolId: a.id, xMm: 45, yMm: 45, pocketDepthMm: 20 });
+    expect(s.placements[1]).toEqual({ toolId: b.id, xMm: 155, yMm: 95, pocketDepthMm: 20 });
+    const bin = binPlacement(s);
+    expect(bin.gridX).toBe(4);
+    expect(bin.gridY).toBe(3);
+    expect(bin.minX).toBeCloseTo(1.2, 9);
+    expect(bin.minY).toBeCloseTo(1.2, 9);
+  });
+
+  it('moves a re-traced tool to its new sheet position', () => {
+    const s = state([], []);
+    const square = (x0: number, y0: number) => ({
+      outer: [
+        { x: x0, y: y0 },
+        { x: x0 + 10, y: y0 },
+        { x: x0 + 10, y: y0 + 10 },
+        { x: x0, y: y0 + 10 },
+      ],
+      holes: [],
+    });
+    const tool = addTool(s, square(40, 40), 'A', 20, [], true);
+    replaceToolOutline(s, tool.id, square(80, 20), []);
+    expect(s.placements[0].xMm).toBe(85);
+    expect(s.placements[0].yMm).toBe(25);
   });
 
   it('keeps a manual floor when a tool outgrows it, growing only the derived bin', () => {

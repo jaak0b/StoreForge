@@ -336,8 +336,11 @@ function recentred(outline: TracedOutline): TracedOutline {
 
 /**
  * Adds a tool from an outline in sheet mm: the outline is recentered so
- * tool-local coordinates sit about the origin, and the tool is placed at the
- * world origin with the given pocket depth. Re-sizes unless manual.
+ * tool-local coordinates sit about the origin. With placeAtSheetPosition the
+ * placement restores the outline's sheet coordinates in the world frame, so
+ * the layout opens with the tools arranged as they lay on the paper; without
+ * it (primitive shapes, which carry no sheet position) the tool lands inside
+ * cell 0. Re-sizes unless manual.
  */
 export function addTool(
   state: LayoutState,
@@ -345,6 +348,7 @@ export function addTool(
   name: string,
   pocketDepthMm: number,
   clicks: SamPoint[] = [],
+  placeAtSheetPosition = false,
 ): TracedTool {
   const tool: TracedTool = {
     id: crypto.randomUUID(),
@@ -357,24 +361,44 @@ export function addTool(
     fingerHoles: [],
   };
   state.tools.push(tool);
-  // A new tool lands with its clearance-grown box starting at the margin
-  // inside cell 0's interior, so it covers the fewest fixed grid cells its
-  // size allows instead of straddling the cell boundary at the origin.
-  const b = boundsOf(tool.outline);
-  const start = (PITCH - binInteriorSizeMm(1)) / 2 + AUTO_SIZE_MARGIN_MM;
-  state.placements.push({
-    toolId: tool.id,
-    xMm: start - (b.minX - tool.offsetMm),
-    yMm: start - (b.minY - tool.offsetMm),
-    pocketDepthMm,
-  });
+  if (placeAtSheetPosition) {
+    // Recentring subtracted the outline's bounding-box middle, so adding it
+    // back as the placement offset restores every point's sheet coordinates
+    // exactly (equivalently: the outline's area centroid lands at its sheet
+    // centroid).
+    state.placements.push({
+      toolId: tool.id,
+      ...sheetPositionOf(outline),
+      pocketDepthMm,
+    });
+  } else {
+    // A new tool lands with its clearance-grown box starting at the margin
+    // inside cell 0's interior, so it covers the fewest fixed grid cells its
+    // size allows instead of straddling the cell boundary at the origin.
+    const b = boundsOf(tool.outline);
+    const start = (PITCH - binInteriorSizeMm(1)) / 2 + AUTO_SIZE_MARGIN_MM;
+    state.placements.push({
+      toolId: tool.id,
+      xMm: start - (b.minX - tool.offsetMm),
+      yMm: start - (b.minY - tool.offsetMm),
+      pocketDepthMm,
+    });
+  }
   refit(state);
   return tool;
 }
 
+/** The placement offset that restores a sheet-frame outline's coordinates. */
+function sheetPositionOf(sheetOutline: TracedOutline): { xMm: number; yMm: number } {
+  const b = boundsOf(sheetOutline);
+  return { xMm: (b.minX + b.maxX) / 2, yMm: (b.minY + b.maxY) / 2 };
+}
+
 /**
  * Replaces an existing tool's outline and clicks after re-tracing it from
- * the stored photo; the placement, name and editing parameters stay.
+ * the stored photo; the name and editing parameters stay. The placement
+ * moves to the new outline's sheet position (manual moves since the original
+ * accept are not tracked, so the re-traced spot on the paper wins).
  * Re-sizes unless manual.
  */
 export function replaceToolOutline(
@@ -387,6 +411,12 @@ export function replaceToolOutline(
   if (tool === undefined) return;
   tool.outline = recentred(outline);
   tool.clicks = clicks;
+  const placement = state.placements.find((p) => p.toolId === toolId);
+  if (placement !== undefined) {
+    const position = sheetPositionOf(outline);
+    placement.xMm = position.xMm;
+    placement.yMm = position.yMm;
+  }
   refit(state);
 }
 
