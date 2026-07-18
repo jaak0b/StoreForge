@@ -101,6 +101,14 @@ Numbered for unambiguous reference; do not cite rule numbers in shipped source o
 
 11. **Subagent discipline.** Give every subagent a correct, specific title; never run more than 1 Fable
     agent at a time (hard budget limit). Sonnet is fine for parallel design/research work.
+    The main (user-facing) agent protects its own context by delegating context-heavy work to
+    subagents and consuming only their conclusions: codebase exploration and broad searches, reading
+    large files or external references, reviews/audits, and self-contained multi-file implementation
+    steps whose diff can be verified by tests. The main agent keeps for itself what needs conversation
+    context or judgment: talking to the owner, design decisions, plan approval, small surgical edits
+    (delegation overhead exceeds the edit), and final verification of results. When delegating
+    implementation, the prompt must be self-contained (files, constraints, conventions, definition of
+    done) and the main agent verifies the outcome (build/tests) rather than re-reading everything.
 
 12. **Measurement integrity: established methods only, never a fudge.** Every change to the measurement
     pipeline (sheet/corner detection, perspective rectification and mm scale, segmentation
