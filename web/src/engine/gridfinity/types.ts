@@ -14,6 +14,14 @@ export interface BinParams {
   dividerCountX: number;
   /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
   dividerCountY: number;
+  /**
+   * Whether the interior gets the scoop: the measured circular fillet
+   * sweeping the floor up into the back wall (opposite the label slot).
+   * Standard bins always have it (omitted means true, matching the Pred
+   * reference bin); pocket bins pass false because their interior is filled
+   * solid for tool pockets and a scoop belongs to loose-part bins.
+   */
+  scoop?: boolean;
 }
 
 /**

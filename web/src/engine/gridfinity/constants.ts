@@ -116,6 +116,20 @@ export const LIP_CREST_HEIGHT = LIP_HEIGHT - LIP_FILLET_RADIUS * Math.SQRT2;
 export const LIP_GROOVE_INSET = 0.7;
 export const LIP_GROOVE_VERTICAL = 1.0;
 
+/**
+ * Radius of the scoop: the circular fillet sweeping the interior floor up
+ * into the wall opposite the label slot, so small parts can be swept out
+ * with a finger. Measured from the Pred reference bin
+ * (gridfinitybin_1x1x6_d1_l12_s10, printables.com/model/592545): a vertical
+ * cross-section at mid-width shows a circular arc of radius 10.000 mm
+ * tangent to the interior floor (z 1.200) at 10 mm from the wall and tangent
+ * to the interior wall face (y 1.750) at 10 mm above the floor, running the
+ * full interior width wall to wall (straight across at every height, square
+ * into the corners). On low bins the radius is clamped to the vertical
+ * interior wall height so the fillet stays tangent to a real wall face.
+ */
+export const SCOOP_RADIUS = 10.0;
+
 /** Magnet hole dimensions (MAGNET_HOLE_RADIUS = 3.25, depth 2.4). */
 export const MAGNET_HOLE_DIAMETER = 6.5;
 export const MAGNET_HOLE_DEPTH = 2.4;

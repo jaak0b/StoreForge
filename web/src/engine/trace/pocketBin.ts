@@ -277,7 +277,10 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
     }
   }
 
-  const shelved = buildSlottedBinBody(m, params);
+  // Pocket bins skip the scoop: the interior is filled solid for the tool
+  // pockets, so a scoop would fight the pocket layout, and the reference
+  // scoop is a loose-parts feature, not a shadow-board one.
+  const shelved = buildSlottedBinBody(m, { ...params, scoop: false });
   // Fill the interior cavity solid between the floor top and the bin top,
   // reaching eps into the floor plate so the fill welds to it.
   const fillSection = interiorSection(m, params.gridX, params.gridY);

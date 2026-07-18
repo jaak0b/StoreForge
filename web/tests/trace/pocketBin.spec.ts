@@ -171,6 +171,34 @@ describe('buildPocketBinBody', () => {
     plain.delete();
   });
 
+  it('is unaffected by the interior scoop: pockets reach the back wall cleanly', () => {
+    // Standard bins carry the scoop fillet against the back (+Y) wall, which
+    // for this 2x1 bin would fill the corner from y 9.8 to the wall at 19.8
+    // between z 7 and 17. Pocket bins skip it: a full-depth pocket whose arm
+    // ends near the back wall (tool-local y 0..25 placed at yMm -5.5 reaches
+    // y 19.5) bottoms out flat at the floor top with no fillet intruding.
+    const body = buildPocketBinBody(
+      m,
+      params({ placements: [{ ...centeredL, pocketDepthMm: 14 }] }),
+    );
+    // Inside the pocket near the back wall, where the scoop fillet would be
+    // solid (12.5 mm from the would-be fillet centre at y 9.8, z 17): air.
+    expect(probeVolume(body, [-10, 18, 7.5], [2, 1, 0.5])).toBe(0);
+    // The plain bin generator does place scoop material there.
+    const { insert: _i, tools: _t, placements: _p, ...binParams } = params();
+    void _i;
+    void _t;
+    void _p;
+    const plain = buildBinManifold(m, binParams);
+    const scooped = m.Manifold.cube([2, 1, 0.5], true).translate(-10, 18, 7.5);
+    const hit = plain.intersect(scooped);
+    expect(hit.volume()).toBeCloseTo(2 * 1 * 0.5, 3);
+    hit.delete();
+    scooped.delete();
+    plain.delete();
+    body.delete();
+  });
+
   it('rejects a pocket deeper than the interior allows, naming the real limit', () => {
     // A 3 unit bin tops out at 21 mm and the floor top is at 7 mm: 14 mm max.
     expect(maxPocketDepthMm(3)).toBe(14);

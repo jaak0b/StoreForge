@@ -396,6 +396,87 @@ describe('interior dividers', () => {
   });
 });
 
+describe('interior scoop', () => {
+  // The Pred reference bin (gridfinitybin_1x1x6_d1_l12_s10) carries a
+  // circular fillet of radius 10.000 mm tangent to the interior floor and to
+  // the interior face of the wall opposite the label slot, running the full
+  // interior width. In our frame the slot is at -Y, so the scoop fills the
+  // corner at the +Y wall. For a 1x1x3 bin without lip: interior back wall
+  // face at y 19.8, floor top at z 7, fillet centre (y 9.8, z 17).
+  it('adds solid fillet material at the floor/back-wall junction', () => {
+    const bin = buildBinManifold(m, params());
+    // Mid-scoop probe (y 18.5, z 8.5): 12.16 mm from the fillet centre,
+    // outside the radius-10 arc, so it is now solid; it was open cavity air
+    // before the scoop.
+    const solid = m.Manifold.cube([2, 0.5, 0.5], true).translate(0, 18.5, 8.5);
+    const solidHit = bin.intersect(solid);
+    expect(solidHit.volume()).toBeCloseTo(2 * 0.5 * 0.5, 3);
+    solidHit.delete();
+    solid.delete();
+    // The same spot at the front wall (the label slot side) stays air: the
+    // scoop is only on the opposite wall.
+    const front = m.Manifold.cube([2, 0.5, 0.5], true).translate(0, -18.5, 8.5);
+    const frontHit = bin.intersect(front);
+    expect(frontHit.isEmpty()).toBe(true);
+    frontHit.delete();
+    front.delete();
+    // Inside the arc (y 12, z 8.5 is 8.78 mm from the centre) the cavity is
+    // still open: the fillet curve, not a solid block.
+    const inside = m.Manifold.cube([2, 0.5, 0.5], true).translate(0, 12, 8.5);
+    const insideHit = bin.intersect(inside);
+    expect(insideHit.isEmpty()).toBe(true);
+    insideHit.delete();
+    inside.delete();
+    // Away from the scoop the floor level is unchanged: air directly above
+    // FLOOR_TOP at the bin centre.
+    const floor = m.Manifold.cube([2, 2, 0.5], true).translate(0, 0, FLOOR_TOP + 0.3);
+    const floorHit = bin.intersect(floor);
+    expect(floorHit.isEmpty()).toBe(true);
+    floorHit.delete();
+    floor.delete();
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('stays watertight with the stacking lip and with dividers crossing the scoop', () => {
+    const bin = buildBinManifold(
+      m,
+      params({ stackingLip: true, dividerCountX: 1, dividerCountY: 1 }),
+    );
+    expect(bin.status()).toBe('NoError');
+    // Dividers only ever overlap the scoop's added material, so they weld in.
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('clamps the scoop radius to the wall height on a 2-unit bin', () => {
+    // A 1x1x2 bin without lip has 14 - 7 = 7 mm of interior wall above the
+    // floor, less than the measured 10 mm radius, so the fillet is clamped
+    // to radius 7 (centre y 12.8, z 14).
+    const bin = buildBinManifold(m, params({ heightUnits: 2 }));
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    // Nothing pokes above the nominal top.
+    expect(bin.boundingBox().max[2]).toBeCloseTo(2 * HEIGHT_UNIT, 5);
+    // Probe (y 17.5, z 10): outside the unclamped radius-10 arc (it would be
+    // solid), but inside the clamped radius-7 arc, so it stays air.
+    const air = m.Manifold.cube([2, 0.5, 0.5], true).translate(0, 17.5, 10);
+    const airHit = bin.intersect(air);
+    expect(airHit.isEmpty()).toBe(true);
+    airHit.delete();
+    air.delete();
+    // The clamped fillet's own material is present near the corner
+    // (y 19.3, z 8: 8.85 mm from the clamped centre, outside the arc).
+    const solid = m.Manifold.cube([2, 0.4, 0.4], true).translate(0, 19.3, 8);
+    const solidHit = bin.intersect(solid);
+    expect(solidHit.volume()).toBeCloseTo(2 * 0.4 * 0.4, 3);
+    solidHit.delete();
+    solid.delete();
+    bin.delete();
+  });
+});
+
 describe('binTopOpeningMm', () => {
   it('narrows the opening of a lipped bin to the lip tip span', () => {
     // Outer size 41.5 minus the 2.6 lip protrusion per side (kennetek

@@ -187,7 +187,7 @@ export function insertPositionInBin(params: BinParams): {
 }
 
 /** Extrude a (y, z) profile along X over the given width, starting at x = 0. */
-function prismFromProfile(
+export function prismFromProfile(
   m: ManifoldToplevel,
   profile: SimplePolygon,
   width: number,

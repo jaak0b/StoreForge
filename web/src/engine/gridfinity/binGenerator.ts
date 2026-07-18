@@ -8,7 +8,12 @@ import type {
   PartMeshes,
   SlottedBinParams,
 } from './types';
-import { applySlotToBody, buildInsertSolids, insertPositionInBin } from '../label/slot';
+import {
+  applySlotToBody,
+  buildInsertSolids,
+  insertPositionInBin,
+  prismFromProfile,
+} from '../label/slot';
 import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
@@ -39,6 +44,7 @@ import {
   MAGNET_HOLE_FROM_CELL_EDGE,
   OUTER_CORNER_RADIUS,
   PITCH,
+  SCOOP_RADIUS,
   WALL_THICKNESS,
 } from './constants';
 
@@ -476,6 +482,50 @@ function buildDividers(
 }
 
 /**
+ * The scoop: a circular fillet (SCOOP_RADIUS, measured from the Pred
+ * reference bin) added where the interior floor meets the back wall, the
+ * wall opposite the label slot, so small parts can be swept up the curve
+ * with a finger. The fillet arc is tangent to the interior floor and to the
+ * vertical interior wall face, and the solid runs the full interior width
+ * wall to wall, square into the corners, exactly as measured. It only adds
+ * material at the wall/floor junction: it sits entirely above the floor
+ * plate (so the hollowed base pocket is untouched) and inside the outer
+ * envelope, and any divider wall crossing it simply welds into the added
+ * material. On low bins the measured radius may exceed the vertical
+ * interior wall height (with a stacking lip the wall face ends where the
+ * lip's 45-degree support taper begins), so the radius is clamped to the
+ * available wall height to keep the arc tangent to a real wall face.
+ * Returns null when no wall height is available at all.
+ */
+function buildScoop(m: ManifoldToplevel, params: BinParams, bodyTop: number): Manifold | null {
+  const innerWidth = binInteriorSizeMm(params.gridX);
+  const innerDepth = binInteriorSizeMm(params.gridY);
+  // Top of the vertical interior wall face: the nominal top for a flat bin,
+  // or where the lip's support taper starts narrowing the interior.
+  const wallTop = params.stackingLip
+    ? bodyTop - LIP_SUPPORT_HEIGHT - (LIP_DEPTH - WALL_THICKNESS)
+    : bodyTop;
+  const radius = Math.min(SCOOP_RADIUS, wallTop - FLOOR_TOP);
+  if (radius <= 0) return null;
+  // Profile in (y, z): the interior face of the back wall, the floor, and
+  // the concave fillet arc tangent to both, sampled like the corner arcs.
+  const wallY = innerDepth / 2;
+  const centreY = wallY - radius;
+  const centreZ = FLOOR_TOP + radius;
+  const profile: SimplePolygon = [
+    [centreY, FLOOR_TOP],
+    [wallY, FLOOR_TOP],
+  ];
+  // The arc's final point (a = PI/2) coincides with the profile's first
+  // point, so the loop stops one sample short and the polygon closes itself.
+  for (let i = 0; i < CORNER_SEGMENTS; i++) {
+    const a = (i / CORNER_SEGMENTS) * (Math.PI / 2);
+    profile.push([centreY + radius * Math.cos(a), centreZ - radius * Math.sin(a)]);
+  }
+  return prismFromProfile(m, profile, innerWidth).translate(-innerWidth / 2, 0, 0);
+}
+
+/**
  * Build the full bin solid. The bin is centred on the origin in X and Y and
  * rests on z = 0.
  */
@@ -578,6 +628,16 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   }
 
   let result = m.Manifold.difference(solid, m.Manifold.union(cutters));
+
+  // The scoop is added after the cavity and base pocket cuts, so its fillet
+  // material survives on top of the floor plate. Standard bins always carry
+  // it (matching the reference bin); pocket bins opt out via params.scoop.
+  if (params.scoop !== false) {
+    const scoop = buildScoop(m, params, bodyTop);
+    if (scoop !== null) {
+      result = m.Manifold.union([result, scoop]);
+    }
+  }
 
   if (dividerCountX > 0 || dividerCountY > 0) {
     const dividers = buildDividers(m, params, envelope, outerWidth, outerDepth, bodyTop);
