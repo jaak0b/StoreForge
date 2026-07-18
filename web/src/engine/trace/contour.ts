@@ -1,8 +1,7 @@
 // Post-processing of a segmentation mask into a clean tool outline in sheet
 // millimeters. The mask comes from the SAM decoder; this module denoises it,
-// splits it into one outline per external contour (the clicked one first),
-// keeps real through-holes, simplifies the polygons to a mm tolerance, and
-// converts to physical coordinates.
+// picks the contour the user clicked, keeps real through-holes, simplifies
+// the polygons to a mm tolerance, and converts to physical coordinates.
 import type { Cv, CvMat } from './paper';
 import type { MmPoint, PixelPoint, TracedOutline } from './types';
 import { signedArea } from './edit';
@@ -63,7 +62,7 @@ function orient(points: MmPoint[], positive: boolean): MmPoint[] {
 }
 
 /**
- * Extract clean tool outlines from a binary mask (CV_8UC1, nonzero inside).
+ * Extract a clean tool outline from a binary mask (CV_8UC1, nonzero inside).
  *
  * The mask is denoised with a morphological open (removes speck islands and
  * single-pixel whiskers) followed by close. The close doubles as the smoothing
@@ -72,21 +71,17 @@ function orient(points: MmPoint[], positive: boolean): MmPoint[] {
  * corners of straight tool edges, so closing is the better fit for hard-edged
  * tool silhouettes.
  *
- * Every denoised external contour above the minimum-area floor becomes its
- * own outline (a connected-component split of the RETR_CCOMP result), each
- * keeping its holes above minHoleAreaMm2. The contour containing the include
- * click (largest, if several) is returned first; if the click landed just
- * outside every contour, the nearest one leads instead. The remaining
- * contours follow in findContours order.
+ * Among the denoised external contours, the largest one containing the include
+ * click is chosen (or, if the click landed just outside every contour, the
+ * nearest one). Its holes above minHoleAreaMm2 are kept as children.
  *
- * Returns an empty array when the mask contains no usable contour after
- * denoising.
+ * Returns null when the mask contains no usable contour after denoising.
  */
-export function maskToContours(
+export function maskToContour(
   cv: Cv,
   mask: CvMat,
   options: MaskContourOptions,
-): TracedOutline[] {
+): TracedOutline | null {
   const { mmPerPixel, includePoint } = options;
   const toleranceMm = options.toleranceMm ?? DEFAULT_TOLERANCE_MM;
   const minHoleAreaMm2 = options.minHoleAreaMm2 ?? DEFAULT_MIN_HOLE_AREA_MM2;
@@ -109,7 +104,6 @@ export function maskToContours(
     cv.findContours(clean, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
 
     const click = { x: includePoint.x, y: includePoint.y };
-    const qualifying: number[] = [];
     let chosen = -1;
     let chosenArea = 0;
     let nearest = -1;
@@ -127,7 +121,6 @@ export function maskToContours(
         if (area < minHoleAreaPx) {
           continue;
         }
-        qualifying.push(i);
         // Signed distance in px: positive inside, negative outside.
         const distance = cv.pointPolygonTest(contour, click, true);
         if (distance >= 0) {
@@ -147,62 +140,44 @@ export function maskToContours(
       chosen = nearest;
     }
     if (chosen === -1) {
-      return [];
+      return null;
     }
-    // The click-chosen contour leads; the rest keep findContours order.
-    const ordered = [chosen, ...qualifying.filter((i) => i !== chosen)];
 
-    const outlines: TracedOutline[] = [];
-    for (const index of ordered) {
-      const outerContour = contours.get(index);
-      let outer: MmPoint[];
+    const outerContour = contours.get(chosen);
+    let outer: MmPoint[];
+    try {
+      outer = orient(contourToMmPolygon(cv, outerContour, epsilonPx, mmPerPixel), true);
+    } finally {
+      outerContour.delete();
+    }
+    if (outer.length < 3) {
+      return null;
+    }
+
+    const holes: MmPoint[][] = [];
+    for (
+      let child = hierarchy.data32S[chosen * 4 + 2];
+      child !== -1;
+      child = hierarchy.data32S[child * 4]
+    ) {
+      const holeContour = contours.get(child);
       try {
-        outer = orient(contourToMmPolygon(cv, outerContour, epsilonPx, mmPerPixel), true);
-      } finally {
-        outerContour.delete();
-      }
-      if (outer.length < 3) {
-        continue;
-      }
-
-      const holes: MmPoint[][] = [];
-      for (
-        let child = hierarchy.data32S[index * 4 + 2];
-        child !== -1;
-        child = hierarchy.data32S[child * 4]
-      ) {
-        const holeContour = contours.get(child);
-        try {
-          if (cv.contourArea(holeContour) < minHoleAreaPx) {
-            continue;
-          }
-          const hole = orient(contourToMmPolygon(cv, holeContour, epsilonPx, mmPerPixel), false);
-          if (hole.length >= 3) {
-            holes.push(hole);
-          }
-        } finally {
-          holeContour.delete();
+        if (cv.contourArea(holeContour) < minHoleAreaPx) {
+          continue;
         }
+        const hole = orient(contourToMmPolygon(cv, holeContour, epsilonPx, mmPerPixel), false);
+        if (hole.length >= 3) {
+          holes.push(hole);
+        }
+      } finally {
+        holeContour.delete();
       }
-      outlines.push({ outer, holes });
     }
-    return outlines;
+    return { outer, holes };
   } finally {
     kernel.delete();
     clean.delete();
     contours.delete();
     hierarchy.delete();
   }
-}
-
-/**
- * Convenience wrapper over maskToContours for callers that want only the
- * click-chosen outline. Returns null when the mask holds no usable contour.
- */
-export function maskToContour(
-  cv: Cv,
-  mask: CvMat,
-  options: MaskContourOptions,
-): TracedOutline | null {
-  return maskToContours(cv, mask, options)[0] ?? null;
 }
