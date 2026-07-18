@@ -1,11 +1,17 @@
 import type { Manifold, ManifoldToplevel, SimplePolygon, Vec3 } from 'manifold-3d';
 import type { Font } from 'opentype.js';
-import type { BinParams, LabeledBinMeshes, LabeledBinParams, MeshData } from './types';
+import type { BinParams, LabeledBinMeshes, LabeledBinParams, LabelMode, MeshData } from './types';
 import {
   buildLabelManifold,
   buildLabelShelf,
   specHasLabel,
 } from '../label/placement';
+import {
+  buildInsertSolids,
+  buildSlotShelf,
+  insertPositionInBin,
+  slotClearanceCutter,
+} from '../label/slot';
 import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
@@ -545,7 +551,17 @@ export function generateBin(m: ManifoldToplevel, params: BinParams): MeshData {
   }
 }
 
-function labelSpecOf(params: LabeledBinParams): LabelSpec {
+/** The entry's label mode, defaulting to the original embossed form. */
+export function labelModeOf(params: LabeledBinParams): LabelMode {
+  return params.labelMode ?? 'embossed';
+}
+
+/** True when the mode gives the bin body an insert slot. */
+export function modeHasSlot(mode: LabelMode): boolean {
+  return mode === 'slot' || mode === 'slot-insert';
+}
+
+export function labelSpecOf(params: LabeledBinParams): LabelSpec {
   let icon = null;
   if (params.labelIcon !== null) {
     // A custom icon's path is resolved on the UI side (the worker cannot
@@ -572,9 +588,25 @@ function labelSpecOf(params: LabeledBinParams): LabelSpec {
  * for a label. A plain bin (no text, no icon) gets no shelf.
  */
 export function buildLabeledBody(m: ManifoldToplevel, params: LabeledBinParams): Manifold {
-  const body = buildBinManifold(m, params);
-  if (!specHasLabel(labelSpecOf(params))) return body;
-  const shelf = buildLabelShelf(m, params);
+  const mode = labelModeOf(params);
+  if (mode === 'insert') {
+    throw new Error('An insert-only entry has no bin body to build.');
+  }
+  let body = buildBinManifold(m, params);
+  // A slotted bin always gets its slot shelf (the slot exists even when no
+  // insert text is set yet); an embossed bin gets a shelf only for a label.
+  if (mode === 'embossed' && !specHasLabel(labelSpecOf(params))) return body;
+  if (modeHasSlot(mode)) {
+    // The channel is wider than the interior is at its rounded front corners
+    // (like the reference model, the channel recesses into the side walls),
+    // so the channel space is cut out of the body before the shelf is added.
+    const clearance = slotClearanceCutter(m, params);
+    const cleared = m.Manifold.difference(body, clearance);
+    body.delete();
+    clearance.delete();
+    body = cleared;
+  }
+  const shelf = modeHasSlot(mode) ? buildSlotShelf(m, params) : buildLabelShelf(m, params);
   const withShelf = m.Manifold.union([body, shelf]);
   body.delete();
   shelf.delete();
@@ -595,6 +627,9 @@ export function buildWeldedLabel(
   params: LabeledBinParams,
   body: Manifold,
 ): Manifold | null {
+  // Only the embossed mode carries its label on the bin body; slotted bins
+  // get their text on the separate insert instead.
+  if (labelModeOf(params) !== 'embossed') return null;
   const label = buildLabelManifold(m, font, params, labelSpecOf(params));
   if (label) {
     const overlap = label.intersect(body);
@@ -620,10 +655,15 @@ export function generateLabeledBin(
   font: Font,
   params: LabeledBinParams,
 ): LabeledBinMeshes {
+  const mode = labelModeOf(params);
+  if (mode === 'insert') return generateLabelInsert(m, font, params);
   const body = buildLabeledBody(m, params);
   let label: Manifold | null = null;
   try {
     label = buildWeldedLabel(m, font, params, body);
+    if (mode === 'slot-insert') {
+      label = buildInsertPlacedInSlot(m, font, params);
+    }
     return {
       body: manifoldToMeshData(body),
       label: label ? manifoldToMeshData(label) : null,
@@ -631,6 +671,78 @@ export function generateLabeledBin(
   } finally {
     body.delete();
     label?.delete();
+  }
+}
+
+/**
+ * The whole insert (plate and inlay unioned) translated into its resting
+ * place in the bin's slot: the preview form of a 'slot-insert' entry, shown
+ * on the label color so it reads as the separate part it is. Exports
+ * generate the bin ('slot') and the insert ('insert') as separate parts
+ * instead.
+ */
+export function buildInsertPlacedInSlot(
+  m: ManifoldToplevel,
+  font: Font,
+  params: LabeledBinParams,
+): Manifold {
+  const { body: plate, label: inlay } = buildInsertSolids(
+    m,
+    font,
+    labelSpecOf(params),
+    params.gridX,
+  );
+  const at = insertPositionInBin(params);
+  const parts = inlay === null ? [plate] : [plate, inlay];
+  const placed = m.Manifold.union(parts).translate(at.x, at.y, at.z);
+  plate.delete();
+  inlay?.delete();
+  if (placed.status() !== 'NoError') {
+    throw new Error(`Insert placement produced an invalid solid: ${placed.status()}`);
+  }
+  return placed;
+}
+
+/**
+ * Generate the label insert for the given parameters as separate plate and
+ * inlay meshes, the plate resting on z = 0 ready to print.
+ */
+export function generateLabelInsert(
+  m: ManifoldToplevel,
+  font: Font,
+  params: LabeledBinParams,
+): LabeledBinMeshes {
+  const { body, label } = buildInsertSolids(m, font, labelSpecOf(params), params.gridX);
+  try {
+    return {
+      body: manifoldToMeshData(body),
+      label: label ? manifoldToMeshData(label) : null,
+    };
+  } finally {
+    body.delete();
+    label?.delete();
+  }
+}
+
+/** Generate the label insert as one unioned mesh for the STL download. */
+export function generateLabelInsertUnion(
+  m: ManifoldToplevel,
+  font: Font,
+  params: LabeledBinParams,
+): MeshData {
+  const { body, label } = buildInsertSolids(m, font, labelSpecOf(params), params.gridX);
+  let union: Manifold | null = null;
+  try {
+    if (!label) return manifoldToMeshData(body);
+    union = m.Manifold.union([body, label]);
+    if (union.status() !== 'NoError') {
+      throw new Error(`Insert union produced an invalid solid: ${union.status()}`);
+    }
+    return manifoldToMeshData(union);
+  } finally {
+    body.delete();
+    label?.delete();
+    union?.delete();
   }
 }
 
@@ -643,6 +755,9 @@ export function generateLabeledBinUnion(
   font: Font,
   params: LabeledBinParams,
 ): MeshData {
+  // Insert-only entries union the insert; a slotted bin unions just the bin
+  // (its insert, when part of the entry, is exported as its own placed part).
+  if (labelModeOf(params) === 'insert') return generateLabelInsertUnion(m, font, params);
   const body = buildLabeledBody(m, params);
   let label: Manifold | null = null;
   let union: Manifold | null = null;

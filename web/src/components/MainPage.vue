@@ -33,6 +33,20 @@ function rowTitle(entry: BinEntry): string {
   return entry.labelText !== '' ? entry.labelText : sizeText(entry);
 }
 
+/** Chip text marking a non-embossed label mode, or null for the plain row. */
+function labelModeChip(entry: BinEntry): string | null {
+  switch (entry.labelMode) {
+    case 'slot':
+      return 'label slot';
+    case 'slot-insert':
+      return 'bin + insert';
+    case 'insert':
+      return 'insert only';
+    default:
+      return null;
+  }
+}
+
 // Row selection for building a plate. Each selected row carries an amount
 // that defaults to its full quantity and can be edited down for a partial
 // plate.
@@ -195,6 +209,15 @@ function removeRow(entry: BinEntry): void {
         >
           {{ entry.pockets.placements.length }}
           {{ entry.pockets.placements.length === 1 ? 'pocket' : 'pockets' }}
+        </v-chip>
+        <v-chip
+          v-if="labelModeChip(entry) !== null"
+          size="x-small"
+          variant="tonal"
+          color="secondary"
+          class="flex-grow-0"
+        >
+          {{ labelModeChip(entry) }}
         </v-chip>
         <span class="row-dims">{{ entry.labelText !== '' ? sizeText(entry) : '' }}</span>
         <span class="qty-badge">x{{ entry.quantity }}</span>

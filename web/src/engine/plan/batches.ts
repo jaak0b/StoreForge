@@ -28,6 +28,7 @@ export function snapshotParams(entry: BinEntry): LabeledBinParams {
     labelText: entry.labelText,
     labelText2: entry.labelText2,
     labelIcon: entry.labelIcon,
+    ...(entry.labelMode !== undefined ? { labelMode: entry.labelMode } : {}),
   };
   switch (entry.kind) {
     case 'manual':
@@ -70,6 +71,7 @@ export function binParamsKey(params: LabeledBinParams, pockets?: BinPockets): st
     params.labelText,
     params.labelText2,
     params.labelIcon,
+    params.labelMode ?? 'embossed',
     pockets ?? null,
   ]);
 }

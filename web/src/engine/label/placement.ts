@@ -229,7 +229,7 @@ export function layoutLabelFace(
  * Offsetting can merge glyphs that already nearly touch; this is accepted as
  * a minor consequence of the same fix (see TEXT_BOLD_OFFSET's doc comment).
  */
-function boldenText(m: ManifoldToplevel, part: LabelFacePart): LabelFacePart {
+export function boldenText(m: ManifoldToplevel, part: LabelFacePart): LabelFacePart {
   if (!part.isText) return part;
   const section = new m.CrossSection(part.polygons, part.fillRule);
   try {
@@ -282,21 +282,39 @@ export function shelfRibCount(spanWidth: number): number {
  * bin.
  */
 export function buildLabelShelf(m: ManifoldToplevel, params: BinParams): Manifold {
+  const bodyTop = params.heightUnits * HEIGHT_UNIT;
+  return buildShelfStructure(m, params, bodyTop, SHELF_DEPTH);
+}
+
+/**
+ * The shared plate-and-ribs shelf structure: a flat plate along the interior
+ * front wall, full interior width, the given depth, with its top face at the
+ * given height, resting on the triangular support ribs described above.
+ * buildLabelShelf places it flush with the nominal bin top for the embossed
+ * label; the slot shelf (see ../label/slot.ts) places it one slot height
+ * lower as the floor of the insert channel.
+ */
+export function buildShelfStructure(
+  m: ManifoldToplevel,
+  params: BinParams,
+  plateTop: number,
+  shelfDepth: number,
+): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
 
   const yOuter = -outerDepth / 2;
   const yInner = yOuter + WALL_THICKNESS;
-  const yBack = yInner + SHELF_DEPTH;
-  const plateBottom = bodyTop - SHELF_THICKNESS;
-  const chamferBottom = plateBottom - SHELF_DEPTH;
+  const yBack = yInner + shelfDepth;
+  const plateBottom = plateTop - SHELF_THICKNESS;
+  const chamferBottom = plateBottom - shelfDepth;
 
   // Profiles in the (y, z) plane. The plate is the solid label surface; each
   // rib is the 45-degree support triangle that used to run the full width.
   const plateProfile: SimplePolygon = [
-    [yOuter, bodyTop],
-    [yBack, bodyTop],
+    [yOuter, plateTop],
+    [yBack, plateTop],
     [yBack, plateBottom],
     [yOuter, plateBottom],
   ];

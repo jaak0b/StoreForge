@@ -1,4 +1,4 @@
-import type { LabeledBinParams } from '../gridfinity/types';
+import type { LabeledBinParams, LabelMode } from '../gridfinity/types';
 import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trace/types';
 import type { HeadType } from './screwListImport';
 
@@ -68,6 +68,12 @@ export interface BinEntryBase {
   labelText2: string;
   /** Name of the label icon shown left of the text, or null for no icon. */
   labelIcon: string | null;
+  /**
+   * How the entry carries its label: embossed on the bin, as a slotted bin
+   * (with or without its swappable insert), or as an insert alone. Absent in
+   * plans saved before label modes existed and means 'embossed'.
+   */
+  labelMode?: LabelMode;
   /** How many copies of this bin the plan calls for. Integer, at least 1. */
   quantity: number;
   /** ISO 8601 timestamp of when the entry was created. */

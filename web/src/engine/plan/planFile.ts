@@ -77,12 +77,23 @@ export function validateBinParams(entry: Record<string, unknown>, subject: strin
   if (entry.labelIcon !== null && typeof entry.labelIcon !== 'string') {
     return `${subject}: labelIcon must be a string or null`;
   }
+  // labelMode was added after the first plans shipped; older files simply
+  // omit it, so undefined is accepted and means the embossed label.
+  if (
+    entry.labelMode !== undefined &&
+    entry.labelMode !== 'embossed' &&
+    entry.labelMode !== 'slot' &&
+    entry.labelMode !== 'slot-insert' &&
+    entry.labelMode !== 'insert'
+  ) {
+    return `${subject}: labelMode must be embossed, slot, slot-insert or insert`;
+  }
   return null;
 }
 
 /** Copies only the LabeledBinParams fields from a validated raw object. */
 export function pickBinParams(raw: Record<string, unknown>): LabeledBinParams {
-  return {
+  const picked: LabeledBinParams = {
     gridX: raw.gridX as number,
     gridY: raw.gridY as number,
     heightUnits: raw.heightUnits as number,
@@ -94,6 +105,8 @@ export function pickBinParams(raw: Record<string, unknown>): LabeledBinParams {
     labelText2: (raw.labelText2 as string | undefined) ?? '',
     labelIcon: raw.labelIcon as string | null,
   };
+  if (raw.labelMode !== undefined) picked.labelMode = raw.labelMode as LabeledBinParams['labelMode'];
+  return picked;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -463,6 +476,7 @@ function pickEntry(raw: Record<string, unknown>): BinEntry {
     quantity: raw.quantity as number,
     createdAt: raw.createdAt as string,
   };
+  if (raw.labelMode !== undefined) base.labelMode = raw.labelMode as BinEntryBase['labelMode'];
   if (raw.notes !== undefined) base.notes = raw.notes as string;
   const kind = resolveKind(raw);
   if (kind === 'traced') {

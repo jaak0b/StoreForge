@@ -138,6 +138,7 @@ watch(
       labelText: entry.labelText,
       labelText2: entry.labelText2,
       labelIcon: entry.labelIcon,
+      labelMode: entry.labelMode ?? 'embossed',
       notes: entry.notes ?? '',
     });
     stage.value = 2;

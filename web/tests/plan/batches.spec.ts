@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  binParamsKey,
   confirmBatchItem,
   createBatch,
   failBatchItem,
@@ -325,5 +326,22 @@ describe('pockets in batches', () => {
     expect(failed.entries).toHaveLength(2);
     expect(failed.entries[0].quantity).toBe(5);
     expect((failed.entries[1] as TracedBin).pockets).toEqual(pockets());
+  });
+});
+
+describe('label modes in batches', () => {
+  it('keeps the label mode in the batch item snapshot', () => {
+    const snapshot = snapshotParams(entry({ labelMode: 'slot-insert' }));
+    expect(snapshot.labelMode).toBe('slot-insert');
+    expect(snapshotParams(entry()).labelMode).toBeUndefined();
+  });
+
+  it('treats different label modes as different bin designs', () => {
+    const embossed = binParamsKey(snapshotParams(entry()));
+    const slotted = binParamsKey(snapshotParams(entry({ labelMode: 'slot' })));
+    const explicitEmbossed = binParamsKey(snapshotParams(entry({ labelMode: 'embossed' })));
+    expect(slotted).not.toBe(embossed);
+    // An entry saved before label modes existed is the embossed design.
+    expect(explicitEmbossed).toBe(embossed);
   });
 });

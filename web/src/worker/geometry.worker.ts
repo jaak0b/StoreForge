@@ -9,6 +9,8 @@ import {
   generateBin,
   generateLabeledBin,
   generateLabeledBinUnion,
+  generateLabelInsert,
+  generateLabelInsertUnion,
 } from '../engine/gridfinity/binGenerator';
 import { generatePocketBin, generatePocketBinUnion } from '../engine/trace/pocketBin';
 import type { PocketBinParams } from '../engine/trace/pocketBin';
@@ -70,6 +72,19 @@ const api = {
   async generateLabeledBinUnion(params: LabeledBinParams): Promise<MeshData> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
     return transferMesh(generateLabeledBinUnion(m, font, params));
+  },
+  async generateLabelInsert(params: LabeledBinParams): Promise<LabeledBinMeshes> {
+    const [m, font] = await Promise.all([loadManifold(), loadFont()]);
+    const meshes = generateLabelInsert(m, font, params);
+    const buffers = [meshes.body.vertices.buffer, meshes.body.indices.buffer];
+    if (meshes.label) {
+      buffers.push(meshes.label.vertices.buffer, meshes.label.indices.buffer);
+    }
+    return Comlink.transfer(meshes, buffers);
+  },
+  async generateLabelInsertUnion(params: LabeledBinParams): Promise<MeshData> {
+    const [m, font] = await Promise.all([loadManifold(), loadFont()]);
+    return transferMesh(generateLabelInsertUnion(m, font, params));
   },
   async generatePocketBin(params: PocketBinParams): Promise<LabeledBinMeshes> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);

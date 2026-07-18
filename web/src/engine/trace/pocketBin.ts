@@ -11,6 +11,7 @@ import type { FingerHole, MmPoint, TracedOutline, TracedTool, ToolPlacement } fr
 import { fingerHoleOutline, resolvedToolOutline } from './edit';
 import {
   binInteriorSizeMm,
+  binOuterSizeMm,
   FLOOR_TOP,
   HEIGHT_UNIT,
   LIP_HEIGHT,
@@ -18,11 +19,22 @@ import {
   WALL_THICKNESS,
 } from '../gridfinity/constants';
 import {
+  buildInsertPlacedInSlot,
   buildLabeledBody,
   buildWeldedLabel,
+  generateLabelInsert,
+  generateLabelInsertUnion,
+  labelModeOf,
   manifoldToMeshData,
+  modeHasSlot,
   roundedRectPolygon,
 } from '../gridfinity/binGenerator';
+import {
+  buildSlotShelf,
+  RETAINER_BASE_DEPTH,
+  SLOT_DEPTH,
+  slotClearanceCutter,
+} from '../label/slot';
 import type { LabeledBinMeshes, LabeledBinParams, MeshData } from '../gridfinity/types';
 
 /** A labeled bin plus the tools whose pockets are sunk into its interior. */
@@ -175,6 +187,26 @@ export function validatePocketLayout(
   }
   const interior = interiorSection(m, params.gridX, params.gridY);
   const cutSections = placed.map((pocket) => placedCutSection(m, pocket));
+  // A slotted bin's insert seat cannot be cut into (the embossed shelf lets a
+  // pocket win over its support ribs, but the slot floor must stay whole for
+  // the insert to rest on), so pockets must stay clear of the slot region.
+  let slotStrip: CrossSection | null = null;
+  if (modeHasSlot(labelModeOf(params))) {
+    const outerWidth = binOuterSizeMm(params.gridX);
+    const outerDepth = binOuterSizeMm(params.gridY);
+    const stripDepth = WALL_THICKNESS + SLOT_DEPTH + RETAINER_BASE_DEPTH;
+    slotStrip = new m.CrossSection(
+      [
+        [
+          [-outerWidth / 2, -outerDepth / 2],
+          [outerWidth / 2, -outerDepth / 2],
+          [outerWidth / 2, -outerDepth / 2 + stripDepth],
+          [-outerWidth / 2, -outerDepth / 2 + stripDepth],
+        ],
+      ],
+      'NonZero',
+    );
+  }
   try {
     for (let i = 0; i < placed.length; i += 1) {
       const outside = cutSections[i].subtract(interior);
@@ -184,6 +216,12 @@ export function validatePocketLayout(
         throw new Error(
           `The pocket for "${placed[i].tool.name}" reaches into the bin wall. ` +
             'Move it away from the walls or use a larger bin.',
+        );
+      }
+      if (slotStrip !== null && sectionsOverlap(cutSections[i], slotStrip)) {
+        throw new Error(
+          `The pocket for "${placed[i].tool.name}" reaches under the label insert slot. ` +
+            'Move it away from the front wall or use a deeper bin.',
         );
       }
     }
@@ -204,6 +242,7 @@ export function validatePocketLayout(
     }
   } finally {
     interior.delete();
+    slotStrip?.delete();
     for (const section of cutSections) section.delete();
   }
 }
@@ -271,6 +310,18 @@ export function buildPocketBinSolids(
   } else {
     body = filled;
   }
+  if (modeHasSlot(labelModeOf(params))) {
+    // The interior fill closed the insert channel; clear it again and restore
+    // the slot shelf (with its retaining lip reaching into the channel).
+    const clearance = slotClearanceCutter(m, params);
+    const cleared = m.Manifold.difference(body, clearance);
+    body.delete();
+    clearance.delete();
+    const shelf = buildSlotShelf(m, params);
+    body = m.Manifold.union([cleared, shelf]);
+    cleared.delete();
+    shelf.delete();
+  }
   if (body.status() !== 'NoError') {
     body.delete();
     throw new Error(`Pocket bin generation produced an invalid solid: ${body.status()}`);
@@ -295,15 +346,24 @@ export function generatePocketBin(
   font: Font,
   params: PocketBinParams,
 ): LabeledBinMeshes {
+  // An insert-only entry has no bin body, so its pockets do not apply.
+  if (labelModeOf(params) === 'insert') return generateLabelInsert(m, font, params);
   const { body, label } = buildPocketBinSolids(m, font, params);
+  let previewLabel = label;
   try {
+    if (labelModeOf(params) === 'slot-insert') {
+      // Preview form, like generateLabeledBin: the insert shown in place in
+      // the slot on the label color. Exports generate the parts separately.
+      previewLabel = buildInsertPlacedInSlot(m, font, params);
+    }
     return {
       body: manifoldToMeshData(body),
-      label: label ? manifoldToMeshData(label) : null,
+      label: previewLabel ? manifoldToMeshData(previewLabel) : null,
     };
   } finally {
     body.delete();
     label?.delete();
+    if (previewLabel !== label) previewLabel?.delete();
   }
 }
 
@@ -316,6 +376,7 @@ export function generatePocketBinUnion(
   font: Font,
   params: PocketBinParams,
 ): MeshData {
+  if (labelModeOf(params) === 'insert') return generateLabelInsertUnion(m, font, params);
   const { body, label } = buildPocketBinSolids(m, font, params);
   let union: Manifold | null = null;
   try {

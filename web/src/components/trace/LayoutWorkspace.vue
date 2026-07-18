@@ -125,6 +125,7 @@ const pocketParams = computed<PocketBinParams>(() => {
     labelText: designer.labelText,
     labelText2: designer.labelText2,
     labelIcon: designer.labelIcon,
+    labelMode: designer.labelMode,
     tools: JSON.parse(JSON.stringify(trace.tools)),
     placements: JSON.parse(JSON.stringify(local.placements)),
   };
@@ -206,6 +207,7 @@ async function addToQueue(): Promise<void> {
     labelText: params.labelText,
     labelText2: params.labelText2,
     labelIcon: params.labelIcon,
+    labelMode: params.labelMode,
   };
   // The photo must be stored before the queue mutation: persisting the plan
   // sweeps stored photos no entry references, so the reference and the photo

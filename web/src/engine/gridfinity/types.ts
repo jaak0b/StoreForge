@@ -16,8 +16,21 @@ export interface BinParams {
   dividerCountY: number;
 }
 
+/**
+ * How a bin entry carries its label.
+ * - 'embossed': the label is embossed on a fixed shelf, part of the bin body.
+ * - 'slot': the bin gets a slot for a swappable label insert, but no insert.
+ * - 'slot-insert': the slotted bin plus its matching label insert.
+ * - 'insert': only the label insert, for a slotted bin that already exists.
+ * The slot and insert geometry is interchangeable with the Printables model
+ * "Gridfinity bin with printable label by Pred" (printables.com/model/592545).
+ */
+export type LabelMode = 'embossed' | 'slot' | 'slot-insert' | 'insert';
+
 /** Parameters describing a Gridfinity bin with an optional embossed label. */
 export interface LabeledBinParams extends BinParams {
+  /** How the label is carried. Absent means 'embossed' (the original form). */
+  labelMode?: LabelMode;
   /** Text embossed on the front wall. An empty string means no text. */
   labelText: string;
   /** Optional smaller second text line under the first. Empty means none. */

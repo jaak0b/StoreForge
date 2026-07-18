@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBinDesigner } from '../stores/binDesigner';
@@ -22,6 +23,7 @@ import {
 } from '../engine/plan/screwListImport';
 import type { LabeledBinParams } from '../engine/gridfinity/types';
 import BinViewport from './BinViewport.vue';
+import LabelModeSelect from './LabelModeSelect.vue';
 import MoreOptions from './MoreOptions.vue';
 
 /**
@@ -36,6 +38,7 @@ import MoreOptions from './MoreOptions.vue';
 const app = useApp();
 const queue = useBinQueue();
 const store = useBinDesigner();
+const { labelMode } = storeToRefs(store);
 const { smAndDown } = useDisplay();
 
 const METRIC_THREADS = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
@@ -116,6 +119,7 @@ function binParamsFor(
     ),
     labelText2: '',
     labelIcon: batch.head !== null ? HEAD_ICON_NAME[batch.head] : null,
+    labelMode: store.labelMode,
   };
 }
 
@@ -199,6 +203,7 @@ watch(
       magnetHoles: entry.magnetHoles,
       dividerCountX: entry.dividerCountX,
       dividerCountY: entry.dividerCountY,
+      labelMode: entry.labelMode ?? 'embossed',
       notes: entry.notes ?? '',
     });
   },
@@ -429,6 +434,8 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
       >
         {{ error }}
       </v-alert>
+
+      <LabelModeSelect v-model="labelMode" class="mt-4" />
 
       <MoreOptions :per-bin-fields="false" />
 

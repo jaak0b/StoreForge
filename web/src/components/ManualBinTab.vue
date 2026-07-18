@@ -8,6 +8,7 @@ import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import BinViewport from './BinViewport.vue';
 import LabelIconField from './LabelIconField.vue';
+import LabelModeSelect from './LabelModeSelect.vue';
 import MoreOptions from './MoreOptions.vue';
 
 /**
@@ -26,7 +27,7 @@ const { smAndDown } = useDisplay();
 // regardless, so downloads stay available.
 const previewLoaded = ref(!smAndDown.value);
 
-const { gridX, gridY, heightUnits, labelText, labelIcon, notes } = storeToRefs(store);
+const { gridX, gridY, heightUnits, labelText, labelIcon, labelMode, notes } = storeToRefs(store);
 
 const quantity = ref(1);
 const gridXField = ref<{ focus: () => void } | null>(null);
@@ -57,6 +58,7 @@ function loadEditingEntry(entryId: string | null): void {
     labelText: entry.labelText,
     labelText2: entry.labelText2,
     labelIcon: entry.labelIcon,
+    labelMode: entry.labelMode ?? 'embossed',
     notes: entry.notes ?? '',
   });
   quantity.value = entry.quantity;
@@ -155,6 +157,7 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
         />
       </div>
       <LabelIconField v-model:text="labelText" v-model:icon="labelIcon" class="mt-4" />
+      <LabelModeSelect v-model="labelMode" class="mt-4" />
 
       <MoreOptions per-bin-fields :quantity="quantity" @update:quantity="quantity = $event" />
 

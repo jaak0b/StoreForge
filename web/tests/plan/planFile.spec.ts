@@ -554,3 +554,28 @@ describe('pockets in plan files', () => {
     );
   });
 });
+
+describe('label modes in plan files', () => {
+  it('round-trips an entry with a label mode', () => {
+    const text = serializePlanFile([entry({ labelMode: 'slot-insert' })], []);
+    const result = parsePlanFile(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].labelMode).toBe('slot-insert');
+    }
+  });
+
+  it('leaves the label mode absent for plans saved before it existed', () => {
+    const text = serializePlanFile([entry()], []);
+    const result = parsePlanFile(text);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].labelMode).toBeUndefined();
+    }
+  });
+
+  it('rejects an unknown label mode with a user-worded message', () => {
+    const problem = validateEntry({ ...entry(), labelMode: 'sticker' });
+    expect(problem).toContain('labelMode must be embossed, slot, slot-insert or insert');
+  });
+});

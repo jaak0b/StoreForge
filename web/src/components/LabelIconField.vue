@@ -61,7 +61,7 @@ const menuOpen = ref(false);
       placeholder="What's inside?"
       density="comfortable"
       class="flex-grow-1"
-      hint="Embossed on the label shelf; long text shrinks to fit."
+      hint="Printed on the label; long text shrinks to fit."
     />
   </div>
 </template>

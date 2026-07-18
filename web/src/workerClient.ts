@@ -40,6 +40,20 @@ export async function generateLabeledBinUnion(
   return getWorker().generateLabeledBinUnion(withResolvedIconPath(params));
 }
 
+/** Generate a label insert as separate plate and inlay meshes. */
+export async function generateLabelInsert(
+  params: LabeledBinParams,
+): Promise<LabeledBinMeshes> {
+  return getWorker().generateLabelInsert(withResolvedIconPath(params));
+}
+
+/** Generate a label insert as one unioned mesh for the STL download. */
+export async function generateLabelInsertUnion(
+  params: LabeledBinParams,
+): Promise<MeshData> {
+  return getWorker().generateLabelInsertUnion(withResolvedIconPath(params));
+}
+
 /** Generate a bin with tool-shaped pockets as separate body and label meshes. */
 export async function generatePocketBin(
   params: PocketBinParams,
