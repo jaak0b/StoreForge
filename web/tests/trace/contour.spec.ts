@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadOpenCv } from '../../src/worker/opencvLoader';
-import { maskToContour } from '../../src/engine/trace/contour';
+import { maskToContour, maskToContours } from '../../src/engine/trace/contour';
 import type { Cv, CvMat } from '../../src/engine/trace/paper';
 import type { MmPoint } from '../../src/engine/trace/types';
 
@@ -139,6 +139,65 @@ describe('maskToContour', () => {
     const box = bounds(outline.outer);
     expect(Math.abs(box.minX - 10)).toBeLessThanOrEqual(0.5);
     expect(Math.abs(box.maxX - 50)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('splits two separate shapes into two outlines with the clicked one first', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // Shape A: 40..120 x 30..130 px. Shape B: 160..240 x 40..100 px with a
+    // radius-16 px hole at (200, 70). The click lands inside B, so B must
+    // lead the result even though A is larger.
+    fillRect(cv, mask, 40, 30, 120, 130);
+    fillRect(cv, mask, 160, 40, 240, 100);
+    cv.circle(mask, new cv.Point(200, 70), 16, new cv.Scalar(0), -1);
+    const outlines = maskToContours(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoint: { x: 170, y: 50 },
+    });
+    mask.delete();
+    expect(outlines).toHaveLength(2);
+    // B spans 160..240 x 40..100 px: 40..60 mm and 10..25 mm, hand-derived
+    // once. 0.5 mm tolerance covers the morphology kernel plus epsilon.
+    const first = bounds(outlines[0].outer);
+    expect(Math.abs(first.minX - 40)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(first.maxX - 60)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(first.minY - 10)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(first.maxY - 25)).toBeLessThanOrEqual(0.5);
+    // B keeps its own hole: radius 4 mm, area pi * 16 = 50.27 mm^2,
+    // hand-derived once, 10 percent for rasterization.
+    expect(outlines[0].holes).toHaveLength(1);
+    const holeArea = measuredArea(outlines[0].holes[0]);
+    expect(holeArea).toBeLessThan(0);
+    expect(Math.abs(holeArea)).toBeGreaterThan(45.2);
+    expect(Math.abs(holeArea)).toBeLessThan(55.3);
+    // A spans 40..120 x 30..130 px: 10..30 mm and 7.5..32.5 mm, hand-derived
+    // once, with no hole of its own.
+    const second = bounds(outlines[1].outer);
+    expect(Math.abs(second.minX - 10)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(second.maxX - 30)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(second.minY - 7.5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(second.maxY - 32.5)).toBeLessThanOrEqual(0.5);
+    expect(outlines[1].holes).toHaveLength(0);
+    // Both outers wound positively.
+    expect(measuredArea(outlines[0].outer)).toBeGreaterThan(0);
+    expect(measuredArea(outlines[1].outer)).toBeGreaterThan(0);
+  });
+
+  it('returns one outline when the second component is below the area floor', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    fillRect(cv, mask, 40, 30, 200, 130);
+    // A 6x6 px island survives the 3x3 open but its area, 36 px^2 = 2.25 mm^2
+    // (hand-derived once), stays under the 3 mm^2 floor.
+    fillRect(cv, mask, 220, 20, 225, 25);
+    const outlines = maskToContours(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoint: { x: 60, y: 50 },
+    });
+    mask.delete();
+    expect(outlines).toHaveLength(1);
+    const box = bounds(outlines[0].outer);
+    expect(box.maxX).toBeLessThan(51);
   });
 
   it('respects the simplification tolerance on a circle', async () => {
