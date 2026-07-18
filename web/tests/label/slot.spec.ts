@@ -56,13 +56,49 @@ describe('buildInsertSolids', () => {
     const { body, label } = buildInsertSolids(m, font, { text: '', icon: null }, 1);
     expect(label).toBeNull();
     const box = body.boundingBox();
-    // Measured from the Pred x1 label mesh: 37.8 x 11.5 x 0.8 mm.
+    // Measured from the Pred x1 label mesh: 37.8 x 11.5 x 0.8 mm overall.
     expect(box.max[0] - box.min[0]).toBeCloseTo(37.8, 3);
     expect(box.max[1] - box.min[1]).toBeCloseTo(11.5, 6);
     expect(box.max[2] - box.min[2]).toBeCloseTo(0.8, 6);
     expect(box.min[2]).toBeCloseTo(0, 6);
     expect(body.status()).toBe('NoError');
-    expect(body.genus()).toBe(0);
+    // The two push-out through-holes give the plate genus 2.
+    expect(body.genus()).toBe(2);
+    body.delete();
+  });
+
+  it('carries the reference end tabs: 35.8 mm plate plus a 1.0 x 5.7 mm tab per end', () => {
+    const { body } = buildInsertSolids(m, font, { text: '', icon: null }, 1);
+    // Away from the centreline (beyond the 5.7 mm tab band) only the plate
+    // remains: a slab there measures the 35.8 mm plate length. Measured from
+    // the Pred x1 label mesh (plate ends 1.0 inside the 37.8 mm total).
+    const offCentre = m.Manifold.cube([100, 2, 2], true).translate(0, 4.5, 0.4);
+    const plateOnly = body.intersect(offCentre);
+    const plateBox = plateOnly.boundingBox();
+    expect(plateBox.max[0] - plateBox.min[0]).toBeCloseTo(35.8, 3);
+    offCentre.delete();
+    plateOnly.delete();
+    // On the centreline the tabs reach the full 37.8 mm.
+    const onCentre = m.Manifold.cube([100, 2, 2], true).translate(0, 0, 0.4);
+    const withTabs = body.intersect(onCentre);
+    const tabBox = withTabs.boundingBox();
+    expect(tabBox.max[0] - tabBox.min[0]).toBeCloseTo(37.8, 3);
+    onCentre.delete();
+    withTabs.delete();
+    body.delete();
+  });
+
+  it('pierces a 1.5 mm push-out hole 1.5 mm from each tab tip', () => {
+    const { body } = buildInsertSolids(m, font, { text: '', icon: null }, 1);
+    // Measured from the Pred x1 label mesh: hole centres 1.5 from the tips
+    // on the centreline, so at x = 17.4 for the 37.8 mm insert.
+    for (const side of [-1, 1]) {
+      const pin = m.Manifold.cylinder(2, 0.5, 0.5, 16).translate(side * 17.4, 0, -0.5);
+      const overlap = body.intersect(pin);
+      expect(Math.abs(overlap.volume())).toBeLessThan(1e-9);
+      pin.delete();
+      overlap.delete();
+    }
     body.delete();
   });
 
@@ -98,16 +134,17 @@ describe('buildInsertSolids', () => {
 });
 
 describe('buildSlotShelf', () => {
-  it('is watertight and stays inside the bin height plus the front overhang', () => {
+  it('is watertight and carries the pocket ceilings above the bin top', () => {
     const shelf = buildSlotShelf(m, binParams());
     expect(shelf.status()).toBe('NoError');
     const box = shelf.boundingBox();
-    // heightUnits 3: nominal top 21; the front overhang strip rises 0.7 above.
-    expect(box.max[2]).toBeCloseTo(21.7, 6);
+    // heightUnits 3: nominal top 21; the tab-pocket ceilings rise 0.65 above
+    // (measured 0.65 of material over the pocket on the reference bin).
+    expect(box.max[2]).toBeCloseTo(21.65, 6);
     shelf.delete();
   });
 
-  it('keeps a flat-topped bin flat: no overhang without a stacking lip', () => {
+  it('keeps a flat-topped bin flat: no ceilings without a stacking lip', () => {
     const shelf = buildSlotShelf(m, binParams({ stackingLip: false }));
     expect(shelf.boundingBox().max[2]).toBeCloseTo(21, 6);
     shelf.delete();
@@ -140,7 +177,7 @@ describe('insert in slot', () => {
     insert.delete();
   });
 
-  it('is retained: lifting the insert makes it collide with the slot geometry', () => {
+  it('is retained: a lifted insert hits the tab-pocket ceilings', () => {
     const p = binParams();
     const body = buildSlottedBinBody(m, p);
     const lifted = placedInsert({ ...p, labelText: 'M3' }).translate(0, 0, 0.4);
@@ -151,10 +188,32 @@ describe('insert in slot', () => {
     lifted.delete();
   });
 
-  it('cannot slide sideways past the side cheeks', () => {
+  it('lifts freely out of a flat-topped bin, whose pockets have no ceiling', () => {
+    const p = binParams({ stackingLip: false });
+    const body = buildSlottedBinBody(m, p);
+    const lifted = placedInsert({ ...p, labelText: 'M3' }).translate(0, 0, 0.4);
+    const overlap = lifted.intersect(body);
+    expect(Math.abs(overlap.volume())).toBeLessThan(1e-9);
+    overlap.delete();
+    body.delete();
+    lifted.delete();
+  });
+
+  it('cannot slide sideways past the channel ends', () => {
     const p = binParams();
     const body = buildSlottedBinBody(m, p);
     const shifted = placedInsert({ ...p, labelText: 'M3' }).translate(1.5, 0, 0);
+    const overlap = shifted.intersect(body);
+    expect(overlap.volume()).toBeGreaterThan(0.01);
+    overlap.delete();
+    body.delete();
+    shifted.delete();
+  });
+
+  it('cannot slide into the bin interior past the end stop', () => {
+    const p = binParams();
+    const body = buildSlottedBinBody(m, p);
+    const shifted = placedInsert({ ...p, labelText: 'M3' }).translate(0, 1.5, 0);
     const overlap = shifted.intersect(body);
     expect(overlap.volume()).toBeGreaterThan(0.01);
     overlap.delete();

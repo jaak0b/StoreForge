@@ -1,7 +1,6 @@
 import type { Manifold, ManifoldToplevel, SimplePolygon } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import {
-  binInteriorSizeMm,
   binOuterSizeMm,
   HEIGHT_UNIT,
   OUTER_CORNER_RADIUS,
@@ -26,10 +25,14 @@ import type { LabelSpec } from './placement';
  * printable label by Pred" (printables.com/model/592545): all figures below
  * were measured from that model's published meshes (label 3MF/STEP files and
  * the 1x1x6 bin), so an insert printed from here fits a Pred bin and a Pred
- * insert fits a bin from here. The insert drops into a shallow channel above
- * the label shelf and lies between the front wall, an end stop at the back,
- * and a side cheek at each end; the front-wall overhang keeps its front edge
- * from bowing up.
+ * insert fits a bin from here. The insert is a thin plate with a short tab
+ * at each end; the bin's channel has a matching enclosed pocket at each end
+ * whose ceiling holds the tabs down. The insert flexes in (the plate is 0.8
+ * mm thin) and is pushed out again through the tab's through-hole. Two
+ * clearance-increasing simplifications against the reference model are
+ * deliberate and do not affect the fit: the 0.2 mm edge round-over on the
+ * insert faces is omitted, and the channel's 1.15 mm plan corner fillets are
+ * left square (both only remove material from mating clearances).
  */
 
 /** Thickness of the label insert plate. */
@@ -38,14 +41,32 @@ export const INSERT_THICKNESS = 0.8;
 /** Depth (front to back) of the label insert plate. */
 export const INSERT_DEPTH = 11.5;
 
-/** Corner radius of the label insert plate. */
-export const INSERT_CORNER_RADIUS = 0.4;
+/** Plan corner radius of the label insert plate. Measured 0.9. */
+export const INSERT_CORNER_RADIUS = 0.9;
 
 /**
- * How much shorter the insert is than the bin's outer width (1.85 mm per
- * side): a one-cell insert is 37.8 mm long on the 41.5 mm bin.
+ * How much shorter the insert (including its tabs) is than the bin's outer
+ * width (1.85 mm per side): a one-cell insert is 37.8 mm long overall on the
+ * 41.5 mm bin.
  */
 export const INSERT_END_INSET = 3.7;
+
+/**
+ * The retention tab at each end of the insert: a full-thickness rectangular
+ * ear protruding INSERT_TAB_LENGTH beyond the plate, INSERT_TAB_WIDTH wide,
+ * centred on the plate's centreline, with square plan corners. Measured
+ * 1.0 x 5.7 on the reference insert (37.8 total = 35.8 plate + 1.0 per end).
+ */
+export const INSERT_TAB_LENGTH = 1.0;
+export const INSERT_TAB_WIDTH = 5.7;
+
+/**
+ * The push-out through-hole in each tab: 1.5 mm diameter, its centre 1.5 mm
+ * from the tab tip on the centreline. It lies under the open span of the
+ * channel, so a pin pushed through it lifts the insert out.
+ */
+export const INSERT_HOLE_DIAMETER = 1.5;
+export const INSERT_HOLE_FROM_TIP = 1.5;
 
 /** Depth (front to back) of the insert channel; 0.5 mm clearance over the insert. */
 export const SLOT_DEPTH = 12.0;
@@ -53,27 +74,29 @@ export const SLOT_DEPTH = 12.0;
 /** Height of the insert channel; 0.2 mm clearance over the insert thickness. */
 export const SLOT_HEIGHT = 1.0;
 
-/** Total side clearance of the channel over the insert length. */
+/** Total side clearance of the channel cavity over the insert length. */
 export const SLOT_SIDE_CLEARANCE = 0.5;
 
 /**
  * The end stop along the channel's back edge: a ridge rising from the
  * channel floor to the nominal bin top that keeps the insert from sliding
- * into the bin interior. The insert drops into the channel from above and
- * lies between this stop, the front wall, and the side cheeks; the front
- * overhang (below) keeps its front edge from bowing up.
+ * into the bin interior.
  */
 export const RETAINER_BASE_DEPTH = 0.9;
 
 /**
- * The overhang above the channel along the front wall (depth and height of a
- * 45-degree strip) that holds the insert's front edge down. In the reference
- * model this overhang is part of its thicker wall; here it is added as a
- * strip welded onto the wall, only on bins with a stacking lip (a flat-topped
- * bin keeps its flat top; the retaining lip and side cheeks still hold the
- * insert).
+ * The enclosed tab pocket at each end of the channel: as deep as the tab is
+ * long (the cavity keeps 0.25 mm end clearance overall), TAB_POCKET_WIDTH
+ * wide (0.5 mm clearance per side over the tab), full channel height, with a
+ * ceiling POCKET_CEILING_THICKNESS thick above the nominal bin top. The
+ * ceilings are the vertical retention: a lifted insert hits them with its
+ * tabs. Measured 1.0 deep x 6.7 wide x 1.0 high with 0.65 above the ceiling
+ * on the reference bin. On a bin without a stacking lip the ceiling would
+ * stand proud of the flat top, so the pockets stay open there and the insert
+ * is held by gravity alone.
  */
-export const FRONT_OVERHANG = 0.7;
+export const TAB_POCKET_WIDTH = 6.7;
+export const POCKET_CEILING_THICKNESS = 0.65;
 
 /**
  * How deep the label face is inlaid into the insert's top, and how far the
@@ -82,14 +105,19 @@ export const FRONT_OVERHANG = 0.7;
 export const INSERT_INLAY_DEPTH = 0.4;
 export const INSERT_INLAY_WELD = 0.05;
 
-/** Length of the label insert for a bin spanning `cells` grid cells. */
+/** Overall length of the label insert (tabs included) for a bin spanning `cells` grid cells. */
 export function insertLengthMm(cells: number): number {
   return binOuterSizeMm(cells) - INSERT_END_INSET;
 }
 
-/** Width of the insert channel for a bin spanning `cells` grid cells. */
+/** Full width of the channel cavity (tab pockets included) for a bin spanning `cells` grid cells. */
 export function slotChannelWidthMm(cells: number): number {
   return insertLengthMm(cells) + SLOT_SIDE_CLEARANCE;
+}
+
+/** Width of the open channel span between the two tab pockets. */
+export function slotOpenSpanMm(cells: number): number {
+  return slotChannelWidthMm(cells) - 2 * INSERT_TAB_LENGTH;
 }
 
 /**
@@ -125,81 +153,108 @@ function prismFromProfile(
   }
 }
 
+/** The two tab-pocket void boxes of the channel, at the given channel frame. */
+function tabPocketVoids(
+  m: ManifoldToplevel,
+  params: BinParams,
+  floorTop: number,
+  topZ: number,
+): Manifold[] {
+  const outerDepth = binOuterSizeMm(params.gridY);
+  const yInner = -outerDepth / 2 + WALL_THICKNESS;
+  const channelCentreY = yInner + SLOT_DEPTH / 2;
+  const openHalf = slotOpenSpanMm(params.gridX) / 2;
+  const cavityHalf = slotChannelWidthMm(params.gridX) / 2;
+  const voids: Manifold[] = [];
+  for (const side of [-1, 1]) {
+    voids.push(
+      m.Manifold.cube([cavityHalf - openHalf, TAB_POCKET_WIDTH, topZ - floorTop]).translate(
+        side === -1 ? -cavityHalf : openHalf,
+        channelCentreY - TAB_POCKET_WIDTH / 2,
+        floorTop,
+      ),
+    );
+  }
+  return voids;
+}
+
 /**
  * The slot shelf: the shared plate-and-ribs shelf structure with its top face
  * one channel height below the nominal bin top (forming the channel floor,
- * extended under the retaining lip), plus the retaining lip along the
- * channel's back edge, a side cheek at each channel end that centres the
- * insert, and (on bins with a stacking lip) the front-wall overhang strip.
- * Unioned with the bin body like the embossed label shelf; the channel itself
- * is simply the open space above the plate.
+ * extended under the end stop), plus the end stop along the channel's back
+ * edge and a side block at each channel end. Each side block carries the
+ * enclosed tab pocket: its void is subtracted from the block, and on bins
+ * with a stacking lip the block rises POCKET_CEILING_THICKNESS above the
+ * nominal bin top so the pocket gets its retaining ceiling (matching the
+ * reference bin's solid front corners). Without a stacking lip the block
+ * stops at the flat top and the pockets stay open. Unioned with the bin
+ * body; the channel itself is the open space above the plate.
  */
 export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
-  const interiorWidth = binInteriorSizeMm(params.gridX);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const floorTop = bodyTop - SLOT_HEIGHT;
-  const channelWidth = slotChannelWidthMm(params.gridX);
+  const cavityWidth = slotChannelWidthMm(params.gridX);
+  const openHalf = slotOpenSpanMm(params.gridX) / 2;
+  const eps = 0.01;
 
   const yOuter = -outerDepth / 2;
   const yInner = yOuter + WALL_THICKNESS;
   const yBack = yInner + SLOT_DEPTH;
   const yLipBack = yBack + RETAINER_BASE_DEPTH;
+  const blockTop = params.stackingLip ? bodyTop + POCKET_CEILING_THICKNESS : bodyTop;
 
   const parts: Manifold[] = [
     buildShelfStructure(m, params, floorTop, SLOT_DEPTH + RETAINER_BASE_DEPTH),
   ];
 
-  // End stop along the channel's back edge, spanning the channel width.
+  // End stop along the channel's back edge, spanning the cavity width.
   const stopProfile: SimplePolygon = [
     [yBack, floorTop],
     [yLipBack, floorTop],
     [yLipBack, bodyTop],
     [yBack, bodyTop],
   ];
-  parts.push(prismFromProfile(m, stopProfile, channelWidth).translate(-channelWidth / 2, 0, 0));
+  parts.push(prismFromProfile(m, stopProfile, cavityWidth).translate(-cavityWidth / 2, 0, 0));
 
-  // Side cheeks between the channel ends and the interior walls, so the
-  // insert is centred instead of sliding sideways.
-  const cheekWidth = (interiorWidth - channelWidth) / 2;
-  if (cheekWidth > 0) {
-    for (const side of [-1, 1]) {
-      parts.push(
-        m.Manifold.cube([cheekWidth, yLipBack - yInner, SLOT_HEIGHT]).translate(
-          side === -1 ? -interiorWidth / 2 : channelWidth / 2,
-          yInner,
-          floorTop,
-        ),
-      );
-    }
-  }
-
-  // Front-wall overhang strip above the channel, with a 45-degree top so it
-  // prints as a continuation of the wall. Only where wall material continues
-  // above the nominal bin top, i.e. on bins with a stacking lip.
-  if (params.stackingLip) {
-    const overhangProfile: SimplePolygon = [
-      [yOuter, bodyTop],
-      [yInner + FRONT_OVERHANG, bodyTop],
-      [yInner, bodyTop + FRONT_OVERHANG],
-      [yOuter, bodyTop + FRONT_OVERHANG],
-    ];
+  // Side blocks between the open channel span and the side walls, hosting
+  // the tab pockets. They reach to the outer width and are clipped to the
+  // bin outline below, so they weld into the walls.
+  for (const side of [-1, 1]) {
     parts.push(
-      prismFromProfile(m, overhangProfile, channelWidth).translate(-channelWidth / 2, 0, 0),
+      m.Manifold.cube([outerWidth / 2 - openHalf, yLipBack - yInner, blockTop - floorTop]).translate(
+        side === -1 ? -outerWidth / 2 : openHalf,
+        yInner,
+        floorTop,
+      ),
     );
   }
 
   const prism = m.Manifold.union(parts);
   for (const part of parts) part.delete();
 
-  // Clip to the bin's rounded outer outline, like the embossed label shelf.
+  // Subtract the tab-pocket voids from the side blocks. Without a stacking
+  // lip the void reaches past the flat block top so the pocket is open.
+  const voids = tabPocketVoids(
+    m,
+    params,
+    floorTop,
+    params.stackingLip ? bodyTop : bodyTop + eps,
+  );
+  const voidUnion = m.Manifold.union(voids);
+  for (const v of voids) v.delete();
+  const pocketed = m.Manifold.difference(prism, voidUnion);
+  prism.delete();
+  voidUnion.delete();
+
+  // Clip to the bin's rounded outer outline, so nothing pokes outside.
   const outline = m.Manifold.extrude(
     [roundedRectPolygon(outerWidth, outerDepth, OUTER_CORNER_RADIUS)],
-    bodyTop + FRONT_OVERHANG,
+    blockTop,
   );
-  const shelf = m.Manifold.intersection(prism, outline);
-  prism.delete();
+  const shelf = m.Manifold.intersection(pocketed, outline);
+  pocketed.delete();
   outline.delete();
   if (shelf.status() !== 'NoError') {
     throw new Error(`Slot shelf construction produced an invalid solid: ${shelf.status()}`);
@@ -208,22 +263,31 @@ export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold
 }
 
 /**
- * Cutter clearing the insert channel's open space, for builders that first
- * fill the bin interior solid (the pocket bin): subtracting this and then
- * unioning buildSlotShelf restores the channel. Slightly oversized in height
- * so no film is left over the channel.
+ * Cutter clearing the insert channel's cavity (the open span plus the two
+ * tab pockets), for the bin body before the slot shelf is unioned in and for
+ * builders that fill the bin interior solid (the pocket bin): subtracting
+ * this and then unioning buildSlotShelf produces the channel. The open span
+ * is slightly oversized in height so no film is left over the channel; the
+ * pocket voids stop exactly at the nominal bin top, where wall or ceiling
+ * material above them stays.
  */
 export function slotClearanceCutter(m: ManifoldToplevel, params: BinParams): Manifold {
   const outerDepth = binOuterSizeMm(params.gridY);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  const channelWidth = slotChannelWidthMm(params.gridX);
+  const floorTop = bodyTop - SLOT_HEIGHT;
+  const openSpan = slotOpenSpanMm(params.gridX);
   const yInner = -outerDepth / 2 + WALL_THICKNESS;
   const eps = 0.01;
-  return m.Manifold.cube([channelWidth, SLOT_DEPTH, SLOT_HEIGHT + eps]).translate(
-    -channelWidth / 2,
+  const main = m.Manifold.cube([openSpan, SLOT_DEPTH, SLOT_HEIGHT + eps]).translate(
+    -openSpan / 2,
     yInner,
-    bodyTop - SLOT_HEIGHT,
+    floorTop,
   );
+  const voids = tabPocketVoids(m, params, floorTop, bodyTop);
+  const cutter = m.Manifold.union([main, ...voids]);
+  main.delete();
+  for (const v of voids) v.delete();
+  return cutter;
 }
 
 /**
@@ -263,10 +327,59 @@ export interface InsertSolids {
 }
 
 /**
- * Build a label insert: a flat plate (resting on z = 0, centred on the
- * origin, ready to print) with the label face inlaid flush into its top as a
- * separate solid, so the face prints in a second filament. An empty spec
- * yields a blank insert with a null label. The caller owns both manifolds.
+ * The insert's flat body: the plate with its end tabs, pierced by the two
+ * push-out through-holes, resting on z = 0 and centred on the origin.
+ */
+function buildInsertPlate(m: ManifoldToplevel, cells: number): Manifold {
+  const length = insertLengthMm(cells);
+  const plateLength = length - 2 * INSERT_TAB_LENGTH;
+  const eps = 0.01;
+  const plate = m.Manifold.extrude(
+    [roundedRectPolygon(plateLength, INSERT_DEPTH, INSERT_CORNER_RADIUS)],
+    INSERT_THICKNESS,
+  );
+  // Full-thickness tabs with square plan corners, overlapping into the plate
+  // by eps so the union is welded.
+  const tabs: Manifold[] = [];
+  for (const side of [-1, 1]) {
+    tabs.push(
+      m.Manifold.cube([INSERT_TAB_LENGTH + eps, INSERT_TAB_WIDTH, INSERT_THICKNESS]).translate(
+        side === -1 ? -length / 2 : plateLength / 2 - eps,
+        -INSERT_TAB_WIDTH / 2,
+        0,
+      ),
+    );
+  }
+  const solid = m.Manifold.union([plate, ...tabs]);
+  plate.delete();
+  for (const tab of tabs) tab.delete();
+  // The push-out holes, through the full thickness, centred on the
+  // centreline INSERT_HOLE_FROM_TIP from each tab tip.
+  const holes: Manifold[] = [];
+  for (const side of [-1, 1]) {
+    holes.push(
+      m.Manifold.cylinder(
+        INSERT_THICKNESS + 2 * eps,
+        INSERT_HOLE_DIAMETER / 2,
+        INSERT_HOLE_DIAMETER / 2,
+        32,
+      ).translate(side * (length / 2 - INSERT_HOLE_FROM_TIP), 0, -eps),
+    );
+  }
+  const holeUnion = m.Manifold.union(holes);
+  for (const hole of holes) hole.delete();
+  const pierced = m.Manifold.difference(solid, holeUnion);
+  solid.delete();
+  holeUnion.delete();
+  return pierced;
+}
+
+/**
+ * Build a label insert: a flat plate with end tabs (resting on z = 0,
+ * centred on the origin, ready to print) with the label face inlaid flush
+ * into its top as a separate solid, so the face prints in a second filament.
+ * An empty spec yields a blank insert with a null label. The caller owns
+ * both manifolds.
  */
 export function buildInsertSolids(
   m: ManifoldToplevel,
@@ -276,10 +389,7 @@ export function buildInsertSolids(
 ): InsertSolids {
   const length = insertLengthMm(cells);
   const eps = 0.01;
-  let body = m.Manifold.extrude(
-    [roundedRectPolygon(length, INSERT_DEPTH, INSERT_CORNER_RADIUS)],
-    INSERT_THICKNESS,
-  );
+  let body = buildInsertPlate(m, cells);
   if (!specHasLabel(spec)) {
     if (body.status() !== 'NoError') {
       throw new Error(`Insert generation produced an invalid solid: ${body.status()}`);
@@ -287,10 +397,12 @@ export function buildInsertSolids(
     return { body, label: null };
   }
 
+  // The label lays out on the plate between the tabs, so the inlay never
+  // reaches the tab region or the push-out holes.
   const parts = layoutLabelFace(
     font,
     spec,
-    length - 2 * LABEL_MARGIN,
+    length - 2 * INSERT_TAB_LENGTH - 2 * LABEL_MARGIN,
     INSERT_DEPTH - 2 * SHELF_DEPTH_MARGIN,
   ).map((part) => boldenText(m, part));
   const pocketTop = INSERT_THICKNESS - INSERT_INLAY_DEPTH;
