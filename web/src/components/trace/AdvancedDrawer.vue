@@ -3,12 +3,10 @@ import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { CLEARANCE_CHOICES, useToolTrace } from '../../stores/toolTrace';
-import { useCustomIcons } from '../../stores/customIcons';
-import { LABEL_ICONS } from '../../engine/label/icons';
 import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import type { FingerHole } from '../../engine/trace/types';
-import IconPicker from '../IconPicker.vue';
+import LabelIconField from '../LabelIconField.vue';
 import MoreOptions from '../MoreOptions.vue';
 
 /**
@@ -33,7 +31,6 @@ const emit = defineEmits<{
 
 const designer = useBinDesigner();
 const trace = useToolTrace();
-const customIcons = useCustomIcons();
 
 const { labelText, labelIcon, heightUnits } = storeToRefs(designer);
 const {
@@ -121,17 +118,6 @@ function toolSummary(rotationDeg: number, offsetMm: number): string {
   return `${rotationDeg} deg, ${offsetMm} mm clearance`;
 }
 
-/** The current label icon's drawable shape, from the shared icon sources. */
-const currentIcon = computed(() => {
-  if (labelIcon.value === null) return null;
-  return (
-    LABEL_ICONS.find((icon) => icon.name === labelIcon.value) ??
-    customIcons.iconByName(labelIcon.value) ??
-    null
-  );
-});
-
-const iconMenuOpen = ref(false);
 </script>
 
 <template>
@@ -365,37 +351,7 @@ const iconMenuOpen = ref(false);
         class="mt-2"
         @update:model-value="applyDefaultDepth(Number($event))"
       />
-      <v-text-field
-        v-model="labelText"
-        label="Label"
-        placeholder="What's inside?"
-        density="comfortable"
-        class="mt-2"
-        hint="Embossed on the label shelf; long text shrinks to fit."
-      />
-      <div class="text-caption text-medium-emphasis mt-2 mb-1">Label icon</div>
-      <v-menu v-model="iconMenuOpen" :close-on-content-click="false" location="bottom start">
-        <template #activator="{ props: menuProps }">
-          <v-btn variant="outlined" size="small" class="icon-thumb" v-bind="menuProps">
-            <svg
-              v-if="currentIcon !== null"
-              width="24"
-              height="24"
-              :viewBox="currentIcon.viewBox.join(' ')"
-              aria-hidden="true"
-            >
-              <path :d="currentIcon.path" fill="currentColor" fill-rule="evenodd" />
-            </svg>
-            <v-icon v-else icon="mdi-close" size="18" />
-            <v-tooltip activator="parent" location="bottom">
-              {{ currentIcon !== null ? currentIcon.name : 'No icon' }}; press to pick another.
-            </v-tooltip>
-          </v-btn>
-        </template>
-        <v-card class="pa-3 icon-menu">
-          <IconPicker v-model="labelIcon" />
-        </v-card>
-      </v-menu>
+      <LabelIconField v-model:text="labelText" v-model:icon="labelIcon" class="mt-2" />
       <MoreOptions
         per-bin-fields
         hide-dividers
@@ -459,14 +415,4 @@ const iconMenuOpen = ref(false);
   padding: 0 8px;
 }
 
-.icon-thumb {
-  min-width: 40px;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-}
-
-.icon-menu {
-  max-width: 380px;
-}
 </style>

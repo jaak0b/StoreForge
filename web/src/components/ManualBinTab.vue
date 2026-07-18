@@ -7,7 +7,7 @@ import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import BinViewport from './BinViewport.vue';
-import IconPicker from './IconPicker.vue';
+import LabelIconField from './LabelIconField.vue';
 import MoreOptions from './MoreOptions.vue';
 
 /**
@@ -154,16 +154,7 @@ const { meshes, errorMessage } = useBinPreview(() => store.params);
           hide-details
         />
       </div>
-      <v-text-field
-        v-model="labelText"
-        label="Label"
-        placeholder="What's inside?"
-        density="comfortable"
-        class="mt-4"
-        hint="Embossed on the label shelf; long text shrinks to fit."
-      />
-      <div class="text-caption text-medium-emphasis mt-2 mb-1">Label icon</div>
-      <IconPicker v-model="labelIcon" />
+      <LabelIconField v-model:text="labelText" v-model:icon="labelIcon" class="mt-4" />
 
       <MoreOptions per-bin-fields :quantity="quantity" @update:quantity="quantity = $event" />
 
