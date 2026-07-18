@@ -32,7 +32,12 @@ export const PAPER_SIZES: Record<PaperKind, { shortMm: number; longMm: number }>
  */
 export const RECTIFIED_PX_PER_MM = 4;
 
-/** A sheet candidate must cover at least this fraction of the photo. */
+/**
+ * A sheet candidate must cover at least this fraction of the photo. A sheet
+ * under a fifth of the frame is too small to pick corners from reliably; this
+ * is a plausibility gate for auto-detection only, not a scale calibration.
+ * The user can still adjust the corners by hand after detection.
+ */
 const MIN_AREA_FRACTION = 0.2;
 
 /** Physical width and height in mm for a sheet in the given orientation. */
@@ -87,6 +92,8 @@ export function detectPaper(cv: Cv, mat: CvMat): PaperDetectionResult {
   const imageArea = mat.rows * mat.cols;
   let best: { corners: PaperCorners; area: number; rectangularity: number } | null = null;
   try {
+    // 5x5 is the conventional pre-threshold denoise kernel of the OpenCV
+    // squares.cpp document-scanner recipe this function follows.
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
     // Otsu picks the split between the bright sheet and the darker background
     // globally; the sheet then comes out as one large filled component.
@@ -101,6 +108,9 @@ export function detectPaper(cv: Cv, mat: CvMat): PaperDetectionResult {
           continue;
         }
         const perimeter = cv.arcLength(contour, true);
+        // 0.02 * perimeter is the epsilon used by OpenCV's squares.cpp
+        // sample, the standard recipe for reducing a document contour to a
+        // quadrilateral.
         cv.approxPolyDP(contour, approx, 0.02 * perimeter, true);
         if (approx.rows !== 4 || !cv.isContourConvex(approx)) {
           continue;
@@ -138,8 +148,15 @@ export function detectPaper(cv: Cv, mat: CvMat): PaperDetectionResult {
         'No paper sheet was found in the photo. Make sure the whole sheet is visible and clearly brighter than the surface it lies on, then try again or place the corners by hand.',
     };
   }
-  // How much of the frame the sheet fills (saturating at half the frame) and
-  // how close the contour is to a true quadrilateral both raise confidence.
+  // This confidence figure is a UI-only advisory heuristic, not a
+  // measurement: it does not feed the mm scale, which comes solely from the
+  // paper standard's known size and the corner homography, and the corners
+  // are always user-confirmed regardless of this score. Area fraction
+  // (saturating at half the frame, an arbitrary display choice picked so a
+  // sheet filling most of the photo reads as confident, not a fitted
+  // constant) and rectangularity (closeness to a true quadrilateral)
+  // combine into a rough 0..1 signal for how trustworthy the auto-detected
+  // corners look.
   const areaScore = Math.min(1, best.area / imageArea / 0.5);
   return { ok: true, corners: best.corners, confidence: areaScore * best.rectangularity };
 }

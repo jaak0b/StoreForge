@@ -96,6 +96,15 @@ Numbered for unambiguous reference; do not cite rule numbers in shipped source o
 11. **Subagent discipline.** Give every subagent a correct, specific title; never run more than 1 Fable
     agent at a time (hard budget limit). Sonnet is fine for parallel design/research work.
 
+12. **Measurement integrity: established methods only, never a fudge.** Every change to the measurement
+    pipeline (sheet/corner detection, perspective rectification and mm scale, segmentation
+    post-processing, contour extraction/simplification, outline offsetting and fitting math) must be an
+    established, published algorithm or a standard library primitive (OpenCV.js, manifold-3d), chosen
+    because it is the correct model for the problem, and named as such (e.g. "Otsu threshold",
+    "Douglas-Peucker simplification", "Circle Hough Transform"). NEVER introduce a hand-tuned constant,
+    empirical offset, axis "nudge", or bias correction fitted to make one particular scan's numbers look
+    right: that overfits the sample and lies on the next one.
+
 **Verification bar.** `npm run build` plus `npm test` green inside `web/` (CI runs the same on push).
 Manual browser checks only when the owner asks; exported 3MF must be verified in Orca Slicer by the owner
 before the export format is considered proven.

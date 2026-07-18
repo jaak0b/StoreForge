@@ -370,6 +370,10 @@ export function buildPocketBinSolids(
 
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const solidTop = params.stackingLip ? bodyTop + LIP_HEIGHT : bodyTop;
+  // Overlap used to avoid coincident-face gaps in the CSG union/subtraction
+  // below. It only extends cuts past free surfaces or fill into material it
+  // unions with; it never alters a finished dimension, since the extra 0.01
+  // mm is always consumed inside a face that gets cut away or welded over.
   const eps = 0.01;
 
   const cutters: Manifold[] = [];

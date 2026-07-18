@@ -88,6 +88,10 @@ export function maskToContour(
   const epsilonPx = toleranceMm / mmPerPixel;
   const minHoleAreaPx = minHoleAreaMm2 / (mmPerPixel * mmPerPixel);
 
+  // 3x3 is the minimal ellipse kernel: at the mask's working resolution
+  // (RECTIFIED_PX_PER_MM = 4 px/mm) its radius reaches about 0.75 mm, enough
+  // to remove single-pixel speckle without rounding off real tool corners
+  // that a larger kernel would erode.
   const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
   const clean = new cv.Mat();
   const contours = new cv.MatVector();

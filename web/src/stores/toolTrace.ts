@@ -17,7 +17,11 @@ import { boundsOf } from '../engine/trace/edit';
  */
 export const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
 
-/** Clear interior kept around the pockets when the bin footprint is auto-sized. */
+/**
+ * Clear interior kept around the pockets when the bin footprint is
+ * auto-sized: the gap between the pocket outline and the bin wall so the
+ * wall line does not touch the pocket edge.
+ */
 export const AUTO_SIZE_MARGIN_MM = 2;
 
 /**
@@ -77,7 +81,11 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const gridY = ref(1);
   /** True when the user typed a footprint; auto sizing stops updating it. */
   const gridManual = ref(false);
-  /** Pocket depth applied to newly placed tools, in mm. */
+  /**
+   * Pocket depth applied to newly placed tools, in mm. 20 mm fits most hand
+   * tool bodies (pliers, wrenches, screwdriver heads) while leaving grip
+   * above the pocket for lifting the tool out.
+   */
   const defaultDepthMm = ref(20);
 
   let toolCounter = 0;
@@ -106,6 +114,8 @@ export const useToolTrace = defineStore('toolTrace', () => {
       outline: recentred(outline),
       clicks,
       rotationDeg: 0,
+      // 0.5 mm is a typical FDM XY fit clearance: enough to slide the tool
+      // into the pocket snugly without binding on printer dimensional error.
       offsetMm: 0.5,
       mirrored: false,
       fingerHoles: [],
