@@ -67,13 +67,16 @@ const menuOpen = ref(false);
 </template>
 
 <style scoped>
-/* Matches the height of the comfortable-density text field beside it. */
+/*
+ * Matches the 48 px input box of the comfortable-density text field beside
+ * it; with the row aligned to flex-start both boxes share the same top and
+ * centre while the field's message area hangs below.
+ */
 .icon-thumb {
   min-width: 48px;
   width: 48px;
   height: 48px;
   padding: 0;
-  margin-top: 4px;
 }
 
 .icon-menu {
