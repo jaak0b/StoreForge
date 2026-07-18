@@ -210,7 +210,7 @@ export function writePlate3mf(items: PlateItem[]): Uint8Array {
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
     `<model unit="millimeter" xml:lang="en-US" xmlns="${MODEL_NAMESPACE}" ` +
     `xmlns:p="${PRODUCTION_NAMESPACE}" requiredextensions="p">` +
-    '<metadata name="Application">GridfinityGenerator</metadata>' +
+    '<metadata name="Application">StoreForge</metadata>' +
     '<metadata name="BambuStudio:3mfVersion">1</metadata>' +
     `<resources>${objectsXml.join('')}</resources>` +
     `<build p:UUID="${counterUuid(uuidCounter++)}">${buildItemsXml.join('')}</build>` +

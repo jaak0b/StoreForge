@@ -5,7 +5,7 @@ import {
   serializeCustomIconFile,
 } from '../engine/label/customIconFile';
 
-const STORAGE_KEY = 'gridfinity-generator.custom-icons';
+const STORAGE_KEY = 'storeforge.custom-icons';
 
 function loadIcons(): CustomIcon[] {
   let text: string | null = null;

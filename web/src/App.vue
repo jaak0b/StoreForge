@@ -86,7 +86,7 @@ function finishImport(mode: 'merge' | 'replace'): void {
 <template>
   <v-app>
     <v-app-bar color="primary" density="comfortable">
-      <v-app-bar-title>Gridfinity Planner</v-app-bar-title>
+      <v-app-bar-title>StoreForge</v-app-bar-title>
       <v-btn variant="text" prepend-icon="mdi-upload" @click="openImportPicker">
         Import backup
       </v-btn>

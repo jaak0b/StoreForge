@@ -10,7 +10,7 @@
  * lives in engine/plan/traceSources.ts and is tested with a fake store.
  */
 
-const DB_NAME = 'gridfinity-generator';
+const DB_NAME = 'storeforge';
 const DB_VERSION = 1;
 const PHOTO_STORE = 'photos';
 

@@ -20,7 +20,7 @@ import {
 import { sweepOrphanTracePhotos } from '../engine/plan/traceSources';
 import { deletePhoto, listPhotoIds } from '../photoStore';
 
-const STORAGE_KEY = 'gridfinity-generator.plan';
+const STORAGE_KEY = 'storeforge.plan';
 
 function loadPlan(): { entries: QueueEntry[]; batches: PrintBatch[] } {
   let text: string | null = null;
