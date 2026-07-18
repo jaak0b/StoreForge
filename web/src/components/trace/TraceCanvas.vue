@@ -205,8 +205,8 @@ function acceptTool(): void {
       <v-progress-circular v-if="segmenting" indeterminate size="20" width="2" />
     </div>
     <div v-if="iouScore !== null" class="text-caption text-medium-emphasis mt-2 readout">
-      <div><span>Mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
-      <div><span>Decode time</span><span>{{ decodeMs!.toFixed(0) }} ms</span></div>
+      <div><span>Lowest mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
+      <div><span>Total decode time</span><span>{{ decodeMs!.toFixed(0) }} ms</span></div>
     </div>
     <v-alert v-if="errorMessage" type="error" density="compact" class="mt-2">
       {{ errorMessage }}

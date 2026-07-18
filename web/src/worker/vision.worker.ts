@@ -16,6 +16,9 @@ import {
   prepareEncoderInput,
 } from '../engine/trace/sam';
 import { maskToContours } from '../engine/trace/contour';
+import { pointInPolygon } from '../engine/trace/edit';
+import { partitionClicks } from '../engine/trace/prompts';
+import type { CvMat } from '../engine/trace/paper';
 import type {
   PaperCalibration,
   PaperCorners,
@@ -121,11 +124,11 @@ export type SegmentResult =
        * (or nearest) the first include click comes first.
        */
       outlines: TracedOutline[];
-      /** The decoder's own quality estimate for the chosen mask, 0..1. */
+      /** The lowest per-decode quality estimate across all decodes, 0..1. */
       iouScore: number;
-      /** Decoder plus post-processing wall time in milliseconds. */
+      /** Wall time over all decodes plus post-processing, in milliseconds. */
       decodeMs: number;
-      /** The chosen mask at rectified resolution, for drawing as a UI overlay. */
+      /** All decode masks composited at rectified resolution, for a UI overlay. */
       maskPreview: ImageData;
     }
   | { ok: false; error: string };
@@ -241,8 +244,22 @@ const api = {
 
   /**
    * Segment the rectified sheet at the given click prompts (rectified-image
-   * pixels) and return the traced outline in sheet millimeters plus a mask
+   * pixels) and return the traced outlines in sheet millimeters plus a mask
    * overlay for the UI.
+   *
+   * SAM's point prompts describe a single object per decode, so the clicks
+   * are partitioned into one prompt group per include click (excludes join
+   * their nearest include) and decoded sequentially against the one cached
+   * embedding. Each decode keeps only the click-gated component, so a mask
+   * bleeding onto a visually similar unclicked tool never surfaces as a
+   * tool. An include click landing inside an already-traced outline is a
+   * refinement of that tool: its group is merged into that decode's points
+   * and the merged prompt is decoded again, replacing the earlier outline
+   * instead of adding a duplicate.
+   *
+   * Diagnostics: iouScore is the lowest per-decode estimate (the weakest
+   * mask bounds the result's quality) and decodeMs is the wall time over
+   * all decodes including post-processing.
    */
   async segmentAt(points: SamPoint[]): Promise<SegmentResult> {
     if (!embedding || !rectified || !rectifiedCalibration) {
@@ -252,46 +269,96 @@ const api = {
           'The sheet image has not been prepared for segmentation yet. Wait for the preparation step to finish, then click the tool again.',
       };
     }
-    const includePoint = points.find((point) => point.label === 1);
-    if (!includePoint) {
+    const groups = partitionClicks(points);
+    if (groups.length === 0) {
       return {
         ok: false,
         error: 'Click on the tool itself first; exclude clicks alone cannot select a shape.',
       };
     }
     const [cv, decoder] = await Promise.all([loadOpenCv(), loadDecoder()]);
-    const prompt = buildDecoderPrompt(points, embedding.scale);
+    const cached = embedding;
+    const sheet = rectified;
+    const mmPerPixel = rectifiedCalibration.mmPerPixel;
+    const maskWidth = sheet.cols;
+    const maskHeight = sheet.rows;
     const start = performance.now();
-    const outputs = await decoder.run({
-      image_embeddings: embedding.tensor,
-      point_coords: new ort.Tensor('float32', prompt.coords, [1, prompt.pointCount, 2]),
-      point_labels: new ort.Tensor('float32', prompt.labels, [1, prompt.pointCount]),
-      mask_input: new ort.Tensor('float32', new Float32Array(256 * 256), [1, 1, 256, 256]),
-      has_mask_input: new ort.Tensor('float32', new Float32Array([0]), [1]),
-      orig_im_size: new ort.Tensor(
-        'float32',
-        new Float32Array([rectified.rows, rectified.cols]),
-        [2],
-      ),
-    });
-    const iou = (outputs.iou_predictions as ort.Tensor).data as Float32Array;
-    const maskIndex = bestMaskIndex(iou);
-    const maskWidth = rectified.cols;
-    const maskHeight = rectified.rows;
-    const maskMat = lowResMaskToMat(
-      cv,
-      (outputs.low_res_masks as ort.Tensor).data as Float32Array,
-      maskIndex,
-      { width: embedding.encoderWidth, height: embedding.encoderHeight },
-      maskWidth,
-      maskHeight,
-    );
-    try {
-      const outlines = maskToContours(cv, maskMat, {
-        mmPerPixel: rectifiedCalibration.mmPerPixel,
-        includePoint,
+
+    const decodeOnce = async (
+      promptPoints: SamPoint[],
+    ): Promise<{ maskMat: CvMat; iouScore: number }> => {
+      const prompt = buildDecoderPrompt(promptPoints, cached.scale);
+      const outputs = await decoder.run({
+        image_embeddings: cached.tensor,
+        point_coords: new ort.Tensor('float32', prompt.coords, [1, prompt.pointCount, 2]),
+        point_labels: new ort.Tensor('float32', prompt.labels, [1, prompt.pointCount]),
+        mask_input: new ort.Tensor('float32', new Float32Array(256 * 256), [1, 1, 256, 256]),
+        has_mask_input: new ort.Tensor('float32', new Float32Array([0]), [1]),
+        orig_im_size: new ort.Tensor(
+          'float32',
+          new Float32Array([sheet.rows, sheet.cols]),
+          [2],
+        ),
       });
-      if (outlines.length === 0) {
+      const iou = (outputs.iou_predictions as ort.Tensor).data as Float32Array;
+      const maskIndex = bestMaskIndex(iou);
+      const maskMat = lowResMaskToMat(
+        cv,
+        (outputs.low_res_masks as ort.Tensor).data as Float32Array,
+        maskIndex,
+        { width: cached.encoderWidth, height: cached.encoderHeight },
+        maskWidth,
+        maskHeight,
+      );
+      return { maskMat, iouScore: iou[maskIndex] };
+    };
+
+    /** One traced tool: its prompt points, gated outline, and decode mask. */
+    interface TracedEntry {
+      includes: SamPoint[];
+      excludes: SamPoint[];
+      outline: TracedOutline;
+      iouScore: number;
+      mask: CvMat;
+    }
+    const entries: TracedEntry[] = [];
+    try {
+      for (const group of groups) {
+        // A later include click inside an existing outline refines that
+        // tool rather than starting a new one.
+        const target = entries.find((entry) =>
+          pointInPolygon(entry.outline.outer, {
+            x: group.include.x * mmPerPixel,
+            y: group.include.y * mmPerPixel,
+          }),
+        );
+        const includes = target ? [...target.includes, group.include] : [group.include];
+        const excludes = target
+          ? [...target.excludes, ...group.excludes]
+          : [...group.excludes];
+        const { maskMat, iouScore } = await decodeOnce([...includes, ...excludes]);
+        // The first outline is the component containing (or nearest) this
+        // decode's primary include click; bleed components are discarded.
+        const outline = maskToContours(cv, maskMat, {
+          mmPerPixel,
+          includePoint: includes[0],
+        })[0];
+        if (outline === undefined) {
+          maskMat.delete();
+          continue;
+        }
+        if (target) {
+          target.mask.delete();
+          target.includes = includes;
+          target.excludes = excludes;
+          target.outline = outline;
+          target.iouScore = iouScore;
+          target.mask = maskMat;
+        } else {
+          entries.push({ includes, excludes, outline, iouScore, mask: maskMat });
+        }
+      }
+      if (entries.length === 0) {
         return {
           ok: false,
           error:
@@ -299,19 +366,29 @@ const api = {
         };
       }
       const maskPreview = new ImageData(maskWidth, maskHeight);
-      const mask = maskMat.data;
-      for (let i = 0; i < maskWidth * maskHeight; i += 1) {
-        if (mask[i]) {
-          maskPreview.data.set(MASK_OVERLAY_RGBA, i * 4);
+      for (const entry of entries) {
+        const mask = entry.mask.data;
+        for (let i = 0; i < maskWidth * maskHeight; i += 1) {
+          if (mask[i]) {
+            maskPreview.data.set(MASK_OVERLAY_RGBA, i * 4);
+          }
         }
       }
       const decodeMs = performance.now() - start;
       return Comlink.transfer(
-        { ok: true, outlines, iouScore: iou[maskIndex], decodeMs, maskPreview },
+        {
+          ok: true,
+          outlines: entries.map((entry) => entry.outline),
+          iouScore: Math.min(...entries.map((entry) => entry.iouScore)),
+          decodeMs,
+          maskPreview,
+        },
         [maskPreview.data.buffer],
       );
     } finally {
-      maskMat.delete();
+      for (const entry of entries) {
+        entry.mask.delete();
+      }
     }
   },
 
