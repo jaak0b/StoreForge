@@ -1,4 +1,4 @@
-import type { BinEntry, PrintBatch } from './types';
+import { binOf, type PrintBatch, type Product, type QueueEntry } from './types';
 
 /**
  * Garbage collection of stored trace photos. The photos themselves live in an
@@ -21,19 +21,19 @@ export interface PhotoStoreLike {
  * item. A photo not in this set belongs to no plan row and can be deleted.
  */
 export function referencedTraceSourceIds(
-  entries: BinEntry[],
+  entries: QueueEntry[],
   batches: PrintBatch[],
 ): Set<string> {
   const ids = new Set<string>();
-  for (const entry of entries) {
-    if (entry.kind === 'traced' && entry.traceSourceId !== undefined) {
-      ids.add(entry.traceSourceId);
+  const addProduct = (product: Product): void => {
+    const bin = binOf(product);
+    if (bin !== null && bin.origin === 'traced' && bin.traceSourceId !== undefined) {
+      ids.add(bin.traceSourceId);
     }
-  }
+  };
+  for (const entry of entries) addProduct(entry.product);
   for (const batch of batches) {
-    for (const item of batch.items) {
-      if (item.traceSourceId !== undefined) ids.add(item.traceSourceId);
-    }
+    for (const item of batch.items) addProduct(item.product);
   }
   return ids;
 }
@@ -45,7 +45,7 @@ export function referencedTraceSourceIds(
  */
 export async function sweepOrphanTracePhotos(
   store: PhotoStoreLike,
-  entries: BinEntry[],
+  entries: QueueEntry[],
   batches: PrintBatch[],
 ): Promise<string[]> {
   const referenced = referencedTraceSourceIds(entries, batches);

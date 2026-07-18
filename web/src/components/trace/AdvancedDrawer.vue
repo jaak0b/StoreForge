@@ -7,7 +7,7 @@ import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import type { FingerHole } from '../../engine/trace/types';
 import LabelIconField from '../LabelIconField.vue';
-import LabelModeSelect from '../LabelModeSelect.vue';
+import ProductSelect from '../ProductSelect.vue';
 import MoreOptions from '../MoreOptions.vue';
 
 /**
@@ -33,7 +33,7 @@ const emit = defineEmits<{
 const designer = useBinDesigner();
 const trace = useToolTrace();
 
-const { labelText, labelIcon, labelMode, heightUnits } = storeToRefs(designer);
+const { labelText, labelIcon, productChoice, heightUnits } = storeToRefs(designer);
 const {
   tools,
   selectedToolId,
@@ -352,8 +352,13 @@ function toolSummary(rotationDeg: number, offsetMm: number): string {
         class="mt-2"
         @update:model-value="applyDefaultDepth(Number($event))"
       />
-      <LabelIconField v-model:text="labelText" v-model:icon="labelIcon" class="mt-2" />
-      <LabelModeSelect v-model="labelMode" class="mt-2" />
+      <LabelIconField
+        v-if="productChoice === 'binWithInsert'"
+        v-model:text="labelText"
+        v-model:icon="labelIcon"
+        class="mt-2"
+      />
+      <ProductSelect v-model="productChoice" hide-insert-only class="mt-2" />
       <MoreOptions
         per-bin-fields
         hide-dividers

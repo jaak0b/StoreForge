@@ -3,10 +3,8 @@ import type { Manifold, ManifoldToplevel, SimplePolygon } from 'manifold-3d';
 import { textToPolygons } from './textToPolygons';
 import { svgPathToPolygons } from './svgPath';
 import type { LabelIcon } from './icons';
-import { extrudeLabel } from './extrude';
 import type { LabelFillRule } from './extrude';
 import {
-  binInteriorSizeMm,
   binOuterSizeMm,
   HEIGHT_UNIT,
   OUTER_CORNER_RADIUS,
@@ -16,30 +14,14 @@ import { roundedRectPolygon } from '../gridfinity/binGenerator';
 import type { BinParams } from '../gridfinity/types';
 
 /**
- * Label-shelf placement. A flat plate spans the top front edge of the bin
- * interior, its top face flush with the nominal bin top (below the stacking
- * lip), and the label (icon left, text right) is embossed on that face so it
- * reads from above when the bin sits in a drawer. Structured as one placement
- * flavour so another placement can be added as a sibling module later.
+ * Label face layout and the shared shelf structure. The label face (icon
+ * left, text right) is laid out here and inlaid into the swappable label
+ * insert (see ./slot.ts); the plate-and-ribs shelf structure below carries
+ * the insert channel floor along the bin's interior front wall.
  */
-
-/**
- * How deep the shelf reaches into the bin from the interior front wall, in
- * millimetres. This matches the common flat label-shelf designs in the
- * Gridfinity ecosystem; kennetek/gridfinity-rebuilt-openscad's label tab is a
- * different, angled design (15.85 mm deep at a 36-degree support angle), so
- * its figure is not applicable here.
- */
-export const SHELF_DEPTH = 12;
 
 /** Thickness of the flat shelf plate, matching the bin wall thickness. */
 export const SHELF_THICKNESS = WALL_THICKNESS;
-
-/** How far the embossed label stands proud of the shelf top face. */
-export const EMBOSS_HEIGHT = 0.6;
-
-/** How far the label extends into the shelf so the two solids are welded. */
-export const EMBOSS_WELD_DEPTH = 0.4;
 
 /** Cap height of the label text at full size, in millimetres. */
 export const LABEL_TEXT_HEIGHT = 6;
@@ -268,31 +250,19 @@ export function shelfRibCount(spanWidth: number): number {
 }
 
 /**
- * Build the label shelf: a flat plate along the interior front wall, full
- * interior width, SHELF_DEPTH deep, its top face flush with the nominal bin
- * top. Instead of a solid support wedge under the full plate, the plate rests
- * on evenly spaced triangular gussets (our own design, not taken from any
- * reference implementation): each rib keeps the 45-degree profile from the
- * plate's inner bottom edge down to the front wall, so ribs and plate still
- * print without supports, and the plate top bridges the short spans between
- * ribs. A rib sits flush at each end so the plate is anchored at the side
- * walls. The profile reaches into the front wall so unioning it with the bin
- * body welds them, and the solid is clipped to the bin's rounded outer
- * outline so it also welds to the side walls without protruding outside the
- * bin.
- */
-export function buildLabelShelf(m: ManifoldToplevel, params: BinParams): Manifold {
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  return buildShelfStructure(m, params, bodyTop, SHELF_DEPTH);
-}
-
-/**
  * The shared plate-and-ribs shelf structure: a flat plate along the interior
  * front wall, full interior width, the given depth, with its top face at the
- * given height, resting on the triangular support ribs described above.
- * buildLabelShelf places it flush with the nominal bin top for the embossed
- * label; the slot shelf (see ../label/slot.ts) places it one slot height
- * lower as the floor of the insert channel.
+ * given height. Instead of a solid support wedge under the full plate, the
+ * plate rests on evenly spaced triangular gussets (our own design, not taken
+ * from any reference implementation): each rib keeps the 45-degree profile
+ * from the plate's inner bottom edge down to the front wall, so ribs and
+ * plate print without supports, and the plate top bridges the short spans
+ * between ribs. A rib sits flush at each end so the plate is anchored at the
+ * side walls. The profile reaches into the front wall so unioning it with
+ * the bin body welds them, and the solid is clipped to the bin's rounded
+ * outer outline so it also welds to the side walls without protruding
+ * outside the bin. The slot shelf (see ./slot.ts) places it one slot height
+ * below the nominal bin top as the floor of the insert channel.
  */
 export function buildShelfStructure(
   m: ManifoldToplevel,
@@ -368,48 +338,3 @@ export function buildShelfStructure(
   return shelf;
 }
 
-/**
- * Build the label solid embossed on the shelf's top face. The face lies flat
- * (readable from above, right-side-up when viewed from the bin front), stands
- * EMBOSS_HEIGHT proud of the shelf and reaches EMBOSS_WELD_DEPTH into it, so
- * unioning it with the bin body welds them. Returns null when the spec is
- * empty.
- */
-export function buildLabelManifold(
-  m: ManifoldToplevel,
-  font: Font,
-  params: BinParams,
-  spec: LabelSpec,
-): Manifold | null {
-  if (!specHasLabel(spec)) return null;
-
-  const outerDepth = binOuterSizeMm(params.gridY);
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  const interiorWidth = binInteriorSizeMm(params.gridX);
-
-  // Reserve TEXT_BOLD_OFFSET on every side of the fit box: boldenText grows
-  // text outlines by that much after layout, so shrinking the target here
-  // keeps the bolded result within LABEL_MARGIN / SHELF_DEPTH_MARGIN.
-  const parts = layoutLabelFace(
-    font,
-    spec,
-    interiorWidth - 2 * LABEL_MARGIN - 2 * TEXT_BOLD_OFFSET,
-    SHELF_DEPTH - 2 * SHELF_DEPTH_MARGIN - 2 * TEXT_BOLD_OFFSET,
-  ).map((part) => boldenText(m, part));
-  const depth = EMBOSS_HEIGHT + EMBOSS_WELD_DEPTH;
-  const solids = parts.map((part) => extrudeLabel(m, part.polygons, depth, part.fillRule));
-  const flat = solids.length === 1 ? solids[0] : m.Manifold.union(solids);
-  if (solids.length > 1) {
-    for (const solid of solids) solid.delete();
-  }
-  // The face is extruded along +Z and already reads correctly from the bin
-  // front (baseline parallel to the front wall); move it onto the middle of
-  // the shelf, sunk EMBOSS_WELD_DEPTH into the plate.
-  const shelfCentreY = -outerDepth / 2 + WALL_THICKNESS + SHELF_DEPTH / 2;
-  const label = flat.translate(0, shelfCentreY, bodyTop - EMBOSS_WELD_DEPTH);
-  flat.delete();
-  if (label.status() !== 'NoError') {
-    throw new Error(`Label placement produced an invalid solid: ${label.status()}`);
-  }
-  return label;
-}

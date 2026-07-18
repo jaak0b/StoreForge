@@ -1,15 +1,25 @@
 import { defineStore } from 'pinia';
-import type { LabeledBinParams, LabelMode } from '../engine/gridfinity/types';
+import type { InsertContentParams, SlottedBinParams } from '../engine/gridfinity/types';
+import type { LabelContent } from '../engine/plan/types';
 
-/** Parameters of the bin currently being designed, plus notes (not part of
- * the bin geometry, but shared across the Manual bin and Screw entry tabs'
- * More options disclosure so the value persists across tab switches). */
+/**
+ * What a designer form produces: a bin with an empty slot, a bin plus its
+ * matching label insert, or a standalone insert for a bin that already
+ * exists. Mirrors the plan layer's Product kinds; the tab that saves the
+ * entry adds its own origin.
+ */
+export type ProductChoice = 'bin' | 'binWithInsert' | 'insert';
+
+/**
+ * Parameters of the product currently being designed, plus notes (not part
+ * of the geometry, but shared across the Manual bin and Screw entry tabs'
+ * More options disclosure so the value persists across tab switches). For an
+ * insert-only design, gridX doubles as the insert's width in cells; the
+ * other bin fields are simply unused.
+ */
 export const useBinDesigner = defineStore('binDesigner', {
-  state: (): LabeledBinParams & {
-    labelMode: LabelMode;
-    notes: string;
-    moreOptionsOpen: boolean;
-  } => ({
+  state: () => ({
+    productChoice: 'binWithInsert' as ProductChoice,
     gridX: 1,
     gridY: 1,
     heightUnits: 6,
@@ -19,13 +29,28 @@ export const useBinDesigner = defineStore('binDesigner', {
     dividerCountY: 0,
     labelText: '',
     labelText2: '',
-    labelIcon: null,
-    labelMode: 'embossed' as LabelMode,
+    labelIcon: null as string | null,
     notes: '',
     moreOptionsOpen: false,
   }),
   getters: {
-    params(state): LabeledBinParams {
+    /** The designed label content. */
+    content(state): LabelContent {
+      return {
+        text: state.labelText,
+        text2: state.labelText2,
+        icon: state.labelIcon,
+      };
+    },
+    /**
+     * The geometry parameters of the designed bin, with the insert content
+     * riding along for the preview when the product includes the insert.
+     */
+    binParams(state): SlottedBinParams {
+      const insert: InsertContentParams | null =
+        state.productChoice === 'binWithInsert'
+          ? { text: state.labelText, text2: state.labelText2, icon: state.labelIcon }
+          : null;
       return {
         gridX: state.gridX,
         gridY: state.gridY,
@@ -34,10 +59,7 @@ export const useBinDesigner = defineStore('binDesigner', {
         magnetHoles: state.magnetHoles,
         dividerCountX: state.dividerCountX,
         dividerCountY: state.dividerCountY,
-        labelText: state.labelText,
-        labelText2: state.labelText2,
-        labelIcon: state.labelIcon,
-        labelMode: state.labelMode,
+        insert,
       };
     },
   },

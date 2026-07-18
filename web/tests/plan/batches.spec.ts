@@ -1,24 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
-  binParamsKey,
   confirmBatchItem,
   createBatch,
   failBatchItem,
-  snapshotParams,
+  productKey,
+  snapshotProduct,
 } from '../../src/engine/plan/batches';
 import type {
-  BinEntry,
   BinPockets,
   ManualBin,
+  Product,
   PrintBatch,
+  QueueEntry,
   ScrewBin,
   TracedBin,
 } from '../../src/engine/plan/types';
 
-function entry(overrides: Partial<ManualBin> = {}): ManualBin {
+function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
-    id: 'a1',
-    kind: 'manual',
+    origin: 'manual',
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
@@ -26,11 +26,16 @@ function entry(overrides: Partial<ManualBin> = {}): ManualBin {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    labelText: 'M3 bolts',
-    labelText2: '',
-    labelIcon: 'bolt',
+    ...overrides,
+  };
+}
+
+function entry(overrides: Partial<QueueEntry> = {}): QueueEntry {
+  return {
+    id: 'a1',
     quantity: 5,
     createdAt: '2026-07-01T10:00:00.000Z',
+    product: { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M3 bolts', text2: '', icon: 'bolt' } },
     ...overrides,
   };
 }
@@ -40,7 +45,7 @@ function idFactory(prefix: string): () => string {
   return () => `${prefix}${++n}`;
 }
 
-function makeBatch(entries: BinEntry[], selections: { entryId: string; count: number }[]) {
+function makeBatch(entries: QueueEntry[], selections: { entryId: string; count: number }[]) {
   return createBatch(entries, selections, 'Plate 1', {
     batchId: 'batch1',
     itemId: idFactory('item'),
@@ -55,7 +60,7 @@ describe('createBatch', () => {
     expect(result.batch!.items).toEqual([
       {
         id: 'item1',
-        params: snapshotParams(entry()),
+        product: snapshotProduct(entry().product),
         count: 2,
         sourceEntryId: 'a1',
       },
@@ -81,7 +86,10 @@ describe('createBatch', () => {
   });
 
   it('leaves unselected entries untouched', () => {
-    const other = entry({ id: 'b2', labelText: 'M5 nuts' });
+    const other = entry({
+      id: 'b2',
+      product: { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M5 nuts', text2: '', icon: null } },
+    });
     const result = makeBatch([entry(), other], [{ entryId: 'a1', count: 1 }]);
     expect(result.entries).toEqual([entry({ quantity: 4 }), other]);
   });
@@ -90,7 +98,13 @@ describe('createBatch', () => {
 describe('confirmBatchItem', () => {
   const batch = (): PrintBatch =>
     makeBatch(
-      [entry(), entry({ id: 'b2', labelText: 'M5 nuts' })],
+      [
+        entry(),
+        entry({
+          id: 'b2',
+          product: { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M5 nuts', text2: '', icon: null } },
+        }),
+      ],
       [
         { entryId: 'a1', count: 3 },
         { entryId: 'b2', count: 2 },
@@ -166,12 +180,18 @@ describe('failBatchItem', () => {
     const created = makeBatch([entry()], [{ entryId: 'a1', count: 5 }]);
     // Queue is now empty; the batch still knows its bin design.
     expect(created.entries).toEqual([]);
-    expect(created.batch!.items[0].params).toEqual(snapshotParams(entry()));
+    expect(created.batch!.items[0].product).toEqual(snapshotProduct(entry().product));
   });
 
   it('keeps other items and leaves the batch open when one item fails', () => {
     const created = makeBatch(
-      [entry(), entry({ id: 'b2', labelText: 'M5 nuts' })],
+      [
+        entry(),
+        entry({
+          id: 'b2',
+          product: { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M5 nuts', text2: '', icon: null } },
+        }),
+      ],
       [
         { entryId: 'a1', count: 1 },
         { entryId: 'b2', count: 1 },
@@ -188,17 +208,22 @@ describe('failBatchItem', () => {
 });
 
 describe('screw snapshots in batches', () => {
-  function screwEntry(): ScrewBin {
-    return {
-      ...entry({ id: 'a1', labelText: 'M3 x 20' }),
-      kind: 'screw',
+  function screwEntry(): QueueEntry {
+    const screwBin: ScrewBin = {
+      ...manualBin(),
+      origin: 'screw',
       screw: { thread: 'M3', lengthMm: 20, head: 'countersunk screw', enteredLengthText: null },
     };
+    return entry({
+      id: 'a1',
+      product: { kind: 'binWithInsert', bin: screwBin, insert: { text: 'M3 x 20', text2: '', icon: null } },
+    });
   }
 
   it('snapshots the screw description into the batch item', () => {
     const result = makeBatch([screwEntry()], [{ entryId: 'a1', count: 2 }]);
-    expect(result.batch!.items[0].screw).toEqual(screwEntry().screw);
+    const bin = result.batch!.items[0].product.kind === 'binWithInsert' ? result.batch!.items[0].product.bin : null;
+    expect((bin as ScrewBin).screw).toEqual((screwEntry().product as { bin: ScrewBin }).bin.screw);
   });
 
   it('recreates a failed screw item as a screw entry', () => {
@@ -206,13 +231,15 @@ describe('screw snapshots in batches', () => {
     const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
     expect(failed.entries).toHaveLength(1);
     const recreated = failed.entries[0];
-    expect(recreated.kind).toBe('screw');
-    expect((recreated as ScrewBin).screw).toEqual(screwEntry().screw);
+    const bin = recreated.product.kind === 'binWithInsert' ? recreated.product.bin : null;
+    expect(bin!.origin).toBe('screw');
+    expect((bin as ScrewBin).screw).toEqual((screwEntry().product as { bin: ScrewBin }).bin.screw);
   });
 
   it('leaves the screw field off items from entries of other kinds', () => {
     const result = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]);
-    expect('screw' in result.batch!.items[0]).toBe(false);
+    const product = result.batch!.items[0].product;
+    expect(product.kind === 'binWithInsert' && 'screw' in product.bin).toBe(false);
   });
 });
 
@@ -242,26 +269,29 @@ describe('pockets in batches', () => {
     };
   }
 
-  function tracedEntry(): TracedBin {
-    const { dividerCountX, dividerCountY, kind, ...base } = entry();
+  function tracedEntry(): QueueEntry {
+    const { dividerCountX, dividerCountY, origin, ...base } = manualBin();
     void dividerCountX;
     void dividerCountY;
-    void kind;
-    return { ...base, kind: 'traced', pockets: pockets() };
+    void origin;
+    const tracedBin: TracedBin = { ...base, origin: 'traced', pockets: pockets() };
+    return entry({ id: 'a1', product: { kind: 'bin', bin: tracedBin } });
   }
 
   it('snapshots the pockets into the batch item without aliasing the entry', () => {
     const source = tracedEntry();
     const result = makeBatch([source], [{ entryId: 'a1', count: 2 }]);
     const item = result.batch!.items[0];
-    expect(item.pockets).toEqual(pockets());
-    item.pockets!.placements[0].xMm = 99;
-    expect(source.pockets.placements[0].xMm).toBe(0);
+    const bin = item.product.kind === 'bin' ? (item.product.bin as TracedBin) : null;
+    expect(bin!.pockets).toEqual(pockets());
+    bin!.pockets.placements[0].xMm = 99;
+    expect((source.product as { bin: TracedBin }).bin.pockets.placements[0].xMm).toBe(0);
   });
 
   it('leaves the pockets field off items from entries without pockets', () => {
     const result = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]);
-    expect('pockets' in result.batch!.items[0]).toBe(false);
+    const product = result.batch!.items[0].product;
+    expect(product.kind === 'binWithInsert' && 'pockets' in product.bin).toBe(false);
   });
 
   it('recreates a failed item as a traced entry that keeps its pockets', () => {
@@ -269,9 +299,10 @@ describe('pockets in batches', () => {
     const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
     const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
     expect(failed.entries).toHaveLength(1);
-    const recreated: BinEntry = failed.entries[0];
-    expect(recreated.kind).toBe('traced');
-    expect((recreated as TracedBin).pockets).toEqual(pockets());
+    const recreated = failed.entries[0];
+    const bin = recreated.product.kind === 'bin' ? (recreated.product.bin as TracedBin) : null;
+    expect(bin!.origin).toBe('traced');
+    expect(bin!.pockets).toEqual(pockets());
   });
 
   it('snapshots the trace source id and paper into the batch item without aliasing', () => {
@@ -284,13 +315,19 @@ describe('pockets in batches', () => {
       },
       kind: 'letter' as const,
     };
-    const source: TracedBin = { ...tracedEntry(), traceSourceId: 'photo-1', paper };
+    const base = tracedEntry();
+    const bin = (base.product as { bin: TracedBin }).bin;
+    const source: QueueEntry = {
+      ...base,
+      product: { kind: 'bin', bin: { ...bin, traceSourceId: 'photo-1', paper } },
+    };
     const result = makeBatch([source], [{ entryId: 'a1', count: 2 }]);
     const item = result.batch!.items[0];
-    expect(item.traceSourceId).toBe('photo-1');
-    expect(item.paper).toEqual(paper);
-    item.paper!.corners.tl.x = 99;
-    expect(source.paper!.corners.tl.x).toBe(1);
+    const itemBin = item.product.kind === 'bin' ? (item.product.bin as TracedBin) : null;
+    expect(itemBin!.traceSourceId).toBe('photo-1');
+    expect(itemBin!.paper).toEqual(paper);
+    itemBin!.paper!.corners.tl.x = 99;
+    expect((source.product as { bin: TracedBin }).bin.paper!.corners.tl.x).toBe(1);
   });
 
   it('recreates a failed item with its trace source id and paper', () => {
@@ -303,45 +340,50 @@ describe('pockets in batches', () => {
       },
       kind: 'a4' as const,
     };
-    const source: TracedBin = { ...tracedEntry(), traceSourceId: 'photo-1', paper };
+    const base = tracedEntry();
+    const bin = (base.product as { bin: TracedBin }).bin;
+    const source: QueueEntry = {
+      ...base,
+      product: { kind: 'bin', bin: { ...bin, traceSourceId: 'photo-1', paper } },
+    };
     const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
     const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
-    const recreated = failed.entries[0] as TracedBin;
-    expect(recreated.traceSourceId).toBe('photo-1');
-    expect(recreated.paper).toEqual(paper);
+    const recreatedBin = (failed.entries[0].product as { bin: TracedBin }).bin;
+    expect(recreatedBin.traceSourceId).toBe('photo-1');
+    expect(recreatedBin.paper).toEqual(paper);
   });
 
   it('leaves the trace source fields off items from entries without them', () => {
     const result = makeBatch([tracedEntry()], [{ entryId: 'a1', count: 1 }]);
     const item = result.batch!.items[0];
-    expect('traceSourceId' in item).toBe(false);
-    expect('paper' in item).toBe(false);
+    const bin = item.product.kind === 'bin' ? item.product.bin : null;
+    expect(bin !== null && 'traceSourceId' in bin).toBe(false);
+    expect(bin !== null && 'paper' in bin).toBe(false);
   });
 
-  it('does not merge a failed pocket item into a pocketless entry with equal params', () => {
+  it('does not merge a failed pocket item into a pocketless entry with equal product', () => {
     const plain = entry({ id: 'other' });
     const source = tracedEntry();
     const made = makeBatch([source], [{ entryId: 'a1', count: 5 }]);
     const failed = failBatchItem([plain], made.batch!, 'item1', idFactory('new'));
     expect(failed.entries).toHaveLength(2);
     expect(failed.entries[0].quantity).toBe(5);
-    expect((failed.entries[1] as TracedBin).pockets).toEqual(pockets());
+    const bin = (failed.entries[1].product as { bin: TracedBin }).bin;
+    expect(bin.pockets).toEqual(pockets());
   });
 });
 
-describe('label modes in batches', () => {
-  it('keeps the label mode in the batch item snapshot', () => {
-    const snapshot = snapshotParams(entry({ labelMode: 'slot-insert' }));
-    expect(snapshot.labelMode).toBe('slot-insert');
-    expect(snapshotParams(entry()).labelMode).toBeUndefined();
+describe('product snapshots and keys', () => {
+  it('a paired insert product is a different design key than a bin alone', () => {
+    const withInsert: Product = { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M3', text2: '', icon: null } };
+    const binAlone: Product = { kind: 'bin', bin: manualBin() };
+    expect(productKey(withInsert)).not.toBe(productKey(binAlone));
   });
 
-  it('treats different label modes as different bin designs', () => {
-    const embossed = binParamsKey(snapshotParams(entry()));
-    const slotted = binParamsKey(snapshotParams(entry({ labelMode: 'slot' })));
-    const explicitEmbossed = binParamsKey(snapshotParams(entry({ labelMode: 'embossed' })));
-    expect(slotted).not.toBe(embossed);
-    // An entry saved before label modes existed is the embossed design.
-    expect(explicitEmbossed).toBe(embossed);
+  it('deep-copies a product so mutating the snapshot does not alias the source', () => {
+    const product: Product = { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M3', text2: '', icon: null } };
+    const snapshot = snapshotProduct(product);
+    (snapshot as { insert: { text: string } }).insert.text = 'changed';
+    expect((product as { insert: { text: string } }).insert.text).toBe('M3');
   });
 });

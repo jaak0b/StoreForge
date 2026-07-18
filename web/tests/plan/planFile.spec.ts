@@ -11,16 +11,18 @@ import type {
   BatchItem,
   BinPockets,
   ManualBin,
+  ManualInsertProduct,
   PrintBatch,
+  Product,
+  QueueEntry,
   ScrewBin,
   ScrewSpec,
   TracedBin,
 } from '../../src/engine/plan/types';
 
-function entry(overrides: Partial<ManualBin> = {}): ManualBin {
+function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
-    id: 'a1',
-    kind: 'manual',
+    origin: 'manual',
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
@@ -28,11 +30,6 @@ function entry(overrides: Partial<ManualBin> = {}): ManualBin {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    labelText: 'M3 bolts',
-    labelText2: '',
-    labelIcon: 'bolt',
-    quantity: 1,
-    createdAt: '2026-07-01T10:00:00.000Z',
     ...overrides,
   };
 }
@@ -47,26 +44,8 @@ function screwSpec(overrides: Partial<ScrewSpec> = {}): ScrewSpec {
   };
 }
 
-function screwEntry(overrides: Partial<ScrewBin> = {}): ScrewBin {
-  return { ...entry({ id: 's1' }), kind: 'screw', screw: screwSpec(), ...overrides };
-}
-
-function tracedEntry(overrides: Partial<TracedBin> = {}): TracedBin {
-  const { dividerCountX, dividerCountY, kind, ...base } = entry({ id: 't1' });
-  void dividerCountX;
-  void dividerCountY;
-  void kind;
-  return { ...base, kind: 'traced', pockets: pockets(), ...overrides };
-}
-
-function batchItem(overrides: Partial<BatchItem> = {}): BatchItem {
-  const { id, kind, quantity, createdAt, notes, ...params } = entry();
-  void quantity;
-  void createdAt;
-  void notes;
-  void id;
-  void kind;
-  return { id: 'i1', params, count: 2, sourceEntryId: 'a1', ...overrides };
+function screwBin(overrides: Partial<ScrewBin> = {}): ScrewBin {
+  return { ...manualBin(), origin: 'screw', screw: screwSpec(), ...overrides };
 }
 
 function pockets(): BinPockets {
@@ -105,6 +84,34 @@ function pockets(): BinPockets {
   };
 }
 
+function tracedBin(overrides: Partial<TracedBin> = {}): TracedBin {
+  const { dividerCountX, dividerCountY, origin, ...base } = manualBin();
+  void dividerCountX;
+  void dividerCountY;
+  void origin;
+  return { ...base, origin: 'traced', pockets: pockets(), ...overrides };
+}
+
+function entry(overrides: Partial<QueueEntry> = {}): QueueEntry {
+  return {
+    id: 'a1',
+    quantity: 1,
+    createdAt: '2026-07-01T10:00:00.000Z',
+    product: { kind: 'bin', bin: manualBin() },
+    ...overrides,
+  };
+}
+
+function batchItem(overrides: Partial<BatchItem> = {}): BatchItem {
+  return {
+    id: 'i1',
+    product: { kind: 'bin', bin: manualBin() },
+    count: 2,
+    sourceEntryId: 'a1',
+    ...overrides,
+  };
+}
+
 function batch(overrides: Partial<PrintBatch> = {}): PrintBatch {
   return {
     id: 'batch1',
@@ -120,7 +127,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     const entries = [entry(), entry({ id: 'b2', notes: 'reprint in PETG' })];
     const batches = [batch()];
     const result = parsePlanFile(serializePlanFile(entries, batches));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries, batches } });
+    expect(result).toEqual({ ok: true, plan: { version: 3, entries, batches }, warnings: [] });
   });
 
   it('rejects text that is not JSON', () => {
@@ -135,25 +142,28 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects an unknown envelope version', () => {
-    const result = parsePlanFile('{"version":3,"entries":[],"batches":[]}');
+    const result = parsePlanFile('{"version":4,"entries":[],"batches":[]}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('version 3');
+    if (!result.ok) expect(result.error).toContain('version 4');
   });
 
   it('rejects a missing entries list', () => {
-    const result = parsePlanFile('{"version":2}');
+    const result = parsePlanFile('{"version":3}');
     expect(result).toEqual({ ok: false, error: 'The plan is missing its entries list.' });
   });
 
-  it('rejects a version-2 file without a batches list', () => {
-    const result = parsePlanFile('{"version":2,"entries":[]}');
+  it('rejects a version-3 file without a batches list', () => {
+    const result = parsePlanFile('{"version":3,"entries":[]}');
     expect(result).toEqual({ ok: false, error: 'The plan is missing its batches list.' });
   });
 
   it('rejects a plan containing one malformed entry instead of dropping it', () => {
     const good = entry();
-    const bad = { ...entry({ id: 'b2' }), gridX: 'two' };
-    const text = JSON.stringify({ version: 2, entries: [good, bad], batches: [] });
+    const bad = {
+      ...entry({ id: 'b2' }),
+      product: { kind: 'bin', bin: { ...manualBin(), gridX: 'two' } },
+    };
+    const text = JSON.stringify({ version: 3, entries: [good, bad], batches: [] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -162,7 +172,7 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects duplicate entry ids', () => {
-    const text = JSON.stringify({ version: 2, entries: [entry(), entry()], batches: [] });
+    const text = JSON.stringify({ version: 3, entries: [entry(), entry()], batches: [] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -171,7 +181,7 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects duplicate batch ids', () => {
-    const text = JSON.stringify({ version: 2, entries: [], batches: [batch(), batch()] });
+    const text = JSON.stringify({ version: 3, entries: [], batches: [batch(), batch()] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -181,7 +191,7 @@ describe('serializePlanFile / parsePlanFile', () => {
 
   it('rejects a malformed batch item instead of dropping it', () => {
     const bad = batch({ items: [batchItem({ count: 0 })] });
-    const text = JSON.stringify({ version: 2, entries: [], batches: [bad] });
+    const text = JSON.stringify({ version: 3, entries: [], batches: [bad] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -192,48 +202,72 @@ describe('serializePlanFile / parsePlanFile', () => {
   it('drops unknown extra fields on an entry when parsing', () => {
     const withExtra = { ...entry(), somethingElse: 42 };
     const result = parsePlanFile(
-      JSON.stringify({ version: 2, entries: [withExtra], batches: [] }),
+      JSON.stringify({ version: 3, entries: [withExtra], batches: [] }),
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 2, entries: [entry()], batches: [] },
+      plan: { version: 3, entries: [entry()], batches: [] },
+      warnings: [],
     });
   });
 });
 
 describe('version-1 migration', () => {
+  function legacyFlatEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'a1',
+      kind: 'manual',
+      gridX: 2,
+      gridY: 1,
+      heightUnits: 3,
+      stackingLip: true,
+      magnetHoles: false,
+      dividerCountX: 0,
+      dividerCountY: 0,
+      labelText: '',
+      labelText2: '',
+      labelIcon: null,
+      quantity: 1,
+      createdAt: '2026-07-01T10:00:00.000Z',
+      ...overrides,
+    };
+  }
+
   it('imports queued version-1 entries and starts with no batches', () => {
-    const legacy = { ...entry(), status: 'queued' };
+    const legacy = { ...legacyFlatEntry(), status: 'queued' };
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 2, entries: [entry()], batches: [] },
+      plan: { version: 3, entries: [entry()], batches: [] },
+      warnings: [],
     });
   });
 
   it('drops version-1 entries that were already printed', () => {
-    const queued = { ...entry(), status: 'queued' };
+    const queued = { ...legacyFlatEntry(), status: 'queued' };
     const printed = {
-      ...entry({ id: 'b2' }),
+      ...legacyFlatEntry({ id: 'b2' }),
       status: 'printed',
       printedAt: '2026-07-02T09:30:00.000Z',
     };
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [queued, printed] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 2, entries: [entry()], batches: [] },
+      plan: { version: 3, entries: [entry()], batches: [] },
+      warnings: [],
     });
   });
 
   it('defaults dividers and the second label line on old version-1 files', () => {
-    const legacy: Record<string, unknown> = { ...entry(), status: 'queued' };
+    const legacy: Record<string, unknown> = { ...legacyFlatEntry(), status: 'queued' };
     delete legacy.dividerCountX;
     delete legacy.dividerCountY;
     delete legacy.labelText2;
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 2, entries: [entry()], batches: [] },
+      plan: { version: 3, entries: [entry()], batches: [] },
+      warnings: [],
     });
   });
 });
@@ -241,10 +275,6 @@ describe('version-1 migration', () => {
 describe('validateEntry', () => {
   it('accepts a complete valid entry', () => {
     expect(validateEntry(entry())).toBeNull();
-  });
-
-  it('tolerates version-1 lifecycle fields', () => {
-    expect(validateEntry({ ...entry(), status: 'printed', printedAt: 'whenever' })).toBeNull();
   });
 
   it.each([
@@ -255,13 +285,18 @@ describe('validateEntry', () => {
     ['magnetHoles', 1, 'magnetHoles must be true or false'],
     ['dividerCountX', -1, 'dividerCountX must be an integer of at least 0'],
     ['dividerCountY', 0.5, 'dividerCountY must be an integer of at least 0'],
-    ['labelText', null, 'labelText must be a string'],
-    ['labelText2', 7, 'labelText2 must be a string'],
-    ['labelIcon', 7, 'labelIcon must be a string or null'],
+  ])('rejects a bad bin %s field', (field, value, message) => {
+    const raw = entry({
+      product: { kind: 'bin', bin: { ...manualBin(), [field]: value } },
+    });
+    expect(validateEntry(raw)).toBe(`entry a1: ${message}`);
+  });
+
+  it.each([
     ['quantity', 0, 'quantity must be an integer of at least 1'],
     ['createdAt', 'yesterday', 'createdAt must be an ISO 8601 timestamp'],
     ['notes', 5, 'notes must be a string'],
-  ])('rejects a bad %s field', (field, value, message) => {
+  ])('rejects a bad entry %s field', (field, value, message) => {
     const raw = { ...entry(), [field]: value };
     expect(validateEntry(raw)).toBe(`entry a1: ${message}`);
   });
@@ -300,9 +335,12 @@ describe('validateBatch', () => {
     expect(validateBatch(raw)).toBe('a batch is missing its id');
   });
 
-  it('rejects a bad item params field', () => {
+  it('rejects a bad item product field', () => {
     const item = batchItem();
-    const badItem = { ...item, params: { ...item.params, gridX: 'two' } };
+    const badItem = {
+      ...item,
+      product: { kind: 'bin', bin: { ...manualBin(), gridX: 'two' } },
+    };
     expect(validateBatch(batch({ items: [badItem as unknown as BatchItem] }))).toBe(
       'batch batch1: item i1: gridX must be an integer of at least 1',
     );
@@ -317,11 +355,17 @@ describe('validateBatch', () => {
 
 describe('mergeEntries', () => {
   it('replaces entries with matching ids and appends new ones', () => {
-    const existing = [entry(), entry({ id: 'b2', labelText: 'old' })];
-    const imported = [entry({ id: 'b2', labelText: 'new' }), entry({ id: 'c3' })];
+    const existing = [
+      entry(),
+      entry({ id: 'b2', product: { kind: 'insert', origin: 'manual', cells: 1, content: { text: 'old', text2: '', icon: null } } }),
+    ];
+    const imported = [
+      entry({ id: 'b2', product: { kind: 'insert', origin: 'manual', cells: 1, content: { text: 'new', text2: '', icon: null } } }),
+      entry({ id: 'c3' }),
+    ];
     const merged = mergeEntries(existing, imported);
     expect(merged.map((e) => e.id)).toEqual(['a1', 'b2', 'c3']);
-    expect(merged[1].labelText).toBe('new');
+    expect((merged[1].product as ManualInsertProduct).content.text).toBe('new');
   });
 
   it('keeps existing entries untouched when the import shares no ids', () => {
@@ -343,82 +387,96 @@ describe('mergeBatches', () => {
 
 describe('bin entry kinds in plan files', () => {
   it('round-trips a screw entry with its screw description', () => {
-    const imperial = screwEntry({
-      screw: screwSpec({ thread: '#8', lengthMm: 38, enteredLengthText: '1-1/2"' }),
+    const imperial = entry({
+      id: 's1',
+      product: {
+        kind: 'bin',
+        bin: screwBin({ screw: screwSpec({ thread: '#8', lengthMm: 38, enteredLengthText: '1-1/2"' }) }),
+      },
     });
-    const lengthless = screwEntry({
+    const lengthless = entry({
       id: 's2',
-      screw: screwSpec({ thread: 'M5', lengthMm: null, head: 'hex nut' }),
+      product: {
+        kind: 'bin',
+        bin: screwBin({ screw: screwSpec({ thread: 'M5', lengthMm: null, head: 'hex nut' }) }),
+      },
     });
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 2, entries: [imperial, lengthless], batches: [] },
+      plan: { version: 3, entries: [imperial, lengthless], batches: [] },
+      warnings: [],
     });
   });
 
   it('round-trips a traced entry with pockets and no divider fields', () => {
-    const traced = tracedEntry();
+    const traced = entry({ id: 't1', product: { kind: 'bin', bin: tracedBin() } });
     const result = parsePlanFile(serializePlanFile([traced], []));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [traced], batches: [] } });
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 3, entries: [traced], batches: [] },
+      warnings: [],
+    });
   });
 
-  it('round-trips a batch item with pockets and screw snapshots', () => {
+  it('round-trips a batch item with pocket and screw products', () => {
     const withSnapshots = batch({
-      items: [batchItem({ pockets: pockets() }), batchItem({ id: 'i2', screw: screwSpec() })],
+      items: [
+        batchItem({ product: { kind: 'bin', bin: tracedBin() } }),
+        batchItem({ id: 'i2', product: { kind: 'bin', bin: screwBin() } }),
+      ],
     });
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [], batches: [withSnapshots] } });
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 3, entries: [], batches: [withSnapshots] },
+      warnings: [],
+    });
   });
 
-  it('migrates a legacy entry without kind and with pockets to a traced bin', () => {
-    const legacy: Record<string, unknown> = { ...tracedEntry(), dividerCountX: 0, dividerCountY: 0 };
-    delete legacy.kind;
-    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [tracedEntry()], batches: [] } });
-  });
-
-  it('migrates a legacy entry without kind and without pockets to a manual bin', () => {
-    const legacy: Record<string, unknown> = { ...entry() };
-    delete legacy.kind;
-    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [entry()], batches: [] } });
-  });
-
-  it('rejects an unknown kind', () => {
-    expect(validateEntry({ ...entry(), kind: 'mystery' })).toBe(
-      'entry a1: kind must be manual, screw or traced',
+  it('rejects an unknown product kind', () => {
+    expect(validateEntry({ ...entry(), product: { kind: 'mystery' } })).toBe(
+      'entry a1: product kind must be bin, binWithInsert or insert',
     );
   });
 
-  it('rejects a traced entry without pockets', () => {
-    const bad: Record<string, unknown> = { ...tracedEntry() };
-    delete bad.pockets;
-    expect(validateEntry(bad)).toBe('entry t1: a traced entry must have pockets');
-  });
-
-  it('rejects a traced entry with divider fields', () => {
-    expect(validateEntry({ ...tracedEntry(), dividerCountX: 1 })).toBe(
-      'entry t1: a traced entry cannot have divider walls',
+  it('rejects a traced bin without pockets', () => {
+    const bad: Product = { kind: 'bin', bin: { ...tracedBin() } };
+    delete (bad.bin as Record<string, unknown>).pockets;
+    expect(validateEntry(entry({ id: 't1', product: bad }))).toBe(
+      'entry t1: pockets must be an object',
     );
   });
 
-  it('rejects a manual entry with pockets', () => {
-    expect(validateEntry({ ...entry(), pockets: pockets() })).toBe(
-      'entry a1: only a traced entry can have pockets',
+  it('rejects a traced bin with divider fields', () => {
+    const bad: Product = { kind: 'bin', bin: { ...tracedBin(), dividerCountX: 1 } as never };
+    expect(validateEntry(entry({ id: 't1', product: bad }))).toBe(
+      'entry t1: a traced bin cannot have divider walls',
     );
   });
 
-  it('rejects a screw entry without its screw description', () => {
-    const bad: Record<string, unknown> = { ...screwEntry() };
-    delete bad.screw;
+  it('rejects a bin origin that is not manual, screw or traced', () => {
+    const bad: Product = { kind: 'bin', bin: { ...manualBin(), origin: 'mystery' as never } };
+    expect(validateEntry(entry({ product: bad }))).toBe(
+      'entry a1: bin origin must be manual, screw or traced',
+    );
+  });
+
+  it('rejects a screw bin without its screw description', () => {
+    const bad = { ...entry({ id: 's1', product: { kind: 'bin', bin: screwBin() } }) };
+    delete (bad.product as { bin: Record<string, unknown> }).bin.screw;
     expect(validateEntry(bad)).toBe('entry s1: screw must be an object');
   });
 
-  it('rejects a screw entry with an unknown head type', () => {
-    expect(validateEntry(screwEntry({ screw: { ...screwSpec(), head: 'mushroom' as never } }))).toBe(
-      'entry s1: screw head must be a known head type or null',
-    );
+  it('rejects a screw bin with an unknown head type', () => {
+    const bad = entry({
+      id: 's1',
+      product: {
+        kind: 'bin',
+        bin: screwBin({ screw: { ...screwSpec(), head: 'mushroom' as never } }),
+      },
+    });
+    expect(validateEntry(bad)).toBe('entry s1: screw head must be a known head type or null');
   });
 });
 
@@ -436,68 +494,95 @@ describe('trace sources in plan files', () => {
   }
 
   it('round-trips a traced entry with its trace source id, paper and clicks', () => {
-    const traced = tracedEntry({ traceSourceId: 'photo-1', paper: tracePaper() });
+    const traced = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ traceSourceId: 'photo-1', paper: tracePaper() }) },
+    });
     const result = parsePlanFile(serializePlanFile([traced], []));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [traced], batches: [] } });
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 3, entries: [traced], batches: [] },
+      warnings: [],
+    });
   });
 
   it('accepts a traced entry without trace source fields (imported plan)', () => {
-    expect(validateEntry(tracedEntry())).toBeNull();
+    expect(validateEntry(entry({ id: 't1', product: { kind: 'bin', bin: tracedBin() } }))).toBeNull();
   });
 
   it('defaults missing tool clicks to an empty list on old plans', () => {
-    const legacy = tracedEntry();
+    const legacy = entry({ id: 't1', product: { kind: 'bin', bin: tracedBin() } });
     const raw = JSON.parse(serializePlanFile([legacy], [])) as {
-      entries: Array<{ pockets: { tools: Array<Record<string, unknown>> } }>;
+      entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
     };
-    delete raw.entries[0].pockets.tools[0].clicks;
-    const result = parsePlanFile(JSON.stringify({ ...raw, version: 2, batches: [] }));
+    delete raw.entries[0].product.bin.pockets.tools[0].clicks;
+    const result = parsePlanFile(JSON.stringify({ ...raw, version: 3, batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      const entry = result.plan.entries[0] as TracedBin;
-      expect(entry.pockets.tools[0].clicks).toEqual([]);
+      const bin = result.plan.entries[0].product as { bin: TracedBin };
+      expect(bin.bin.pockets.tools[0].clicks).toEqual([]);
     }
   });
 
   it('rejects a malformed click', () => {
     const bad = pockets();
     bad.tools[0].clicks = [{ x: 1, y: 2, label: 3 as never }];
-    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
-      'entry t1: pocket tool t1: a click needs x, y and a label of 0 or 1',
-    );
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', bin: tracedBin({ pockets: bad }) } })),
+    ).toBe('entry t1: pocket tool t1: a click needs x, y and a label of 0 or 1');
   });
 
   it('rejects an empty traceSourceId', () => {
-    expect(validateEntry({ ...tracedEntry(), traceSourceId: '' })).toBe(
-      'entry t1: traceSourceId must be a non-empty string',
-    );
+    const bad = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ traceSourceId: '' }) },
+    });
+    expect(validateEntry(bad)).toBe('entry t1: traceSourceId must be a non-empty string');
   });
 
   it('rejects an unknown paper kind', () => {
     const paper = { ...tracePaper(), kind: 'a3' };
-    expect(validateEntry({ ...tracedEntry(), paper })).toBe(
-      'entry t1: paper kind must be a4 or letter',
-    );
+    const bad = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ paper: paper as never }) },
+    });
+    expect(validateEntry(bad)).toBe('entry t1: paper kind must be a4 or letter');
   });
 
   it('rejects a paper corner without coordinates', () => {
     const paper = tracePaper() as unknown as { corners: Record<string, unknown>; kind: string };
     paper.corners.br = { x: 5 };
-    expect(validateEntry({ ...tracedEntry(), paper })).toBe(
-      'entry t1: paper corner br needs x and y coordinates',
-    );
+    const bad = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ paper: paper as never }) },
+    });
+    expect(validateEntry(bad)).toBe('entry t1: paper corner br needs x and y coordinates');
   });
 
   it('round-trips a batch item carrying the trace source snapshot', () => {
     const withSource = batch({
-      items: [batchItem({ pockets: pockets(), traceSourceId: 'photo-1', paper: tracePaper() })],
+      items: [
+        batchItem({
+          product: { kind: 'bin', bin: tracedBin({ traceSourceId: 'photo-1', paper: tracePaper() }) },
+        }),
+      ],
     });
     const result = parsePlanFile(serializePlanFile([], [withSource]));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [], batches: [withSource] } });
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 3, entries: [], batches: [withSource] },
+      warnings: [],
+    });
   });
 
   it('rejects a batch item with a malformed paper field', () => {
-    const bad = batch({ items: [batchItem({ paper: 'a4' as never })] });
+    const bad = batch({
+      items: [
+        batchItem({
+          product: { kind: 'bin', bin: tracedBin({ paper: 'a4' as never }) },
+        }),
+      ],
+    });
     const result = parsePlanFile(serializePlanFile([], [bad]));
     expect(result).toEqual({
       ok: false,
@@ -510,7 +595,11 @@ describe('pockets in plan files', () => {
   it('rejects a placement naming a tool that is not in the pockets', () => {
     const bad = pockets();
     bad.placements[0].toolId = 'ghost';
-    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+    const entryWithBad = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ pockets: bad }) },
+    });
+    expect(validateEntry(entryWithBad)).toBe(
       'entry t1: a pocket placement refers to a tool that is not in the pockets',
     );
   });
@@ -521,7 +610,11 @@ describe('pockets in plan files', () => {
       { x: 0, y: 0 },
       { x: 1, y: 0 },
     ];
-    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+    const entryWithBad = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ pockets: bad }) },
+    });
+    expect(validateEntry(entryWithBad)).toBe(
       'entry t1: pocket tool t1: outline needs at least 3 outer points',
     );
   });
@@ -529,7 +622,11 @@ describe('pockets in plan files', () => {
   it('rejects a pocket depth of zero', () => {
     const bad = pockets();
     bad.placements[0].pocketDepthMm = 0;
-    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+    const entryWithBad = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ pockets: bad }) },
+    });
+    expect(validateEntry(entryWithBad)).toBe(
       'entry t1: a pocket placement needs xMm, yMm and a pocketDepthMm above 0',
     );
   });
@@ -537,45 +634,220 @@ describe('pockets in plan files', () => {
   it('round-trips a traced entry whose finger hole is an elongated slot', () => {
     const withSlot = pockets();
     withSlot.tools[0].fingerHoles = [{ x: 0, y: 0, x2: 12, y2: -3, diameterMm: 20 }];
-    const traced = tracedEntry({ pockets: withSlot });
+    const traced = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ pockets: withSlot }) },
+    });
     const result = parsePlanFile(serializePlanFile([traced], []));
-    expect(result).toEqual({ ok: true, plan: { version: 2, entries: [traced], batches: [] } });
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 3, entries: [traced], batches: [] },
+      warnings: [],
+    });
   });
 
   it('accepts a circular finger hole without slot endpoints (old plans)', () => {
-    expect(validateEntry(tracedEntry())).toBeNull();
+    expect(validateEntry(entry({ id: 't1', product: { kind: 'bin', bin: tracedBin() } }))).toBeNull();
   });
 
   it('rejects a finger hole with only one slot coordinate', () => {
     const bad = pockets();
     bad.tools[0].fingerHoles = [{ x: 0, y: 0, x2: 12, diameterMm: 20 }];
-    expect(validateEntry(tracedEntry({ pockets: bad }))).toBe(
+    const entryWithBad = entry({
+      id: 't1',
+      product: { kind: 'bin', bin: tracedBin({ pockets: bad }) },
+    });
+    expect(validateEntry(entryWithBad)).toBe(
       'entry t1: pocket tool t1: an elongated finger hole needs both x2 and y2 as numbers',
     );
   });
 });
 
-describe('label modes in plan files', () => {
-  it('round-trips an entry with a label mode', () => {
-    const text = serializePlanFile([entry({ labelMode: 'slot-insert' })], []);
-    const result = parsePlanFile(text);
+describe('legacy label mode conversion (versions 1 and 2)', () => {
+  function legacyFlatEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'a1',
+      kind: 'manual',
+      gridX: 2,
+      gridY: 1,
+      heightUnits: 3,
+      stackingLip: true,
+      magnetHoles: false,
+      dividerCountX: 0,
+      dividerCountY: 0,
+      labelText: 'M3 bolts',
+      labelText2: '',
+      labelIcon: 'bolt',
+      quantity: 1,
+      createdAt: '2026-07-01T10:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('converts an embossed label (with content) into a bin with its insert', () => {
+    const legacy = legacyFlatEntry({ labelMode: 'embossed' });
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.plan.entries[0].labelMode).toBe('slot-insert');
+      expect(result.plan.entries[0].product).toEqual({
+        kind: 'binWithInsert',
+        bin: manualBin(),
+        insert: { text: 'M3 bolts', text2: '', icon: 'bolt' },
+      });
     }
   });
 
-  it('leaves the label mode absent for plans saved before it existed', () => {
-    const text = serializePlanFile([entry()], []);
-    const result = parsePlanFile(text);
+  it('converts an embossed label with no content into a plain bin', () => {
+    const legacy = legacyFlatEntry({ labelMode: 'embossed', labelText: '', labelIcon: null });
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.plan.entries[0].labelMode).toBeUndefined();
+      expect(result.plan.entries[0].product).toEqual({ kind: 'bin', bin: manualBin() });
     }
   });
 
-  it('rejects an unknown label mode with a user-worded message', () => {
-    const problem = validateEntry({ ...entry(), labelMode: 'sticker' });
-    expect(problem).toContain('labelMode must be embossed, slot, slot-insert or insert');
+  it('leaves an absent labelMode defaulting to embossed conversion behavior', () => {
+    const legacy = legacyFlatEntry();
+    delete legacy.labelMode;
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({
+        kind: 'binWithInsert',
+        bin: manualBin(),
+        insert: { text: 'M3 bolts', text2: '', icon: 'bolt' },
+      });
+    }
+  });
+
+  it('converts a slot label into a plain bin, dropping any content', () => {
+    const legacy = legacyFlatEntry({ labelMode: 'slot' });
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({ kind: 'bin', bin: manualBin() });
+    }
+  });
+
+  it('converts a slot-insert label into a bin with its insert', () => {
+    const legacy = legacyFlatEntry({ labelMode: 'slot-insert' });
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({
+        kind: 'binWithInsert',
+        bin: manualBin(),
+        insert: { text: 'M3 bolts', text2: '', icon: 'bolt' },
+      });
+    }
+  });
+
+  it('converts a manual insert-only entry into a standalone manual insert product', () => {
+    const legacy = legacyFlatEntry({ labelMode: 'insert' });
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({
+        kind: 'insert',
+        origin: 'manual',
+        cells: 2,
+        content: { text: 'M3 bolts', text2: '', icon: 'bolt' },
+      });
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
+  it('converts a screw insert-only entry into a standalone screw insert product', () => {
+    const legacy = legacyFlatEntry({
+      kind: 'screw',
+      labelMode: 'insert',
+      screw: screwSpec(),
+    });
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({
+        kind: 'insert',
+        origin: 'screw',
+        cells: 2,
+        content: { text: 'M3 bolts', text2: '', icon: 'bolt' },
+        screw: screwSpec(),
+      });
+    }
+  });
+
+  it('converts a traced insert-only entry into a standalone manual insert with a dropped-pockets warning', () => {
+    const legacy = legacyFlatEntry({ kind: 'traced', labelMode: 'insert', pockets: pockets() });
+    delete legacy.dividerCountX;
+    delete legacy.dividerCountY;
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({
+        kind: 'insert',
+        origin: 'manual',
+        cells: 2,
+        content: { text: 'M3 bolts', text2: '', icon: 'bolt' },
+      });
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain('dropped');
+    }
+  });
+
+  it('round-trips a legacy screw entry with its screw description as a bin with insert', () => {
+    const legacy = legacyFlatEntry({ kind: 'screw', screw: screwSpec({ thread: '#8', lengthMm: 38 }) });
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({
+        kind: 'binWithInsert',
+        bin: screwBin({ screw: screwSpec({ thread: '#8', lengthMm: 38 }) }),
+        insert: { text: 'M3 bolts', text2: '', icon: 'bolt' },
+      });
+    }
+  });
+
+  it('migrates a legacy entry without kind and with pockets to a traced bin', () => {
+    const legacy: Record<string, unknown> = {
+      ...legacyFlatEntry({ labelMode: 'slot', pockets: pockets() }),
+    };
+    delete legacy.kind;
+    delete legacy.dividerCountX;
+    delete legacy.dividerCountY;
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({ kind: 'bin', bin: tracedBin() });
+    }
+  });
+
+  it('migrates a legacy entry without kind and without pockets to a manual bin', () => {
+    const legacy: Record<string, unknown> = { ...legacyFlatEntry({ labelMode: 'slot' }) };
+    delete legacy.kind;
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.plan.entries[0].product).toEqual({ kind: 'bin', bin: manualBin() });
+    }
+  });
+
+  it('rejects an unknown legacy kind', () => {
+    const result = parsePlanFile(
+      JSON.stringify({ version: 2, entries: [{ ...legacyFlatEntry(), kind: 'mystery' }], batches: [] }),
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: 'The plan is invalid: entry a1: kind must be manual, screw or traced.',
+    });
+  });
+
+  it('rejects an unknown legacy label mode', () => {
+    const result = parsePlanFile(
+      JSON.stringify({ version: 2, entries: [{ ...legacyFlatEntry(), labelMode: 'sticker' }], batches: [] }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('labelMode must be embossed, slot, slot-insert or insert');
+    }
   });
 });

@@ -7,18 +7,19 @@ import type { Font } from 'opentype.js';
 import fontUrl from '../assets/fonts/roboto-medium.ttf?url';
 import {
   generateBin,
-  generateLabeledBin,
-  generateLabeledBinUnion,
-  generateLabelInsert,
-  generateLabelInsertUnion,
+  generateInsert,
+  generateInsertUnion,
+  generateSlottedBin,
+  generateSlottedBinUnion,
 } from '../engine/gridfinity/binGenerator';
 import { generatePocketBin, generatePocketBinUnion } from '../engine/trace/pocketBin';
 import type { PocketBinParams } from '../engine/trace/pocketBin';
 import type {
   BinParams,
-  LabeledBinMeshes,
-  LabeledBinParams,
+  InsertParams,
   MeshData,
+  PartMeshes,
+  SlottedBinParams,
 } from '../engine/gridfinity/types';
 
 let manifoldPromise: Promise<ManifoldToplevel> | null = null;
@@ -55,49 +56,42 @@ function transferMesh(mesh: MeshData): MeshData {
   return Comlink.transfer(mesh, [mesh.vertices.buffer, mesh.indices.buffer]);
 }
 
+function transferMeshes(meshes: PartMeshes): PartMeshes {
+  const buffers = [meshes.body.vertices.buffer, meshes.body.indices.buffer];
+  if (meshes.label) {
+    buffers.push(meshes.label.vertices.buffer, meshes.label.indices.buffer);
+  }
+  return Comlink.transfer(meshes, buffers);
+}
+
 const api = {
   async generateBin(params: BinParams): Promise<MeshData> {
     const m = await loadManifold();
     return transferMesh(generateBin(m, params));
   },
-  async generateLabeledBin(params: LabeledBinParams): Promise<LabeledBinMeshes> {
+  async generateSlottedBin(params: SlottedBinParams): Promise<PartMeshes> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const meshes = generateLabeledBin(m, font, params);
-    const buffers = [meshes.body.vertices.buffer, meshes.body.indices.buffer];
-    if (meshes.label) {
-      buffers.push(meshes.label.vertices.buffer, meshes.label.indices.buffer);
-    }
-    return Comlink.transfer(meshes, buffers);
+    return transferMeshes(generateSlottedBin(m, font, params));
   },
-  async generateLabeledBinUnion(params: LabeledBinParams): Promise<MeshData> {
-    const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    return transferMesh(generateLabeledBinUnion(m, font, params));
+  async generateSlottedBinUnion(params: BinParams): Promise<MeshData> {
+    const m = await loadManifold();
+    return transferMesh(generateSlottedBinUnion(m, params));
   },
-  async generateLabelInsert(params: LabeledBinParams): Promise<LabeledBinMeshes> {
+  async generateInsert(params: InsertParams): Promise<PartMeshes> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const meshes = generateLabelInsert(m, font, params);
-    const buffers = [meshes.body.vertices.buffer, meshes.body.indices.buffer];
-    if (meshes.label) {
-      buffers.push(meshes.label.vertices.buffer, meshes.label.indices.buffer);
-    }
-    return Comlink.transfer(meshes, buffers);
+    return transferMeshes(generateInsert(m, font, params));
   },
-  async generateLabelInsertUnion(params: LabeledBinParams): Promise<MeshData> {
+  async generateInsertUnion(params: InsertParams): Promise<MeshData> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    return transferMesh(generateLabelInsertUnion(m, font, params));
+    return transferMesh(generateInsertUnion(m, font, params));
   },
-  async generatePocketBin(params: PocketBinParams): Promise<LabeledBinMeshes> {
+  async generatePocketBin(params: PocketBinParams): Promise<PartMeshes> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const meshes = generatePocketBin(m, font, params);
-    const buffers = [meshes.body.vertices.buffer, meshes.body.indices.buffer];
-    if (meshes.label) {
-      buffers.push(meshes.label.vertices.buffer, meshes.label.indices.buffer);
-    }
-    return Comlink.transfer(meshes, buffers);
+    return transferMeshes(generatePocketBin(m, font, params));
   },
   async generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
-    const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    return transferMesh(generatePocketBinUnion(m, font, params));
+    const m = await loadManifold();
+    return transferMesh(generatePocketBinUnion(m, params));
   },
 };
 

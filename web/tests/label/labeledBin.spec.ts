@@ -4,32 +4,20 @@ import type { ManifoldToplevel } from 'manifold-3d';
 import { loadManifold } from '../helpers/manifold';
 import { loadLabelFont } from '../helpers/font';
 import {
+  buildSlottedBinBody,
   generateBin,
-  generateLabeledBin,
-  generateLabeledBinUnion,
+  generateSlottedBin,
+  generateSlottedBinUnion,
 } from '../../src/engine/gridfinity/binGenerator';
+import { buildInsertSolids } from '../../src/engine/label/slot';
 import {
-  buildLabelManifold,
-  buildLabelShelf,
   layoutLabelFace,
-  EMBOSS_HEIGHT,
-  EMBOSS_WELD_DEPTH,
   LABEL_LINE2_SCALE,
-  LABEL_MARGIN,
   LABEL_TEXT_HEIGHT,
-  RIB_THICKNESS,
-  SHELF_DEPTH,
-  SHELF_THICKNESS,
-  shelfRibCount,
   TEXT_BOLD_OFFSET,
 } from '../../src/engine/label/placement';
-import { iconByName } from '../../src/engine/label/icons';
-import {
-  HEIGHT_UNIT,
-  PITCH,
-  WALL_THICKNESS,
-} from '../../src/engine/gridfinity/constants';
-import type { LabeledBinParams, MeshData } from '../../src/engine/gridfinity/types';
+import { HEIGHT_UNIT } from '../../src/engine/gridfinity/constants';
+import type { BinParams, MeshData, SlottedBinParams } from '../../src/engine/gridfinity/types';
 
 let m: ManifoldToplevel;
 let font: Font;
@@ -39,7 +27,7 @@ beforeAll(async () => {
   font = await loadLabelFont();
 });
 
-function params(overrides: Partial<LabeledBinParams> = {}): LabeledBinParams {
+function params(overrides: Partial<SlottedBinParams> = {}): SlottedBinParams {
   return {
     gridX: 1,
     gridY: 1,
@@ -48,11 +36,15 @@ function params(overrides: Partial<LabeledBinParams> = {}): LabeledBinParams {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    labelText: 'M3',
-    labelText2: '',
-    labelIcon: null,
+    insert: null,
     ...overrides,
   };
+}
+
+function binParams(overrides: Partial<BinParams> = {}): BinParams {
+  const { insert: _insert, ...rest } = params(overrides);
+  void _insert;
+  return rest;
 }
 
 /** Signed volume of a triangle mesh (divergence theorem over tetrahedra). */
@@ -79,167 +71,7 @@ function meshMaxZ(mesh: MeshData): number {
   return max;
 }
 
-const outerWidth = PITCH - 0.5;
-const outerDepth = PITCH - 0.5;
 const bodyTop = 3 * HEIGHT_UNIT;
-const shelfFrontY = -outerDepth / 2;
-const shelfBackY = shelfFrontY + WALL_THICKNESS + SHELF_DEPTH;
-
-describe('buildLabelShelf', () => {
-  it('spans the top front edge, flush with the bin top', () => {
-    const shelf = buildLabelShelf(m, params());
-    const box = shelf.boundingBox();
-    expect(box.max[2]).toBeCloseTo(bodyTop, 6);
-    expect(box.min[1]).toBeCloseTo(shelfFrontY, 6);
-    expect(box.max[1]).toBeCloseTo(shelfBackY, 6);
-    // Clipped to the bin outline, so it never protrudes sideways.
-    expect(box.min[0]).toBeGreaterThanOrEqual(-outerWidth / 2 - 1e-6);
-    expect(box.max[0]).toBeLessThanOrEqual(outerWidth / 2 + 1e-6);
-    shelf.delete();
-  });
-
-  it('has a support chamfer whose cross-section narrows downward toward the front wall', () => {
-    const shelf = buildLabelShelf(m, params());
-    const plateBottom = bodyTop - SHELF_THICKNESS;
-    const depthOf = (zLow: number, zHigh: number): number => {
-      const slab = m.Manifold.cube([200, 200, zHigh - zLow], true).translate(
-        0,
-        0,
-        (zLow + zHigh) / 2,
-      );
-      const cut = m.Manifold.intersection(shelf, slab);
-      const box = cut.boundingBox();
-      const empty = cut.isEmpty();
-      slab.delete();
-      cut.delete();
-      return empty ? 0 : box.max[1] - box.min[1];
-    };
-    // Material exists below the plate (the chamfer), and its front-to-back
-    // extent shrinks with depth: a 45-degree wedge leaning on the front wall.
-    const nearPlate = depthOf(plateBottom - 2, plateBottom - 1);
-    const deeper = depthOf(plateBottom - 8, plateBottom - 7);
-    expect(nearPlate).toBeGreaterThan(0);
-    expect(deeper).toBeGreaterThan(0);
-    expect(deeper).toBeLessThan(nearPlate);
-    // Both slices stay attached to the front wall.
-    expect(nearPlate).toBeGreaterThan(WALL_THICKNESS);
-    shelf.delete();
-  });
-});
-
-describe('label shelf ribs', () => {
-  it('places ribs under the plate with open spans between them', () => {
-    const shelf = buildLabelShelf(m, params());
-    const plateBottom = bodyTop - SHELF_THICKNESS;
-    // Probe at a depth where every rib is solid between the chamfer line and
-    // the plate: at y = -14 the 45-degree rib profile spans z up to the plate.
-    const probeY = shelfFrontY + WALL_THICKNESS + SHELF_DEPTH / 2;
-    const probeZ = plateBottom - 1;
-    const ribCount = shelfRibCount(outerWidth);
-    const step = (outerWidth - RIB_THICKNESS) / (ribCount - 1);
-    for (let i = 0; i < ribCount; i++) {
-      const centre = -outerWidth / 2 + i * step + RIB_THICKNESS / 2;
-      const probe = m.Manifold.cube([RIB_THICKNESS / 2, 1, 1], true).translate(
-        centre,
-        probeY,
-        probeZ,
-      );
-      const hit = shelf.intersect(probe);
-      expect(hit.isEmpty()).toBe(false);
-      hit.delete();
-      probe.delete();
-    }
-    // Midway between two inner ribs there is open air under the plate.
-    const gapX = -outerWidth / 2 + 0.5 * step + RIB_THICKNESS / 2;
-    const gapProbe = m.Manifold.cube([1, 1, 1], true).translate(gapX, probeY, probeZ);
-    const gap = shelf.intersect(gapProbe);
-    expect(gap.isEmpty()).toBe(true);
-    gap.delete();
-    gapProbe.delete();
-    shelf.delete();
-  });
-
-  it('keeps every clear span between ribs at or under the bridging limit', () => {
-    for (const width of [PITCH - 0.5, 2 * PITCH - 0.5, 5 * PITCH - 0.5]) {
-      const n = shelfRibCount(width);
-      const clear = (width - n * RIB_THICKNESS) / (n - 1);
-      expect(clear).toBeLessThanOrEqual(16 + 1e-9);
-      expect(clear).toBeGreaterThan(0);
-    }
-  });
-
-  it('uses much less material than a solid support wedge', () => {
-    const shelf = buildLabelShelf(m, params());
-    const plateArea = (WALL_THICKNESS + SHELF_DEPTH) * SHELF_THICKNESS;
-    const wedgeArea = ((WALL_THICKNESS + SHELF_DEPTH + WALL_THICKNESS) / 2) * SHELF_DEPTH;
-    // The old design extruded plate plus wedge across the full width; the
-    // ribbed shelf must keep well under half the wedge material.
-    expect(shelf.volume()).toBeLessThan((plateArea + 0.35 * wedgeArea) * outerWidth);
-    expect(shelf.volume()).toBeGreaterThan(0);
-    shelf.delete();
-  });
-});
-
-describe('buildLabelManifold', () => {
-  it('rests the label on the shelf top face, raised by the emboss height', () => {
-    const label = buildLabelManifold(m, font, params(), { text: 'M3', icon: null });
-    expect(label).not.toBeNull();
-    const box = label!.boundingBox();
-    expect(box.max[2]).toBeCloseTo(bodyTop + EMBOSS_HEIGHT, 6);
-    expect(box.min[2]).toBeCloseTo(bodyTop - EMBOSS_WELD_DEPTH, 6);
-    // Within the shelf footprint.
-    expect(box.min[1]).toBeGreaterThan(shelfFrontY + WALL_THICKNESS);
-    expect(box.max[1]).toBeLessThan(shelfBackY);
-    label!.delete();
-  });
-
-  it('keeps the label within the interior width margins', () => {
-    const label = buildLabelManifold(m, font, params(), {
-      text: 'M3 COUNTERSUNK WOOD SCREWS 12 mm',
-      icon: null,
-    })!;
-    const interiorHalf = (outerWidth - 2 * WALL_THICKNESS) / 2;
-    const box = label.boundingBox();
-    expect(box.min[0]).toBeGreaterThanOrEqual(-(interiorHalf - LABEL_MARGIN) - 1e-6);
-    expect(box.max[0]).toBeLessThanOrEqual(interiorHalf - LABEL_MARGIN + 1e-6);
-    label.delete();
-  });
-
-  it('shrinks long text to fit', () => {
-    const short = buildLabelManifold(m, font, params(), { text: 'M3', icon: null })!;
-    const long = buildLabelManifold(m, font, params(), {
-      text: 'M3 COUNTERSUNK WOOD SCREWS 12 mm',
-      icon: null,
-    })!;
-    const shortBox = short.boundingBox();
-    const longBox = long.boundingBox();
-    // The long label is shrunk: its glyphs are shorter front to back.
-    expect(longBox.max[1] - longBox.min[1]).toBeLessThan(
-      shortBox.max[1] - shortBox.min[1],
-    );
-    short.delete();
-    long.delete();
-  });
-
-  it('returns null for an empty label spec', () => {
-    expect(buildLabelManifold(m, font, params(), { text: '  ', icon: null })).toBeNull();
-  });
-
-  it('places the icon left of the text', () => {
-    const textOnly = buildLabelManifold(m, font, params(), { text: 'M3', icon: null })!;
-    const withIcon = buildLabelManifold(m, font, params(), {
-      text: 'M3',
-      icon: iconByName('washer'),
-    })!;
-    const textBox = textOnly.boundingBox();
-    const bothBox = withIcon.boundingBox();
-    expect(bothBox.max[0] - bothBox.min[0]).toBeGreaterThan(
-      textBox.max[0] - textBox.min[0],
-    );
-    textOnly.delete();
-    withIcon.delete();
-  });
-});
 
 describe('text bolding', () => {
   it('dilates text outlines wider without merging separate letters', () => {
@@ -257,10 +89,12 @@ describe('text bolding', () => {
     bold.delete();
   });
 
-  it('keeps the finished label solid watertight after text bolding', () => {
-    const label = buildLabelManifold(m, font, params(), { text: 'M3 x 20', icon: null })!;
-    expect(label.status()).toBe('NoError');
-    label.delete();
+  it('keeps the finished insert solid watertight after text bolding', () => {
+    const { body, label } = buildInsertSolids(m, font, { text: 'M3 x 20', icon: null }, 1);
+    expect(body.status()).toBe('NoError');
+    expect(label!.status()).toBe('NoError');
+    body.delete();
+    label!.delete();
   });
 
   it('makes text visibly thicker on the finished label than an unbolded pass would be', () => {
@@ -345,25 +179,43 @@ describe('layoutLabelFace with a second line', () => {
       6,
     );
   });
+});
 
-  it('builds a taller label solid when a second line is present', () => {
-    const oneLine = buildLabelManifold(m, font, params(), { text: 'M3', icon: null })!;
-    const twoLines = buildLabelManifold(m, font, params(), {
-      text: 'M3',
-      text2: 'wood',
-      icon: null,
-    })!;
-    const oneBox = oneLine.boundingBox();
-    const twoBox = twoLines.boundingBox();
-    expect(twoBox.max[1] - twoBox.min[1]).toBeGreaterThan(oneBox.max[1] - oneBox.min[1]);
-    oneLine.delete();
-    twoLines.delete();
+describe('buildSlottedBinBody', () => {
+  it('produces a watertight solid whether or not an insert is paired with it', () => {
+    const body = buildSlottedBinBody(m, binParams());
+    expect(body.status()).toBe('NoError');
+    expect(body.isEmpty()).toBe(false);
+    body.delete();
+  });
+
+  it('every bin gets the slot: its volume exceeds the plain unslotted body', () => {
+    const slotted = buildSlottedBinBody(m, binParams());
+    const plain = generateBin(m, binParams());
+    expect(slotted.volume()).toBeGreaterThan(0);
+    // Compare against the raw unslotted mesh volume via its own manifold.
+    const plainVolume = (() => {
+      let vol = 0;
+      const v = plain.vertices;
+      const idx = plain.indices;
+      for (let i = 0; i < idx.length; i += 3) {
+        const [a, b, c] = [idx[i] * 3, idx[i + 1] * 3, idx[i + 2] * 3];
+        vol +=
+          (v[a] * (v[b + 1] * v[c + 2] - v[b + 2] * v[c + 1]) +
+            v[a + 1] * (v[b + 2] * v[c] - v[b] * v[c + 2]) +
+            v[a + 2] * (v[b] * v[c + 1] - v[b + 1] * v[c])) /
+          6;
+      }
+      return vol;
+    })();
+    expect(slotted.volume()).toBeGreaterThan(plainVolume);
+    slotted.delete();
   });
 });
 
-describe('generateLabeledBin', () => {
-  it('returns separate watertight body and label meshes', () => {
-    const result = generateLabeledBin(m, font, params({ labelIcon: 'washer' }));
+describe('generateSlottedBin', () => {
+  it('returns separate watertight body and label meshes when an insert is paired', () => {
+    const result = generateSlottedBin(m, font, params({ insert: { text: 'M3', text2: '', icon: 'washer' } }));
     expect(result.label).not.toBeNull();
     for (const mesh of [result.body, result.label!]) {
       expect(mesh.vertices.length % 3).toBe(0);
@@ -372,37 +224,27 @@ describe('generateLabeledBin', () => {
     }
   });
 
-  it('adds the shelf to the body when a label is present', () => {
-    const plain = generateLabeledBin(m, font, params({ labelText: '', labelIcon: null }));
-    const labeled = generateLabeledBin(m, font, params());
-    expect(meshVolume(labeled.body)).toBeGreaterThan(meshVolume(plain.body));
-  });
-
   it('does not raise the body top above the bin top', () => {
-    const labeled = generateLabeledBin(m, font, params());
+    const labeled = generateSlottedBin(m, font, params());
     expect(meshMaxZ(labeled.body)).toBeCloseTo(bodyTop, 6);
-    const withLip = generateLabeledBin(m, font, params({ stackingLip: true }));
+    const withLip = generateSlottedBin(m, font, params({ stackingLip: true }));
     expect(meshMaxZ(withLip.body)).toBeGreaterThan(bodyTop);
   });
 
-  it('returns a plain bin with no shelf when there is no text and no icon', () => {
-    const noLabel = generateLabeledBin(m, font, params({ labelText: '', labelIcon: null }));
+  it('returns a null label mesh for a bin ordered with an empty slot', () => {
+    const noLabel = generateSlottedBin(m, font, params({ insert: null }));
     expect(noLabel.label).toBeNull();
-    // Same solid as a bin generated without any label machinery: identical volume.
-    const reference = generateBin(m, params());
-    expect(meshVolume(noLabel.body)).toBeCloseTo(meshVolume(reference), 6);
+    // The slot itself is still cut into the body, so its volume differs from
+    // a plain bin generated without any slot machinery.
+    const reference = generateBin(m, binParams());
+    expect(meshVolume(noLabel.body)).toBeGreaterThan(meshVolume(reference));
   });
 });
 
-describe('generateLabeledBinUnion', () => {
-  it('produces one welded mesh whose volume exceeds body plus shelf alone', () => {
-    const labeled = generateLabeledBin(m, font, params());
-    const union = generateLabeledBinUnion(m, font, params());
-    const bodyVolume = meshVolume(labeled.body);
-    const unionVolume = meshVolume(union);
-    expect(unionVolume).toBeGreaterThan(bodyVolume);
-    // The label overlaps the shelf by the weld depth, so the union is smaller
-    // than the plain sum of the two meshes.
-    expect(unionVolume).toBeLessThan(bodyVolume + meshVolume(labeled.label!));
+describe('generateSlottedBinUnion', () => {
+  it('matches the body mesh of generateSlottedBin with no insert riding along', () => {
+    const { body } = generateSlottedBin(m, font, params());
+    const union = generateSlottedBinUnion(m, binParams());
+    expect(meshVolume(union)).toBeCloseTo(meshVolume(body), 6);
   });
 });

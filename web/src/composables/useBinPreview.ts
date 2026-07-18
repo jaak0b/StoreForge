@@ -1,22 +1,26 @@
 import { onMounted, onBeforeUnmount, ref, watch, type Ref } from 'vue';
-import { generateLabeledBin } from '../workerClient';
-import type { LabeledBinMeshes, LabeledBinParams } from '../engine/gridfinity/types';
+import { generateSlottedBin } from '../workerClient';
+import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 
 /**
- * Debounced live 3D preview generation for a reactive set of bin parameters.
- * Regenerates in the geometry worker whenever the parameters change; stale
- * results are discarded by ticket so a slow generation never overwrites a
- * newer one.
+ * Debounced live 3D preview generation for a reactive set of part
+ * parameters. Regenerates in the geometry worker whenever the parameters
+ * change; stale results are discarded by ticket so a slow generation never
+ * overwrites a newer one. Generic over the parameter shape so the tabs can
+ * preview slotted bins, pocket bins or standalone inserts with one
+ * composable.
  */
-export function useBinPreview(
-  params: () => LabeledBinParams,
-  generate: (params: LabeledBinParams) => Promise<LabeledBinMeshes> = generateLabeledBin,
+export function useBinPreview<P = SlottedBinParams>(
+  params: () => P,
+  generate: (params: P) => Promise<PartMeshes> = generateSlottedBin as (
+    params: P,
+  ) => Promise<PartMeshes>,
 ): {
-  meshes: Ref<LabeledBinMeshes | null>;
+  meshes: Ref<PartMeshes | null>;
   generating: Ref<boolean>;
   errorMessage: Ref<string | null>;
 } {
-  const meshes = ref<LabeledBinMeshes | null>(null);
+  const meshes = ref<PartMeshes | null>(null);
   const generating = ref(false);
   const errorMessage = ref<string | null>(null);
 

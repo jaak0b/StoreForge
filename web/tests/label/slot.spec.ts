@@ -11,11 +11,11 @@ import {
 } from '../../src/engine/label/slot';
 import {
   buildInsertPlacedInSlot,
-  buildLabeledBody,
-  generateLabeledBin,
-  generateLabelInsertUnion,
+  buildSlottedBinBody,
+  generateInsertUnion,
+  generateSlottedBin,
 } from '../../src/engine/gridfinity/binGenerator';
-import type { LabeledBinParams } from '../../src/engine/gridfinity/types';
+import type { BinParams, SlottedBinParams } from '../../src/engine/gridfinity/types';
 
 let m: ManifoldToplevel;
 let font: Font;
@@ -25,7 +25,7 @@ beforeAll(async () => {
   font = await loadLabelFont();
 });
 
-function params(overrides: Partial<LabeledBinParams> = {}): LabeledBinParams {
+function binParams(overrides: Partial<BinParams> = {}): BinParams {
   return {
     gridX: 1,
     gridY: 1,
@@ -34,12 +34,12 @@ function params(overrides: Partial<LabeledBinParams> = {}): LabeledBinParams {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    labelText: 'M3',
-    labelText2: '',
-    labelIcon: null,
-    labelMode: 'slot',
     ...overrides,
   };
+}
+
+function params(overrides: Partial<SlottedBinParams> = {}): SlottedBinParams {
+  return { ...binParams(), insert: { text: 'M3', text2: '', icon: null }, ...overrides };
 }
 
 describe('insertLengthMm', () => {
@@ -87,7 +87,7 @@ describe('buildInsertSolids', () => {
   });
 
   it('unions to one watertight solid with a flat top for the STL download', () => {
-    const mesh = generateLabelInsertUnion(m, font, params({ labelMode: 'insert' }));
+    const mesh = generateInsertUnion(m, font, { cells: 1, content: { text: 'M3 x 20', icon: null } });
     let maxZ = -Infinity;
     for (let i = 2; i < mesh.vertices.length; i += 3) {
       maxZ = Math.max(maxZ, mesh.vertices[i]);
@@ -99,7 +99,7 @@ describe('buildInsertSolids', () => {
 
 describe('buildSlotShelf', () => {
   it('is watertight and stays inside the bin height plus the front overhang', () => {
-    const shelf = buildSlotShelf(m, params());
+    const shelf = buildSlotShelf(m, binParams());
     expect(shelf.status()).toBe('NoError');
     const box = shelf.boundingBox();
     // heightUnits 3: nominal top 21; the front overhang strip rises 0.7 above.
@@ -108,20 +108,15 @@ describe('buildSlotShelf', () => {
   });
 
   it('keeps a flat-topped bin flat: no overhang without a stacking lip', () => {
-    const shelf = buildSlotShelf(m, params({ stackingLip: false }));
+    const shelf = buildSlotShelf(m, binParams({ stackingLip: false }));
     expect(shelf.boundingBox().max[2]).toBeCloseTo(21, 6);
     shelf.delete();
   });
 });
 
 describe('insert in slot', () => {
-  function placedInsert(p: LabeledBinParams): Manifold {
-    const { body, label } = buildInsertSolids(
-      m,
-      font,
-      { text: p.labelText, icon: null },
-      p.gridX,
-    );
+  function placedInsert(p: BinParams & { labelText: string }): Manifold {
+    const { body, label } = buildInsertSolids(m, font, { text: p.labelText, icon: null }, p.gridX);
     const parts = label === null ? [body] : [body, label];
     const at = insertPositionInBin(p);
     const placed = m.Manifold.union(parts).translate(at.x, at.y, at.z);
@@ -131,9 +126,9 @@ describe('insert in slot', () => {
   }
 
   it('rests in the slot without touching the bin body (clearance fit)', () => {
-    const p = params();
-    const body = buildLabeledBody(m, p);
-    const insert = placedInsert(p);
+    const p = binParams();
+    const body = buildSlottedBinBody(m, p);
+    const insert = placedInsert({ ...p, labelText: 'M3' });
     const overlap = insert.intersect(body);
     // The insert rests on the channel floor (coincident faces), so the
     // intersection may be a zero-volume film, but never solid material.
@@ -146,9 +141,9 @@ describe('insert in slot', () => {
   });
 
   it('is retained: lifting the insert makes it collide with the slot geometry', () => {
-    const p = params();
-    const body = buildLabeledBody(m, p);
-    const lifted = placedInsert(p).translate(0, 0, 0.4);
+    const p = binParams();
+    const body = buildSlottedBinBody(m, p);
+    const lifted = placedInsert({ ...p, labelText: 'M3' }).translate(0, 0, 0.4);
     const overlap = lifted.intersect(body);
     expect(overlap.volume()).toBeGreaterThan(0.01);
     overlap.delete();
@@ -157,9 +152,9 @@ describe('insert in slot', () => {
   });
 
   it('cannot slide sideways past the side cheeks', () => {
-    const p = params();
-    const body = buildLabeledBody(m, p);
-    const shifted = placedInsert(p).translate(1.5, 0, 0);
+    const p = binParams();
+    const body = buildSlottedBinBody(m, p);
+    const shifted = placedInsert({ ...p, labelText: 'M3' }).translate(1.5, 0, 0);
     const overlap = shifted.intersect(body);
     expect(overlap.volume()).toBeGreaterThan(0.01);
     overlap.delete();
@@ -168,15 +163,15 @@ describe('insert in slot', () => {
   });
 });
 
-describe('generateLabeledBin label modes', () => {
-  it("mode 'slot' returns the slotted bin with no label mesh", () => {
-    const result = generateLabeledBin(m, font, params({ labelMode: 'slot' }));
+describe('generateSlottedBin with and without a paired insert', () => {
+  it('returns the slotted bin with no label mesh when the slot is empty', () => {
+    const result = generateSlottedBin(m, font, params({ insert: null }));
     expect(result.label).toBeNull();
     expect(result.body.indices.length).toBeGreaterThan(0);
   });
 
-  it("mode 'slot-insert' previews the insert in place on the label mesh", () => {
-    const result = generateLabeledBin(m, font, params({ labelMode: 'slot-insert' }));
+  it('previews the insert in place on the label mesh when one is paired', () => {
+    const result = generateSlottedBin(m, font, params());
     expect(result.label).not.toBeNull();
     // The preview insert lies in the slot: its lowest point is the channel
     // floor at 20.0 for a 3-unit bin.
@@ -187,18 +182,9 @@ describe('generateLabeledBin label modes', () => {
     expect(minZ).toBeCloseTo(20.0, 5);
   });
 
-  it("mode 'insert' returns just the insert plate and inlay", () => {
-    const result = generateLabeledBin(m, font, params({ labelMode: 'insert' }));
-    expect(result.label).not.toBeNull();
-    let maxZ = -Infinity;
-    for (let i = 2; i < result.body.vertices.length; i += 3) {
-      maxZ = Math.max(maxZ, result.body.vertices[i]);
-    }
-    expect(maxZ).toBeCloseTo(0.8, 6);
-  });
-
   it('placed preview insert build matches the standalone insert position', () => {
-    const placed = buildInsertPlacedInSlot(m, font, params({ labelMode: 'slot-insert' }));
+    const p = params();
+    const placed = buildInsertPlacedInSlot(m, font, p.insert!, p);
     expect(placed.status()).toBe('NoError');
     expect(placed.boundingBox().min[2]).toBeCloseTo(20.0, 6);
     placed.delete();

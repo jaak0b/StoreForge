@@ -1,60 +1,34 @@
 import {
-  generateLabeledBin,
-  generateLabeledBinUnion,
-  generateLabelInsert,
-  generateLabelInsertUnion,
+  generateInsert,
+  generateInsertUnion,
   generatePocketBin,
   generatePocketBinUnion,
+  generateSlottedBin,
+  generateSlottedBinUnion,
 } from './workerClient';
 import { meshToStlBlob } from './engine/gridfinity/stlExport';
 import { binOuterSizeMm } from './engine/gridfinity/constants';
-import { labelModeOf } from './engine/gridfinity/binGenerator';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
-import type { LabeledBinMeshes, LabeledBinParams, MeshData } from './engine/gridfinity/types';
-import type { BinPockets } from './engine/plan/types';
-import { binParamsKey } from './engine/plan/batches';
+import type { MeshData, PartMeshes } from './engine/gridfinity/types';
+import type { BinPockets, Product } from './engine/plan/types';
+import { partsOf, type PrintablePart } from './engine/plan/geometry';
 import { arrangeAutoPlate, type FootprintItem, type Placement } from './engine/plate/arranger';
 import { mergePlacedMeshes, type PlacedMesh } from './engine/plate/placement';
 import { writePlate3mf, type PlateItem } from './engine/threeMf/writer';
 
 /**
- * Shared download plumbing for the single-page UI: single-bin STL/3MF from a
- * queue row and merged STL / 3MF exports of a whole print batch. The plate
+ * Shared download plumbing for the single-page UI: single-entry STL/3MF from
+ * a queue row and merged STL / 3MF exports of a whole print batch. The plate
  * layout for batch downloads is arranged automatically (no plate preview);
- * the user rearranges bins in the slicer. An entry expands into its printable
- * parts first: a 'slot-insert' entry contributes its slotted bin and its
- * label insert as two separately placed parts, an 'insert' entry only the
- * insert, everything else the bin itself.
+ * the user rearranges parts in the slicer. A product expands into its
+ * printable parts first (see engine/plan/geometry): a bin ordered with its
+ * insert contributes the bin and the insert as two separately placed parts.
  */
 
-/** One bin design with the number of copies to export. */
-export interface DownloadBin {
-  params: LabeledBinParams;
+/** One product with the number of copies to export. */
+export interface DownloadProduct {
+  product: Product;
   count: number;
-  /** Tool pockets of the bin, when it has any. */
-  pockets?: BinPockets;
-}
-
-/** One printable part of a queue entry: the bin body or the label insert. */
-interface EntryPart {
-  params: LabeledBinParams;
-  pockets?: BinPockets;
-  part: 'bin' | 'insert';
-}
-
-/** Expands an entry into the parts its label mode calls for. */
-function partsOf(params: LabeledBinParams, pockets?: BinPockets): EntryPart[] {
-  const mode = labelModeOf(params);
-  if (mode === 'insert') return [{ params, part: 'insert' }];
-  if (mode === 'slot-insert') {
-    // The bin part is exported as a plain slotted bin so the insert never
-    // rides along inside the slot; the insert is its own placed part.
-    return [
-      { params: { ...params, labelMode: 'slot' }, pockets, part: 'bin' },
-      { params, part: 'insert' },
-    ];
-  }
-  return [{ params, pockets, part: 'bin' }];
 }
 
 // Pocket data crossing into the worker is deep-copied to strip Vue proxies,
@@ -64,28 +38,33 @@ function plainPockets(pockets: BinPockets): BinPockets {
 }
 
 /** Generates one part's separate body and label meshes. */
-function generatePartMeshes(part: EntryPart): Promise<LabeledBinMeshes> {
-  if (part.part === 'insert') return generateLabelInsert(part.params);
-  if (part.pockets === undefined) return generateLabeledBin(part.params);
-  return generatePocketBin({ ...part.params, ...plainPockets(part.pockets) });
+function generatePartMeshes(part: PrintablePart): Promise<PartMeshes> {
+  if (part.part === 'insert') return generateInsert(part.insert);
+  if (part.pockets === undefined) return generateSlottedBin(part.bin);
+  return generatePocketBin({ ...part.bin, ...plainPockets(part.pockets) });
 }
 
 /** Generates one part as a single unioned mesh. */
-function generatePartUnion(part: EntryPart): Promise<MeshData> {
-  if (part.part === 'insert') return generateLabelInsertUnion(part.params);
-  if (part.pockets === undefined) return generateLabeledBinUnion(part.params);
-  return generatePocketBinUnion({ ...part.params, ...plainPockets(part.pockets) });
+function generatePartUnion(part: PrintablePart): Promise<MeshData> {
+  if (part.part === 'insert') return generateInsertUnion(part.insert);
+  if (part.pockets === undefined) return generateSlottedBinUnion(part.bin);
+  return generatePocketBinUnion({ ...part.bin, ...plainPockets(part.pockets) });
 }
 
 /** The part's plate footprint in millimetres. */
-function partFootprint(part: EntryPart): { widthMm: number; depthMm: number } {
+function partFootprint(part: PrintablePart): { widthMm: number; depthMm: number } {
   if (part.part === 'insert') {
-    return { widthMm: insertLengthMm(part.params.gridX), depthMm: INSERT_DEPTH };
+    return { widthMm: insertLengthMm(part.insert.cells), depthMm: INSERT_DEPTH };
   }
   return {
-    widthMm: binOuterSizeMm(part.params.gridX),
-    depthMm: binOuterSizeMm(part.params.gridY),
+    widthMm: binOuterSizeMm(part.bin.gridX),
+    depthMm: binOuterSizeMm(part.bin.gridY),
   };
+}
+
+/** Stable key identifying one printable part, for deduplication. */
+function partKey(part: PrintablePart): string {
+  return JSON.stringify(part);
 }
 
 export function triggerDownload(blob: Blob, name: string): void {
@@ -97,49 +76,52 @@ export function triggerDownload(blob: Blob, name: string): void {
   URL.revokeObjectURL(url);
 }
 
-function binName(params: LabeledBinParams): string {
-  const size = `${params.gridX}x${params.gridY}x${params.heightUnits}`;
-  return params.labelText !== '' ? `${params.labelText} (${size})` : size;
-}
-
 /** Object name of one part, shown in the slicer. */
-function partName(part: EntryPart): string {
-  const name = binName(part.params);
-  return part.part === 'insert' ? `${name} label insert` : name;
+function partName(part: PrintablePart): string {
+  if (part.part === 'insert') {
+    const text = part.insert.content.text;
+    return text !== '' ? `${text} label insert` : `${part.insert.cells}u label insert`;
+  }
+  const size = `${part.bin.gridX}x${part.bin.gridY}x${part.bin.heightUnits}`;
+  return part.bin.insert !== null && part.bin.insert.text !== ''
+    ? `${part.bin.insert.text} (${size})`
+    : size;
 }
 
-function fileStem(params: LabeledBinParams): string {
-  if (labelModeOf(params) === 'insert') {
-    return `gridfinity_label_insert_${params.gridX}u`;
+/** File name stem of a single-product download. */
+function fileStem(product: Product): string {
+  if (product.kind === 'insert') {
+    return `gridfinity_label_insert_${product.cells}u`;
   }
-  return `gridfinity_bin_${params.gridX}x${params.gridY}x${params.heightUnits}`;
+  const bin = product.bin;
+  return `gridfinity_bin_${bin.gridX}x${bin.gridY}x${bin.heightUnits}`;
 }
 
 /** A generated part with everywhere its copies go on the plate. */
 interface ArrangedPart {
-  part: EntryPart;
+  part: PrintablePart;
   placements: Placement[];
 }
 
 /**
- * Expands the bins into their printable parts, deduplicates identical parts
- * and arranges every copy on an automatically sized plate, so each unique
- * part generates once.
+ * Expands the products into their printable parts, deduplicates identical
+ * parts and arranges every copy on an automatically sized plate, so each
+ * unique part generates once.
  */
-function arrangeUniqueParts(bins: DownloadBin[]): ArrangedPart[] {
-  const groups = new Map<string, { part: EntryPart; ids: string[] }>();
+function arrangeUniqueParts(products: DownloadProduct[]): ArrangedPart[] {
+  const groups = new Map<string, { part: PrintablePart; ids: string[] }>();
   const items: FootprintItem[] = [];
   let instance = 0;
-  for (const bin of bins) {
-    for (const part of partsOf(bin.params, bin.pockets)) {
-      const key = `${part.part}:${binParamsKey(part.params, part.pockets)}`;
+  for (const entry of products) {
+    for (const part of partsOf(entry.product)) {
+      const key = partKey(part);
       let group = groups.get(key);
       if (group === undefined) {
         group = { part, ids: [] };
         groups.set(key, group);
       }
       const footprint = partFootprint(part);
-      for (let i = 0; i < bin.count; i++) {
+      for (let i = 0; i < entry.count; i++) {
         const id = `part#${instance++}`;
         group.ids.push(id);
         items.push({ id, ...footprint });
@@ -153,15 +135,12 @@ function arrangeUniqueParts(bins: DownloadBin[]): ArrangedPart[] {
   }));
 }
 
-/** Downloads one queue entry as a single STL mesh (all its parts arranged side by side). */
-export async function downloadBinStl(
-  params: LabeledBinParams,
-  pockets?: BinPockets,
-): Promise<void> {
-  const arranged = arrangeUniqueParts([{ params, count: 1, pockets }]);
+/** Downloads one product as a single STL mesh (all its parts arranged side by side). */
+export async function downloadProductStl(product: Product): Promise<void> {
+  const arranged = arrangeUniqueParts([{ product, count: 1 }]);
   if (arranged.length === 1) {
     const mesh = await generatePartUnion(arranged[0].part);
-    triggerDownload(meshToStlBlob(mesh), `${fileStem(params)}.stl`);
+    triggerDownload(meshToStlBlob(mesh), `${fileStem(product)}.stl`);
     return;
   }
   const placed: PlacedMesh[] = [];
@@ -171,15 +150,12 @@ export async function downloadBinStl(
       placed.push({ mesh, xMm: placement.xMm, yMm: placement.yMm });
     }
   }
-  triggerDownload(meshToStlBlob(mergePlacedMeshes(placed)), `${fileStem(params)}.stl`);
+  triggerDownload(meshToStlBlob(mergePlacedMeshes(placed)), `${fileStem(product)}.stl`);
 }
 
-/** Downloads one queue entry as a two-filament 3MF (body slot 1, label slot 2). */
-export async function downloadBin3mf(
-  params: LabeledBinParams,
-  pockets?: BinPockets,
-): Promise<void> {
-  const arranged = arrangeUniqueParts([{ params, count: 1, pockets }]);
+/** Downloads one product as a two-filament 3MF (body slot 1, label slot 2). */
+export async function downloadProduct3mf(product: Product): Promise<void> {
+  const arranged = arrangeUniqueParts([{ product, count: 1 }]);
   const items: PlateItem[] = [];
   for (const { part, placements } of arranged) {
     const meshes = await generatePartMeshes(part);
@@ -193,7 +169,7 @@ export async function downloadBin3mf(
   const bytes = writePlate3mf(items);
   triggerDownload(
     new Blob([bytes.buffer as ArrayBuffer], { type: 'model/3mf' }),
-    `${fileStem(params)}.3mf`,
+    `${fileStem(product)}.3mf`,
   );
 }
 
@@ -202,16 +178,17 @@ export type BatchFormat = 'stl' | '3mf-single' | '3mf-two';
 
 /**
  * Downloads a whole batch in the given format: one merged STL, a
- * single-color 3MF (labels unioned into their bodies) or a two-filament 3MF
- * (bodies on slot 1, labels on slot 2). Progress is reported per unique part.
+ * single-color 3MF (inserts as plain single-color parts) or a two-filament
+ * 3MF (bodies on slot 1, insert labels on slot 2). Progress is reported per
+ * unique part.
  */
 export async function downloadBatch(
-  bins: DownloadBin[],
+  products: DownloadProduct[],
   format: BatchFormat,
   batchName: string,
   onProgress: (text: string) => void,
 ): Promise<void> {
-  const unique = arrangeUniqueParts(bins);
+  const unique = arrangeUniqueParts(products);
   const stem = batchName.trim() === '' ? 'gridfinity_batch' : sanitizeFileName(batchName);
   if (format === 'stl') {
     const placed: PlacedMesh[] = [];

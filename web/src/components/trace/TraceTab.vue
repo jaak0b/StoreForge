@@ -5,7 +5,7 @@ import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
-import type { TracedBin } from '../../engine/plan/types';
+import { binOf, type TracedBin } from '../../engine/plan/types';
 import type { PaperCorners } from '../../engine/trace/types';
 import { worldFromEntry } from '../../engine/trace/layoutModel';
 import { getPhoto } from '../../photoStore';
@@ -39,7 +39,15 @@ const stage = ref<1 | 2>(1);
 const editingEntry = computed(() => {
   if (app.editingKind !== 'traced' || app.editingEntryId === null) return null;
   const entry = queue.entryById(app.editingEntryId);
-  return entry !== null && entry.kind === 'traced' ? entry : null;
+  return entry !== null && binOf(entry.product)?.origin === 'traced' ? entry : null;
+});
+
+/** The traced bin of the entry being edited, or null. */
+const editingBin = computed<TracedBin | null>(() => {
+  const entry = editingEntry.value;
+  if (entry === null) return null;
+  const bin = binOf(entry.product);
+  return bin !== null && bin.origin === 'traced' ? bin : null;
 });
 
 // The entry's original photo when it is still in this device's photo store,
@@ -74,7 +82,7 @@ async function lookUpStoredPhoto(entry: TracedBin): Promise<void> {
  * so the trace canvas can restore each tool's clicks.
  */
 async function resumeTrace(): Promise<void> {
-  const entry = editingEntry.value;
+  const entry = editingBin.value;
   const blob = storedPhoto.value;
   if (entry === null || blob === null || entry.paper === undefined) return;
   resumeBusy.value = true;
@@ -116,29 +124,32 @@ watch(
   (entryId) => {
     if (entryId === null) return;
     const entry = queue.entryById(entryId);
-    if (entry === null || entry.kind !== 'traced') return;
-    void lookUpStoredPhoto(entry);
-    trace.tools = JSON.parse(JSON.stringify(entry.pockets.tools));
+    if (entry === null) return;
+    const bin = binOf(entry.product);
+    if (bin === null || bin.origin !== 'traced') return;
+    void lookUpStoredPhoto(bin);
+    trace.tools = JSON.parse(JSON.stringify(bin.pockets.tools));
     // Stored placements are bin-centred; the layout model works in the world
     // frame, so place the resumed layout inside the bin's world cells.
     trace.placements = worldFromEntry(
-      JSON.parse(JSON.stringify(entry.pockets.placements)),
-      entry.gridX,
-      entry.gridY,
+      JSON.parse(JSON.stringify(bin.pockets.placements)),
+      bin.gridX,
+      bin.gridY,
     );
     trace.selectedToolId = null;
     // The stored footprint is a floor; the layout can still demand more.
-    trace.gridX = entry.gridX;
-    trace.gridY = entry.gridY;
+    trace.gridX = bin.gridX;
+    trace.gridY = bin.gridY;
     trace.gridManual = true;
+    const content = entry.product.kind === 'binWithInsert' ? entry.product.insert : null;
     designer.$patch({
-      heightUnits: entry.heightUnits,
-      stackingLip: entry.stackingLip,
-      magnetHoles: entry.magnetHoles,
-      labelText: entry.labelText,
-      labelText2: entry.labelText2,
-      labelIcon: entry.labelIcon,
-      labelMode: entry.labelMode ?? 'embossed',
+      productChoice: entry.product.kind === 'binWithInsert' ? 'binWithInsert' : 'bin',
+      heightUnits: bin.heightUnits,
+      stackingLip: bin.stackingLip,
+      magnetHoles: bin.magnetHoles,
+      labelText: content?.text ?? '',
+      labelText2: content?.text2 ?? '',
+      labelIcon: content?.icon ?? null,
       notes: entry.notes ?? '',
     });
     stage.value = 2;

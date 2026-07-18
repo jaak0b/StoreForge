@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useBinQueue } from '../stores/binQueue';
-import type { BatchItem, PrintBatch } from '../engine/plan/types';
+import { binOf, insertOf, type BatchItem, type PrintBatch } from '../engine/plan/types';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
 import { downloadBatch, type BatchFormat } from '../binDownloads';
@@ -18,16 +18,26 @@ const props = defineProps<{ batch: PrintBatch }>();
 
 const queue = useBinQueue();
 
-function labelIconOf(name: string | null): LabelIcon | null {
-  return name !== null ? resolveLabelIcon(name) : null;
+function itemIcon(item: BatchItem): LabelIcon | null {
+  const icon = insertOf(item.product)?.content.icon ?? null;
+  return icon !== null ? resolveLabelIcon(icon) : null;
 }
 
 function itemTitle(item: BatchItem): string {
-  return item.params.labelText !== '' ? item.params.labelText : sizeText(item);
+  const insert = insertOf(item.product);
+  if (insert !== null && insert.content.text !== '') return insert.content.text;
+  if (item.product.kind === 'insert') return `${item.product.cells}u label insert`;
+  return sizeText(item);
+}
+
+function itemText2(item: BatchItem): string {
+  return insertOf(item.product)?.content.text2 ?? '';
 }
 
 function sizeText(item: BatchItem): string {
-  return `${item.params.gridX} x ${item.params.gridY} x ${item.params.heightUnits}`;
+  const bin = binOf(item.product);
+  if (bin === null) return '';
+  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
 }
 
 // Name editing commits on change (blur or Enter).
@@ -82,9 +92,8 @@ async function download(format: BatchFormat): Promise<void> {
     await downloadBatch(
       // Custom icon paths are resolved inside the worker client.
       props.batch.items.map((item) => ({
-        params: item.params,
+        product: item.product,
         count: item.count,
-        pockets: item.pockets,
       })),
       format,
       props.batch.name,
@@ -166,14 +175,14 @@ async function download(format: BatchFormat): Promise<void> {
       >
         <span class="swatch d-flex align-center justify-center">
           <svg
-            v-if="labelIconOf(item.params.labelIcon) !== null"
+            v-if="itemIcon(item) !== null"
             width="18"
             height="18"
-            :viewBox="labelIconOf(item.params.labelIcon)!.viewBox.join(' ')"
+            :viewBox="itemIcon(item)!.viewBox.join(' ')"
             aria-hidden="true"
           >
             <path
-              :d="labelIconOf(item.params.labelIcon)!.path"
+              :d="itemIcon(item)!.path"
               fill="currentColor"
               fill-rule="evenodd"
             />
@@ -183,13 +192,13 @@ async function download(format: BatchFormat): Promise<void> {
         <span class="row-name">
           <span class="d-block text-body-2 font-weight-bold">{{ itemTitle(item) }}</span>
           <span
-            v-if="item.params.labelText2 !== ''"
+            v-if="itemText2(item) !== ''"
             class="d-block text-caption text-medium-emphasis"
           >
-            {{ item.params.labelText2 }}
+            {{ itemText2(item) }}
           </span>
         </span>
-        <span class="row-dims">{{ item.params.labelText !== '' ? sizeText(item) : '' }}</span>
+        <span class="row-dims">{{ itemTitle(item) !== sizeText(item) ? sizeText(item) : '' }}</span>
         <span class="qty-badge">x{{ item.count }}</span>
         <v-spacer />
         <template v-if="confirmingItemId === item.id">

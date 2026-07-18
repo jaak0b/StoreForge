@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { useApp } from '../stores/app';
-import type { BinKind } from '../engine/plan/types';
+import type { ProductOrigin } from '../engine/plan/types';
 import ManualBinTab from './ManualBinTab.vue';
 import ScrewEntryTab from './ScrewEntryTab.vue';
 import TraceTab from './trace/TraceTab.vue';
@@ -18,7 +18,7 @@ const app = useApp();
 type TabName = 'manual' | 'screw' | 'trace';
 const tab = ref<TabName>('manual');
 
-const TAB_OF_KIND: Record<BinKind, TabName> = {
+const TAB_OF_KIND: Record<ProductOrigin, TabName> = {
   manual: 'manual',
   screw: 'screw',
   traced: 'trace',

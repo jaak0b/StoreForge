@@ -15,6 +15,11 @@ const props = defineProps<{
   quantity?: number;
   /** Hides the divider fields; a pocket bin cannot have divider walls. */
   hideDividers?: boolean;
+  /**
+   * Hides every bin body option (dividers, stacking lip, magnet holes); an
+   * insert-only design has no bin body to configure.
+   */
+  insertOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -58,7 +63,7 @@ const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, note
           @update:model-value="emit('update:quantity', Number($event))"
         />
         <v-text-field
-          v-if="!props.hideDividers"
+          v-if="!props.hideDividers && !props.insertOnly"
           v-model.number="dividerCountX"
           type="number"
           min="0"
@@ -68,7 +73,7 @@ const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, note
           hide-details
         />
         <v-text-field
-          v-if="!props.hideDividers"
+          v-if="!props.hideDividers && !props.insertOnly"
           v-model.number="dividerCountY"
           type="number"
           min="0"
@@ -78,7 +83,7 @@ const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, note
           hide-details
         />
       </div>
-      <div class="options-grid mt-3">
+      <div v-if="!props.insertOnly" class="options-grid mt-3">
         <v-switch
           v-model="stackingLip"
           color="primary"

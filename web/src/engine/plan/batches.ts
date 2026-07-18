@@ -1,86 +1,39 @@
-import type { LabeledBinParams } from '../gridfinity/types';
-import { assertNever, type BatchItem, type BinEntry, type BinPockets, type PrintBatch, type ScrewSpec, type TracePaper, type TracedBin } from './types';
+import type { BatchItem, PrintBatch, Product, QueueEntry } from './types';
 
 /**
  * Pure print-batch operations over the plan's entries and batches. A batch
- * item embeds a snapshot of the bin design parameters, so a batch keeps
- * working after the queue entry it came from is edited or deleted; the
- * sourceEntryId on each item is only a hint for returning failed amounts to
- * the same queue row.
+ * item embeds a snapshot of the product, so a batch keeps working after the
+ * queue entry it came from is edited or deleted; the sourceEntryId on each
+ * item is only a hint for returning failed amounts to the same queue row.
  */
 
 /** One selected queue row headed into a new batch, with the amount to take. */
 export interface BatchSelection {
-  /** Id of the queue entry to take bins from. */
+  /** Id of the queue entry to take copies from. */
   entryId: string;
-  /** How many bins to move into the batch. Clamped to the entry's quantity. */
+  /** How many copies to move into the batch. Clamped to the entry's quantity. */
   count: number;
 }
 
-/** Copies only the design parameter fields of an entry, as a snapshot. */
-export function snapshotParams(entry: BinEntry): LabeledBinParams {
-  const shared = {
-    gridX: entry.gridX,
-    gridY: entry.gridY,
-    heightUnits: entry.heightUnits,
-    stackingLip: entry.stackingLip,
-    magnetHoles: entry.magnetHoles,
-    labelText: entry.labelText,
-    labelText2: entry.labelText2,
-    labelIcon: entry.labelIcon,
-    ...(entry.labelMode !== undefined ? { labelMode: entry.labelMode } : {}),
-  };
-  switch (entry.kind) {
-    case 'manual':
-    case 'screw':
-      return {
-        ...shared,
-        dividerCountX: entry.dividerCountX,
-        dividerCountY: entry.dividerCountY,
-      };
-    case 'traced':
-      // The pocket generator rejects divider walls, so a traced bin has none.
-      return { ...shared, dividerCountX: 0, dividerCountY: 0 };
-    default:
-      return assertNever(entry);
-  }
+/** Deep JSON copy of a product, so a batch snapshot never aliases the queue row. */
+export function snapshotProduct(product: Product): Product {
+  return JSON.parse(JSON.stringify(product)) as Product;
 }
 
-/** Deep JSON copy of a traced entry's pockets, so a batch snapshot never aliases the queue row. */
-export function snapshotPockets(entry: BinEntry): BinPockets | undefined {
-  return entry.kind === 'traced'
-    ? (JSON.parse(JSON.stringify(entry.pockets)) as BinPockets)
-    : undefined;
-}
-
-/** Copy of a screw entry's screw description, for the batch snapshot. */
-export function snapshotScrew(entry: BinEntry): ScrewSpec | undefined {
-  return entry.kind === 'screw' ? { ...entry.screw } : undefined;
-}
-
-/** Stable key identifying a bin design, for grouping identical bins. */
-export function binParamsKey(params: LabeledBinParams, pockets?: BinPockets): string {
-  return JSON.stringify([
-    params.gridX,
-    params.gridY,
-    params.heightUnits,
-    params.stackingLip,
-    params.magnetHoles,
-    params.dividerCountX,
-    params.dividerCountY,
-    params.labelText,
-    params.labelText2,
-    params.labelIcon,
-    params.labelMode ?? 'embossed',
-    pockets ?? null,
-  ]);
+/**
+ * Stable key identifying a product design, for grouping identical products.
+ * Products are plain JSON with a stable field order per kind, so the
+ * serialized form is the key.
+ */
+export function productKey(product: Product): string {
+  return JSON.stringify(product);
 }
 
 /** Result of creating a batch: the updated queue and the new batch. */
 export interface CreateBatchResult {
   /** The queue with the taken amounts removed (rows emptied out are gone). */
-  entries: BinEntry[];
-  /** The new batch, or null when no selection took any bins. */
+  entries: QueueEntry[];
+  /** The new batch, or null when no selection took anything. */
   batch: PrintBatch | null;
 }
 
@@ -91,7 +44,7 @@ export interface CreateBatchResult {
  * a missing entry are ignored.
  */
 export function createBatch(
-  entries: BinEntry[],
+  entries: QueueEntry[],
   selections: BatchSelection[],
   name: string,
   ids: { batchId: string; itemId: () => string },
@@ -103,25 +56,12 @@ export function createBatch(
     const entry = entries.find((e) => e.id === selection.entryId);
     if (entry === undefined) continue;
     const count = Math.min(Math.max(1, Math.floor(selection.count)), entry.quantity);
-    const item: BatchItem = {
+    items.push({
       id: ids.itemId(),
-      params: snapshotParams(entry),
+      product: snapshotProduct(entry.product),
       count,
       sourceEntryId: entry.id,
-    };
-    const pockets = snapshotPockets(entry);
-    if (pockets !== undefined) item.pockets = pockets;
-    if (entry.kind === 'traced') {
-      // The photo-store key and sheet setup ride along so a failed print
-      // returns to the queue fully re-traceable.
-      if (entry.traceSourceId !== undefined) item.traceSourceId = entry.traceSourceId;
-      if (entry.paper !== undefined) {
-        item.paper = JSON.parse(JSON.stringify(entry.paper)) as TracePaper;
-      }
-    }
-    const screw = snapshotScrew(entry);
-    if (screw !== undefined) item.screw = screw;
-    items.push(item);
+    });
     remaining.set(entry.id, entry.quantity - count);
   }
   if (items.length === 0) return { entries, batch: null };
@@ -161,7 +101,7 @@ export function confirmBatchItem(
 /** Result of failing a batch item: the updated queue and batch. */
 export interface FailBatchItemResult {
   /** The queue with the failed amount returned to it. */
-  entries: BinEntry[];
+  entries: QueueEntry[];
   /** The updated batch, or null when the batch emptied out. */
   batch: PrintBatch | null;
 }
@@ -169,11 +109,11 @@ export interface FailBatchItemResult {
 /**
  * Marks a batch item as failed: its whole count returns to the main queue.
  * The amount is re-added to the source entry when it still exists, otherwise
- * to any entry with identical design parameters, otherwise a new entry is
- * recreated from the item's snapshot.
+ * to any entry with an identical product, otherwise a new entry is recreated
+ * from the item's snapshot.
  */
 export function failBatchItem(
-  entries: BinEntry[],
+  entries: QueueEntry[],
   batch: PrintBatch,
   itemId: string,
   newEntryId: () => string,
@@ -181,48 +121,25 @@ export function failBatchItem(
 ): FailBatchItemResult {
   const item = batch.items.find((i) => i.id === itemId);
   if (item === undefined) return { entries, batch };
-  const itemKey = binParamsKey(item.params, item.pockets);
+  const itemKey = productKey(item.product);
   const target =
     entries.find((entry) => entry.id === item.sourceEntryId) ??
-    entries.find(
-      (entry) =>
-        binParamsKey(snapshotParams(entry), entry.kind === 'traced' ? entry.pockets : undefined) ===
-        itemKey,
-    );
-  let updatedEntries: BinEntry[];
+    entries.find((entry) => productKey(entry.product) === itemKey);
+  let updatedEntries: QueueEntry[];
   if (target !== undefined) {
     updatedEntries = entries.map((entry) =>
       entry.id === target.id ? { ...entry, quantity: entry.quantity + item.count } : entry,
     );
   } else {
-    // Recreate the entry as the kind it was batched from: the pockets or
-    // screw snapshot on the item marks its origin (a plain item is manual).
-    const { dividerCountX, dividerCountY, ...shared } = item.params;
-    const base = { id: newEntryId(), ...shared, quantity: item.count, createdAt };
-    let recreated: BinEntry;
-    if (item.pockets !== undefined) {
-      const traced: TracedBin = {
-        ...base,
-        kind: 'traced',
-        pockets: JSON.parse(JSON.stringify(item.pockets)) as BinPockets,
-      };
-      if (item.traceSourceId !== undefined) traced.traceSourceId = item.traceSourceId;
-      if (item.paper !== undefined) {
-        traced.paper = JSON.parse(JSON.stringify(item.paper)) as TracePaper;
-      }
-      recreated = traced;
-    } else if (item.screw !== undefined) {
-      recreated = {
-        ...base,
-        kind: 'screw',
-        dividerCountX,
-        dividerCountY,
-        screw: { ...item.screw },
-      };
-    } else {
-      recreated = { ...base, kind: 'manual', dividerCountX, dividerCountY };
-    }
-    updatedEntries = [...entries, recreated];
+    updatedEntries = [
+      ...entries,
+      {
+        id: newEntryId(),
+        quantity: item.count,
+        createdAt,
+        product: snapshotProduct(item.product),
+      },
+    ];
   }
   const items = batch.items.filter((i) => i.id !== itemId);
   return { entries: updatedEntries, batch: items.length === 0 ? null : { ...batch, items } };

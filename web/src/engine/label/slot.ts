@@ -226,6 +226,34 @@ export function slotClearanceCutter(m: ManifoldToplevel, params: BinParams): Man
   );
 }
 
+/**
+ * Give a bin body its insert slot: the channel space is cut out of the body
+ * first (the channel is wider than the interior is at its rounded front
+ * corners, so like the reference model it recesses into the side walls), then
+ * the slot shelf is unioned in. The single place the cut-then-shelf sequence
+ * lives; both the plain bin builder and the pocket bin builder (which re-fills
+ * the interior and must restore the channel) call it. Consumes the given body
+ * and returns the slotted result.
+ */
+export function applySlotToBody(
+  m: ManifoldToplevel,
+  params: BinParams,
+  body: Manifold,
+): Manifold {
+  const clearance = slotClearanceCutter(m, params);
+  const cleared = m.Manifold.difference(body, clearance);
+  body.delete();
+  clearance.delete();
+  const shelf = buildSlotShelf(m, params);
+  const slotted = m.Manifold.union([cleared, shelf]);
+  cleared.delete();
+  shelf.delete();
+  if (slotted.status() !== 'NoError') {
+    throw new Error(`Slot construction produced an invalid solid: ${slotted.status()}`);
+  }
+  return slotted;
+}
+
 /** The two parts of a label insert, kept separate for per-part coloring. */
 export interface InsertSolids {
   /** The insert plate with the label face pocketed out of its top. */

@@ -6,9 +6,10 @@ import {
 } from '../../src/engine/plan/traceSources';
 import type {
   BatchItem,
-  BinEntry,
   ManualBin,
   PrintBatch,
+  Product,
+  QueueEntry,
   TracedBin,
 } from '../../src/engine/plan/types';
 
@@ -16,10 +17,9 @@ import type {
 // that node cannot run without a shim; the wrapper stays thin and untested,
 // and these tests cover the garbage-collection logic through a fake store.
 
-function manual(id: string): ManualBin {
+function manualBin(): ManualBin {
   return {
-    id,
-    kind: 'manual',
+    origin: 'manual',
     gridX: 1,
     gridY: 1,
     heightUnits: 3,
@@ -27,22 +27,17 @@ function manual(id: string): ManualBin {
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
-    labelText: '',
-    labelText2: '',
-    labelIcon: null,
-    quantity: 1,
-    createdAt: '2026-07-01T10:00:00.000Z',
   };
 }
 
-function traced(id: string, traceSourceId?: string): TracedBin {
-  const { dividerCountX, dividerCountY, kind, ...base } = manual(id);
+function tracedBin(traceSourceId?: string): TracedBin {
+  const { dividerCountX, dividerCountY, origin, ...base } = manualBin();
   void dividerCountX;
   void dividerCountY;
-  void kind;
-  const entry: TracedBin = {
+  void origin;
+  const bin: TracedBin = {
     ...base,
-    kind: 'traced',
+    origin: 'traced',
     pockets: {
       tools: [
         {
@@ -66,23 +61,36 @@ function traced(id: string, traceSourceId?: string): TracedBin {
       placements: [{ toolId: 't1', xMm: 0, yMm: 0, pocketDepthMm: 10 }],
     },
   };
-  if (traceSourceId !== undefined) entry.traceSourceId = traceSourceId;
-  return entry;
+  if (traceSourceId !== undefined) bin.traceSourceId = traceSourceId;
+  return bin;
 }
 
-function batchWith(items: Partial<BatchItem>[]): PrintBatch {
-  const { id, kind, quantity, createdAt, ...params } = manual('x');
-  void id;
-  void kind;
-  void quantity;
-  void createdAt;
+function manualEntry(id: string): QueueEntry {
+  return {
+    id,
+    quantity: 1,
+    createdAt: '2026-07-01T10:00:00.000Z',
+    product: { kind: 'bin', bin: manualBin() },
+  };
+}
+
+function tracedEntry(id: string, traceSourceId?: string): QueueEntry {
+  return {
+    id,
+    quantity: 1,
+    createdAt: '2026-07-01T10:00:00.000Z',
+    product: { kind: 'bin', bin: tracedBin(traceSourceId) },
+  };
+}
+
+function batchWith(items: Array<Partial<BatchItem> & { product?: Product }>): PrintBatch {
   return {
     id: 'batch1',
     name: 'Plate',
     createdAt: '2026-07-02T10:00:00.000Z',
     items: items.map((overrides, index) => ({
       id: `item${index}`,
-      params,
+      product: { kind: 'bin', bin: manualBin() },
       count: 1,
       ...overrides,
     })),
@@ -103,8 +111,10 @@ function fakeStore(ids: string[]): PhotoStoreLike & { deleted: string[] } {
 
 describe('referencedTraceSourceIds', () => {
   it('collects ids from traced entries and batch items and skips the rest', () => {
-    const entries: BinEntry[] = [manual('m1'), traced('t1', 'photo-a'), traced('t2')];
-    const batches = [batchWith([{ traceSourceId: 'photo-b' }, {}])];
+    const entries: QueueEntry[] = [manualEntry('m1'), tracedEntry('t1', 'photo-a'), tracedEntry('t2')];
+    const batches = [
+      batchWith([{ product: { kind: 'bin', bin: tracedBin('photo-b') } }, {}]),
+    ];
     expect(referencedTraceSourceIds(entries, batches)).toEqual(new Set(['photo-a', 'photo-b']));
   });
 
@@ -118,8 +128,8 @@ describe('sweepOrphanTracePhotos', () => {
     const store = fakeStore(['photo-a', 'photo-b', 'photo-stale']);
     const deleted = await sweepOrphanTracePhotos(
       store,
-      [traced('t1', 'photo-a')],
-      [batchWith([{ traceSourceId: 'photo-b' }])],
+      [tracedEntry('t1', 'photo-a')],
+      [batchWith([{ product: { kind: 'bin', bin: tracedBin('photo-b') } }])],
     );
     expect(deleted).toEqual(['photo-stale']);
     expect(store.deleted).toEqual(['photo-stale']);
@@ -127,7 +137,7 @@ describe('sweepOrphanTracePhotos', () => {
 
   it('deletes nothing when every stored photo is referenced', async () => {
     const store = fakeStore(['photo-a']);
-    const deleted = await sweepOrphanTracePhotos(store, [traced('t1', 'photo-a')], []);
+    const deleted = await sweepOrphanTracePhotos(store, [tracedEntry('t1', 'photo-a')], []);
     expect(deleted).toEqual([]);
     expect(store.deleted).toEqual([]);
   });
@@ -143,7 +153,11 @@ describe('sweepOrphanTracePhotos', () => {
     const deleted = await sweepOrphanTracePhotos(
       store,
       [],
-      [batchWith([{ traceSourceId: 'photo-a', sourceEntryId: 'gone' }])],
+      [
+        batchWith([
+          { product: { kind: 'bin', bin: tracedBin('photo-a') }, sourceEntryId: 'gone' },
+        ]),
+      ],
     );
     expect(deleted).toEqual([]);
   });

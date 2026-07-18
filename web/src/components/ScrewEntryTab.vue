@@ -5,8 +5,17 @@ import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
-import type { ScrewSpec } from '../engine/plan/types';
+import {
+  insertOf,
+  originOf,
+  type LabelContent,
+  type Product,
+  type QueueEntry,
+  type ScrewSpec,
+} from '../engine/plan/types';
 import { useBinPreview } from '../composables/useBinPreview';
+import { generateInsert, generateSlottedBin } from '../workerClient';
+import type { PartMeshes } from '../engine/gridfinity/types';
 import { iconByName } from '../engine/label/icons';
 import {
   composeLabelText,
@@ -21,24 +30,25 @@ import {
   type HeadType,
   type ScrewBatch,
 } from '../engine/plan/screwListImport';
-import type { LabeledBinParams } from '../engine/gridfinity/types';
 import BinViewport from './BinViewport.vue';
-import LabelModeSelect from './LabelModeSelect.vue';
+import ProductSelect from './ProductSelect.vue';
 import MoreOptions from './MoreOptions.vue';
 
 /**
  * The Screw entry tab of the add-bin card: one shorthand field ("m3x20 fhcs
  * x5") that parses live into a synced Thread/Head/Length/Count/Height
- * breakdown, with the resulting bin (computed size, label, icon) previewing
- * live beside it. A comma-separated shorthand list adds every parsed screw
- * at once; the breakdown then shows the first entry and disables editing,
- * since there is no single set of fields to edit.
+ * breakdown, with the resulting product (computed size, label, icon)
+ * previewing live beside it. A comma-separated shorthand list adds every
+ * parsed screw at once; the breakdown then shows the first entry and
+ * disables editing, since there is no single set of fields to edit. The
+ * product choice decides the packaging: a bin, a bin with its label insert,
+ * or just the insert (a label for a screw bin that already exists).
  */
 
 const app = useApp();
 const queue = useBinQueue();
 const store = useBinDesigner();
-const { labelMode } = storeToRefs(store);
+const { productChoice } = storeToRefs(store);
 const { smAndDown } = useDisplay();
 
 const METRIC_THREADS = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
@@ -67,6 +77,8 @@ const shorthandFocused = ref(false);
 
 const previewLoaded = ref(!smAndDown.value);
 
+const insertOnly = computed(() => productChoice.value === 'insert');
+
 /** Head choices: the canonical head types plus an explicit none. */
 const HEAD_ITEMS = [
   { title: 'No head type', value: null },
@@ -91,40 +103,70 @@ function headIconPath(headType: HeadType): string {
   return iconByName(HEAD_ICON_NAME[headType]).path;
 }
 
-/** The bin a screw batch turns into (size from the length, label, icon). */
-function binParamsFor(
+/** The width in cells and label content a screw batch turns into. */
+function sizedContentFor(batch: {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+  enteredLengthText?: string | null;
+}): { cells: number; content: LabelContent } {
+  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  const effectiveLength = noLength ? null : batch.lengthMm;
+  return {
+    cells: effectiveLength !== null ? computeBinWidthUnits(effectiveLength) : 1,
+    content: {
+      text: composeLabelText(
+        batch.thread,
+        effectiveLength,
+        batch.head,
+        batch.enteredLengthText ?? null,
+      ),
+      text2: '',
+      icon: batch.head !== null ? HEAD_ICON_NAME[batch.head] : null,
+    },
+  };
+}
+
+/** The product a screw batch turns into, per the current product choice. */
+function productFor(
   batch: {
     thread: string | null;
     lengthMm: number | null;
     head: HeadType | null;
     enteredLengthText?: string | null;
   },
+  screw: ScrewSpec,
   binHeightUnits: number,
-): LabeledBinParams {
-  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
-  const effectiveLength = noLength ? null : batch.lengthMm;
-  return {
-    gridX: effectiveLength !== null ? computeBinWidthUnits(effectiveLength) : 1,
+): Product {
+  const { cells, content } = sizedContentFor(batch);
+  if (insertOnly.value) {
+    return { kind: 'insert', origin: 'screw', cells, content, screw };
+  }
+  const bin = {
+    origin: 'screw' as const,
+    gridX: cells,
     gridY: 1,
     heightUnits: binHeightUnits,
     stackingLip: store.stackingLip,
     magnetHoles: store.magnetHoles,
     dividerCountX: store.dividerCountX,
     dividerCountY: store.dividerCountY,
-    labelText: composeLabelText(
-      batch.thread,
-      effectiveLength,
-      batch.head,
-      batch.enteredLengthText ?? null,
-    ),
-    labelText2: '',
-    labelIcon: batch.head !== null ? HEAD_ICON_NAME[batch.head] : null,
-    labelMode: store.labelMode,
+    screw,
   };
+  return productChoice.value === 'binWithInsert'
+    ? { kind: 'binWithInsert', bin, insert: content }
+    : { kind: 'bin', bin };
 }
 
-function sizeText(params: LabeledBinParams): string {
-  return `${params.gridX} x ${params.gridY} x ${params.heightUnits}`;
+function productSizeText(product: Product): string {
+  if (product.kind === 'insert') return `${product.cells}u insert`;
+  const bin = product.bin;
+  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
+}
+
+function productLabelText(product: Product): string {
+  const insert = insertOf(product);
+  return insert !== null ? insert.content.text : productSizeText(product);
 }
 
 // Parsing the shorthand field is the single source of truth; the breakdown
@@ -160,11 +202,20 @@ function quickBatchComplete(batch: ScrewBatch): boolean {
 
 const completeBatches = computed(() => parsed.value.batches.filter(quickBatchComplete));
 
-/** The queue entry being edited on this tab, or null when designing a new bin. */
-const editingEntry = computed(() => {
+/** The queue entry being edited on this tab, or null when designing a new one. */
+const editingEntry = computed<QueueEntry | null>(() => {
   if (app.editingKind !== 'screw' || app.editingEntryId === null) return null;
   const entry = queue.entryById(app.editingEntryId);
-  return entry !== null && entry.kind === 'screw' ? entry : null;
+  return entry !== null && originOf(entry.product) === 'screw' ? entry : null;
+});
+
+/** The screw description stored on the entry being edited, or null. */
+const editingScrew = computed<ScrewSpec | null>(() => {
+  const entry = editingEntry.value;
+  if (entry === null) return null;
+  const product = entry.product;
+  if (product.kind === 'insert') return product.origin === 'screw' ? product.screw : null;
+  return product.bin.origin === 'screw' ? product.bin.screw : null;
 });
 
 /**
@@ -172,8 +223,8 @@ const editingEntry = computed(() => {
  * length itself is unchanged; editing the length drops the stale inch text.
  */
 const keptEnteredText = computed(() =>
-  editingEntry.value !== null && lengthMm.value === editingEntry.value.screw.lengthMm
-    ? editingEntry.value.screw.enteredLengthText
+  editingScrew.value !== null && lengthMm.value === editingScrew.value.lengthMm
+    ? editingScrew.value.enteredLengthText
     : null,
 );
 
@@ -184,28 +235,34 @@ watch(
   (entryId) => {
     if (entryId === null) return;
     const entry = queue.entryById(entryId);
-    if (entry === null || entry.kind !== 'screw') return;
+    if (entry === null || originOf(entry.product) !== 'screw') return;
+    const product = entry.product;
+    const screw =
+      product.kind === 'insert'
+        ? (product.origin === 'screw' ? product.screw : null)
+        : product.bin.origin === 'screw'
+          ? product.bin.screw
+          : null;
+    if (screw === null) return;
     internalUpdate = true;
-    thread.value = entry.screw.thread;
-    head.value = entry.screw.head;
-    lengthMm.value = entry.screw.lengthMm;
+    thread.value = screw.thread;
+    head.value = screw.head;
+    lengthMm.value = screw.lengthMm;
     count.value = entry.quantity;
-    heightUnits.value = entry.heightUnits;
-    shorthand.value = composeShorthand(
-      entry.screw.thread,
-      entry.screw.lengthMm,
-      entry.screw.head,
-      entry.quantity,
-    );
+    if (product.kind !== 'insert') heightUnits.value = product.bin.heightUnits;
+    shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
     internalUpdate = false;
-    store.$patch({
-      stackingLip: entry.stackingLip,
-      magnetHoles: entry.magnetHoles,
-      dividerCountX: entry.dividerCountX,
-      dividerCountY: entry.dividerCountY,
-      labelMode: entry.labelMode ?? 'embossed',
+    const patch: Record<string, unknown> = {
+      productChoice: product.kind,
       notes: entry.notes ?? '',
-    });
+    };
+    if (product.kind !== 'insert' && product.bin.origin === 'screw') {
+      patch.stackingLip = product.bin.stackingLip;
+      patch.magnetHoles = product.bin.magnetHoles;
+      patch.dividerCountX = product.bin.dividerCountX;
+      patch.dividerCountY = product.bin.dividerCountY;
+    }
+    store.$patch(patch);
   },
   { immediate: true },
 );
@@ -216,20 +273,24 @@ watch(
  * complete parsed batch verbatim. While editing, only a single screw is
  * valid, since one queue row is being updated. */
 const pending = computed<{
-  batches: Array<{ params: LabeledBinParams; quantity: number; screw: ScrewSpec }>;
+  batches: Array<{ product: Product; quantity: number }>;
 }>(() => {
   if (isMultiple.value) {
     if (editingEntry.value !== null) return { batches: [] };
     return {
       batches: completeBatches.value.map((batch) => ({
-        params: binParamsFor(batch, DEFAULT_HEIGHT_UNITS),
+        product: productFor(
+          batch,
+          {
+            thread: batch.thread!,
+            lengthMm:
+              batch.head !== null && LENGTHLESS_HEADS.has(batch.head) ? null : batch.lengthMm,
+            head: batch.head,
+            enteredLengthText: batch.enteredLengthText,
+          },
+          DEFAULT_HEIGHT_UNITS,
+        ),
         quantity: batch.quantity,
-        screw: {
-          thread: batch.thread!,
-          lengthMm: batch.head !== null && LENGTHLESS_HEADS.has(batch.head) ? null : batch.lengthMm,
-          head: batch.head,
-          enteredLengthText: batch.enteredLengthText,
-        },
       })),
     };
   }
@@ -245,9 +306,8 @@ const pending = computed<{
   return {
     batches: [
       {
-        params: binParamsFor(screw, heightUnits.value),
+        product: productFor(screw, screw, heightUnits.value),
         quantity: count.value,
-        screw,
       },
     ],
   };
@@ -256,11 +316,14 @@ const pending = computed<{
 const resultText = computed(() => {
   if (isMultiple.value) {
     const n = completeBatches.value.length;
-    return n > 0 ? `Adds ${n} ${n === 1 ? 'bin' : 'bins'}.` : '';
+    return n > 0 ? `Adds ${n} ${n === 1 ? 'entry' : 'entries'}.` : '';
   }
   if (pending.value.batches.length === 0) return '';
-  const params = pending.value.batches[0].params;
-  return `Resulting bin: ${params.labelText} (${sizeText(params)}).`;
+  const product = pending.value.batches[0].product;
+  if (product.kind === 'insert') {
+    return `Resulting label insert: ${product.content.text} (${product.cells}u wide).`;
+  }
+  return `Resulting bin: ${productLabelText(product)} (${productSizeText(product)}).`;
 });
 
 const formValid = computed(() => pending.value.batches.length > 0);
@@ -273,27 +336,25 @@ function addToQueue(): void {
   const cleanNotes = store.notes.trim();
   const editing = editingEntry.value;
   if (editing !== null) {
-    const { params, quantity, screw } = pending.value.batches[0];
+    const { product, quantity } = pending.value.batches[0];
     queue.update(editing.id, {
-      ...params,
+      product,
       quantity,
-      screw,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
-    addedText.value = `Updated ${params.labelText} in the queue.`;
+    addedText.value = `Updated ${productLabelText(product)} in the queue.`;
     addedSnackbar.value = true;
     app.stopEditing();
     return;
   }
-  for (const { params, quantity, screw } of pending.value.batches) {
-    const id = queue.add(params, quantity, { kind: 'screw', screw });
-    if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
+  for (const { product, quantity } of pending.value.batches) {
+    queue.add(product, quantity, cleanNotes);
   }
   const n = pending.value.batches.length;
   addedText.value =
     n === 1
-      ? `Added ${pending.value.batches[0].params.labelText} to the queue.`
-      : `Added ${n} bins to the queue.`;
+      ? `Added ${productLabelText(pending.value.batches[0].product)} to the queue.`
+      : `Added ${n} entries to the queue.`;
   addedSnackbar.value = true;
   if (isMultiple.value) shorthand.value = '';
 }
@@ -302,12 +363,35 @@ function cancelEdit(): void {
   app.stopEditing();
 }
 
-// The preview follows whichever bin Add to queue would create first.
-const previewParams = computed(
-  () => pending.value.batches[0]?.params ?? binParamsFor({ thread: null, lengthMm: null, head: null }, heightUnits.value),
+// The preview follows whichever product Add to queue would create first.
+const previewProduct = computed<Product>(
+  () =>
+    pending.value.batches[0]?.product ??
+    productFor(
+      { thread: null, lengthMm: null, head: null },
+      { thread: thread.value, lengthMm: null, head: null, enteredLengthText: null },
+      heightUnits.value,
+    ),
 );
 
-const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
+function generatePreview(product: Product): Promise<PartMeshes> {
+  if (product.kind === 'insert') {
+    return generateInsert({ cells: product.cells, content: product.content });
+  }
+  const bin = product.bin;
+  return generateSlottedBin({
+    gridX: bin.gridX,
+    gridY: bin.gridY,
+    heightUnits: bin.heightUnits,
+    stackingLip: bin.stackingLip,
+    magnetHoles: bin.magnetHoles,
+    dividerCountX: bin.origin === 'traced' ? 0 : bin.dividerCountX,
+    dividerCountY: bin.origin === 'traced' ? 0 : bin.dividerCountY,
+    insert: product.kind === 'binWithInsert' ? product.insert : null,
+  });
+}
+
+const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, generatePreview);
 </script>
 
 <template>
@@ -394,6 +478,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
           style="min-width: 90px; max-width: 120px"
         />
         <v-text-field
+          v-if="!insertOnly"
           v-model.number="heightUnits"
           type="number"
           min="2"
@@ -435,9 +520,9 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
         {{ error }}
       </v-alert>
 
-      <LabelModeSelect v-model="labelMode" class="mt-4" />
+      <ProductSelect v-model="productChoice" class="mt-4" />
 
-      <MoreOptions :per-bin-fields="false" />
+      <MoreOptions :per-bin-fields="false" :insert-only="insertOnly" />
 
       <div class="d-flex ga-2 mt-4">
         <v-btn
@@ -461,7 +546,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewParams.value);
         density="compact"
         class="mt-2"
       >
-        Editing "{{ editingEntry.labelText }}"; saving updates the queue row.
+        Editing "{{ productLabelText(editingEntry.product) }}"; saving updates the queue row.
       </v-alert>
     </v-col>
 

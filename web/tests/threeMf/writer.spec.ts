@@ -4,13 +4,13 @@ import type { Font } from 'opentype.js';
 import type { ManifoldToplevel } from 'manifold-3d';
 import { loadManifold } from '../helpers/manifold';
 import { loadLabelFont } from '../helpers/font';
-import { generateLabeledBin } from '../../src/engine/gridfinity/binGenerator';
+import { generateSlottedBin } from '../../src/engine/gridfinity/binGenerator';
 import { writePlate3mf, type PlateItem } from '../../src/engine/threeMf/writer';
 import {
   meshBounds,
   mergePlacedMeshes,
 } from '../../src/engine/plate/placement';
-import type { LabeledBinMeshes, MeshData } from '../../src/engine/gridfinity/types';
+import type { PartMeshes, MeshData } from '../../src/engine/gridfinity/types';
 
 /**
  * Minimal XML well-formedness check: walks the document character by
@@ -191,13 +191,13 @@ describe('writePlate3mf with synthetic meshes', () => {
 describe('writePlate3mf with two real labeled bins', () => {
   let m: ManifoldToplevel;
   let font: Font;
-  let binA: LabeledBinMeshes;
-  let binB: LabeledBinMeshes;
+  let binA: PartMeshes;
+  let binB: PartMeshes;
 
   beforeAll(async () => {
     m = await loadManifold();
     font = await loadLabelFont();
-    binA = generateLabeledBin(m, font, {
+    binA = generateSlottedBin(m, font, {
       gridX: 1,
       gridY: 1,
       heightUnits: 3,
@@ -205,11 +205,9 @@ describe('writePlate3mf with two real labeled bins', () => {
       magnetHoles: false,
       dividerCountX: 0,
       dividerCountY: 0,
-      labelText: 'M3',
-      labelText2: '',
-      labelIcon: null,
+      insert: { text: 'M3', text2: '', icon: null },
     });
-    binB = generateLabeledBin(m, font, {
+    binB = generateSlottedBin(m, font, {
       gridX: 2,
       gridY: 1,
       heightUnits: 2,
@@ -217,9 +215,7 @@ describe('writePlate3mf with two real labeled bins', () => {
       magnetHoles: false,
       dividerCountX: 0,
       dividerCountY: 0,
-      labelText: 'M4',
-      labelText2: '',
-      labelIcon: null,
+      insert: { text: 'M4', text2: '', icon: null },
     });
   });
 

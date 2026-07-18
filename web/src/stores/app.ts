@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import type { BinKind } from '../engine/plan/types';
+import type { ProductOrigin } from '../engine/plan/types';
 
 /**
  * App-wide UI state. The app is a single page; this store carries the
@@ -10,8 +10,8 @@ export const useApp = defineStore('app', {
   state: () => ({
     /** Id of the queue entry being edited, or null for a new bin. */
     editingEntryId: null as string | null,
-    /** Kind of the entry being edited; names the tab that owns the edit. */
-    editingKind: null as BinKind | null,
+    /** Origin of the entry being edited; names the tab that owns the edit. */
+    editingKind: null as ProductOrigin | null,
     /**
      * Monotonic counter the Ctrl+N shortcut bumps; the add-bin card watches
      * it and focuses its first field (resetting to a new bin).
@@ -27,8 +27,8 @@ export const useApp = defineStore('app', {
       this.editingKind = null;
       this.focusAddSeq += 1;
     },
-    /** Loads a queue entry into the tab owning its kind for editing. */
-    editEntry(entryId: string, kind: BinKind) {
+    /** Loads a queue entry into the tab owning its origin for editing. */
+    editEntry(entryId: string, kind: ProductOrigin) {
       this.editingEntryId = entryId;
       this.editingKind = kind;
       this.focusAddSeq += 1;

@@ -1,21 +1,10 @@
 import { defineStore } from 'pinia';
-import {
-  assertNever,
-  type BinEntry,
-  type BinEntryUpdate,
-  type BinPockets,
-  type PrintBatch,
-  type ScrewSpec,
-  type TracePaper,
-  type TracedBin,
+import type {
+  PrintBatch,
+  Product,
+  QueueEntry,
+  QueueEntryUpdate,
 } from '../engine/plan/types';
-import type { LabeledBinParams } from '../engine/gridfinity/types';
-
-/** Kind-specific data a new queue entry is created with, by its owning tab. */
-export type NewEntryDetails =
-  | { kind: 'manual' }
-  | { kind: 'screw'; screw: ScrewSpec }
-  | { kind: 'traced'; pockets: BinPockets; traceSourceId?: string; paper?: TracePaper };
 import {
   mergeBatches,
   mergeEntries,
@@ -33,7 +22,7 @@ import { deletePhoto, listPhotoIds } from '../photoStore';
 
 const STORAGE_KEY = 'gridfinity-generator.plan';
 
-function loadPlan(): { entries: BinEntry[]; batches: PrintBatch[] } {
+function loadPlan(): { entries: QueueEntry[]; batches: PrintBatch[] } {
   let text: string | null = null;
   try {
     text = localStorage.getItem(STORAGE_KEY);
@@ -47,6 +36,7 @@ function loadPlan(): { entries: BinEntry[]; batches: PrintBatch[] } {
     console.error(`The stored plan could not be read: ${result.error}`);
     return { entries: [], batches: [] };
   }
+  for (const warning of result.warnings) console.warn(warning);
   return { entries: result.plan.entries, batches: result.plan.batches };
 }
 
@@ -86,63 +76,37 @@ export const useBinQueue = defineStore('binQueue', {
         console.error('Cleaning up stored trace photos failed.', error);
       }
     },
-    /**
-     * Adds a new queued entry from designer parameters, of the kind the
-     * calling tab owns. Returns its id.
-     */
-    add(
-      params: LabeledBinParams,
-      quantity = 1,
-      details: NewEntryDetails = { kind: 'manual' },
-    ): string {
-      // labelIconPath is a transient worker-call field, never persisted.
-      const { labelIconPath, dividerCountX, dividerCountY, ...shared } = params;
-      void labelIconPath;
-      const base = {
+    /** Adds a new queued entry ordering the given product. Returns its id. */
+    add(product: Product, quantity = 1, notes?: string): string {
+      const entry: QueueEntry = {
         id: crypto.randomUUID(),
-        ...shared,
         quantity,
         createdAt: new Date().toISOString(),
+        product,
       };
-      let entry: BinEntry;
-      switch (details.kind) {
-        case 'manual':
-          entry = { ...base, kind: 'manual', dividerCountX, dividerCountY };
-          break;
-        case 'screw':
-          entry = { ...base, kind: 'screw', dividerCountX, dividerCountY, screw: details.screw };
-          break;
-        case 'traced': {
-          // The pocket generator rejects divider walls: a traced entry has none.
-          const traced: TracedBin = { ...base, kind: 'traced', pockets: details.pockets };
-          if (details.traceSourceId !== undefined) traced.traceSourceId = details.traceSourceId;
-          if (details.paper !== undefined) traced.paper = details.paper;
-          entry = traced;
-          break;
-        }
-        default:
-          entry = assertNever(details);
-      }
+      if (notes !== undefined && notes !== '') entry.notes = notes;
       this.entries.push(entry);
       this.persist();
       return entry.id;
     },
     /**
-     * Applies partial changes to an existing entry. The kind never changes;
-     * each tab only writes the kind-specific fields it owns.
+     * Applies partial changes to an existing entry. The product is replaced
+     * wholesale when given (the sync-safe way to edit a discriminated union);
+     * id and createdAt never change.
      */
-    update(id: string, changes: BinEntryUpdate) {
+    update(id: string, changes: QueueEntryUpdate) {
       const index = this.entries.findIndex((e) => e.id === id);
       if (index === -1) return;
-      this.entries[index] = { ...this.entries[index], ...changes } as BinEntry;
+      this.entries[index] = { ...this.entries[index], ...changes };
       this.persist();
     },
     /** Duplicates an entry as a fresh copy. Returns the new id. */
     duplicate(id: string): string | null {
       const source = this.entryById(id);
       if (source === null) return null;
-      const copy: BinEntry = {
+      const copy: QueueEntry = {
         ...source,
+        product: JSON.parse(JSON.stringify(source.product)) as Product,
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
       };
@@ -221,6 +185,7 @@ export const useBinQueue = defineStore('binQueue', {
     importJson(text: string, mode: 'merge' | 'replace'): string | null {
       const result = parsePlanFile(text);
       if (!result.ok) return result.error;
+      for (const warning of result.warnings) console.warn(warning);
       if (mode === 'replace') {
         this.entries = result.plan.entries;
         this.batches = result.plan.batches;

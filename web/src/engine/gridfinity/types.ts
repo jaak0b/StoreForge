@@ -17,33 +17,43 @@ export interface BinParams {
 }
 
 /**
- * How a bin entry carries its label.
- * - 'embossed': the label is embossed on a fixed shelf, part of the bin body.
- * - 'slot': the bin gets a slot for a swappable label insert, but no insert.
- * - 'slot-insert': the slotted bin plus its matching label insert.
- * - 'insert': only the label insert, for a slotted bin that already exists.
- * The slot and insert geometry is interchangeable with the Printables model
- * "Gridfinity bin with printable label by Pred" (printables.com/model/592545).
+ * The printed content of a label insert, in the geometry layer's own shape so
+ * the engine does not depend on the plan layer. Structurally compatible with
+ * the plan layer's LabelContent, plus the transient resolved icon path.
  */
-export type LabelMode = 'embossed' | 'slot' | 'slot-insert' | 'insert';
-
-/** Parameters describing a Gridfinity bin with an optional embossed label. */
-export interface LabeledBinParams extends BinParams {
-  /** How the label is carried. Absent means 'embossed' (the original form). */
-  labelMode?: LabelMode;
-  /** Text embossed on the front wall. An empty string means no text. */
-  labelText: string;
+export interface InsertContentParams {
+  /** Main label text. An empty string means no text. */
+  text: string;
   /** Optional smaller second text line under the first. Empty means none. */
-  labelText2: string;
+  text2: string;
   /** Name of the label icon shown left of the text, or null for no icon. */
-  labelIcon: string | null;
+  icon: string | null;
   /**
-   * Resolved SVG path data for a custom labelIcon. Custom icons live in the
+   * Resolved SVG path data for a custom icon. Custom icons live in the
    * browser's localStorage, which the geometry worker cannot reach, so the UI
    * resolves the path before the worker call and passes it here. Transient:
-   * never persisted, and absent when labelIcon names a built-in icon.
+   * never persisted, and absent when icon names a built-in icon.
    */
-  labelIconPath?: string;
+  iconPath?: string;
+}
+
+/**
+ * Parameters describing a bin to generate. Every bin has the label insert
+ * slot; insert carries the paired insert's content for the preview (shown
+ * resting in the slot), or null for a bin previewed with an empty slot.
+ * Exports always generate the insert as its own separately placed part.
+ */
+export interface SlottedBinParams extends BinParams {
+  /** Content of the paired label insert, or null for a bin alone. */
+  insert: InsertContentParams | null;
+}
+
+/** Parameters describing a standalone label insert to generate. */
+export interface InsertParams {
+  /** Width of the insert in grid cells (42 mm pitch each). Integer, at least 1. */
+  cells: number;
+  /** The text and icon printed on the insert. */
+  content: InsertContentParams;
 }
 
 /** Triangle mesh in flat typed arrays, ready to transfer between threads. */
@@ -54,10 +64,14 @@ export interface MeshData {
   indices: Uint32Array;
 }
 
-/** The two parts of a labeled bin, kept separate for per-part coloring. */
-export interface LabeledBinMeshes {
-  /** The bin body. */
+/** The two preview meshes of a generated part, kept separate for coloring. */
+export interface PartMeshes {
+  /** The main body: the bin, or the insert plate. */
   body: MeshData;
-  /** The embossed label, welded into the front wall, or null when unlabeled. */
+  /**
+   * The second-filament mesh: the insert (plate and inlay) resting in the
+   * bin's slot for a bin previewed with its insert, or the label inlay of a
+   * standalone insert. Null when there is nothing to show in a second color.
+   */
   label: MeshData | null;
 }

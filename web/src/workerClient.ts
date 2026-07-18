@@ -1,11 +1,12 @@
 import * as Comlink from 'comlink';
 import type { GeometryWorkerApi } from './worker/geometry.worker';
-import { withResolvedIconPath } from './labelIcons';
+import { withResolvedBinInsert, withResolvedInsertContent } from './labelIcons';
 import type {
   BinParams,
-  LabeledBinMeshes,
-  LabeledBinParams,
+  InsertParams,
   MeshData,
+  PartMeshes,
+  SlottedBinParams,
 } from './engine/gridfinity/types';
 import type { PocketBinParams } from './engine/trace/pocketBin';
 
@@ -26,44 +27,32 @@ export async function generateBin(params: BinParams): Promise<MeshData> {
   return getWorker().generateBin(params);
 }
 
-/** Generate a labeled bin as separate body and label meshes for the preview. */
-export async function generateLabeledBin(
-  params: LabeledBinParams,
-): Promise<LabeledBinMeshes> {
-  return getWorker().generateLabeledBin(withResolvedIconPath(params));
+/** Generate a slotted bin as separate body and preview-insert meshes. */
+export async function generateSlottedBin(params: SlottedBinParams): Promise<PartMeshes> {
+  return getWorker().generateSlottedBin(withResolvedBinInsert(params));
 }
 
-/** Generate a labeled bin as one unioned mesh for the STL download. */
-export async function generateLabeledBinUnion(
-  params: LabeledBinParams,
-): Promise<MeshData> {
-  return getWorker().generateLabeledBinUnion(withResolvedIconPath(params));
+/** Generate a slotted bin as one unioned mesh for the STL download. */
+export async function generateSlottedBinUnion(params: BinParams): Promise<MeshData> {
+  return getWorker().generateSlottedBinUnion(params);
 }
 
 /** Generate a label insert as separate plate and inlay meshes. */
-export async function generateLabelInsert(
-  params: LabeledBinParams,
-): Promise<LabeledBinMeshes> {
-  return getWorker().generateLabelInsert(withResolvedIconPath(params));
+export async function generateInsert(params: InsertParams): Promise<PartMeshes> {
+  return getWorker().generateInsert(withResolvedInsertContent(params));
 }
 
 /** Generate a label insert as one unioned mesh for the STL download. */
-export async function generateLabelInsertUnion(
-  params: LabeledBinParams,
-): Promise<MeshData> {
-  return getWorker().generateLabelInsertUnion(withResolvedIconPath(params));
+export async function generateInsertUnion(params: InsertParams): Promise<MeshData> {
+  return getWorker().generateInsertUnion(withResolvedInsertContent(params));
 }
 
-/** Generate a bin with tool-shaped pockets as separate body and label meshes. */
-export async function generatePocketBin(
-  params: PocketBinParams,
-): Promise<LabeledBinMeshes> {
-  return getWorker().generatePocketBin(withResolvedIconPath(params));
+/** Generate a bin with tool-shaped pockets as separate body and preview-insert meshes. */
+export async function generatePocketBin(params: PocketBinParams): Promise<PartMeshes> {
+  return getWorker().generatePocketBin(withResolvedBinInsert(params));
 }
 
 /** Generate a pocket bin as one unioned mesh for the STL download. */
-export async function generatePocketBinUnion(
-  params: PocketBinParams,
-): Promise<MeshData> {
-  return getWorker().generatePocketBinUnion(withResolvedIconPath(params));
+export async function generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
+  return getWorker().generatePocketBinUnion(params);
 }

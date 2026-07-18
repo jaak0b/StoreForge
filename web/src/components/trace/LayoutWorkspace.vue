@@ -8,7 +8,14 @@ import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
 import { generatePocketBin } from '../../workerClient';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
-import type { BinPockets, TracePaper, TracedBin } from '../../engine/plan/types';
+import {
+  insertOf,
+  type BinPockets,
+  type Product,
+  type QueueEntry,
+  type TracePaper,
+  type TracedBin,
+} from '../../engine/plan/types';
 import type { PaperCorners } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
@@ -26,8 +33,8 @@ import AdvancedDrawer from './AdvancedDrawer.vue';
  */
 
 const props = defineProps<{
-  /** The queue entry being edited, or null when designing a new bin. */
-  editingEntry: TracedBin | null;
+  /** The queue entry being edited (a traced product), or null when designing a new bin. */
+  editingEntry: QueueEntry | null;
   /** True when a tool can be re-traced (embedding ready or photo stored). */
   retraceAvailable: boolean;
 }>();
@@ -122,10 +129,14 @@ const pocketParams = computed<PocketBinParams>(() => {
     // The pocket generator rejects divider walls, so a pocket bin never has any.
     dividerCountX: 0,
     dividerCountY: 0,
-    labelText: designer.labelText,
-    labelText2: designer.labelText2,
-    labelIcon: designer.labelIcon,
-    labelMode: designer.labelMode,
+    insert:
+      designer.productChoice === 'binWithInsert'
+        ? {
+            text: designer.labelText,
+            text2: designer.labelText2,
+            icon: designer.labelIcon,
+          }
+        : null,
     tools: JSON.parse(JSON.stringify(trace.tools)),
     placements: JSON.parse(JSON.stringify(local.placements)),
   };
@@ -196,42 +207,58 @@ async function addToQueue(): Promise<void> {
   const params = pocketParams.value;
   const pockets: BinPockets = { tools: params.tools, placements: params.placements };
   const cleanNotes = notes.value.trim();
-  const binParams = {
+  // The photo must be stored before the queue mutation: persisting the plan
+  // sweeps stored photos no entry references, so the reference and the photo
+  // have to land in that order. During an edit without a newly loaded photo,
+  // the entry's stored trace-source fields carry over.
+  const source = await storeTraceSource();
+  const editingProductBin =
+    props.editingEntry !== null && props.editingEntry.product.kind !== 'insert'
+      ? props.editingEntry.product.bin
+      : null;
+  const editingBin =
+    editingProductBin !== null && editingProductBin.origin === 'traced'
+      ? editingProductBin
+      : null;
+  const bin: TracedBin = {
+    origin: 'traced',
     gridX: params.gridX,
     gridY: params.gridY,
     heightUnits: params.heightUnits,
     stackingLip: params.stackingLip,
     magnetHoles: params.magnetHoles,
-    dividerCountX: 0,
-    dividerCountY: 0,
-    labelText: params.labelText,
-    labelText2: params.labelText2,
-    labelIcon: params.labelIcon,
-    labelMode: params.labelMode,
+    pockets,
   };
-  // The photo must be stored before the queue mutation: persisting the plan
-  // sweeps stored photos no entry references, so the reference and the photo
-  // have to land in that order.
-  const source = await storeTraceSource();
+  const traceSourceId = source.traceSourceId ?? editingBin?.traceSourceId;
+  const paper = source.paper ?? editingBin?.paper;
+  if (traceSourceId !== undefined) bin.traceSourceId = traceSourceId;
+  if (paper !== undefined) bin.paper = paper;
+  const product: Product =
+    params.insert !== null
+      ? { kind: 'binWithInsert', bin, insert: params.insert }
+      : { kind: 'bin', bin };
   if (props.editingEntry !== null) {
-    const { dividerCountX, dividerCountY, ...shared } = binParams;
-    void dividerCountX;
-    void dividerCountY;
     queue.update(props.editingEntry.id, {
-      ...shared,
-      pockets,
-      ...source,
+      product,
       quantity: quantity.value,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
     app.stopEditing();
   } else {
-    const id = queue.add(binParams, quantity.value, { kind: 'traced', pockets, ...source });
-    if (cleanNotes !== '') queue.update(id, { notes: cleanNotes });
+    queue.add(product, quantity.value, cleanNotes);
   }
   trace.reset();
   quantity.value = 1;
   emit('saved');
+}
+
+/** Display title of the entry being edited. */
+function editingTitle(entry: QueueEntry): string {
+  const insert = insertOf(entry.product);
+  if (insert !== null && insert.content.text !== '') return insert.content.text;
+  if (entry.product.kind === 'insert') return `${entry.product.cells}u label insert`;
+  const bin = entry.product.bin;
+  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
 }
 
 function cancelEdit(): void {
@@ -303,7 +330,7 @@ function cancelEdit(): void {
           </v-tooltip>
         </div>
         <div v-if="editingEntry !== null" class="text-caption text-medium-emphasis text-right mt-1">
-          Editing "{{ editingEntry.labelText !== '' ? editingEntry.labelText : `${editingEntry.gridX} x ${editingEntry.gridY} x ${editingEntry.heightUnits}` }}"; saving updates the queue row.
+          Editing "{{ editingTitle(editingEntry) }}"; saving updates the queue row.
         </div>
       </div>
     </div>

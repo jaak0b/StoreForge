@@ -2,11 +2,16 @@
 import { computed, ref } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
-import type { BinEntry } from '../engine/plan/types';
-import { snapshotParams, snapshotPockets, type BatchSelection } from '../engine/plan/batches';
+import {
+  binOf,
+  insertOf,
+  originOf,
+  type QueueEntry,
+} from '../engine/plan/types';
+import { snapshotProduct, type BatchSelection } from '../engine/plan/batches';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
-import { downloadBin3mf, downloadBinStl } from '../binDownloads';
+import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
 import CountStepper from './CountStepper.vue';
@@ -21,24 +26,33 @@ import CountStepper from './CountStepper.vue';
 const app = useApp();
 const queue = useBinQueue();
 
-function labelIconOf(name: string | null): LabelIcon | null {
-  return name !== null ? resolveLabelIcon(name) : null;
+/** The row's label icon, from the entry's insert content, when it has one. */
+function rowIcon(entry: QueueEntry): LabelIcon | null {
+  const icon = insertOf(entry.product)?.content.icon ?? null;
+  return icon !== null ? resolveLabelIcon(icon) : null;
 }
 
-function sizeText(entry: BinEntry): string {
-  return `${entry.gridX} x ${entry.gridY} x ${entry.heightUnits}`;
+function sizeText(entry: QueueEntry): string {
+  const bin = binOf(entry.product);
+  if (bin === null) return '';
+  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
 }
 
-function rowTitle(entry: BinEntry): string {
-  return entry.labelText !== '' ? entry.labelText : sizeText(entry);
+function rowTitle(entry: QueueEntry): string {
+  const insert = insertOf(entry.product);
+  if (insert !== null && insert.content.text !== '') return insert.content.text;
+  if (entry.product.kind === 'insert') return `${entry.product.cells}u label insert`;
+  return sizeText(entry);
 }
 
-/** Chip text marking a non-embossed label mode, or null for the plain row. */
-function labelModeChip(entry: BinEntry): string | null {
-  switch (entry.labelMode) {
-    case 'slot':
-      return 'label slot';
-    case 'slot-insert':
+function rowText2(entry: QueueEntry): string {
+  return insertOf(entry.product)?.content.text2 ?? '';
+}
+
+/** Chip text marking what the row prints beyond a plain bin, or null. */
+function productChip(entry: QueueEntry): string | null {
+  switch (entry.product.kind) {
+    case 'binWithInsert':
       return 'bin + insert';
     case 'insert':
       return 'insert only';
@@ -47,13 +61,19 @@ function labelModeChip(entry: BinEntry): string | null {
   }
 }
 
+/** The traced bin's pocket count of the row, or null for other rows. */
+function pocketCount(entry: QueueEntry): number | null {
+  const bin = binOf(entry.product);
+  return bin !== null && bin.origin === 'traced' ? bin.pockets.placements.length : null;
+}
+
 // Row selection for building a plate. Each selected row carries an amount
 // that defaults to its full quantity and can be edited down for a partial
 // plate.
 const selectedIds = ref<Set<string>>(new Set());
 const plateCounts = ref<Map<string, number>>(new Map());
 
-function toggleSelected(entry: BinEntry): void {
+function toggleSelected(entry: QueueEntry): void {
   const nextIds = new Set(selectedIds.value);
   const nextCounts = new Map(plateCounts.value);
   if (nextIds.has(entry.id)) {
@@ -67,11 +87,11 @@ function toggleSelected(entry: BinEntry): void {
   plateCounts.value = nextCounts;
 }
 
-function plateCountOf(entry: BinEntry): number {
+function plateCountOf(entry: QueueEntry): number {
   return plateCounts.value.get(entry.id) ?? entry.quantity;
 }
 
-function setPlateCount(entry: BinEntry, value: number): void {
+function setPlateCount(entry: QueueEntry, value: number): void {
   const next = new Map(plateCounts.value);
   next.set(entry.id, Math.min(Math.max(1, Math.floor(value)), entry.quantity));
   plateCounts.value = next;
@@ -95,9 +115,9 @@ function createPlate(): void {
   plateCounts.value = new Map();
 }
 
-// Row click loads the entry into the tab that owns its kind for editing.
-function editRow(entry: BinEntry): void {
-  app.editEntry(entry.id, entry.kind);
+// Row click loads the entry into the tab that owns its origin for editing.
+function editRow(entry: QueueEntry): void {
+  app.editEntry(entry.id, originOf(entry.product));
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -105,14 +125,13 @@ function editRow(entry: BinEntry): void {
 const downloadingId = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
 
-async function downloadRow(entry: BinEntry, format: 'stl' | '3mf'): Promise<void> {
+async function downloadRow(entry: QueueEntry, format: 'stl' | '3mf'): Promise<void> {
   downloadingId.value = entry.id;
   errorMessage.value = null;
   try {
-    const params = snapshotParams(entry);
-    const pockets = snapshotPockets(entry);
-    if (format === 'stl') await downloadBinStl(params, pockets);
-    else await downloadBin3mf(params, pockets);
+    const product = snapshotProduct(entry.product);
+    if (format === 'stl') await downloadProductStl(product);
+    else await downloadProduct3mf(product);
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : 'The download failed.';
@@ -121,7 +140,7 @@ async function downloadRow(entry: BinEntry, format: 'stl' | '3mf'): Promise<void
   }
 }
 
-function removeRow(entry: BinEntry): void {
+function removeRow(entry: QueueEntry): void {
   if (app.editingEntryId === entry.id) app.stopEditing();
   const nextIds = new Set(selectedIds.value);
   nextIds.delete(entry.id);
@@ -177,14 +196,14 @@ function removeRow(entry: BinEntry): void {
         />
         <span class="swatch d-flex align-center justify-center">
           <svg
-            v-if="labelIconOf(entry.labelIcon) !== null"
+            v-if="rowIcon(entry) !== null"
             width="18"
             height="18"
-            :viewBox="labelIconOf(entry.labelIcon)!.viewBox.join(' ')"
+            :viewBox="rowIcon(entry)!.viewBox.join(' ')"
             aria-hidden="true"
           >
             <path
-              :d="labelIconOf(entry.labelIcon)!.path"
+              :d="rowIcon(entry)!.path"
               fill="currentColor"
               fill-rule="evenodd"
             />
@@ -194,32 +213,32 @@ function removeRow(entry: BinEntry): void {
         <span class="row-name">
           <span class="d-block text-body-2 font-weight-bold">{{ rowTitle(entry) }}</span>
           <span
-            v-if="entry.labelText2 !== ''"
+            v-if="rowText2(entry) !== ''"
             class="d-block text-caption text-medium-emphasis"
           >
-            {{ entry.labelText2 }}
+            {{ rowText2(entry) }}
           </span>
         </span>
         <v-chip
-          v-if="entry.kind === 'traced'"
+          v-if="pocketCount(entry) !== null"
           size="x-small"
           variant="tonal"
           color="primary"
           class="flex-grow-0"
         >
-          {{ entry.pockets.placements.length }}
-          {{ entry.pockets.placements.length === 1 ? 'pocket' : 'pockets' }}
+          {{ pocketCount(entry) }}
+          {{ pocketCount(entry) === 1 ? 'pocket' : 'pockets' }}
         </v-chip>
         <v-chip
-          v-if="labelModeChip(entry) !== null"
+          v-if="productChip(entry) !== null"
           size="x-small"
           variant="tonal"
           color="secondary"
           class="flex-grow-0"
         >
-          {{ labelModeChip(entry) }}
+          {{ productChip(entry) }}
         </v-chip>
-        <span class="row-dims">{{ entry.labelText !== '' ? sizeText(entry) : '' }}</span>
+        <span class="row-dims">{{ rowTitle(entry) !== sizeText(entry) ? sizeText(entry) : '' }}</span>
         <span class="qty-badge">x{{ entry.quantity }}</span>
         <div v-if="selectedIds.has(entry.id)" class="d-flex align-center ga-1" @click.stop>
           <span class="text-caption text-primary font-weight-bold">Plate:</span>
