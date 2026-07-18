@@ -70,9 +70,9 @@ const DEFAULT_HEIGHT_UNITS = 6;
 const thread = ref('M3');
 const head = ref<HeadType | null>('countersunk screw');
 const lengthMm = ref<number | null>(20);
-const count = ref(5);
+const count = ref(1);
 const heightUnits = ref(DEFAULT_HEIGHT_UNITS);
-const shorthand = ref('M3x20 fhcs x5');
+const shorthand = ref('M3x20 fhcs x1');
 const shorthandFocused = ref(false);
 
 const previewLoaded = ref(!smAndDown.value);
