@@ -124,8 +124,9 @@ export const LIP_GROOVE_VERTICAL = 1.0;
  * cross-section at mid-width shows a circular arc of radius 10.000 mm
  * tangent to the interior floor (z 1.200) at 10 mm from the wall and tangent
  * to the interior wall face (y 1.750) at 10 mm above the floor, running the
- * full interior width wall to wall (straight across at every height, square
- * into the corners). On low bins the radius is clamped to the vertical
+ * full interior width wall to wall (straight across at every height, bounded
+ * by the wall faces at its ends: plan slices through the scoop band keep the
+ * bin's outer corner arcs unchanged). On low bins the radius is clamped to the vertical
  * interior wall height so the fillet stays tangent to a real wall face.
  */
 export const SCOOP_RADIUS = 10.0;

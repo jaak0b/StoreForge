@@ -487,11 +487,13 @@ function buildDividers(
  * wall opposite the label slot, so small parts can be swept up the curve
  * with a finger. The fillet arc is tangent to the interior floor and to the
  * vertical interior wall face, and the solid runs the full interior width
- * wall to wall, square into the corners, exactly as measured. It only adds
- * material at the wall/floor junction: it sits entirely above the floor
- * plate (so the hollowed base pocket is untouched) and inside the outer
- * envelope, and any divider wall crossing it simply welds into the added
- * material. On low bins the measured radius may exceed the vertical
+ * wall to wall, straight across at every height, exactly as measured. The
+ * prism's ends are square while the bin's corners are round, so the caller
+ * clips it to the outer wall envelope (as it does the dividers); the
+ * reference bin's scoop is likewise bounded by the wall faces at its ends.
+ * It only adds material at the wall/floor junction: it sits entirely above
+ * the floor plate (so the hollowed base pocket is untouched), and any
+ * divider wall crossing it simply welds into the added material. On low bins the measured radius may exceed the vertical
  * interior wall height (with a stacking lip the wall face ends where the
  * lip's 45-degree support taper begins), so the radius is clamped to the
  * available wall height to keep the arc tangent to a real wall face.
@@ -635,7 +637,13 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   if (params.scoop !== false) {
     const scoop = buildScoop(m, params, bodyTop);
     if (scoop !== null) {
-      result = m.Manifold.union([result, scoop]);
+      // The scoop prism ends square while the bin corners are round: trimmed
+      // to the outer wall envelope, like the dividers, so its ends cannot
+      // poke past the outer corner arcs (the reference bin's scoop is
+      // bounded by its wall faces there).
+      const trimmed = m.Manifold.intersection(scoop, envelope);
+      scoop.delete();
+      result = m.Manifold.union([result, trimmed]);
     }
   }
 

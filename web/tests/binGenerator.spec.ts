@@ -439,6 +439,31 @@ describe('interior scoop', () => {
     bin.delete();
   });
 
+  it('keeps the outer corner arcs unchanged through the scoop band', () => {
+    // Regression: the scoop prism ends square while the bin corners are
+    // round, so before it was trimmed to the outer envelope its ends poked
+    // 0.313 mm past the outer corner arcs at (+-19.8, 19.8), z 7..17 on a
+    // 1x1x6 lipped bin (plan slices measured 2026-07-18; the Pred reference
+    // bin gridfinitybin_1x1x6_d1_l12_s10 keeps its corner arc unchanged
+    // through the same band). A probe box spanning the diagonal just outside
+    // the radius-4 corner arc but inside where the nub was must stay empty.
+    const bin = buildBinManifold(m, params({ heightUnits: 6, stackingLip: true }));
+    for (const sx of [-1, 1]) {
+      // Box corner nearest the arc centre (16.75, 16.75) is (19.7, 19.7),
+      // 4.17 mm from it: the whole box lies outside the outer outline.
+      const probe = m.Manifold.cube([0.8, 0.8, 8]).translate(
+        sx === 1 ? 19.7 : -20.5,
+        19.7,
+        8,
+      );
+      const hit = bin.intersect(probe);
+      expect(hit.isEmpty()).toBe(true);
+      hit.delete();
+      probe.delete();
+    }
+    bin.delete();
+  });
+
   it('stays watertight with the stacking lip and with dividers crossing the scoop', () => {
     const bin = buildBinManifold(
       m,
