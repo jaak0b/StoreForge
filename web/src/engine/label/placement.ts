@@ -284,7 +284,14 @@ export function shelfRibCentresMm(cells: number): number[] {
  * insert channel; the fused label's shelf places it at the nominal top at a
  * greater thickness, which is what the trailing thickness parameter is for
  * (the back chamfer stays at 45 degrees whatever the plate thickness, and the
- * ribs start at the plate underside, so they grow with it).
+ * ribs start at the plate underside, so they grow with it). The trailing riser
+ * parameter puts a short vertical face at the plate's back edge before the
+ * chamfer starts: the chamfer then begins riser below the plate top, so a
+ * thicker plate keeps the reference bin's inner-end silhouette (a vertical
+ * step down to the flat label surface) instead of chamfering straight off the
+ * top face. It stays a 45 degree chamfer at any riser, and the ramp foot stays
+ * at rampStartY, because the chamfer's run and its drop are both reduced by
+ * the riser. Zero (the default) is the plain chamfered plate.
  */
 export function buildShelfStructure(
   m: ManifoldToplevel,
@@ -292,6 +299,7 @@ export function buildShelfStructure(
   plateTop: number,
   rampStartY: number,
   thickness: number = SHELF_THICKNESS,
+  riser: number = 0,
 ): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
@@ -303,11 +311,14 @@ export function buildShelfStructure(
   const plateBottom = plateTop - thickness;
 
   // Profiles in the (y, z) plane. The plate carries the measured 45-degree
-  // back chamfer under the end stop; each rib is the measured 45-degree
-  // support triangle.
+  // back chamfer under the end stop, preceded by the riser's vertical face;
+  // each rib is the measured 45-degree support triangle.
+  const chamferBackY = rampStartY + (thickness - riser);
   const plateProfile: SimplePolygon = [
     [yOuter, plateTop],
-    [rampStartY + thickness, plateTop],
+    [chamferBackY, plateTop],
+    // A zero riser would repeat the previous vertex, so it is left out.
+    ...(riser > 0 ? ([[chamferBackY, plateTop - riser]] as SimplePolygon) : []),
     [rampStartY, plateBottom],
     [yOuter, plateBottom],
   ];

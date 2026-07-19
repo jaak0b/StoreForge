@@ -10,7 +10,9 @@ import {
   insertPositionInBin,
   SLOT_DEPTH,
   SLOT_FRONT_INSET,
+  SLOT_HEIGHT,
 } from '../../src/engine/label/slot';
+import { SHELF_THICKNESS } from '../../src/engine/label/placement';
 import {
   buildFoot,
   buildInsertInSlotSolids,
@@ -264,6 +266,26 @@ describe('slotted bin front region (measured against the Pred 1x1x6 mesh)', () =
       );
       expect(volume).toBeCloseTo(0.6 * 2 * 0.18, 3);
     }
+    body.delete();
+  });
+
+  it('leaves no bare strip of plate top behind the end stop', () => {
+    // The end stop stands on the plate and its back face is the plate's own
+    // top-back edge, one plate thickness behind the channel's back edge, so
+    // the strip between the two is filled solid from the channel floor to the
+    // nominal bin top. A shallower stop would leave a sliver of exposed plate
+    // top with air above it, far narrower than one extrusion width.
+    const p = binParams();
+    const body = buildSlottedBinBody(m, p);
+    const yBack = -binOuterSizeMm(p.gridY) / 2 + SLOT_FRONT_INSET + SLOT_DEPTH;
+    const floorTop = p.heightUnits * HEIGHT_UNIT - SLOT_HEIGHT;
+    const width = 10;
+    const volume = probeVolume(
+      body,
+      [-width / 2, yBack, floorTop],
+      [width / 2, yBack + SHELF_THICKNESS, floorTop + SLOT_HEIGHT],
+    );
+    expect(volume).toBeCloseTo(width * SHELF_THICKNESS * SLOT_HEIGHT, 6);
     body.delete();
   });
 

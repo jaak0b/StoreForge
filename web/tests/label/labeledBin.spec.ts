@@ -18,6 +18,8 @@ import {
   INSERT_TAB_LENGTH,
   INSERT_TEXT_RAISE,
   INSERT_TEXT_WELD,
+  SLOT_DEPTH,
+  SLOT_FRONT_INSET,
 } from '../../src/engine/label/slot';
 import {
   layoutLabelFace,
@@ -25,9 +27,10 @@ import {
   LABEL_MARGIN,
   LABEL_TEXT_HEIGHT,
   SHELF_DEPTH_MARGIN,
+  SHELF_THICKNESS,
   TEXT_BOLD_OFFSET,
 } from '../../src/engine/label/placement';
-import { HEIGHT_UNIT } from '../../src/engine/gridfinity/constants';
+import { binOuterSizeMm, HEIGHT_UNIT } from '../../src/engine/gridfinity/constants';
 import type { BinParams, MeshData, SlottedBinParams } from '../../src/engine/gridfinity/types';
 
 let m: ManifoldToplevel;
@@ -321,6 +324,38 @@ describe('fused label', () => {
     weld.delete();
     body.delete();
     label!.delete();
+  });
+
+  it('steps down at the inner end just as the slot shelf does', () => {
+    // The channel's back edge, where both shelves' ramp starts, and the plate
+    // top's back edge one plate thickness behind it: in the slot shelf that
+    // edge is the end stop's back face, so the inner end shows a short
+    // vertical face there before the 45 degree ramp begins. The fused shelf
+    // must show the same face; without the riser its chamfer starts straight
+    // off the top surface and the plate top reaches a further slot height into
+    // the bin.
+    const p = fusedParams();
+    const yBack = -binOuterSizeMm(p.gridY) / 2 + SLOT_FRONT_INSET + SLOT_DEPTH;
+    const body = buildSlottedBinBody(m, p);
+    // Cross-section just under the top face, over the interior (clear of the
+    // side walls): the material must stop at the plate's top-back edge.
+    const justBelowTop = m.Manifold.cube([10, 18, 0.05]).translate(-5, -20, bodyTop - 0.05);
+    const topSlice = m.Manifold.intersection(body, justBelowTop);
+    expect(topSlice.boundingBox().max[1]).toBeCloseTo(yBack + SHELF_THICKNESS, 6);
+    justBelowTop.delete();
+    topSlice.delete();
+    // The same slice holds no material behind that edge, where a chamfer
+    // starting at the top face would still leave some.
+    const behindEdge = m.Manifold.cube([10, SHELF_THICKNESS, 0.05]).translate(
+      -5,
+      yBack + SHELF_THICKNESS + 0.01,
+      bodyTop - 0.05,
+    );
+    const stray = m.Manifold.intersection(body, behindEdge);
+    expect(Math.abs(stray.volume())).toBeLessThan(1e-9);
+    behindEdge.delete();
+    stray.delete();
+    body.delete();
   });
 
   it('unions the raised label into the single STL mesh', () => {
