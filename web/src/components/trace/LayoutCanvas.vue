@@ -11,9 +11,12 @@ import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
  * world frame with draggable tools; the bin interior outline and its dotted
  * 42 mm cell boundaries are derived from the layout and move and resize
  * around the tools as they are dragged. While finger-hole mode is
- * active, a pointer drag on free tool area draws a finger hole (a short drag
- * places a circle, a longer one an elongated slot); in either mode a drag on
- * an existing hole moves it. All layout mutations go through the store's
+ * active, a pointer drag anywhere in the view draws a finger hole (a short
+ * drag places a circle, a longer one an elongated slot) on the tool under the
+ * pointer or else on the selected tool; in either mode a drag on an existing
+ * hole moves it, and a drag on one of its endpoint handles reshapes it. When
+ * the grid is set manually the footprint is fixed, so holes are clamped to
+ * the bin interior. All layout mutations go through the store's
  * layout-model wrappers; the view transform is frozen at drag start so the
  * mapping under the pointer never changes mid-drag, and between drags the
  * view is fitted to the bin plus some slack.
@@ -176,6 +179,20 @@ function draw(): void {
       ctx.strokeStyle = '#9c27b0';
       ctx.lineWidth = 1.5;
       ctx.stroke();
+      // Endpoint handles, on the selected tool's capsules only: they mark
+      // where a press grabs one end and leaves the other one fixed.
+      if (selected && hole.x2 !== undefined && hole.y2 !== undefined) {
+        ctx.fillStyle = '#9c27b0';
+        for (const end of [
+          { x: hole.x, y: hole.y },
+          { x: hole.x2, y: hole.y2 },
+        ]) {
+          const [hx, hy] = toPx({ x: end.x + placement.xMm, y: end.y + placement.yMm });
+          ctx.beginPath();
+          ctx.arc(hx, hy, 3, 0, 2 * Math.PI);
+          ctx.fill();
+        }
+      }
     }
   }
   // A dashed bounding box marks the selected tool, so the docked toolbar's
@@ -235,10 +252,12 @@ onUnmounted(() => resizeObserver?.disconnect());
 // transform is captured at drag start and held until the drop, so even
 // while the derived bin resizes mid-drag the pointer mapping does not move
 // under the pointer.
-type DragKind = 'tool' | 'hole' | 'place';
+type DragKind = 'tool' | 'hole' | 'place' | 'endpoint';
 let dragKind: DragKind | null = null;
 let draggingToolId: string | null = null;
 let draggingHole: FingerHole | null = null;
+/** Which endpoint of draggingHole an 'endpoint' drag moves. */
+let draggingEnd: 'start' | 'end' = 'end';
 let lastMm: MmPoint | null = null;
 
 function clientToMm(clientX: number, clientY: number): MmPoint {
@@ -302,12 +321,108 @@ function holeAt(p: MmPoint): { tool: TracedTool; hole: FingerHole } | null {
   return null;
 }
 
+/**
+ * An endpoint handle of a placed hole under the point, with its tool. A
+ * capsule offers both of its endpoints; a plain circle offers its centre as
+ * the anchor of a stretch, but only in finger-hole mode, so that outside that
+ * mode a press on a circle still moves it. The handle zone is the hole's own
+ * radius, so it scales with the hole. The end endpoint wins over the start
+ * one where the two zones overlap, matching a fresh press-and-drag.
+ */
+function endpointAt(
+  p: MmPoint,
+): { tool: TracedTool; hole: FingerHole; end: 'start' | 'end' } | null {
+  for (let i = tools.value.length - 1; i >= 0; i -= 1) {
+    const tool = tools.value[i];
+    const placement = store.placementOf(tool.id);
+    if (placement === undefined) continue;
+    for (const hole of tool.fingerHoles) {
+      const r = hole.diameterMm / 2;
+      const a = { x: hole.x + placement.xMm, y: hole.y + placement.yMm };
+      if (hole.x2 === undefined || hole.y2 === undefined) {
+        if (fingerHoleMode.value && Math.hypot(p.x - a.x, p.y - a.y) <= r) {
+          // The circle's centre stays put and the drag grows the second end.
+          return { tool, hole, end: 'end' };
+        }
+        continue;
+      }
+      const b = { x: hole.x2 + placement.xMm, y: hole.y2 + placement.yMm };
+      if (Math.hypot(p.x - b.x, p.y - b.y) <= r) return { tool, hole, end: 'end' };
+      if (Math.hypot(p.x - a.x, p.y - a.y) <= r) return { tool, hole, end: 'start' };
+    }
+  }
+  return null;
+}
+
+/**
+ * Keeps a hole's disc inside the bin interior. Only a manual grid has a fixed
+ * footprint; while the footprint auto-refits the bin grows to contain the
+ * hole, so the point is left alone.
+ */
+function clampToBin(p: MmPoint, diameterMm: number): MmPoint {
+  if (!gridManual.value) return p;
+  const bin = store.binPlacement;
+  const r = diameterMm / 2;
+  const clampAxis = (v: number, min: number, extent: number): number => {
+    const lo = min + r;
+    const hi = min + extent - r;
+    // A hole wider than the interior has no valid span; centre it instead.
+    if (hi < lo) return min + extent / 2;
+    return Math.min(Math.max(v, lo), hi);
+  };
+  return {
+    x: clampAxis(p.x, bin.minX, bin.widthMm),
+    y: clampAxis(p.y, bin.minY, bin.heightMm),
+  };
+}
+
+/**
+ * The part of a move delta that keeps every endpoint's disc inside the bin
+ * interior, using the same clamp as the placement and stretch paths.
+ */
+function clampMove(hole: FingerHole, placement: { xMm: number; yMm: number }, d: MmPoint): MmPoint {
+  const ends = [{ x: hole.x, y: hole.y }];
+  if (hole.x2 !== undefined && hole.y2 !== undefined) ends.push({ x: hole.x2, y: hole.y2 });
+  let dx = d.x;
+  let dy = d.y;
+  for (const end of ends) {
+    const target = { x: end.x + placement.xMm + d.x, y: end.y + placement.yMm + d.y };
+    const clamped = clampToBin(target, hole.diameterMm);
+    // Keep the most restrictive shift per axis, so the hole stays rigid.
+    const ex = clamped.x - (end.x + placement.xMm);
+    const ey = clamped.y - (end.y + placement.yMm);
+    if (Math.abs(ex) < Math.abs(dx)) dx = ex;
+    if (Math.abs(ey) < Math.abs(dy)) dy = ey;
+  }
+  return { x: dx, y: dy };
+}
+
+/** The tool a new hole belongs to: the one under the pointer, else the selected one. */
+function owningTool(p: MmPoint): TracedTool | null {
+  const under = toolAt(p);
+  if (under !== null) return under;
+  if (selectedToolId.value === null) return null;
+  return tools.value.find((t) => t.id === selectedToolId.value) ?? null;
+}
+
 function onPointerDown(event: PointerEvent): void {
   frozenView = fitView();
   const p = clientToMm(event.clientX, event.clientY);
   lastMm = p;
+  // An endpoint handle of a placed hole reshapes that hole, and takes
+  // priority over moving it or placing a new one.
+  const endHit = endpointAt(p);
+  if (endHit !== null) {
+    draggingHole = endHit.hole;
+    draggingToolId = endHit.tool.id;
+    draggingEnd = endHit.end;
+    dragKind = 'endpoint';
+    selectedToolId.value = endHit.tool.id;
+    (event.target as HTMLElement).setPointerCapture(event.pointerId);
+    return;
+  }
   // An existing hole under the pointer is dragged in either mode; in
-  // finger-hole mode only a press on free tool area places a new hole.
+  // finger-hole mode a press anywhere in the view places a new hole.
   const holeHit = holeAt(p);
   if (holeHit !== null) {
     draggingHole = holeHit.hole;
@@ -318,16 +433,20 @@ function onPointerDown(event: PointerEvent): void {
     return;
   }
   if (fingerHoleMode.value) {
-    const tool = toolAt(p);
+    // A hole may sit anywhere in the bin interior; it belongs to the tool
+    // under the pointer, or to the selected tool when there is none.
+    const tool = owningTool(p);
     if (tool === null) return;
-    const placement = store.placementOf(tool.id)!;
+    const placement = store.placementOf(tool.id);
+    if (placement === undefined) return;
+    const start = clampToBin(p, store.fingerHoleDiameterMm);
     // The store returns the pushed hole, reactive inside the store; drag the
     // reactive one so mutations redraw the canvas.
     draggingHole = store.addFingerHole(tool.id, {
-      x: p.x - placement.xMm,
-      y: p.y - placement.yMm,
-      x2: p.x - placement.xMm,
-      y2: p.y - placement.yMm,
+      x: start.x - placement.xMm,
+      y: start.y - placement.yMm,
+      x2: start.x - placement.xMm,
+      y2: start.y - placement.yMm,
       diameterMm: store.fingerHoleDiameterMm,
     });
     if (draggingHole === null) return;
@@ -352,10 +471,13 @@ function onPointerDown(event: PointerEvent): void {
 const hoverCursor = ref('default');
 
 function updateHoverCursor(p: MmPoint): void {
-  if (holeAt(p) !== null) {
+  if (endpointAt(p) !== null) {
+    // Same cursor as stretching a hole out, which is what this drag does.
+    hoverCursor.value = 'crosshair';
+  } else if (holeAt(p) !== null) {
     hoverCursor.value = 'grab';
   } else if (fingerHoleMode.value) {
-    hoverCursor.value = toolAt(p) !== null ? 'crosshair' : 'default';
+    hoverCursor.value = owningTool(p) !== null ? 'crosshair' : 'default';
   } else {
     hoverCursor.value = toolAt(p) !== null ? 'grab' : 'default';
   }
@@ -379,19 +501,28 @@ function onPointerMove(event: PointerEvent): void {
     return;
   }
   if (draggingHole === null) return;
-  if (dragKind === 'hole') {
-    store.moveFingerHole(draggingHole, dx, dy);
-    return;
-  }
-  // 'place': the start stays put and the drag stretches the second endpoint.
   const placement = draggingToolId !== null ? store.placementOf(draggingToolId) : undefined;
   if (placement === undefined) return;
-  store.stretchFingerHole(draggingHole, p.x - placement.xMm, p.y - placement.yMm);
+  if (dragKind === 'hole') {
+    const d = clampMove(draggingHole, placement, { x: dx, y: dy });
+    store.moveFingerHole(draggingHole, d.x, d.y);
+    return;
+  }
+  // 'place' and 'endpoint': one end stays put and the drag moves the other.
+  const target = clampToBin(p, draggingHole.diameterMm);
+  const xMm = target.x - placement.xMm;
+  const yMm = target.y - placement.yMm;
+  if (dragKind === 'endpoint' && draggingEnd === 'start') {
+    store.stretchFingerHoleStart(draggingHole, xMm, yMm);
+    return;
+  }
+  store.stretchFingerHole(draggingHole, xMm, yMm);
 }
 
 function onPointerUp(): void {
-  if (dragKind === 'place' && draggingHole !== null) {
-    // A short drag collapses back to a circular hole.
+  if ((dragKind === 'place' || dragKind === 'endpoint') && draggingHole !== null) {
+    // A short drag, or an endpoint dropped on its partner, collapses back to
+    // a circular hole.
     store.finishFingerHole(draggingHole, SLOT_MIN_DRAG_MM);
   }
   dragKind = null;

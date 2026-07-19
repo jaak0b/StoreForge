@@ -210,6 +210,10 @@ export const useToolTrace = defineStore('toolTrace', () => {
     layout.stretchFingerHole(layoutState, hole, x2Mm, y2Mm);
   }
 
+  function stretchFingerHoleStart(hole: FingerHole, xMm: number, yMm: number): void {
+    layout.stretchFingerHoleStart(layoutState, hole, xMm, yMm);
+  }
+
   function finishFingerHole(hole: FingerHole, minSlotMm: number): void {
     layout.finishFingerHole(layoutState, hole, minSlotMm);
   }
@@ -288,6 +292,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     addFingerHole,
     moveFingerHole,
     stretchFingerHole,
+    stretchFingerHoleStart,
     finishFingerHole,
     removeFingerHole,
     setFingerHoleDiameter,

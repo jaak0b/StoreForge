@@ -39,9 +39,6 @@ const quantity = ref(1);
 const gridXField = ref<{ focus: () => void } | null>(null);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
-const showLabelFields = computed(
-  () => productChoice.value === 'binWithInsert' || productChoice.value === 'insert',
-);
 
 function resetForm(): void {
   const keepOpen = store.moreOptionsOpen;
@@ -249,7 +246,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generate
         class="mt-4"
       />
       <LabelIconField
-        v-if="showLabelFields"
+        v-if="store.hasLabel"
         v-model:text="labelText"
         v-model:icon="labelIcon"
         class="mt-4"

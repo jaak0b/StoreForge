@@ -9,6 +9,7 @@ import {
   requiredFootprint,
   setGridManually,
   setToolTransform,
+  stretchFingerHoleStart,
   toBinLocal,
   worldFromEntry,
   type LayoutState,
@@ -334,6 +335,22 @@ describe('setGridManually', () => {
     });
     expect(setGridManually(s, 'y', 5)).toBe(5);
     expect(s.gridY).toBe(5);
+  });
+});
+
+describe('stretchFingerHoleStart', () => {
+  it('moves a capsule first endpoint and leaves the second one where it was', () => {
+    const hole = { x: 5, y: 5, x2: 20, y2: 5, diameterMm: 12 };
+    const tool = lTool({ fingerHoles: [hole] });
+    stretchFingerHoleStart(state([tool], [centeredL]), hole, -3, 8);
+    expect(hole).toEqual({ x: -3, y: 8, x2: 20, y2: 5, diameterMm: 12 });
+  });
+
+  it('turns a plain circle into a capsule anchored at the old centre', () => {
+    const hole = { x: 5, y: 5, diameterMm: 12 };
+    const tool = lTool({ fingerHoles: [hole] });
+    stretchFingerHoleStart(state([tool], [centeredL]), hole, 5, 25);
+    expect(hole).toEqual({ x: 5, y: 25, x2: 5, y2: 5, diameterMm: 12 });
   });
 });
 

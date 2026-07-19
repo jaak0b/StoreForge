@@ -34,6 +34,10 @@ export const useBinDesigner = defineStore('binDesigner', {
     moreOptionsOpen: false,
   }),
   getters: {
+    /** Whether the chosen product carries a label: the single source for label-field visibility. */
+    hasLabel(state): boolean {
+      return state.productChoice === 'binWithInsert' || state.productChoice === 'insert';
+    },
     /** The designed label content. */
     content(state): LabelContent {
       return {

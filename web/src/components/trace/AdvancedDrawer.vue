@@ -353,7 +353,7 @@ function toolSummary(rotationDeg: number, offsetMm: number): string {
         @update:model-value="applyDefaultDepth(Number($event))"
       />
       <LabelIconField
-        v-if="productChoice === 'binWithInsert'"
+        v-if="designer.hasLabel"
         v-model:text="labelText"
         v-model:icon="labelIcon"
         class="mt-2"

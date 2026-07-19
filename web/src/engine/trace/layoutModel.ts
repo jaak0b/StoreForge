@@ -525,6 +525,27 @@ export function stretchFingerHole(
 }
 
 /**
+ * Moves a hole's first endpoint while the other one stays put, in tool-local
+ * mm: the counterpart of stretchFingerHole, used when an endpoint handle of a
+ * placed hole is dragged. A plain circle keeps its old centre as the second
+ * endpoint, so the drag stretches it into a capsule. Re-sizes unless manual.
+ */
+export function stretchFingerHoleStart(
+  state: LayoutState,
+  hole: FingerHole,
+  xMm: number,
+  yMm: number,
+): void {
+  if (hole.x2 === undefined || hole.y2 === undefined) {
+    hole.x2 = hole.x;
+    hole.y2 = hole.y;
+  }
+  hole.x = xMm;
+  hole.y = yMm;
+  refit(state);
+}
+
+/**
  * Finishes placing a hole: a drag shorter than minSlotMm collapses back to a
  * plain circle. Re-sizes unless manual.
  */

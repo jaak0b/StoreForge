@@ -8,6 +8,8 @@ import { useBinDesigner } from '../stores/binDesigner';
  * values persist across tab switches. Second label line and quantity are
  * per-bin-only fields that do not apply to a screw entry (which always adds
  * a set count of identical bins), so the caller hides them with perBinFields.
+ * The second label line additionally follows the store's label-visibility
+ * getter, so it disappears for products without a label.
  */
 
 const props = defineProps<{
@@ -44,7 +46,7 @@ const { labelText2, dividerCountX, dividerCountY, magnetHoles, notes, moreOption
   <v-expand-transition>
     <div v-if="open" class="mt-3">
       <v-text-field
-        v-if="props.perBinFields"
+        v-if="props.perBinFields && store.hasLabel"
         v-model="labelText2"
         label="Second label line"
         density="comfortable"

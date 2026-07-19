@@ -55,13 +55,24 @@ const queue = useBinQueue();
 
 const { notes } = storeToRefs(designer);
 
-// The product choice is shared designer state; the trace tab cannot produce
-// a standalone insert (pockets need a bin), so a leftover insert-only choice
-// from another tab falls back to the bin-with-insert default here.
+/**
+ * The product choice the trace flow starts a new design on: traced tool bins
+ * hold pockets rather than a label, so they default to the plain bin. The
+ * other tabs keep the shared designer default.
+ */
+const traceDefaultChoice = 'plainBin';
+
+// The product choice is shared designer state. A new trace design starts on
+// the trace default, while editing a queue entry keeps the choice rehydrated
+// from that entry. Either way the trace tab cannot produce a standalone
+// insert (pockets need a bin), so a leftover insert-only choice carried in
+// from another tab falls back to the same default.
 watch(
-  () => designer.productChoice,
-  (choice) => {
-    if (choice === 'insert') designer.productChoice = 'binWithInsert';
+  [() => props.editingEntry?.id ?? null, () => designer.productChoice],
+  ([entryId, choice], previous) => {
+    const startingDesign = previous === undefined || previous[0] !== entryId;
+    if (entryId === null && startingDesign) designer.productChoice = traceDefaultChoice;
+    else if (choice === 'insert') designer.productChoice = traceDefaultChoice;
   },
   { immediate: true },
 );
@@ -302,8 +313,10 @@ function cancelEdit(): void {
           Trace a tool with the plus button, or add a basic shape.
         </template>
         <template v-else-if="fingerHoleMode">
-          Press on a tool to place a finger hole; drag before releasing to
-          stretch it into a slot.
+          Press anywhere in the bin to place a finger hole on the tool under
+          the pointer, or on the selected tool. Drag before releasing to
+          stretch the hole into a slot, and drag an endpoint handle of a
+          placed slot to reshape it.
         </template>
         <template v-else>
           Drag each tool to its place; the bin outline follows the tools.
