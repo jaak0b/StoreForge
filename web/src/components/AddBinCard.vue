@@ -43,7 +43,7 @@ function tabDisabled(name: TabName): boolean {
     <v-tabs v-model="tab" color="primary" density="comfortable">
       <v-tab value="manual" :disabled="tabDisabled('manual')">Manual bin</v-tab>
       <v-tab value="screw" :disabled="tabDisabled('screw')">Screw entry</v-tab>
-      <v-tab value="trace" :disabled="tabDisabled('trace')">Tool trace</v-tab>
+      <v-tab value="trace" :disabled="tabDisabled('trace')">Tool bin</v-tab>
     </v-tabs>
     <v-divider />
     <v-card-text>

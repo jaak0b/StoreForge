@@ -179,7 +179,7 @@ export const LABEL_ICONS: LabelIcon[] = [
   },
   {
     // Toy brick in side view with two studs on top.
-    name: 'lego brick',
+    name: 'toy brick',
     path:
       'M5 45L20 45L20 30L40 30L40 45L60 45L60 30L80 30L80 45L95 45L95 85L5 85Z',
     viewBox: VIEW_BOX,

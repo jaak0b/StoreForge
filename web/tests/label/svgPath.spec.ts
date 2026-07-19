@@ -101,7 +101,7 @@ describe('svgPathToPolygons', () => {
       'pocket screw': 0,
       cable: 0,
       battery: 0,
-      'lego brick': 0,
+      'toy brick': 0,
       resistor: 0,
       'ic chip': 0,
       spring: 0,
@@ -145,7 +145,7 @@ describe('svgPathToPolygons', () => {
       [
         'cable',
         'battery',
-        'lego brick',
+        'toy brick',
         'resistor',
         'ic chip',
         'spring',

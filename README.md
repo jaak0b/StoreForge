@@ -17,12 +17,12 @@ Everything runs in your browser. The 3D geometry (Gridfinity bin bodies, stackin
 - **STL per bin**, or a full **3MF build plate** for Orca Slicer, with the label on a second filament slot for toolchanger or AMS printing.
 - **Print tracking.** After a print session, check off the bins that came out fine; anything that failed stays queued for the next plate.
 - **Screw-list import.** Paste a hardware list like `m3x20 fhcs, m5x12 bhcs` and StoreForge parses it into correctly sized, labeled queue entries.
-- **Tool tracing.** Photograph an object (a tool, a part) against a sheet of paper, click to segment it, and StoreForge fits a bin around the traced outline, including a measured interior scoop for tools that need a fingertip to reach in.
+- **Tool bin tracing.** Photograph an object (a tool, a part) against a sheet of paper, click to segment it, and StoreForge fits a bin around the traced outline, including a measured interior scoop for tools that need a fingertip to reach in.
 - **Magnet holes and stacking lip**, generated from the same MIT-licensed reference geometry as `kennetek/gridfinity-rebuilt-openscad` (42 mm pitch, 41.5 mm base footprint, 7 mm height units).
 
 ![The queue with a build plate batch ready to confirm and download](img/QueuGridfinityBinGenerator.png)
 
-![Tracing a tool's outline from a photo to size a bin around it](img/ToolTraceGridfinityBinGenerator.png)
+![Tracing a tool's outline from a photo to size a tool bin around it](img/ToolTraceGridfinityBinGenerator.png)
 
 ## Roadmap
 
