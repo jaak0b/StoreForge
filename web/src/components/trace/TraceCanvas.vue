@@ -5,6 +5,13 @@ import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
 import type { BrushStroke, MmPoint, SamPoint, TracedOutline } from '../../engine/trace/types';
 import { centroidOf, pointInPolygon } from '../../engine/trace/edit';
+import {
+  MIN_ZOOM,
+  clampPan,
+  screenToImage,
+  zoomToCursor,
+  type ViewTransform,
+} from './viewTransform';
 
 /**
  * The Trace mode of the trace-and-layout workspace: click a tool on the
@@ -43,6 +50,64 @@ let activeStroke: BrushStroke | null = null;
 const cursorPx = ref<{ x: number; y: number } | null>(null);
 
 let maskPreview: ImageData | null = null;
+
+// View transform: zoom in [1, 8] and a pan offset in canvas pixels, applied to
+// every drawn layer so the whole view scales together. At zoom 1 the pan is
+// pinned to (0, 0) and the view matches the untransformed canvas.
+const zoom = ref(MIN_ZOOM);
+const panX = ref(0);
+const panY = ref(0);
+
+// True while the space bar is held; it turns a left-drag into a pan, taking
+// priority over the paint modes.
+const spaceHeld = ref(false);
+// The in-progress pan drag: the canvas-pixel pointer position and the pan
+// offset captured when the drag began; null when not panning.
+let panDrag: { startX: number; startY: number; panX: number; panY: number } | null = null;
+// Set true when a left-button pan drag ends so the click event it produces is
+// swallowed instead of segmenting.
+let panConsumedClick = false;
+
+// Cached offscreen canvases so the base photo and the mask overlay draw through
+// the view transform without rebuilding their ImageData every frame. The base
+// is rebuilt when a new rectified photo arrives; the mask when a new preview
+// arrives (tracked by reference identity).
+let baseCanvas: OffscreenCanvas | null = null;
+let cachedBasePreview: ImageData | null = null;
+let maskCanvas: OffscreenCanvas | null = null;
+let cachedMaskPreview: ImageData | null = null;
+
+function currentTransform(): ViewTransform {
+  return { zoom: zoom.value, panX: panX.value, panY: panY.value };
+}
+
+/**
+ * Returns the cached base-photo offscreen canvas, rebuilding it only when a new
+ * rectified preview arrives so drawImage can render it through the transform.
+ */
+function ensureBaseCanvas(preview: ImageData): OffscreenCanvas {
+  if (baseCanvas === null || cachedBasePreview !== preview) {
+    baseCanvas = new OffscreenCanvas(preview.width, preview.height);
+    const bctx = baseCanvas.getContext('2d');
+    if (bctx) bctx.putImageData(preview, 0, 0);
+    cachedBasePreview = preview;
+  }
+  return baseCanvas;
+}
+
+/**
+ * Returns the cached mask-overlay offscreen canvas, rebuilding it only when a
+ * new mask preview arrives so drawImage renders it through the transform.
+ */
+function ensureMaskCanvas(mask: ImageData): OffscreenCanvas {
+  if (maskCanvas === null || cachedMaskPreview !== mask) {
+    maskCanvas = new OffscreenCanvas(mask.width, mask.height);
+    const mctx = maskCanvas.getContext('2d');
+    if (mctx) mctx.putImageData(mask, 0, 0);
+    cachedMaskPreview = mask;
+  }
+  return maskCanvas;
+}
 
 // Id of the existing tool being re-traced from its stored clicks.
 const retraceToolId = ref<string | null>(null);
@@ -85,15 +150,15 @@ function draw(): void {
   el.height = preview.height;
   const ctx = el.getContext('2d');
   if (!ctx) return;
-  ctx.putImageData(preview, 0, 0);
+  // Clear in identity space, then apply the view transform so every layer
+  // below (photo, mask, ghosts, outline, points, brush ring) scales together.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, el.width, el.height);
+  ctx.setTransform(zoom.value, 0, 0, zoom.value, panX.value, panY.value);
+  ctx.drawImage(ensureBaseCanvas(preview), 0, 0);
   if (maskPreview !== null) {
     // The mask overlay carries alpha, so it composites over the sheet.
-    const overlay = new OffscreenCanvas(maskPreview.width, maskPreview.height);
-    const octx = overlay.getContext('2d');
-    if (octx) {
-      octx.putImageData(maskPreview, 0, 0);
-      ctx.drawImage(overlay, 0, 0);
-    }
+    ctx.drawImage(ensureMaskCanvas(maskPreview), 0, 0);
   }
   const cal = calibration.value;
   if (cal !== null) drawGhosts(ctx, el, cal.mmPerPixel);
@@ -245,6 +310,9 @@ function drawGhosts(
 
 watch(rectifiedPreview, () => {
   ghostOutlines.clear();
+  zoom.value = MIN_ZOOM;
+  panX.value = 0;
+  panY.value = 0;
   clearClicks();
   void nextTick(draw);
 });
@@ -267,6 +335,18 @@ function isEditableTarget(target: EventTarget | null): boolean {
  */
 function onKeyDown(event: KeyboardEvent): void {
   if (isEditableTarget(event.target)) return;
+  // Zoom and pan work whether or not an outline is pending.
+  if (event.key === '0' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    resetZoom();
+    event.preventDefault();
+    return;
+  }
+  if (event.key === ' ' || event.code === 'Space') {
+    if (!spaceHeld.value) spaceHeld.value = true;
+    // Stop the page from scrolling while space is used for panning.
+    event.preventDefault();
+    return;
+  }
   if (outline.value === null) return;
   const key = event.key;
   if ((event.ctrlKey || event.metaKey) && (key === 'z' || key === 'Z')) {
@@ -305,11 +385,19 @@ function onKeyDown(event: KeyboardEvent): void {
   event.preventDefault();
 }
 
+function onKeyUp(event: KeyboardEvent): void {
+  if (event.key === ' ' || event.code === 'Space') spaceHeld.value = false;
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
   void nextTick(draw);
 });
-onUnmounted(() => window.removeEventListener('keydown', onKeyDown));
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeyDown);
+  window.removeEventListener('keyup', onKeyUp);
+});
 
 function clearClicks(): void {
   retraceToolId.value = null;
@@ -357,8 +445,12 @@ async function runSegment(): Promise<void> {
   }
 }
 
-/** Converts a pointer event to canvas pixels, or null when the canvas is gone. */
-function toCanvasPixel(event: MouseEvent): { x: number; y: number } | null {
+/**
+ * Converts a pointer event to canvas backing-store pixels (before the view
+ * transform), accounting for the canvas being displayed at a CSS size that may
+ * differ from its pixel resolution. Null when the canvas is gone.
+ */
+function eventToCanvasPx(event: MouseEvent): { x: number; y: number } | null {
   const el = canvas.value;
   if (!el) return null;
   const rect = el.getBoundingClientRect();
@@ -368,7 +460,84 @@ function toCanvasPixel(event: MouseEvent): { x: number; y: number } | null {
   };
 }
 
+/**
+ * Converts a pointer event to rectified-image pixels, inverting the view
+ * transform so clicks and brush strokes land at the correct image coordinate at
+ * any zoom. Null when the canvas is gone.
+ */
+function toCanvasPixel(event: MouseEvent): { x: number; y: number } | null {
+  const canvasPx = eventToCanvasPx(event);
+  if (canvasPx === null) return null;
+  return screenToImage(canvasPx, currentTransform());
+}
+
+/** Applies a pan offset clamped so the image stays within the viewport. */
+function setPan(nextPanX: number, nextPanY: number): void {
+  const el = canvas.value;
+  if (!el) return;
+  const clamped = clampPan(
+    { zoom: zoom.value, panX: nextPanX, panY: nextPanY },
+    el.width,
+    el.height,
+  );
+  panX.value = clamped.panX;
+  panY.value = clamped.panY;
+}
+
+/** Resets the view to fit (zoom 1, centred). Bound to the toolbar and key 0. */
+function resetZoom(): void {
+  zoom.value = MIN_ZOOM;
+  panX.value = 0;
+  panY.value = 0;
+  draw();
+}
+
+/** Wheel zoom centred on the pointer, clamped to [1, 8]; never scrolls the page. */
+function onWheel(event: WheelEvent): void {
+  event.preventDefault();
+  const el = canvas.value;
+  if (!el || rectifiedPreview.value === null) return;
+  const anchor = eventToCanvasPx(event);
+  if (anchor === null) return;
+  const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const next = zoomToCursor(
+    currentTransform(),
+    zoom.value * factor,
+    anchor,
+    el.width,
+    el.height,
+  );
+  zoom.value = next.zoom;
+  panX.value = next.panX;
+  panY.value = next.panY;
+  draw();
+}
+
+/**
+ * Begins a pan drag on middle-mouse-down, or on left-down while space is held.
+ * Returns true when the event started a pan so the caller skips paint or click
+ * handling.
+ */
+function maybeStartPan(event: PointerEvent): boolean {
+  const isMiddle = event.button === 1;
+  const isSpaceLeft = event.button === 0 && spaceHeld.value;
+  if (zoom.value <= MIN_ZOOM || (!isMiddle && !isSpaceLeft)) return false;
+  const canvasPx = eventToCanvasPx(event);
+  if (canvasPx === null) return false;
+  const el = canvas.value;
+  if (el) el.setPointerCapture(event.pointerId);
+  panDrag = { startX: canvasPx.x, startY: canvasPx.y, panX: panX.value, panY: panY.value };
+  event.preventDefault();
+  return true;
+}
+
 function onClick(event: MouseEvent, exclude: boolean): void {
+  if (panConsumedClick) {
+    // Swallow the click synthesized by the end of a space-pan drag.
+    panConsumedClick = false;
+    return;
+  }
+  if (spaceHeld.value) return;
   if (brushMode.value !== 'off') return;
   if (segmenting.value || !embedReady.value) return;
   const pt = toCanvasPixel(event);
@@ -394,6 +563,7 @@ function clearStrokes(): void {
 }
 
 function onPointerDown(event: PointerEvent): void {
+  if (maybeStartPan(event)) return;
   if (brushMode.value === 'off') return;
   if (segmenting.value || !embedReady.value) return;
   const pt = toCanvasPixel(event);
@@ -407,6 +577,16 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  if (panDrag !== null) {
+    const canvasPx = eventToCanvasPx(event);
+    if (canvasPx === null) return;
+    setPan(
+      panDrag.panX + (canvasPx.x - panDrag.startX),
+      panDrag.panY + (canvasPx.y - panDrag.startY),
+    );
+    draw();
+    return;
+  }
   if (brushMode.value === 'off') return;
   const pt = toCanvasPixel(event);
   if (pt === null) return;
@@ -436,13 +616,32 @@ function commitStroke(event: PointerEvent): void {
   void runSegment();
 }
 
+/** Ends a pan drag, releasing capture; returns true when a pan was active. */
+function endPan(event: PointerEvent): boolean {
+  if (panDrag === null) return false;
+  panDrag = null;
+  // A left-button pan (space held) is followed by a click event; swallow it.
+  if (event.button === 0) panConsumedClick = true;
+  const el = canvas.value;
+  if (el) {
+    try {
+      el.releasePointerCapture(event.pointerId);
+    } catch {
+      // No capture to release; nothing to do.
+    }
+  }
+  return true;
+}
+
 function onPointerUp(event: PointerEvent): void {
+  if (endPan(event)) return;
   if (brushMode.value === 'off') return;
   commitStroke(event);
 }
 
 function onPointerLeave(event: PointerEvent): void {
   cursorPx.value = null;
+  if (endPan(event)) return;
   if (activeStroke !== null) {
     commitStroke(event);
   } else {
@@ -450,10 +649,17 @@ function onPointerLeave(event: PointerEvent): void {
   }
 }
 
-/** CSS cursor class: the ring cursor replaces the pointer in paint modes. */
-const canvasCursorClass = computed(() =>
-  brushMode.value === 'off' ? 'cursor-crosshair' : 'cursor-none',
-);
+/**
+ * CSS cursor class: the grab cursor while space-panning takes priority, then
+ * the ring cursor replaces the pointer in paint modes.
+ */
+const canvasCursorClass = computed(() => {
+  if (spaceHeld.value) return 'cursor-grab';
+  return brushMode.value === 'off' ? 'cursor-crosshair' : 'cursor-none';
+});
+
+/** The zoom factor formatted for the readout, one decimal (e.g. "2.5x"). */
+const zoomLabel = computed(() => `${zoom.value.toFixed(1)}x`);
 
 /** The 1-based number of the tool the canvas is currently tracing. */
 const activeToolNumber = computed(() => {
@@ -569,6 +775,7 @@ function acceptTool(finish: boolean): void {
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
       @pointerleave="onPointerLeave"
+      @wheel.prevent="onWheel"
     />
     <div class="action-island">
       <div class="d-flex align-center flex-wrap ga-2">
@@ -607,6 +814,13 @@ function acceptTool(finish: boolean): void {
           Clear clicks
         </v-btn>
         <v-progress-circular v-if="segmenting" indeterminate size="20" width="2" />
+        <div v-if="zoom > 1" class="d-flex align-center ga-1 ml-auto">
+          <span class="text-caption text-medium-emphasis zoom-readout">{{ zoomLabel }}</span>
+          <v-btn icon size="small" variant="text" @click="resetZoom">
+            <v-icon icon="mdi-fit-to-screen" size="20" />
+            <v-tooltip activator="parent" location="bottom">Reset zoom (0)</v-tooltip>
+          </v-btn>
+        </div>
       </div>
       <div v-if="outline !== null" class="d-flex align-center flex-wrap ga-2 mt-2">
         <v-btn-toggle v-model="brushMode" mandatory density="compact" variant="text">
@@ -682,6 +896,17 @@ function acceptTool(finish: boolean): void {
 /* The ring drawn on the canvas replaces the pointer while a paint mode is on. */
 .cursor-none {
   cursor: none;
+}
+
+/* Space is held to pan; show the grab cursor over the canvas. */
+.cursor-grab {
+  cursor: grab;
+}
+
+.zoom-readout {
+  min-width: 34px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .brush-slider {
