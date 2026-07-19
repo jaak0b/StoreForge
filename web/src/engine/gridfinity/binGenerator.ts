@@ -8,7 +8,14 @@ import type {
   PartMeshes,
   SlottedBinParams,
 } from './types';
-import { applySlotToBody, buildFusedLabel, buildInsertSolids, insertPositionInBin } from '../label/slot';
+import {
+  applySlotToBody,
+  buildFusedLabel,
+  buildFusedShelf,
+  buildInsertSolids,
+  insertPositionInBin,
+} from '../label/slot';
+import { specHasLabel } from '../label/placement';
 import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
@@ -754,16 +761,44 @@ export function labelSpecOf(content: InsertContentParams): LabelSpec {
 }
 
 /**
+ * Whether the bin carries a fused label, and therefore the fused shelf in place
+ * of the insert channel. A fused entry whose spec is blank raises nothing, so
+ * it needs no shelf either. The single source deciding the fused case for the
+ * body builders and for pocket validation, which must protect the shelf's plan
+ * strip wherever the shelf is built.
+ */
+export function hasFusedLabel(
+  params: Pick<SlottedBinParams, 'fusedLabel'>,
+): boolean {
+  return params.fusedLabel != null && specHasLabel(labelSpecOf(params.fusedLabel));
+}
+
+/**
  * Build the bin body, with its label insert slot unless labelSlot is false
  * (a plain bin with no label feature). The paired insert, when the entry has
  * one, is a separate solid (see buildInsertPlacedInSlot for the preview and
- * the insert generators for the printable part).
+ * the insert generators for the printable part). A fused label gets the same
+ * shelf at its solid thickness instead of the channel, so its text has a
+ * surface to stand on; the single place that union happens, so every builder
+ * on top of this one (the pocket bin included) gets the shelf too.
  */
 export function buildSlottedBinBody(
   m: ManifoldToplevel,
-  params: BinParams & { labelSlot?: boolean },
+  params: BinParams & { labelSlot?: boolean } & Pick<SlottedBinParams, 'fusedLabel'>,
 ): Manifold {
   const body = buildBinManifold(m, params);
+  if (hasFusedLabel(params)) {
+    const shelf = buildFusedShelf(m, params);
+    const fused = m.Manifold.union([body, shelf]);
+    body.delete();
+    shelf.delete();
+    if (fused.status() !== 'NoError') {
+      const status = fused.status();
+      fused.delete();
+      throw new Error(`Fused label shelf union produced an invalid solid: ${status}`);
+    }
+    return fused;
+  }
   if (params.labelSlot === false) return body;
   return applySlotToBody(m, params, body);
 }
@@ -785,8 +820,9 @@ export function generateSlottedBin(
   let label: Manifold | null = null;
   try {
     if (params.fusedLabel != null) {
-      // Fused: no slot in the body (labelSlot is false), the label raised on
-      // the top face as the second-filament mesh.
+      // Fused: the body carries the solid fused shelf instead of the insert
+      // channel, and the label is raised on that shelf's top face as the
+      // second-filament mesh.
       label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
     } else if (params.insert !== null) {
       const placed = buildInsertInSlotSolids(m, font, params.insert, params);

@@ -281,13 +281,17 @@ export function shelfRibCentresMm(cells: number): number[] {
  * clipped to the bin's rounded outer outline so it also welds to the side
  * walls without protruding outside the bin. The slot shelf (see ./slot.ts)
  * places it one slot height below the nominal bin top as the floor of the
- * insert channel.
+ * insert channel; the fused label's shelf places it at the nominal top at a
+ * greater thickness, which is what the trailing thickness parameter is for
+ * (the back chamfer stays at 45 degrees whatever the plate thickness, and the
+ * ribs start at the plate underside, so they grow with it).
  */
 export function buildShelfStructure(
   m: ManifoldToplevel,
   params: BinParams,
   plateTop: number,
   rampStartY: number,
+  thickness: number = SHELF_THICKNESS,
 ): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
@@ -296,14 +300,14 @@ export function buildShelfStructure(
 
   const yOuter = -outerDepth / 2;
   const yInner = yOuter + WALL_THICKNESS;
-  const plateBottom = plateTop - SHELF_THICKNESS;
+  const plateBottom = plateTop - thickness;
 
   // Profiles in the (y, z) plane. The plate carries the measured 45-degree
   // back chamfer under the end stop; each rib is the measured 45-degree
   // support triangle.
   const plateProfile: SimplePolygon = [
     [yOuter, plateTop],
-    [rampStartY + SHELF_THICKNESS, plateTop],
+    [rampStartY + thickness, plateTop],
     [rampStartY, plateBottom],
     [yOuter, plateBottom],
   ];

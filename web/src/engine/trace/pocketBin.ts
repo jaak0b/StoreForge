@@ -21,11 +21,17 @@ import {
 import {
   buildInsertInSlotSolids,
   buildSlottedBinBody,
+  hasFusedLabel,
   labelSpecOf,
   manifoldToMeshData,
   roundedRectPolygon,
 } from '../gridfinity/binGenerator';
-import { applySlotToBody, buildFusedLabel, SLOT_REACH_DEPTH } from '../label/slot';
+import {
+  applySlotToBody,
+  buildFusedLabel,
+  FUSED_SHELF_REACH_DEPTH,
+  SLOT_REACH_DEPTH,
+} from '../label/slot';
 import type { BinParams, MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 
 /** A slotted bin plus the tools whose pockets are sunk into its interior. */
@@ -155,7 +161,7 @@ function sectionsOverlap(a: CrossSection, b: CrossSection): boolean {
  */
 export function validatePocketLayout(
   m: ManifoldToplevel,
-  params: BinParams & { labelSlot?: boolean },
+  params: BinParams & { labelSlot?: boolean } & Pick<SlottedBinParams, 'fusedLabel'>,
   placed: PlacedPocket[],
 ): void {
   if (params.dividerCountX > 0 || params.dividerCountY > 0) {
@@ -183,12 +189,16 @@ export function validatePocketLayout(
   // chamfer and support ribs under it must stay solid), so pockets must stay
   // clear of the slot structure's full plan reach: pockets are cut from the
   // bin top down, and SLOT_REACH_DEPTH is the structure's widest plan extent
-  // at every depth. A bin without the slot has no such region to protect.
+  // at every depth. A fused label stands on the same shelf at its own plan
+  // reach and needs it whole for the same reason. A bin with neither has no
+  // such region to protect.
+  const fused = hasFusedLabel(params);
+  const structureName = fused ? 'fused label shelf' : 'label insert slot';
   let slotStrip: CrossSection | null = null;
-  if (params.labelSlot !== false) {
+  if (fused || params.labelSlot !== false) {
     const outerWidth = binOuterSizeMm(params.gridX);
     const outerDepth = binOuterSizeMm(params.gridY);
-    const stripDepth = SLOT_REACH_DEPTH;
+    const stripDepth = fused ? FUSED_SHELF_REACH_DEPTH : SLOT_REACH_DEPTH;
     slotStrip = new m.CrossSection(
       [
         [
@@ -214,7 +224,7 @@ export function validatePocketLayout(
       }
       if (slotStrip !== null && sectionsOverlap(cutSections[i], slotStrip)) {
         throw new Error(
-          `The pocket for "${placed[i].tool.name}" reaches under the label insert slot. ` +
+          `The pocket for "${placed[i].tool.name}" reaches under the ${structureName}. ` +
             'Move it away from the front wall or use a deeper bin.',
         );
       }

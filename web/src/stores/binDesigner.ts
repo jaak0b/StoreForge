@@ -71,7 +71,8 @@ export const useBinDesigner = defineStore('binDesigner', {
         magnetHoles: state.magnetHoles,
         dividerCountX: state.dividerCountX,
         dividerCountY: state.dividerCountY,
-        // A fused bin has no slot; the label is raised on the top face instead.
+        // A fused bin has no insert channel; the label is raised on the solid
+        // fused shelf the body builder puts in the channel's place.
         labelSlot: state.productChoice !== 'plainBin' && !fused,
         insert: withInsert && !fused ? content : null,
         fusedLabel: fused ? content : null,

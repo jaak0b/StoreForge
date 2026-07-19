@@ -9,11 +9,22 @@ import {
   generateSlottedBin,
   generateSlottedBinUnion,
 } from '../../src/engine/gridfinity/binGenerator';
-import { buildFusedLabel, buildInsertSolids, INSERT_TEXT_RAISE } from '../../src/engine/label/slot';
+import {
+  buildFusedLabel,
+  buildInsertSolids,
+  FUSED_SHELF_THICKNESS,
+  insertLengthMm,
+  INSERT_DEPTH,
+  INSERT_TAB_LENGTH,
+  INSERT_TEXT_RAISE,
+  INSERT_TEXT_WELD,
+} from '../../src/engine/label/slot';
 import {
   layoutLabelFace,
   LABEL_LINE2_SCALE,
+  LABEL_MARGIN,
   LABEL_TEXT_HEIGHT,
+  SHELF_DEPTH_MARGIN,
   TEXT_BOLD_OFFSET,
 } from '../../src/engine/label/placement';
 import { HEIGHT_UNIT } from '../../src/engine/gridfinity/constants';
@@ -251,11 +262,13 @@ describe('generateSlottedBinUnion', () => {
 describe('fused label', () => {
   const spec = { text: 'M3 x 20', icon: null } as const;
 
-  it('builds a watertight raised label standing above the bin top', () => {
+  it('builds a watertight raised label standing on the bin top face', () => {
     const label = buildFusedLabel(m, font, spec, binParams());
     expect(label).not.toBeNull();
     expect(label!.status()).toBe('NoError');
-    // The raised face tops out INSERT_TEXT_RAISE above the nominal bin top.
+    // The raised face stands INSERT_TEXT_RAISE above the shelf's top face,
+    // which is the nominal bin top, exactly as the insert label stands above
+    // its plate.
     expect(label!.boundingBox().max[2]).toBeCloseTo(bodyTop + INSERT_TEXT_RAISE, 6);
     label!.delete();
   });
@@ -265,21 +278,49 @@ describe('fused label', () => {
     expect(label).toBeNull();
   });
 
-  it('cuts no slot into the body: the body equals the plain unslotted bin', () => {
-    // The fused path builds the body with no slot (labelSlot false), exactly
-    // as the plan expansion produces it.
-    const fused = generateSlottedBin(
-      m,
-      font,
-      params({ labelSlot: false, fusedLabel: { ...spec, text2: '' } }),
-    );
+  /** The fused bin exactly as the plan expansion produces it. */
+  const fusedParams = () =>
+    params({ labelSlot: false, fusedLabel: { ...spec, text2: '' } });
+
+  it('cuts no insert channel into the body, but does carry the fused shelf', () => {
+    const fused = generateSlottedBin(m, font, fusedParams());
     expect(fused.label).not.toBeNull();
-    const plain = generateBin(m, binParams());
-    // A fused bin's body has no insert channel, so it matches the plain bin,
-    // unlike the slotted body whose volume differs (see above).
-    expect(meshVolume(fused.body)).toBeCloseTo(meshVolume(plain), 6);
+    // The fused body is not the slotted body: it has no insert channel.
     const slotted = generateSlottedBin(m, font, params({ insert: null }));
     expect(meshVolume(fused.body)).not.toBeCloseTo(meshVolume(slotted.body), 3);
+    // It is not the plain bin either: the label's shelf is unioned in. The
+    // label's own footprint lies wholly over the interior cavity, so the plate
+    // covering it at its full thickness is material a plain bin does not have.
+    const plain = generateBin(m, binParams());
+    const labelFootprint =
+      (insertLengthMm(1) - 2 * INSERT_TAB_LENGTH - 2 * LABEL_MARGIN) *
+      (INSERT_DEPTH - 2 * SHELF_DEPTH_MARGIN);
+    expect(meshVolume(fused.body) - meshVolume(plain)).toBeGreaterThan(
+      labelFootprint * FUSED_SHELF_THICKNESS,
+    );
+  });
+
+  it('builds the fused body as a watertight solid', () => {
+    const body = buildSlottedBinBody(m, fusedParams());
+    expect(body.status()).toBe('NoError');
+    expect(body.isEmpty()).toBe(false);
+    expect(body.genus()).toBe(0);
+    body.delete();
+  });
+
+  it('stands the label text on the shelf instead of floating it over the cavity', () => {
+    const body = buildSlottedBinBody(m, fusedParams());
+    const label = buildFusedLabel(m, font, spec, binParams());
+    // The text reaches into the plate below the bin top, and the plate is
+    // there to receive it: the two solids share volume, so the printed part is
+    // one welded piece rather than text hanging in mid air.
+    expect(label!.boundingBox().min[2]).toBeCloseTo(bodyTop - INSERT_TEXT_WELD, 6);
+    expect(label!.boundingBox().min[2]).toBeGreaterThan(bodyTop - FUSED_SHELF_THICKNESS);
+    const weld = m.Manifold.intersection(body, label!);
+    expect(weld.volume()).toBeGreaterThan(0);
+    weld.delete();
+    body.delete();
+    label!.delete();
   });
 
   it('unions the raised label into the single STL mesh', () => {
