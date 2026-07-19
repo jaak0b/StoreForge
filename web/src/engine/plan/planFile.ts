@@ -28,6 +28,7 @@ import type {
   TracedTool,
   ToolPlacement,
 } from '../trace/types';
+import { DEFAULT_MIN_HOLE_WIDTH_MM } from '../trace/layoutModel';
 
 /** Result of parsing a plan file: either the plan or a user-worded error. */
 export type PlanParseResult =
@@ -109,6 +110,25 @@ export function validatePockets(raw: unknown, subject: string): string | null {
     }
     if (typeof tool.mirrored !== 'boolean') {
       return `${subject}: pocket tool ${tool.id}: mirrored must be true or false`;
+    }
+    // minHoleWidthMm and filledHoleIndices were added after the first traced
+    // entries shipped; older plans omit them, so undefined is accepted and
+    // defaulted (the default width, no filled holes) on load.
+    if (tool.minHoleWidthMm !== undefined) {
+      if (!isFiniteNumber(tool.minHoleWidthMm) || tool.minHoleWidthMm < 0) {
+        return `${subject}: pocket tool ${tool.id}: minHoleWidthMm must be a number of at least 0`;
+      }
+    }
+    if (tool.filledHoleIndices !== undefined) {
+      const holeCount = (outline.holes as unknown[]).length;
+      if (
+        !Array.isArray(tool.filledHoleIndices) ||
+        !tool.filledHoleIndices.every(
+          (i) => Number.isInteger(i) && (i as number) >= 0 && (i as number) < holeCount,
+        )
+      ) {
+        return `${subject}: pocket tool ${tool.id}: filledHoleIndices must be whole numbers referring to the tool's holes`;
+      }
     }
     // clicks were added after the first traced entries shipped; older plans
     // simply omit them, so undefined is accepted and defaulted to an empty list.
@@ -194,6 +214,8 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
       rotationDeg: tool.rotationDeg as number,
       offsetMm: tool.offsetMm as number,
       mirrored: tool.mirrored as boolean,
+      minHoleWidthMm: (tool.minHoleWidthMm as number | undefined) ?? DEFAULT_MIN_HOLE_WIDTH_MM,
+      filledHoleIndices: ((tool.filledHoleIndices as number[] | undefined) ?? []).slice(),
       fingerHoles: (tool.fingerHoles as FingerHole[]).map((hole) => ({
         x: hole.x,
         y: hole.y,

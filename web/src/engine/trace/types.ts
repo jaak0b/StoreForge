@@ -71,9 +71,20 @@ export interface FingerHole {
  * on read. The canonical pipeline, implemented by
  * `resolvedToolOutline(m, tool)` in `engine/trace/edit.ts`, is:
  *
- *   1. mirror (across the vertical axis through the outline centroid),
- *   2. rotate (`rotationDeg` counterclockwise about the same centroid),
- *   3. clearance (`offsetMm` outward offset with rounded joins).
+ *   1. mirror (across the vertical axis through the outline centroid) and
+ *      rotate (`rotationDeg` counterclockwise about the same centroid),
+ *   2. remove the holes named in `filledHoleIndices`,
+ *   3. cull holes narrower than `minHoleWidthMm`,
+ *   4. clearance (`offsetMm` outward offset with rounded joins).
+ *
+ * A hole in the outline leaves a standing island inside the pocket (the
+ * cross-section is an EvenOdd fill of outer plus holes); removing a hole cuts
+ * that island away. Steps 2 and 3 both drop holes so no unwanted island is
+ * left standing: step 2 by the user's explicit choice, step 3 by a width test
+ * against the raw (pre-clearance) hole. Culling runs before clearance so the
+ * width figure is measured on the hole as traced; the two compose freely, and
+ * the clearance offset independently drops any hole thinner than
+ * 2 * offsetMm.
  *
  * Rotation and mirroring are rigid, so the clearance offset commutes with
  * them and the ordering is mathematically free; clearance runs last anyway so
@@ -101,6 +112,18 @@ export interface TracedTool {
   offsetMm: number;
   /** Mirror across the vertical axis through the outline centroid. */
   mirrored: boolean;
+  /**
+   * Interior holes narrower than this (their thinnest width) are filled during
+   * resolve so no thin island is left standing in the pocket. 0 keeps every
+   * hole. Measured by the polygon erosion emptiness test in edit.ts.
+   */
+  minHoleWidthMm: number;
+  /**
+   * Indices into `outline.holes` that the user manually filled, so their
+   * islands are cut away. Stable for the life of the outline; cleared on
+   * re-trace.
+   */
+  filledHoleIndices: number[];
   fingerHoles: FingerHole[];
 }
 

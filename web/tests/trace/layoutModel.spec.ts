@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CLEARANCE_MM,
+  DEFAULT_MIN_HOLE_WIDTH_MM,
   addTool,
   binPlacement,
   layoutBounds,
@@ -12,6 +13,7 @@ import {
   setToolTransform,
   stretchFingerHoleStart,
   toBinLocal,
+  toggleFilledHole,
   worldFromEntry,
   type LayoutState,
 } from '../../src/engine/trace/layoutModel';
@@ -42,10 +44,43 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
     rotationDeg: 0,
     offsetMm: 0,
     mirrored: false,
+    minHoleWidthMm: 0,
+    filledHoleIndices: [],
     clicks: [],
     fingerHoles: [],
     ...overrides,
   };
+}
+
+/** A 20 mm square tool with two holes, for exercising the fill-hole actions. */
+function twoHoleTool(overrides: Partial<TracedTool> = {}): TracedTool {
+  return lTool({
+    id: 'holed',
+    name: 'Holed plate',
+    outline: {
+      outer: [
+        { x: 0, y: 0 },
+        { x: 20, y: 0 },
+        { x: 20, y: 20 },
+        { x: 0, y: 20 },
+      ],
+      holes: [
+        [
+          { x: 3, y: 8 },
+          { x: 3, y: 12 },
+          { x: 7, y: 12 },
+          { x: 7, y: 8 },
+        ],
+        [
+          { x: 13, y: 8 },
+          { x: 13, y: 12 },
+          { x: 17, y: 12 },
+          { x: 17, y: 8 },
+        ],
+      ],
+    },
+    ...overrides,
+  });
 }
 
 /** 70 x 12 mm bar centred on the tool-local origin. */
@@ -474,6 +509,33 @@ describe('tool list and transform actions', () => {
     expect(binPlacement(s).gridX).toBe(3);
   });
 
+  it('gives a new tool the default minimum hole width and no filled holes', () => {
+    const s = state([], []);
+    const tool = addTool(
+      s,
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 10 },
+          { x: 0, y: 10 },
+        ],
+        holes: [],
+      },
+      'Square',
+      20,
+    );
+    expect(tool.minHoleWidthMm).toBe(DEFAULT_MIN_HOLE_WIDTH_MM);
+    expect(tool.filledHoleIndices).toEqual([]);
+  });
+
+  it('updates a tool minimum hole width through setToolTransform', () => {
+    const tool = twoHoleTool();
+    const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
+    setToolTransform(s, 'holed', { minHoleWidthMm: 3.2 });
+    expect(tool.minHoleWidthMm).toBe(3.2);
+  });
+
   it('re-sizes when a transform change swaps the layout axes', () => {
     // Horizontal bar at (42, 21): grown 5..79 covers cells 0..1, Y inside
     // cell 0: 2 x 1. Rotated 90 degrees about its centre, the grown Y
@@ -488,5 +550,42 @@ describe('tool list and transform actions', () => {
     setToolTransform(s, 'bar', { rotationDeg: 90 });
     expect(s.gridX).toBe(2);
     expect(s.gridY).toBe(3);
+  });
+});
+
+describe('toggleFilledHole', () => {
+  it('adds then removes a hole index on repeated toggles', () => {
+    const tool = twoHoleTool();
+    const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
+    toggleFilledHole(s, 'holed', 1);
+    expect(tool.filledHoleIndices).toEqual([1]);
+    toggleFilledHole(s, 'holed', 1);
+    expect(tool.filledHoleIndices).toEqual([]);
+  });
+
+  it('ignores an index outside the tool holes', () => {
+    const tool = twoHoleTool();
+    const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
+    toggleFilledHole(s, 'holed', 2);
+    toggleFilledHole(s, 'holed', -1);
+    expect(tool.filledHoleIndices).toEqual([]);
+  });
+});
+
+describe('replaceToolOutline hole fields', () => {
+  it('clears filled holes but keeps the minimum hole width', () => {
+    const tool = twoHoleTool({ filledHoleIndices: [1], minHoleWidthMm: 3.2 });
+    const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
+    replaceToolOutline(s, 'holed', {
+      outer: [
+        { x: 0, y: 0 },
+        { x: 12, y: 0 },
+        { x: 12, y: 12 },
+        { x: 0, y: 12 },
+      ],
+      holes: [],
+    }, []);
+    expect(tool.filledHoleIndices).toEqual([]);
+    expect(tool.minHoleWidthMm).toBe(3.2);
   });
 });

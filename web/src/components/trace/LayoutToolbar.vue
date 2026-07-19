@@ -32,7 +32,18 @@ const emit = defineEmits<{
 }>();
 
 const trace = useToolTrace();
-const { selectedToolId, fingerHoleMode } = storeToRefs(trace);
+const { selectedToolId, fingerHoleMode, fillHolesMode } = storeToRefs(trace);
+
+/** The two canvas modes are mutually exclusive: turning one on turns off the other. */
+function toggleFingerHoleMode(): void {
+  fingerHoleMode.value = !fingerHoleMode.value;
+  if (fingerHoleMode.value) fillHolesMode.value = false;
+}
+
+function toggleFillHolesMode(): void {
+  fillHolesMode.value = !fillHolesMode.value;
+  if (fillHolesMode.value) fingerHoleMode.value = false;
+}
 
 const tool = computed(() =>
   selectedToolId.value !== null
@@ -135,7 +146,7 @@ function removeTool(): void {
           size="small"
           :variant="fingerHoleMode ? 'tonal' : 'text'"
           :color="fingerHoleMode ? 'primary' : undefined"
-          @click="fingerHoleMode = !fingerHoleMode"
+          @click="toggleFingerHoleMode"
         >
           <v-icon icon="mdi-circle-outline" size="20" />
           <v-tooltip activator="parent" location="bottom">
@@ -143,6 +154,22 @@ function removeTool(): void {
               fingerHoleMode
                 ? 'Finger-hole mode is on: press on a tool to place a hole, drag to stretch it into a slot.'
                 : 'Add a finger hole'
+            }}
+          </v-tooltip>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          :variant="fillHolesMode ? 'tonal' : 'text'"
+          :color="fillHolesMode ? 'primary' : undefined"
+          @click="toggleFillHolesMode"
+        >
+          <v-icon icon="mdi-checkbox-blank-circle" size="20" />
+          <v-tooltip activator="parent" location="bottom">
+            {{
+              fillHolesMode
+                ? 'Fill-holes mode is on: click a hole in a tool to fill it, so no island is left standing there. Click again to keep it.'
+                : 'Fill holes'
             }}
           </v-tooltip>
         </v-btn>

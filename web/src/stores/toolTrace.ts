@@ -27,6 +27,14 @@ export const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
 export const CLEARANCE_CHOICES = [0, 0.5, 1.5, 3, 4.5];
 
 /**
+ * Minimum hole width presets in mm, offered by the advanced drawer. 0 keeps
+ * every hole; the rest are multiples of the 0.4 mm extrusion line (two, four
+ * and eight lines), so each choice is a whole number of printed perimeters an
+ * island would stand on before it is filled in instead.
+ */
+export const HOLE_WIDTH_CHOICES = [0, 0.8, 1.6, 3.2];
+
+/**
  * State of the Tool trace tab, kept in a store because the add-bin card's
  * tabs unmount when switched away; the photo itself stays in the vision
  * worker, so this carries only what the UI needs to redraw. The large
@@ -74,6 +82,8 @@ export const useToolTrace = defineStore('toolTrace', () => {
   /** True while a click on the layout canvas places a finger hole. */
   const fingerHoleMode = ref(false);
   const fingerHoleDiameterMm = ref(DEFAULT_FINGER_HOLE_DIAMETER_MM);
+  /** True while a click on the layout canvas fills the hole under it. */
+  const fillHolesMode = ref(false);
 
   /**
    * Bin footprint in cells: the layout's required footprint while auto-sized,
@@ -189,9 +199,13 @@ export const useToolTrace = defineStore('toolTrace', () => {
 
   function setToolTransform(
     toolId: string,
-    patch: Partial<Pick<TracedTool, 'rotationDeg' | 'mirrored' | 'offsetMm'>>,
+    patch: Partial<Pick<TracedTool, 'rotationDeg' | 'mirrored' | 'offsetMm' | 'minHoleWidthMm'>>,
   ): void {
     layout.setToolTransform(layoutState, toolId, patch);
+  }
+
+  function toggleFilledHole(toolId: string, holeIndex: number): void {
+    layout.toggleFilledHole(layoutState, toolId, holeIndex);
   }
 
   function setPocketDepth(toolId: string, depthMm: number): void {
@@ -249,6 +263,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     retraceRequestId.value = null;
     fingerHoleMode.value = false;
     fingerHoleDiameterMm.value = DEFAULT_FINGER_HOLE_DIAMETER_MM;
+    fillHolesMode.value = false;
     gridX.value = 1;
     gridY.value = 1;
     gridManual.value = false;
@@ -274,6 +289,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     retraceRequestId,
     fingerHoleMode,
     fingerHoleDiameterMm,
+    fillHolesMode,
     gridX,
     gridY,
     gridManual,
@@ -288,6 +304,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     enableAutoSize,
     setGridManually,
     setToolTransform,
+    toggleFilledHole,
     setPocketDepth,
     addFingerHole,
     moveFingerHole,

@@ -352,12 +352,96 @@ export function fingerHoleOutline(hole: FingerHole): TracedOutline {
 }
 
 /**
- * The canonical editing pipeline (see TracedTool in types.ts): mirror, then
- * rotate, then clearance. Returns the pocket-ready outline in tool-local mm.
- * Finger holes are not applied here; the pocket generator cuts them
- * separately.
+ * Drops the holes named by filledHoleIndices from the outline, leaving the
+ * outer loop and the surviving holes copied. A filled hole's island is then
+ * cut away in the pocket (the pocket cross-section is an EvenOdd fill of outer
+ * plus holes, so a missing hole means no standing island there). Indices out
+ * of range are ignored. Pure, no CSG.
+ */
+export function withoutFilledHoles(
+  outline: TracedOutline,
+  filledHoleIndices: number[],
+): TracedOutline {
+  const filled = new Set(filledHoleIndices);
+  return {
+    outer: outline.outer.map((p) => ({ ...p })),
+    holes: outline.holes
+      .filter((_, i) => !filled.has(i))
+      .map((loop) => loop.map((p) => ({ ...p }))),
+  };
+}
+
+/**
+ * Drops holes whose thinnest width is below minHoleWidthMm, so no thin island
+ * is left standing in the pocket. Width is tested by a morphological opening
+ * (polygon erosion emptiness test): a hole survives iff eroding its region by
+ * minHoleWidthMm / 2 (a CrossSection inward offset with rounded joins) leaves
+ * a non-empty region, which holds exactly when the hole is at least
+ * minHoleWidthMm across at its narrowest. minHoleWidthMm 0 keeps every hole
+ * and returns a plain copy without touching the WASM (mirroring
+ * applyClearance's fast path); a negative width is a caller error.
+ */
+export function cullNarrowHoles(
+  m: ManifoldToplevel,
+  outline: TracedOutline,
+  minHoleWidthMm: number,
+): TracedOutline {
+  if (minHoleWidthMm < 0) {
+    throw new RangeError(`minimum hole width must be >= 0, got ${minHoleWidthMm}`);
+  }
+  if (minHoleWidthMm === 0) {
+    return {
+      outer: outline.outer.map((p) => ({ ...p })),
+      holes: outline.holes.map((loop) => loop.map((p) => ({ ...p }))),
+    };
+  }
+  const erosion = minHoleWidthMm / 2;
+  const kept: MmPoint[][] = [];
+  for (const loop of outline.holes) {
+    // NonZero fills the hole region regardless of its winding, so the erosion
+    // measures the hole's own width rather than the outline's fill.
+    const region = new m.CrossSection(
+      [loop.map((p) => [p.x, p.y] as [number, number])],
+      'NonZero',
+    );
+    try {
+      const eroded = region.offset(-erosion, 'Round', undefined, circleSegments(erosion));
+      try {
+        if (!eroded.isEmpty()) {
+          kept.push(loop.map((p) => ({ ...p })));
+        }
+      } finally {
+        eroded.delete();
+      }
+    } finally {
+      region.delete();
+    }
+  }
+  return { outer: outline.outer.map((p) => ({ ...p })), holes: kept };
+}
+
+/**
+ * The index of the topmost hole containing the point, or null when the point
+ * is in no hole. Holes are tested back to front so a hole drawn over another
+ * wins. Pure point-in-polygon hit test.
+ */
+export function holeIndexAt(outline: TracedOutline, point: MmPoint): number | null {
+  for (let i = outline.holes.length - 1; i >= 0; i -= 1) {
+    if (pointInPolygon(point, outline.holes[i])) return i;
+  }
+  return null;
+}
+
+/**
+ * The canonical editing pipeline (see TracedTool in types.ts): mirror and
+ * rotate, remove the manually filled holes, cull holes narrower than the
+ * tool's minimum, then clearance. Returns the pocket-ready outline in
+ * tool-local mm. Finger holes are not applied here; the pocket generator cuts
+ * them separately.
  */
 export function resolvedToolOutline(m: ManifoldToplevel, tool: TracedTool): TracedOutline {
   const placed = transformTool(tool.outline, tool.rotationDeg, tool.mirrored);
-  return applyClearance(m, placed, tool.offsetMm);
+  const kept = withoutFilledHoles(placed, tool.filledHoleIndices);
+  const culled = cullNarrowHoles(m, kept, tool.minHoleWidthMm);
+  return applyClearance(m, culled, tool.offsetMm);
 }

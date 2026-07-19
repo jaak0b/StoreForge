@@ -30,6 +30,14 @@ export const AUTO_SIZE_MARGIN_MM = 2;
  */
 export const DEFAULT_CLEARANCE_MM = 1.5;
 
+/**
+ * Default minimum hole width for a new tool. An island narrower than four
+ * 0.4 mm extrusion lines (1.6 mm) tends to peel or snap off the pocket floor,
+ * the same reasoning the constants module records for the 1.6 mm base ribs, so
+ * holes thinner than this are filled in by default.
+ */
+export const DEFAULT_MIN_HOLE_WIDTH_MM = 1.6;
+
 /** The layout state the model's actions operate on, mutated in place. */
 export interface LayoutState {
   tools: TracedTool[];
@@ -358,6 +366,8 @@ export function addTool(
     rotationDeg: 0,
     offsetMm: DEFAULT_CLEARANCE_MM,
     mirrored: false,
+    minHoleWidthMm: DEFAULT_MIN_HOLE_WIDTH_MM,
+    filledHoleIndices: [],
     fingerHoles: [],
   };
   state.tools.push(tool);
@@ -398,7 +408,9 @@ function sheetPositionOf(sheetOutline: TracedOutline): { xMm: number; yMm: numbe
  * Replaces an existing tool's outline and clicks after re-tracing it from
  * the stored photo; the name and editing parameters stay. The placement
  * moves to the new outline's sheet position (manual moves since the original
- * accept are not tracked, so the re-traced spot on the paper wins).
+ * accept are not tracked, so the re-traced spot on the paper wins). The
+ * manually filled holes are cleared because they indexed the old outline's
+ * holes; the minimum hole width (a width policy, not an index) stays.
  * Re-sizes unless manual.
  */
 export function replaceToolOutline(
@@ -411,6 +423,7 @@ export function replaceToolOutline(
   if (tool === undefined) return;
   tool.outline = recentred(outline);
   tool.clicks = clicks;
+  tool.filledHoleIndices = [];
   const placement = state.placements.find((p) => p.toolId === toolId);
   if (placement !== undefined) {
     const position = sheetPositionOf(outline);
@@ -459,13 +472,31 @@ export function duplicateTool(state: LayoutState, toolId: string): TracedTool | 
 export function setToolTransform(
   state: LayoutState,
   toolId: string,
-  patch: Partial<Pick<TracedTool, 'rotationDeg' | 'mirrored' | 'offsetMm'>>,
+  patch: Partial<Pick<TracedTool, 'rotationDeg' | 'mirrored' | 'offsetMm' | 'minHoleWidthMm'>>,
 ): void {
   const tool = state.tools.find((t) => t.id === toolId);
   if (tool === undefined) return;
   if (patch.rotationDeg !== undefined) tool.rotationDeg = patch.rotationDeg;
   if (patch.mirrored !== undefined) tool.mirrored = patch.mirrored;
   if (patch.offsetMm !== undefined) tool.offsetMm = patch.offsetMm;
+  if (patch.minHoleWidthMm !== undefined) tool.minHoleWidthMm = patch.minHoleWidthMm;
+  refit(state);
+}
+
+/**
+ * Toggles whether the hole at holeIndex (an index into the tool's raw outline
+ * holes) is manually filled. Filling a hole cuts its island away in the
+ * pocket. An index outside the outline's holes is ignored. Re-sizes unless
+ * manual (a filled hole does not change the footprint, but this keeps the
+ * mutation on the same path as the others).
+ */
+export function toggleFilledHole(state: LayoutState, toolId: string, holeIndex: number): void {
+  const tool = state.tools.find((t) => t.id === toolId);
+  if (tool === undefined) return;
+  if (holeIndex < 0 || holeIndex >= tool.outline.holes.length) return;
+  const at = tool.filledHoleIndices.indexOf(holeIndex);
+  if (at === -1) tool.filledHoleIndices.push(holeIndex);
+  else tool.filledHoleIndices.splice(at, 1);
   refit(state);
 }
 

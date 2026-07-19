@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../../stores/binDesigner';
-import { CLEARANCE_CHOICES, useToolTrace } from '../../stores/toolTrace';
+import { CLEARANCE_CHOICES, HOLE_WIDTH_CHOICES, useToolTrace } from '../../stores/toolTrace';
 import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import type { FingerHole } from '../../engine/trace/types';
@@ -114,9 +114,9 @@ function holeLengthMm(hole: FingerHole): number {
 
 const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
 
-/** One-line summary under each tool row: rotation and clearance. */
-function toolSummary(rotationDeg: number, offsetMm: number): string {
-  return `${rotationDeg} deg, ${offsetMm} mm clearance`;
+/** One-line summary under each tool row: rotation, clearance and hole width. */
+function toolSummary(rotationDeg: number, offsetMm: number, minHoleWidthMm: number): string {
+  return `${rotationDeg} deg, ${offsetMm} mm clearance, ${minHoleWidthMm} mm min hole`;
 }
 
 </script>
@@ -139,7 +139,7 @@ function toolSummary(rotationDeg: number, offsetMm: number): string {
           >
             <v-list-item-title>{{ tool.name }}</v-list-item-title>
             <v-list-item-subtitle class="text-caption">
-              {{ toolSummary(tool.rotationDeg, tool.offsetMm) }}
+              {{ toolSummary(tool.rotationDeg, tool.offsetMm, tool.minHoleWidthMm) }}
             </v-list-item-subtitle>
             <template #append>
               <v-btn
@@ -214,12 +214,40 @@ function toolSummary(rotationDeg: number, offsetMm: number): string {
                 {{ choice }}
               </v-btn>
             </v-btn-toggle>
+            <div class="text-caption text-medium-emphasis mt-2 mb-1">Minimum hole width (mm)</div>
+            <v-btn-toggle
+              :model-value="tool.minHoleWidthMm"
+              mandatory
+              density="compact"
+              variant="outlined"
+              divided
+              @update:model-value="trace.setToolTransform(tool.id, { minHoleWidthMm: Number($event) })"
+            >
+              <v-btn
+                v-for="choice in HOLE_WIDTH_CHOICES"
+                :key="choice"
+                :value="choice"
+                size="small"
+                class="clearance-choice"
+              >
+                {{ choice }}
+              </v-btn>
+            </v-btn-toggle>
+            <p class="text-caption text-medium-emphasis mt-1 mb-0">
+              Holes narrower than this are filled in so no thin island is left standing in the
+              pocket. 0 keeps every hole.
+            </p>
+            <div class="text-caption text-medium-emphasis mt-2 readout">
+              <div><span>Holes in outline</span><span>{{ tool.outline.holes.length }}</span></div>
+              <div><span>Filled</span><span>{{ tool.filledHoleIndices.length }}</span></div>
+            </div>
             <v-switch
               :model-value="tool.mirrored"
               color="primary"
               density="compact"
               hide-details
               label="Mirrored"
+              class="mt-1"
               @update:model-value="trace.setToolTransform(tool.id, { mirrored: $event === true })"
             />
             <div v-if="tool.fingerHoles.length > 0" class="text-caption text-medium-emphasis mt-1">
@@ -420,6 +448,15 @@ function toolSummary(rotationDeg: number, offsetMm: number): string {
 .clearance-choice {
   min-width: 44px;
   padding: 0 8px;
+}
+
+.readout > div {
+  display: flex;
+  gap: 12px;
+}
+
+.readout span:first-child {
+  min-width: 120px;
 }
 
 </style>

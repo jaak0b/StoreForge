@@ -3,11 +3,14 @@ import { loadManifold } from '../helpers/manifold';
 import {
   applyClearance,
   boundsOf,
+  cullNarrowHoles,
   fingerHoleOutline,
+  holeIndexAt,
   primitiveOutline,
   resolvedToolOutline,
   signedArea,
   transformTool,
+  withoutFilledHoles,
 } from '../../src/engine/trace/edit';
 import type { MmPoint, TracedOutline, TracedTool } from '../../src/engine/trace/types';
 
@@ -276,6 +279,8 @@ describe('resolvedToolOutline', () => {
       rotationDeg: 90,
       offsetMm: 1,
       mirrored: false,
+      minHoleWidthMm: 0,
+      filledHoleIndices: [],
       clicks: [],
       fingerHoles: [],
     };
@@ -295,9 +300,190 @@ describe('resolvedToolOutline', () => {
       rotationDeg: 0,
       offsetMm: 0,
       mirrored: false,
+      minHoleWidthMm: 0,
+      filledHoleIndices: [],
       clicks: [],
       fingerHoles: [],
     };
     expect(resolvedToolOutline(m, tool)).toEqual(lShape());
+  });
+
+  it('resolves a manually filled hole away, leaving no island', async () => {
+    const m = await loadManifold();
+    const tool: TracedTool = {
+      id: 't3',
+      name: 'filled hole',
+      outline: squareWithHole(),
+      rotationDeg: 0,
+      offsetMm: 0,
+      mirrored: false,
+      minHoleWidthMm: 0,
+      filledHoleIndices: [0],
+      clicks: [],
+      fingerHoles: [],
+    };
+    expect(resolvedToolOutline(m, tool).holes).toHaveLength(0);
+  });
+
+  it('resolves a hole narrower than the minimum width away, leaving no island', async () => {
+    const m = await loadManifold();
+    const tool: TracedTool = {
+      id: 't4',
+      name: 'narrow slot',
+      // The 1 mm wide slot hole is below a 1.6 mm minimum width.
+      outline: squareWithSlot(),
+      rotationDeg: 0,
+      offsetMm: 0,
+      mirrored: false,
+      minHoleWidthMm: 1.6,
+      filledHoleIndices: [],
+      clicks: [],
+      fingerHoles: [],
+    };
+    expect(resolvedToolOutline(m, tool).holes).toHaveLength(0);
+  });
+
+  it('culls a hole by width even with zero clearance', async () => {
+    const m = await loadManifold();
+    const tool: TracedTool = {
+      id: 't5',
+      name: 'wide minimum',
+      // The 5 mm square hole is below a 6 mm minimum width; clearance is off.
+      outline: squareWithHole(),
+      rotationDeg: 0,
+      offsetMm: 0,
+      mirrored: false,
+      minHoleWidthMm: 6,
+      filledHoleIndices: [],
+      clicks: [],
+      fingerHoles: [],
+    };
+    expect(resolvedToolOutline(m, tool).holes).toHaveLength(0);
+  });
+});
+
+/** A 20 mm square with a 1 mm wide by 14 mm tall slot hole (x 9.5..10.5, y 3..17). */
+function squareWithSlot(): TracedOutline {
+  return {
+    outer: [
+      { x: 0, y: 0 },
+      { x: 20, y: 0 },
+      { x: 20, y: 20 },
+      { x: 0, y: 20 },
+    ],
+    holes: [
+      [
+        { x: 9.5, y: 3 },
+        { x: 9.5, y: 17 },
+        { x: 10.5, y: 17 },
+        { x: 10.5, y: 3 },
+      ],
+    ],
+  };
+}
+
+/** A 20 mm square with two 4 mm square holes: hole 0 near the left, hole 1 near the right. */
+function twoHoleSquare(): TracedOutline {
+  return {
+    outer: [
+      { x: 0, y: 0 },
+      { x: 20, y: 0 },
+      { x: 20, y: 20 },
+      { x: 0, y: 20 },
+    ],
+    holes: [
+      [
+        { x: 3, y: 8 },
+        { x: 3, y: 12 },
+        { x: 7, y: 12 },
+        { x: 7, y: 8 },
+      ],
+      [
+        { x: 13, y: 8 },
+        { x: 13, y: 12 },
+        { x: 17, y: 12 },
+        { x: 17, y: 8 },
+      ],
+    ],
+  };
+}
+
+describe('cullNarrowHoles', () => {
+  it('keeps a 5 mm hole at a 1.6 mm and a 4 mm minimum width', async () => {
+    const m = await loadManifold();
+    expect(cullNarrowHoles(m, squareWithHole(), 1.6).holes).toHaveLength(1);
+    expect(cullNarrowHoles(m, squareWithHole(), 4).holes).toHaveLength(1);
+  });
+
+  it('culls a 5 mm hole at a 6 mm minimum width', async () => {
+    const m = await loadManifold();
+    expect(cullNarrowHoles(m, squareWithHole(), 6).holes).toHaveLength(0);
+  });
+
+  it('culls a 1 mm slot at a 1.6 mm minimum but keeps it at 0', async () => {
+    const m = await loadManifold();
+    expect(cullNarrowHoles(m, squareWithSlot(), 1.6).holes).toHaveLength(0);
+    expect(cullNarrowHoles(m, squareWithSlot(), 0).holes).toHaveLength(1);
+  });
+
+  it('returns a distinct copy at width 0 and rejects a negative width', async () => {
+    const m = await loadManifold();
+    const original = squareWithHole();
+    const copy = cullNarrowHoles(m, original, 0);
+    expect(copy).toEqual(original);
+    expect(copy.outer).not.toBe(original.outer);
+    expect(copy.holes[0]).not.toBe(original.holes[0]);
+    expect(() => cullNarrowHoles(m, original, -1)).toThrow(RangeError);
+  });
+});
+
+describe('withoutFilledHoles', () => {
+  it('removes the named hole and keeps the other', () => {
+    const kept = withoutFilledHoles(twoHoleSquare(), [0]);
+    expect(kept.holes).toHaveLength(1);
+    // Hole 1 spans x 13..17, so its first point marks which hole survived.
+    expect(kept.holes[0][0]).toEqual({ x: 13, y: 8 });
+  });
+
+  it('keeps every hole for an empty index list', () => {
+    expect(withoutFilledHoles(twoHoleSquare(), []).holes).toHaveLength(2);
+  });
+
+  it('ignores an out-of-range index', () => {
+    expect(withoutFilledHoles(twoHoleSquare(), [5]).holes).toHaveLength(2);
+  });
+});
+
+describe('holeIndexAt', () => {
+  it('returns the index of the hole the point lies in', () => {
+    // (15, 10) is inside hole 1 (x 13..17, y 8..12).
+    expect(holeIndexAt(twoHoleSquare(), { x: 15, y: 10 })).toBe(1);
+  });
+
+  it('returns null for a point in the body but no hole', () => {
+    // (10, 10) is between the two holes, in solid material.
+    expect(holeIndexAt(twoHoleSquare(), { x: 10, y: 10 })).toBeNull();
+  });
+
+  it('returns the topmost hole where two overlap', () => {
+    // Two holes both covering (10, 10); the later one (index 1) wins.
+    const overlapping: TracedOutline = {
+      outer: twoHoleSquare().outer,
+      holes: [
+        [
+          { x: 8, y: 8 },
+          { x: 8, y: 12 },
+          { x: 12, y: 12 },
+          { x: 12, y: 8 },
+        ],
+        [
+          { x: 9, y: 9 },
+          { x: 9, y: 11 },
+          { x: 11, y: 11 },
+          { x: 11, y: 9 },
+        ],
+      ],
+    };
+    expect(holeIndexAt(overlapping, { x: 10, y: 10 })).toBe(1);
   });
 });

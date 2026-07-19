@@ -76,6 +76,8 @@ function pockets(): BinPockets {
         rotationDeg: 90,
         offsetMm: 0.5,
         mirrored: true,
+        minHoleWidthMm: 3.2,
+        filledHoleIndices: [0],
         fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
       },
     ],
@@ -583,6 +585,51 @@ describe('trace sources in plan files', () => {
       const bin = result.plan.entries[0].product as { bin: TracedBin };
       expect(bin.bin.pockets.tools[0].clicks).toEqual([]);
     }
+  });
+
+  it('defaults missing hole-fill fields on old plans without a warning', () => {
+    const legacy = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
+    const raw = JSON.parse(serializePlanFile([legacy], [])) as {
+      entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+    };
+    delete raw.entries[0].product.bin.pockets.tools[0].minHoleWidthMm;
+    delete raw.entries[0].product.bin.pockets.tools[0].filledHoleIndices;
+    const result = parsePlanFile(JSON.stringify({ ...raw, version: 4, batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.warnings).toEqual([]);
+      const bin = result.plan.entries[0].product as { bin: TracedBin };
+      // The layout model's default minimum hole width, and no filled holes.
+      expect(bin.bin.pockets.tools[0].minHoleWidthMm).toBe(1.6);
+      expect(bin.bin.pockets.tools[0].filledHoleIndices).toEqual([]);
+    }
+  });
+
+  it('rejects a non-numeric minimum hole width', () => {
+    const bad = pockets();
+    (bad.tools[0] as Record<string, unknown>).minHoleWidthMm = 'wide';
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe('entry t1: pocket tool t1: minHoleWidthMm must be a number of at least 0');
+  });
+
+  it('rejects a negative minimum hole width', () => {
+    const bad = pockets();
+    bad.tools[0].minHoleWidthMm = -1;
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe('entry t1: pocket tool t1: minHoleWidthMm must be a number of at least 0');
+  });
+
+  it('rejects a filled hole index outside the outline holes', () => {
+    const bad = pockets();
+    // The fixture tool has one hole, so index 1 refers to nothing.
+    bad.tools[0].filledHoleIndices = [1];
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe(
+      "entry t1: pocket tool t1: filledHoleIndices must be whole numbers referring to the tool's holes",
+    );
   });
 
   it('rejects a malformed click', () => {

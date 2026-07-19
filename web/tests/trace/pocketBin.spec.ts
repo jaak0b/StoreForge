@@ -45,10 +45,41 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
     rotationDeg: 0,
     offsetMm: 0,
     mirrored: false,
+    minHoleWidthMm: 0,
+    filledHoleIndices: [],
     clicks: [],
     fingerHoles: [],
     ...overrides,
   };
+}
+
+/**
+ * A 30 x 22 rectangular plate tool with one 6 mm square through-hole centred
+ * at tool-local (15, 11). Left standing, the hole is an island in the pocket
+ * floor; filling it cuts the island away.
+ */
+function holedPlate(overrides: Partial<TracedTool> = {}): TracedTool {
+  return lTool({
+    id: 'plate',
+    name: 'Holed plate',
+    outline: {
+      outer: [
+        { x: 0, y: 0 },
+        { x: 30, y: 0 },
+        { x: 30, y: 22 },
+        { x: 0, y: 22 },
+      ],
+      holes: [
+        [
+          { x: 12, y: 8 },
+          { x: 12, y: 14 },
+          { x: 18, y: 14 },
+          { x: 18, y: 8 },
+        ],
+      ],
+    },
+    ...overrides,
+  });
 }
 
 /**
@@ -204,6 +235,38 @@ describe('buildPocketBinBody', () => {
     expect(() =>
       buildPocketBinBody(m, params({ placements: [{ ...centeredL, pocketDepthMm: 15 }] })),
     ).toThrow(/at most 14 mm/);
+  });
+
+  it('keeps an unfilled hole as an island in the placed pocket outline', () => {
+    const [placed] = placeTools(m, [holedPlate()], [{ ...centeredL, toolId: 'plate' }]);
+    expect(placed.outline.holes).toHaveLength(1);
+  });
+
+  it('drops a manually filled hole from the placed pocket outline', () => {
+    const tool = holedPlate({ filledHoleIndices: [0] });
+    const [placed] = placeTools(m, [tool], [{ ...centeredL, toolId: 'plate' }]);
+    expect(placed.outline.holes).toHaveLength(0);
+  });
+
+  it('cuts away the island of a filled hole so the pocket floor is clear there', () => {
+    // Bin top 21 mm, a 5 mm pocket bottoms at 16 mm. Tool-local hole centre
+    // (15, 11) maps to bin-local (0, 5.9). Left standing, that column stays
+    // solid up to the bin top; filling the hole cuts it to the pocket floor.
+    const standing = buildPocketBinBody(
+      m,
+      params({ tools: [holedPlate()], placements: [{ ...centeredL, toolId: 'plate' }] }),
+    );
+    const filled = buildPocketBinBody(
+      m,
+      params({
+        tools: [holedPlate({ filledHoleIndices: [0] })],
+        placements: [{ ...centeredL, toolId: 'plate' }],
+      }),
+    );
+    expect(probeVolume(standing, [0, 5.9, 18], [2, 2, 2])).toBeCloseTo(8, 5);
+    expect(probeVolume(filled, [0, 5.9, 18], [2, 2, 2])).toBe(0);
+    standing.delete();
+    filled.delete();
   });
 
   it('rejects combining pockets with divider walls', () => {

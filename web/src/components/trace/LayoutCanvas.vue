@@ -2,7 +2,7 @@
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
-import { boundsOf, transformTool } from '../../engine/trace/edit';
+import { boundsOf, holeIndexAt, transformTool } from '../../engine/trace/edit';
 import { PITCH } from '../../engine/gridfinity/constants';
 import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
 
@@ -23,8 +23,16 @@ import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
  */
 
 const store = useToolTrace();
-const { tools, placements, selectedToolId, gridX, gridY, gridManual, fingerHoleMode } =
-  storeToRefs(store);
+const {
+  tools,
+  placements,
+  selectedToolId,
+  gridX,
+  gridY,
+  gridManual,
+  fingerHoleMode,
+  fillHolesMode,
+} = storeToRefs(store);
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 
@@ -144,7 +152,7 @@ function draw(): void {
     ctx.strokeStyle = selected ? '#42a5f5' : 'rgba(255, 152, 0, 0.9)';
     ctx.fillStyle = selected ? 'rgba(66, 165, 245, 0.18)' : 'rgba(255, 152, 0, 0.12)';
     ctx.lineWidth = selected ? 2.5 : 1.5;
-    for (const loop of [outline.outer, ...outline.holes]) {
+    const traceLoop = (loop: MmPoint[]): void => {
       ctx.beginPath();
       loop.forEach((p, i) => {
         const [x, y] = toPx({ x: p.x + placement.xMm, y: p.y + placement.yMm });
@@ -152,16 +160,21 @@ function draw(): void {
         else ctx.lineTo(x, y);
       });
       ctx.closePath();
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    outline.outer.forEach((p, i) => {
-      const [x, y] = toPx({ x: p.x + placement.xMm, y: p.y + placement.yMm });
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.closePath();
+    };
+    // The whole tool body first, then its outer ring.
+    traceLoop(outline.outer);
     ctx.fill();
+    traceLoop(outline.outer);
+    ctx.stroke();
+    // Holes render in raw order (transformTool preserves it), so the index
+    // lines up with filledHoleIndices. An unfilled hole leaves a standing
+    // island (its ring is stroked); a filled hole is cut away, drawn as
+    // another patch of the tool's fill so the change reads distinctly.
+    outline.holes.forEach((loop, i) => {
+      traceLoop(loop);
+      if (tool.filledHoleIndices.includes(i)) ctx.fill();
+      else ctx.stroke();
+    });
     for (const hole of tool.fingerHoles) {
       holePath(
         ctx,
@@ -397,6 +410,25 @@ function clampMove(hole: FingerHole, placement: { xMm: number; yMm: number }, d:
   return { x: dx, y: dy };
 }
 
+/**
+ * The topmost tool whose resolved outline has an interior hole under the
+ * point, with that hole's raw index, or null. Used by fill-holes mode: the
+ * point is taken into the tool's transformed frame (transformTool preserves
+ * hole order, so the index matches the raw outline).
+ */
+function outlineHoleAt(p: MmPoint): { toolId: string; index: number } | null {
+  for (let i = tools.value.length - 1; i >= 0; i -= 1) {
+    const tool = tools.value[i];
+    const placement = store.placementOf(tool.id);
+    if (placement === undefined) continue;
+    const outline = transformTool(tool.outline, tool.rotationDeg, tool.mirrored);
+    const local = { x: p.x - placement.xMm, y: p.y - placement.yMm };
+    const index = holeIndexAt(outline, local);
+    if (index !== null) return { toolId: tool.id, index };
+  }
+  return null;
+}
+
 /** The tool a new hole belongs to: the one under the pointer, else the selected one. */
 function owningTool(p: MmPoint): TracedTool | null {
   const under = toolAt(p);
@@ -430,6 +462,19 @@ function onPointerDown(event: PointerEvent): void {
     dragKind = 'hole';
     selectedToolId.value = holeHit.tool.id;
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
+    return;
+  }
+  if (fillHolesMode.value) {
+    // A click on an interior hole toggles whether it is filled (its island
+    // cut away); a click elsewhere just selects or clears. No drag.
+    const hit = outlineHoleAt(p);
+    if (hit !== null) {
+      store.toggleFilledHole(hit.toolId, hit.index);
+      selectedToolId.value = hit.toolId;
+      return;
+    }
+    const tool = toolAt(p);
+    selectedToolId.value = tool !== null ? tool.id : null;
     return;
   }
   if (fingerHoleMode.value) {
@@ -471,6 +516,11 @@ function onPointerDown(event: PointerEvent): void {
 const hoverCursor = ref('default');
 
 function updateHoverCursor(p: MmPoint): void {
+  if (fillHolesMode.value) {
+    // A hole under the pointer can be clicked to fill it; nothing here drags.
+    hoverCursor.value = outlineHoleAt(p) !== null ? 'crosshair' : 'default';
+    return;
+  }
   if (endpointAt(p) !== null) {
     // Same cursor as stretching a hole out, which is what this drag does.
     hoverCursor.value = 'crosshair';
