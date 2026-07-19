@@ -41,7 +41,7 @@ const paintedAreaDropped = ref(false);
 // Brush strokes painted onto the mask (rectified-image pixels), the painting
 // mode, and the brush radius in mm. brushSizeMm ranges 1..20.
 const strokes = ref<BrushStroke[]>([]);
-const brushMode = ref<'off' | 'add' | 'erase'>('off');
+const brushMode = ref<'off' | 'add' | 'erase' | 'smooth'>('off');
 const brushSizeMm = ref(4);
 // The stroke being painted between pointer down and up; null when not painting.
 let activeStroke: BrushStroke | null = null;
@@ -206,7 +206,7 @@ function draw(): void {
       // Ring cursor showing where the next stroke lands and how wide it is.
       ctx.beginPath();
       ctx.arc(cursorPx.value.x, cursorPx.value.y, radiusPx, 0, 2 * Math.PI);
-      ctx.strokeStyle = brushMode.value === 'add' ? '#4285f4' : '#f44336';
+      ctx.strokeStyle = BRUSH_RING_COLORS[brushMode.value];
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
@@ -214,9 +214,27 @@ function draw(): void {
 }
 
 /**
+ * Paint colour per brush mode, one entry for the translucent provisional stroke
+ * and one for the opaque ring cursor: blue for add, red for erase, neutral grey
+ * for smooth (which neither adds nor removes area, so it takes neither the add
+ * nor the erase colour and stays clear of the orange outline and ghosts).
+ */
+const BRUSH_STROKE_COLORS: Record<BrushStroke['mode'], string> = {
+  add: 'rgba(66, 133, 244, 0.5)',
+  erase: 'rgba(244, 67, 54, 0.5)',
+  smooth: 'rgba(224, 224, 224, 0.5)',
+};
+const BRUSH_RING_COLORS: Record<BrushStroke['mode'] | 'off', string> = {
+  off: '#4285f4',
+  add: '#4285f4',
+  erase: '#f44336',
+  smooth: '#e0e0e0',
+};
+
+/**
  * Draws a provisional brush stroke on the 2D context as filled vertex discs and
  * thick connecting segments, matching the swept-disc region the mask rasterizer
- * will union or subtract. add is translucent blue, erase translucent red.
+ * will union, subtract or median-filter.
  */
 function drawProvisionalStroke(
   ctx: CanvasRenderingContext2D,
@@ -224,7 +242,7 @@ function drawProvisionalStroke(
   radiusPx: number,
 ): void {
   ctx.save();
-  const color = stroke.mode === 'add' ? 'rgba(66, 133, 244, 0.5)' : 'rgba(244, 67, 54, 0.5)';
+  const color = BRUSH_STROKE_COLORS[stroke.mode];
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
   ctx.lineWidth = 2 * radiusPx;
@@ -339,8 +357,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Brush shortcuts, active only while the trace stage is mounted: B and E pick
- * the paint modes, V and Escape turn painting off, the bracket keys step the
+ * Brush shortcuts, active only while the trace stage is mounted: B, E and S
+ * pick the paint modes, V and Escape turn painting off, the bracket keys step the
  * brush size, and Ctrl+Z (or Cmd+Z) undoes the last stroke. The shortcuts do
  * nothing until a mask exists, and never fire while focus is in a field.
  */
@@ -391,6 +409,10 @@ function onKeyDown(event: KeyboardEvent): void {
     case 'e':
     case 'E':
       brushMode.value = 'erase';
+      break;
+    case 's':
+    case 'S':
+      brushMode.value = 'smooth';
       break;
     case 'v':
     case 'V':
@@ -722,6 +744,7 @@ const shortcutRows: { action: string; keys: string }[] = [
   { action: 'Add exclude point', keys: 'Shift click or right click' },
   { action: 'Paint add', keys: 'B' },
   { action: 'Paint erase', keys: 'E' },
+  { action: 'Smooth edge', keys: 'S' },
   { action: 'Pointer mode', keys: 'V or Escape' },
   { action: 'Brush size', keys: '[ and ]' },
   { action: 'Undo stroke', keys: 'Ctrl+Z' },
@@ -909,6 +932,15 @@ function acceptTool(finish: boolean): void {
           <v-btn value="erase" icon size="small" :color="brushMode === 'erase' ? 'error' : undefined">
             <v-icon icon="mdi-eraser" size="20" />
             <v-tooltip activator="parent" location="bottom">Paint erase (E)</v-tooltip>
+          </v-btn>
+          <v-btn
+            value="smooth"
+            icon
+            size="small"
+            :color="brushMode === 'smooth' ? 'secondary' : undefined"
+          >
+            <v-icon icon="mdi-blur" size="20" />
+            <v-tooltip activator="parent" location="bottom">Smooth edge (S)</v-tooltip>
           </v-btn>
         </v-btn-toggle>
         <div class="brush-size d-flex align-center ga-2">

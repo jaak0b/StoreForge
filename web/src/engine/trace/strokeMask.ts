@@ -44,12 +44,28 @@ export function rasterizeStroke(
 }
 
 /**
+ * Median-filter aperture in pixels for a smooth stroke, derived from the
+ * stroke's own radius (the user's chosen smoothing scale) via mmPerPixel.
+ * cv.medianBlur requires an odd aperture greater than 1, so the pixel radius is
+ * forced odd and clamped up to 3. No upper clamp is applied: for CV_8U OpenCV
+ * runs the constant-time histogram median, so a large aperture stays tractable
+ * and capping it would silently shrink the smoothing the user asked for.
+ */
+function medianKernelSize(stroke: BrushStroke, mmPerPixel: number): number {
+  const radiusPx = Math.round(stroke.radiusMm / mmPerPixel);
+  const odd = radiusPx % 2 === 0 ? radiusPx + 1 : radiusPx;
+  return Math.max(3, odd);
+}
+
+/**
  * Apply brush strokes to `mask` (CV_8UC1, 0/255) in place, in stored order so
  * the last stroke wins on overlap. Each stroke is rasterized into a scratch Mat
  * and then composited: an 'add' stroke unions its region into the mask with
  * cv.bitwise_or; an 'erase' stroke clears exactly the painted pixels with
- * Mat.setTo using the scratch as the operation mask. An empty stroke list
- * returns immediately without allocating. cv failures propagate.
+ * Mat.setTo using the scratch as the operation mask; a 'smooth' stroke replaces
+ * the mask with its median-filtered self inside the painted pixels only. An
+ * empty stroke list returns immediately without allocating. cv failures
+ * propagate.
  */
 export function applyStrokes(
   cv: Cv,
@@ -62,12 +78,25 @@ export function applyStrokes(
   }
   const zero = new cv.Scalar(0);
   const scratch = new cv.Mat(mask.rows, mask.cols, cv.CV_8UC1, zero);
+  // Second scratch for the median-filtered mask, allocated on the first smooth
+  // stroke so add-only and erase-only stroke lists cost nothing extra.
+  let filtered: CvMat | null = null;
   try {
     for (const stroke of strokes) {
       scratch.setTo(zero);
       rasterizeStroke(cv, scratch, stroke, mmPerPixel);
       if (stroke.mode === 'add') {
         cv.bitwise_or(mask, scratch, mask);
+      } else if (stroke.mode === 'smooth') {
+        // Median filter, an edge-preserving smoother: it removes boundary
+        // staircase and speckle while leaving a straight edge in place. The
+        // whole mask is filtered and then copied back only where the stroke
+        // was painted, so mask area the user did not brush is untouched.
+        if (filtered === null) {
+          filtered = new cv.Mat(mask.rows, mask.cols, cv.CV_8UC1, zero);
+        }
+        cv.medianBlur(mask, filtered, medianKernelSize(stroke, mmPerPixel));
+        filtered.copyTo(mask, scratch);
       } else {
         // The scratch marks exactly the painted pixels; setTo with it as the
         // operation mask clears only those pixels of the mask.
@@ -76,5 +105,8 @@ export function applyStrokes(
     }
   } finally {
     scratch.delete();
+    if (filtered !== null) {
+      filtered.delete();
+    }
   }
 }

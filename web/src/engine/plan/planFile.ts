@@ -161,12 +161,12 @@ export function validatePockets(raw: unknown, subject: string): string | null {
         if (
           typeof stroke !== 'object' ||
           stroke === null ||
-          (stroke.mode !== 'add' && stroke.mode !== 'erase') ||
+          (stroke.mode !== 'add' && stroke.mode !== 'erase' && stroke.mode !== 'smooth') ||
           !isFiniteNumber(stroke.radiusMm) ||
           (stroke.radiusMm as number) <= 0 ||
           !Array.isArray(stroke.points)
         ) {
-          return `${subject}: pocket tool ${tool.id}: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list`;
+          return `${subject}: pocket tool ${tool.id}: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list`;
         }
         for (const rawPt of stroke.points as unknown[]) {
           const pt = rawPt as Record<string, unknown> | null;

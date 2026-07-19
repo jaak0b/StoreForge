@@ -658,6 +658,23 @@ describe('trace sources in plan files', () => {
     });
   });
 
+  it('round-trips a tool carrying a smooth brush stroke', () => {
+    const withStrokes = pockets();
+    (withStrokes.tools[0] as Record<string, unknown>).brushStrokes = [
+      { mode: 'smooth', radiusMm: 3, points: [{ x: 18, y: 44 }, { x: 22, y: 47 }] },
+    ];
+    const traced = entry({
+      id: 't1',
+      product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: withStrokes }) },
+    });
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 4, entries: [traced], batches: [] },
+      warnings: [],
+    });
+  });
+
   it('leaves a tool without brush strokes free of the brushStrokes key', () => {
     const traced = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
     const result = parsePlanFile(serializePlanFile([traced], []));
@@ -686,7 +703,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
     );
   });
 
@@ -698,7 +715,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
     );
   });
 
@@ -710,7 +727,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
     );
   });
 

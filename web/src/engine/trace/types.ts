@@ -11,10 +11,13 @@ export interface PixelPoint {
  * A freehand brush stroke painted onto the segmentation mask, in
  * rectified-image pixels (the same frame as TracedTool.clicks). An 'add'
  * stroke unions its swept-disc region into the mask; an 'erase' stroke
- * subtracts it. Strokes apply in stored order, last stroke wins on overlap.
+ * subtracts it; a 'smooth' stroke leaves the mask's set and cleared regions
+ * alone and instead median-filters the mask inside its swept disc, cleaning up
+ * a ragged boundary. Strokes apply in stored order, last stroke wins on
+ * overlap.
  */
 export interface BrushStroke {
-  mode: 'add' | 'erase';
+  mode: 'add' | 'erase' | 'smooth';
   /** Brush radius in millimeters; the swept disc has this radius. */
   radiusMm: number;
   /** Polyline vertices in rectified-image pixels; one vertex is a dot. */
