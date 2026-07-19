@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../stores/binDesigner';
+import DividerEditor from './divider/DividerEditor.vue';
 
 /**
  * The "More options" disclosure shared by the Manual bin and Screw entry
@@ -29,8 +30,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useBinDesigner();
-const { labelText2, dividerCountX, dividerCountY, magnetHoles, notes, moreOptionsOpen: open } =
-  storeToRefs(store);
+const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(store);
 </script>
 
 <template>
@@ -64,27 +64,8 @@ const { labelText2, dividerCountX, dividerCountY, magnetHoles, notes, moreOption
           hide-details
           @update:model-value="emit('update:quantity', Number($event))"
         />
-        <v-text-field
-          v-if="!props.hideDividers && !props.insertOnly"
-          v-model.number="dividerCountX"
-          type="number"
-          min="0"
-          step="1"
-          label="Dividers along X"
-          density="comfortable"
-          hide-details
-        />
-        <v-text-field
-          v-if="!props.hideDividers && !props.insertOnly"
-          v-model.number="dividerCountY"
-          type="number"
-          min="0"
-          step="1"
-          label="Dividers along Y"
-          density="comfortable"
-          hide-details
-        />
       </div>
+      <DividerEditor v-if="!props.hideDividers && !props.insertOnly" class="mt-4" />
       <div v-if="!props.insertOnly" class="mt-3">
         <v-switch
           v-model="magnetHoles"

@@ -16,7 +16,7 @@ import {
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
 import type { PartMeshes } from '../engine/gridfinity/types';
-import { dividerCountsOf, evenDividerWalls } from '../engine/gridfinity/dividerModel';
+import { validateWalls, type DividerWall } from '../engine/gridfinity/dividerModel';
 import { iconByName } from '../engine/label/icons';
 import {
   composeLabelText,
@@ -104,6 +104,21 @@ function headIconPath(headType: HeadType): string {
   return iconByName(HEAD_ICON_NAME[headType]).path;
 }
 
+/**
+ * Divider walls carried by the screw entry being edited. This tab derives the
+ * bin footprint from the screw and can produce several bins at once, so it
+ * offers no divider editor yet; keeping the loaded walls here means editing a
+ * screw entry that has them and saving again does not throw them away. Walls
+ * that no longer fit the derived footprint are dropped, since they would only
+ * fail the geometry layer's validation.
+ */
+const loadedWalls = ref<DividerWall[]>([]);
+
+function wallsFor(cells: number): DividerWall[] {
+  if (validateWalls(loadedWalls.value, cells, 1) !== null) return [];
+  return loadedWalls.value.map((wall) => ({ ...wall }));
+}
+
 /** The width in cells and label content a screw batch turns into. */
 function sizedContentFor(batch: {
   thread: string | null;
@@ -149,7 +164,7 @@ function productFor(
     gridY: 1,
     heightUnits: binHeightUnits,
     magnetHoles: store.magnetHoles,
-    walls: evenDividerWalls(cells, 1, store.dividerCountX, store.dividerCountY),
+    walls: wallsFor(cells),
     screw,
   };
   // A screw bin is printed to carry its label, so the tab offers no bin-alone
@@ -231,6 +246,7 @@ const keptEnteredText = computed(() =>
 watch(
   () => (app.editingKind === 'screw' ? app.editingEntryId : null),
   (entryId) => {
+    loadedWalls.value = [];
     if (entryId === null) return;
     const entry = queue.entryById(entryId);
     if (entry === null || originOf(entry.product) !== 'screw') return;
@@ -258,9 +274,7 @@ watch(
     };
     if (product.kind !== 'insert' && product.bin.origin === 'screw') {
       patch.magnetHoles = product.bin.magnetHoles;
-      const counts = dividerCountsOf(product.bin.walls);
-      patch.dividerCountX = counts.countX;
-      patch.dividerCountY = counts.countY;
+      loadedWalls.value = product.bin.walls.map((wall: DividerWall) => ({ ...wall }));
     }
     store.$patch(patch);
   },
@@ -521,7 +535,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
 
       <ProductSelect v-model="productChoice" hide-bin-alone class="mt-4" />
 
-      <MoreOptions :per-bin-fields="false" :insert-only="insertOnly" />
+      <MoreOptions :per-bin-fields="false" :insert-only="insertOnly" hide-dividers />
 
       <div class="d-flex ga-2 mt-4">
         <v-btn

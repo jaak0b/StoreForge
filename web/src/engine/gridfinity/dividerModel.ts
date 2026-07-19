@@ -49,26 +49,6 @@ export function evenDividerWalls(
   return walls;
 }
 
-/**
- * The count pair equivalent to a set of axis-aligned walls: vertical walls
- * (x1 == x2) count toward countX, horizontal walls (y1 == y2) toward countY.
- * Temporary bridge for the designer store, whose editing representation is
- * still the two count fields until the Stage 2 canvas editor lands; the store
- * only ever holds walls produced by evenDividerWalls, all axis-aligned, so
- * this recovers the counts exactly. A wall that is neither vertical nor
- * horizontal (only reachable once Stage 2 can author them) counts toward
- * neither axis.
- */
-export function dividerCountsOf(walls: DividerWall[]): { countX: number; countY: number } {
-  let countX = 0;
-  let countY = 0;
-  for (const wall of walls) {
-    if (wall.x1 === wall.x2) countX += 1;
-    else if (wall.y1 === wall.y2) countY += 1;
-  }
-  return { countX, countY };
-}
-
 /** Length of a divider wall's centreline segment. */
 export function wallLength(wall: DividerWall): number {
   return Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
@@ -214,4 +194,161 @@ export function validateWalls(
     }
   }
   return null;
+}
+
+/**
+ * The state the divider editor's mutations operate on, mutated in place: the
+ * wall list plus the footprint that bounds it. Mirrors the trace layout
+ * model's LayoutState, and the designer store satisfies it structurally, so
+ * the store's actions are one-to-one wrappers with no logic of their own.
+ */
+export interface DividerState {
+  walls: DividerWall[];
+  gridX: number;
+  gridY: number;
+}
+
+/** Half-extents of a footprint's interior rectangle, in bin-local mm. */
+function interiorHalfExtents(state: DividerState): { hx: number; hy: number } {
+  return {
+    hx: binInteriorSizeMm(state.gridX) / 2,
+    hy: binInteriorSizeMm(state.gridY) / 2,
+  };
+}
+
+/**
+ * The nearest point inside the interior rectangle. Every mutation runs its
+ * endpoints through this, so a drag can never author a wall that leaves the
+ * bin: validateWalls stays the reportable authority, but the interactive
+ * paths do not rely on the user to steer back into a valid state.
+ */
+function clampPoint(state: DividerState, x: number, y: number): { x: number; y: number } {
+  const { hx, hy } = interiorHalfExtents(state);
+  return {
+    x: Math.min(Math.max(x, -hx), hx),
+    y: Math.min(Math.max(y, -hy), hy),
+  };
+}
+
+/** A wall with both endpoints clamped into the interior. */
+function clampWall(state: DividerState, wall: DividerWall): DividerWall {
+  const a = clampPoint(state, wall.x1, wall.y1);
+  const b = clampPoint(state, wall.x2, wall.y2);
+  return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+}
+
+/**
+ * Where the editor's "add a wall" action drops a new wall: a full-depth
+ * vertical wall on one of the evenly spaced slot positions the interior
+ * affords, cycling through them by the number of walls already placed so
+ * repeated adds do not stack on one another. The positions are
+ * evenDividerWalls' own spacing, so this introduces no second spacing source;
+ * the slot count is the largest whose spacing (inner / (slots + 1)) still
+ * clears MIN_COMPARTMENT_MM, so filling a whole cycle stays printable.
+ */
+export function nextDefaultWall(state: DividerState): DividerWall {
+  const innerWidth = binInteriorSizeMm(state.gridX);
+  const slots = Math.max(1, Math.floor(innerWidth / MIN_COMPARTMENT_MM) - 1);
+  const positions = evenDividerWalls(state.gridX, state.gridY, slots, 0);
+  return positions[state.walls.length % slots];
+}
+
+/**
+ * Appends a wall, clamped into the interior, and returns the stored wall (the
+ * reactive instance when the state is a store).
+ */
+export function addWall(state: DividerState, wall: DividerWall): DividerWall {
+  state.walls.push(clampWall(state, wall));
+  return state.walls[state.walls.length - 1];
+}
+
+/** Removes the wall at index; an index outside the list is ignored. */
+export function deleteWall(state: DividerState, index: number): void {
+  if (index < 0 || index >= state.walls.length) return;
+  state.walls.splice(index, 1);
+}
+
+/**
+ * Appends a copy of the wall at index, offset along the wall's normal by the
+ * minimum compartment width so the copy is both visible and separated by a
+ * printable compartment rather than landing on the original. Returns the copy,
+ * or null when the index is outside the list.
+ */
+export function duplicateWall(state: DividerState, index: number): DividerWall | null {
+  if (index < 0 || index >= state.walls.length) return null;
+  const source = state.walls[index];
+  const length = wallLength(source);
+  // A degenerate wall has no normal; offset it along X instead.
+  const nx = length === 0 ? 1 : -(source.y2 - source.y1) / length;
+  const ny = length === 0 ? 0 : (source.x2 - source.x1) / length;
+  return addWall(state, {
+    x1: source.x1 + nx * MIN_COMPARTMENT_MM,
+    y1: source.y1 + ny * MIN_COMPARTMENT_MM,
+    x2: source.x2 + nx * MIN_COMPARTMENT_MM,
+    y2: source.y2 + ny * MIN_COMPARTMENT_MM,
+  });
+}
+
+/**
+ * Translates both endpoints of the wall at index. The delta is reduced per
+ * axis to the largest shift that keeps every endpoint inside the interior, so
+ * a wall dragged against the bin wall stops rigid instead of deforming.
+ */
+export function moveWall(state: DividerState, index: number, dxMm: number, dyMm: number): void {
+  if (index < 0 || index >= state.walls.length) return;
+  const wall = state.walls[index];
+  let dx = dxMm;
+  let dy = dyMm;
+  for (const end of [
+    { x: wall.x1, y: wall.y1 },
+    { x: wall.x2, y: wall.y2 },
+  ]) {
+    const clamped = clampPoint(state, end.x + dxMm, end.y + dyMm);
+    const ex = clamped.x - end.x;
+    const ey = clamped.y - end.y;
+    if (Math.abs(ex) < Math.abs(dx)) dx = ex;
+    if (Math.abs(ey) < Math.abs(dy)) dy = ey;
+  }
+  wall.x1 += dx;
+  wall.y1 += dy;
+  wall.x2 += dx;
+  wall.y2 += dy;
+}
+
+/**
+ * Moves one endpoint of the wall at index to an absolute bin-local position,
+ * clamped into the interior, leaving the other endpoint where it is: the
+ * length and the angle both follow the drag.
+ */
+export function moveWallEndpoint(
+  state: DividerState,
+  index: number,
+  endpoint: 1 | 2,
+  xMm: number,
+  yMm: number,
+): void {
+  if (index < 0 || index >= state.walls.length) return;
+  const wall = state.walls[index];
+  const p = clampPoint(state, xMm, yMm);
+  if (endpoint === 1) {
+    wall.x1 = p.x;
+    wall.y1 = p.y;
+  } else {
+    wall.x2 = p.x;
+    wall.y2 = p.y;
+  }
+}
+
+/**
+ * Replaces the wall at index outright, clamped into the interior: the path
+ * exact numeric entry takes.
+ */
+export function setWall(state: DividerState, index: number, wall: DividerWall): void {
+  if (index < 0 || index >= state.walls.length) return;
+  const clamped = clampWall(state, wall);
+  const target = state.walls[index];
+  target.x1 = clamped.x1;
+  target.y1 = clamped.y1;
+  target.x2 = clamped.x2;
+  target.y2 = clamped.y2;
 }
