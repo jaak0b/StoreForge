@@ -89,6 +89,95 @@ describe('detectPaper', () => {
     expect(result.confidence).toBeLessThanOrEqual(1);
   });
 
+  it('finds the white sheet, not the merged bright chromatic background', async () => {
+    const cv = await loadOpenCv();
+    // A bright yellow field and the white sheet share luminance 235, so a
+    // luminance-only Otsu cannot separate them and would return the yellow
+    // field's corners. Yellow is chromatic (high saturation), the sheet is
+    // neutral, so the saturation gate isolates the sheet. The dark border
+    // anchors Otsu's low class so both surfaces land in the bright class.
+    const mat = new cv.Mat(600, 800, cv.CV_8UC4, new cv.Scalar(...DARK));
+    const field = cv.matFromArray(4, 1, cv.CV_32SC2, [50, 50, 750, 50, 750, 550, 50, 550]);
+    cv.fillConvexPoly(mat, field, new cv.Scalar(255, 255, 80, 255));
+    field.delete();
+    // Axis-aligned white sheet; these four literals are the ground truth.
+    const sheet: PaperCorners = {
+      tl: { x: 250, y: 150 },
+      tr: { x: 600, y: 150 },
+      br: { x: 600, y: 480 },
+      bl: { x: 250, y: 480 },
+    };
+    const sheetPoly = cv.matFromArray(4, 1, cv.CV_32SC2, [
+      sheet.tl.x, sheet.tl.y, sheet.tr.x, sheet.tr.y,
+      sheet.br.x, sheet.br.y, sheet.bl.x, sheet.bl.y,
+    ]);
+    cv.fillConvexPoly(mat, sheetPoly, new cv.Scalar(235, 235, 235, 255));
+    sheetPoly.delete();
+    const result = detectPaper(cv, mat);
+    mat.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const key of ['tl', 'tr', 'br', 'bl'] as const) {
+      // 3 px tolerance: blur plus polygon approximation shifts edges slightly.
+      expect(Math.abs(result.corners[key].x - sheet[key].x)).toBeLessThanOrEqual(3);
+      expect(Math.abs(result.corners[key].y - sheet[key].y)).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('rescues a bumpy merged blob with the minimum-area rectangle', async () => {
+    const cv = await loadOpenCv();
+    // A neutral sheet with a bright neutral tab breaking the edge: the tab adds
+    // vertices so approxPolyDP cannot reduce the contour to four corners, and
+    // the minAreaRect fallback returns the tightest box around sheet plus tab.
+    const mat = new cv.Mat(600, 800, cv.CV_8UC4, new cv.Scalar(...DARK));
+    const sheet = cv.matFromArray(4, 1, cv.CV_32SC2, [200, 150, 600, 150, 600, 450, 200, 450]);
+    cv.fillConvexPoly(mat, sheet, new cv.Scalar(...WHITE));
+    sheet.delete();
+    // A tab protruding above the top edge, raising the box top to y = 100.
+    const tab = cv.matFromArray(4, 1, cv.CV_32SC2, [350, 100, 450, 100, 450, 150, 350, 150]);
+    cv.fillConvexPoly(mat, tab, new cv.Scalar(...WHITE));
+    tab.delete();
+    const result = detectPaper(cv, mat);
+    mat.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The bounding box of sheet (200..600, 150..450) plus tab (top at 100):
+    // x spans 200..600, y spans 100..450. These are the hand-derived box
+    // corners, not recomputed from the detector.
+    const box: PaperCorners = {
+      tl: { x: 200, y: 100 },
+      tr: { x: 600, y: 100 },
+      br: { x: 600, y: 450 },
+      bl: { x: 200, y: 450 },
+    };
+    for (const key of ['tl', 'tr', 'br', 'bl'] as const) {
+      // 4 px tolerance covers rasterizing and the box fit over a stepped edge.
+      expect(Math.abs(result.corners[key].x - box[key].x)).toBeLessThanOrEqual(4);
+      expect(Math.abs(result.corners[key].y - box[key].y)).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it('still detects the sheet in a fully grayscale scene', async () => {
+    const cv = await loadOpenCv();
+    // No chromatic pixels anywhere: the saturation channel is degenerate, so
+    // the gate must fall back to luminance-only and recover the sheet corners.
+    const grayCorners: PaperCorners = {
+      tl: { x: 180, y: 120 },
+      tr: { x: 620, y: 120 },
+      br: { x: 620, y: 500 },
+      bl: { x: 180, y: 500 },
+    };
+    const mat = drawSheet(cv, grayCorners);
+    const result = detectPaper(cv, mat);
+    mat.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    for (const key of ['tl', 'tr', 'br', 'bl'] as const) {
+      expect(Math.abs(result.corners[key].x - grayCorners[key].x)).toBeLessThanOrEqual(3);
+      expect(Math.abs(result.corners[key].y - grayCorners[key].y)).toBeLessThanOrEqual(3);
+    }
+  });
+
   it('returns a user-worded error when no plausible sheet exists', async () => {
     const cv = await loadOpenCv();
     const mat = new cv.Mat(600, 800, cv.CV_8UC4, new cv.Scalar(...DARK));

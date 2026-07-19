@@ -78,6 +78,40 @@ function toGray(cv: Cv, mat: CvMat): CvMat {
 }
 
 /**
+ * Extract the HSV saturation channel of an image as a fresh CV_8UC1 Mat. The
+ * caller owns the returned Mat and must delete it. There is no direct RGBA2HSV
+ * conversion, so the path is RGBA -> RGB -> HSV, then channel 1 (S). This build
+ * of opencv.js does not expose extractChannel, so cv.split is the portable way
+ * to pull a single channel. Shared by paper.ts (white-sheet saturation gate)
+ * and shadow.ts (drop-shadow neutrality test) so the channel path lives once.
+ */
+export function extractSaturation(cv: Cv, mat: CvMat): CvMat {
+  const rgb = new cv.Mat();
+  const hsv = new cv.Mat();
+  const channels = new cv.MatVector();
+  try {
+    if (mat.channels() === 4) {
+      cv.cvtColor(mat, rgb, cv.COLOR_RGBA2RGB);
+    } else if (mat.channels() === 3) {
+      mat.copyTo(rgb);
+    } else {
+      cv.cvtColor(mat, rgb, cv.COLOR_GRAY2RGB);
+    }
+    cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    cv.split(hsv, channels);
+    const satChannel = channels.get(1);
+    const sat = new cv.Mat();
+    satChannel.copyTo(sat);
+    satChannel.delete();
+    return sat;
+  } finally {
+    rgb.delete();
+    hsv.delete();
+    channels.delete();
+  }
+}
+
+/**
  * Find the sheet of paper as the dominant bright convex quadrilateral.
  * Returns proposed corners in photo pixels with a 0..1 confidence, or a
  * user-worded failure when no plausible sheet is present. The caller is
@@ -86,7 +120,11 @@ function toGray(cv: Cv, mat: CvMat): CvMat {
 export function detectPaper(cv: Cv, mat: CvMat): PaperDetectionResult {
   const gray = toGray(cv, mat);
   const blurred = new cv.Mat();
-  const binary = new cv.Mat();
+  const luminance = new cv.Mat();
+  const sat = extractSaturation(cv, mat);
+  const satBinary = new cv.Mat();
+  const neutral = new cv.Mat();
+  const candidate = new cv.Mat();
   const contours = new cv.MatVector();
   const hierarchy = new cv.Mat();
   const imageArea = mat.rows * mat.cols;
@@ -97,8 +135,32 @@ export function detectPaper(cv: Cv, mat: CvMat): PaperDetectionResult {
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
     // Otsu picks the split between the bright sheet and the darker background
     // globally; the sheet then comes out as one large filled component.
-    cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-    cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    cv.threshold(blurred, luminance, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+
+    // Saturation gate: the sheet is white paper, so bright AND neutral. Otsu
+    // threshold on the saturation channel splits neutral (gray) from chromatic
+    // pixels (255 = chromatic, 0 = neutral), the same primitive shadow.ts uses.
+    // ANDing "bright" with "neutral" excludes chromatic bright surfaces (wood,
+    // skin) that would otherwise merge into the sheet.
+    cv.threshold(sat, satBinary, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    const chromaticCount = cv.countNonZero(satBinary);
+    const neutralCount = imageArea - chromaticCount;
+    cv.bitwise_not(satBinary, neutral);
+    cv.bitwise_and(luminance, neutral, candidate);
+    const candidateCount = cv.countNonZero(candidate);
+
+    // Degenerate guard, same emptiness reasoning as shadow.ts: on a fully
+    // grayscale scene the saturation channel is only sensor noise and Otsu
+    // splits it arbitrarily, which could erroneously carve up the sheet. If
+    // either saturation class is empty, or the gate would empty the bright
+    // candidate mask entirely, fall back to the luminance-only mask (the
+    // previous behavior). No tuned constant: the test is pure emptiness.
+    const search =
+      neutralCount === 0 || chromaticCount === 0 || candidateCount === 0
+        ? luminance
+        : candidate;
+
+    cv.findContours(search, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
     for (let i = 0; i < contours.size(); i += 1) {
       const contour = contours.get(i);
       const approx = new cv.Mat();
@@ -107,20 +169,32 @@ export function detectPaper(cv: Cv, mat: CvMat): PaperDetectionResult {
         if (area / imageArea < MIN_AREA_FRACTION) {
           continue;
         }
+        if (best && area <= best.area) {
+          continue;
+        }
         const perimeter = cv.arcLength(contour, true);
         // 0.02 * perimeter is the epsilon used by OpenCV's squares.cpp
         // sample, the standard recipe for reducing a document contour to a
         // quadrilateral.
         cv.approxPolyDP(contour, approx, 0.02 * perimeter, true);
-        if (approx.rows !== 4 || !cv.isContourConvex(approx)) {
-          continue;
-        }
-        if (best && area <= best.area) {
-          continue;
-        }
-        const points: PixelPoint[] = [];
-        for (let p = 0; p < 4; p += 1) {
-          points.push({ x: approx.data32S[p * 2], y: approx.data32S[p * 2 + 1] });
+        let points: PixelPoint[];
+        if (approx.rows === 4 && cv.isContourConvex(approx)) {
+          // Primary path: the polygon approximation gives true corner
+          // positions, which carry the perspective the homography needs.
+          points = [];
+          for (let p = 0; p < 4; p += 1) {
+            points.push({ x: approx.data32S[p * 2], y: approx.data32S[p * 2 + 1] });
+          }
+        } else {
+          // Fallback: minimum-area rotated rectangle of the contour. A blob
+          // whose 4-corner fit failed (a bright neutral protrusion breaking the
+          // quad, wrong vertex count, or non-convex) is still rescued by its
+          // tightest bounding box's 4 vertices. The confidence's rectangularity
+          // term (contour area / quad area) naturally scores this weaker fit
+          // lower.
+          const rotatedRect = cv.minAreaRect(contour);
+          const box = cv.RotatedRect.points(rotatedRect);
+          points = box.map((pt) => ({ x: pt.x, y: pt.y }));
         }
         const rotated = cv.minAreaRect(contour);
         const rotatedArea = rotated.size.width * rotated.size.height;
@@ -137,7 +211,11 @@ export function detectPaper(cv: Cv, mat: CvMat): PaperDetectionResult {
   } finally {
     gray.delete();
     blurred.delete();
-    binary.delete();
+    luminance.delete();
+    sat.delete();
+    satBinary.delete();
+    neutral.delete();
+    candidate.delete();
     contours.delete();
     hierarchy.delete();
   }

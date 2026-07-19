@@ -6,7 +6,7 @@
 // sheet). This module identifies the mid-luminance, low-saturation band that
 // hangs off the mask boundary and clears it, keeping interior detail and any
 // genuinely colored region.
-import type { Cv, CvMat } from './paper';
+import { extractSaturation, type Cv, type CvMat } from './paper';
 
 /** Three-class luminance split from multilevel Otsu. */
 export interface MultilevelOtsuResult {
@@ -106,11 +106,8 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
   }
 
   const gray = new cv.Mat();
-  const rgb = new cv.Mat();
-  const hsv = new cv.Mat();
-  const sat = new cv.Mat();
+  let sat: CvMat | null = null;
   const satMask = new cv.Mat();
-  const hsvChannels = new cv.MatVector();
   const candidate = new cv.Mat();
   const labels = new cv.Mat();
   const bg = new cv.Mat();
@@ -142,23 +139,11 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
       return;
     }
 
-    // Step 2: 2-class Otsu on the saturation channel. There is no direct
-    // RGBA2HSV, so go RGBA -> RGB -> HSV and pull channel 1 (S). Otsu splits
-    // neutral (gray) from chromatic pixels; 255 = chromatic, 0 = neutral.
-    if (rectified.channels() === 4) {
-      cv.cvtColor(rectified, rgb, cv.COLOR_RGBA2RGB);
-    } else if (rectified.channels() === 3) {
-      rectified.copyTo(rgb);
-    } else {
-      cv.cvtColor(rectified, rgb, cv.COLOR_GRAY2RGB);
-    }
-    cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
-    // Split HSV and take channel 1 (S). This build of opencv.js does not
-    // expose extractChannel, so cv.split is the portable equivalent.
-    cv.split(hsv, hsvChannels);
-    const satChannel = hsvChannels.get(1);
-    satChannel.copyTo(sat);
-    satChannel.delete();
+    // Step 2: 2-class Otsu on the saturation channel. The RGBA -> RGB -> HSV
+    // channel path lives in paper.ts's extractSaturation, shared so it is not
+    // duplicated here. Otsu splits neutral (gray) from chromatic pixels;
+    // 255 = chromatic, 0 = neutral.
+    sat = extractSaturation(cv, rectified);
     // On a fully grayscale scene the saturation channel is just sensor noise,
     // and Otsu will still split it into "neutral" and "chromatic" halves, so
     // some neutral pixels get classed chromatic and are spared from removal.
@@ -210,10 +195,9 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
     }
   } finally {
     gray.delete();
-    rgb.delete();
-    hsv.delete();
-    sat.delete();
-    hsvChannels.delete();
+    if (sat) {
+      sat.delete();
+    }
     satMask.delete();
     candidate.delete();
     labels.delete();
