@@ -140,6 +140,51 @@ describe('removeShadow', () => {
     mask.delete();
   });
 
+  it('removes a bright paper halo attached to the tool boundary', async () => {
+    const cv = await loadOpenCv();
+    // Mid-gray scene ground (150) establishes a third luminance population so
+    // multilevel Otsu is non-degenerate. A dark tool (20..60 x 20..70) sits in a
+    // bright paper rectangle (15..65 x 15..75); the bright band around the tool
+    // is the decoder halo. The mask covers the whole bright rectangle, so the
+    // halo reaches the mask boundary and is 8-adjacent to the mid-gray ground.
+    const rectified = sheet(cv, 90, 120, MID_GRAY);
+    fillRect(cv, rectified, 15, 15, 75, 65, BRIGHT_PAPER);
+    fillRect(cv, rectified, 20, 20, 60, 60, DARK_TOOL);
+    const mask = emptyMask(cv, 90, 120);
+    fillMask(cv, mask, 15, 15, 75, 65);
+
+    removeShadow(cv, rectified, mask);
+
+    // The bright halo pixels (here at 17,17: inside the mask, outside the tool)
+    // are cleared; the dark tool pixels are kept.
+    expect(maskAt(mask, 17, 17)).toBe(0);
+    expect(maskAt(mask, 40, 40)).toBe(255);
+
+    rectified.delete();
+    mask.delete();
+  });
+
+  it('keeps a bright specular highlight fully enclosed by the tool', async () => {
+    const cv = await loadOpenCv();
+    // Mid-gray scene ground (150), a dark tool (15..75) with a small bright
+    // patch (40..55 x 40..55) standing in for a specular highlight on a chrome
+    // shaft. The patch is bright but fully enclosed by tool pixels, not adjacent
+    // to any background pixel, so the border guard must spare it.
+    const rectified = sheet(cv, 100, 100, MID_GRAY);
+    fillRect(cv, rectified, 15, 15, 75, 75, DARK_TOOL);
+    fillRect(cv, rectified, 40, 40, 55, 55, BRIGHT_PAPER);
+    const mask = emptyMask(cv, 100, 100);
+    fillMask(cv, mask, 15, 15, 75, 75);
+
+    removeShadow(cv, rectified, mask);
+
+    expect(maskAt(mask, 47, 47)).toBe(255);
+    expect(maskAt(mask, 20, 20)).toBe(255);
+
+    rectified.delete();
+    mask.delete();
+  });
+
   it('leaves the mask unchanged when the scene has only two luminance populations', async () => {
     const cv = await loadOpenCv();
     // Dark tool on bright paper, no mid-luminance band: multilevel Otsu is

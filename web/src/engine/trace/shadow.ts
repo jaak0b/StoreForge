@@ -1,18 +1,19 @@
-// Post-filter that removes drop-shadow pixels a SAM mask picked up on the white
-// sheet, using the rectified color image. Tools laid on paper cast soft gray
-// shadows that share the tool's boundary; SAM often folds them into the mask.
-// A shadow is darker than the paper but lighter than the tool and, unlike a
-// real part, has near-zero saturation (it is a gray attenuation of the white
-// sheet). This module identifies the mid-luminance, low-saturation band that
-// hangs off the mask boundary and clears it, keeping interior detail and any
-// genuinely colored region.
+// Post-filter that removes drop-shadow and paper-halo pixels a SAM mask picked
+// up on the white sheet, using the rectified color image. Tools laid on paper
+// cast soft gray shadows that share the tool's boundary, and the mask decoder's
+// limited resolution often leaves a ring of plain bright paper around the tool;
+// SAM folds both into the mask. Neither is part of the tool: a shadow is a gray
+// attenuation of the white sheet, the halo is the white sheet itself, and both
+// have near-zero saturation. This module identifies the low-saturation pixels
+// (mid-luminance shadow or bright paper) that hang off the mask boundary and
+// clears them, keeping interior detail and any genuinely colored region.
 import { extractSaturation, type Cv, type CvMat } from './paper';
 
 /** Three-class luminance split from multilevel Otsu. */
 export interface MultilevelOtsuResult {
-  /** Upper bound of the dark class: v <= t1 is dark tool. */
+  /** Upper bound of the dark class: v <= t1 is dark tool, v > t1 is removable. */
   t1: number;
-  /** Upper bound of the middle class: t1 < v <= t2 is shadow candidate. */
+  /** Upper bound of the middle class: t1 < v <= t2 is the mid-luminance shadow. */
   t2: number;
   /** True when all three classes carry nonzero histogram weight. */
   classesNonEmpty: boolean;
@@ -89,9 +90,10 @@ export function multilevelOtsu(hist: ArrayLike<number>): MultilevelOtsuResult {
 }
 
 /**
- * Remove drop-shadow pixels from a binary SAM mask in place, using the
- * rectified color sheet. Mutates `mask` (CV_8UC1, 0/255). `rectified` is the
- * RGBA (CV_8UC4) top-down sheet image at the same dimensions as the mask.
+ * Remove border-connected shadow and paper-halo pixels from a binary SAM mask
+ * in place, using the rectified color sheet. Mutates `mask` (CV_8UC1, 0/255).
+ * `rectified` is the RGBA (CV_8UC4) top-down sheet image at the same dimensions
+ * as the mask.
  *
  * Both `mask` and `rectified` are caller-owned and are never deleted here.
  * A dimension mismatch is a programming error and throws rather than being
@@ -108,7 +110,7 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
   const gray = new cv.Mat();
   let sat: CvMat | null = null;
   const satMask = new cv.Mat();
-  const candidate = new cv.Mat();
+  const removable = new cv.Mat();
   const labels = new cv.Mat();
   const bg = new cv.Mat();
   const bgDilated = new cv.Mat();
@@ -131,7 +133,7 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
     for (let i = 0; i < grayData.length; i += 1) {
       hist[grayData[i]] += 1;
     }
-    const { t1, t2, classesNonEmpty } = multilevelOtsu(hist);
+    const { t1, classesNonEmpty } = multilevelOtsu(hist);
     if (!classesNonEmpty) {
       // Degenerate multilevel Otsu: a luminance class is empty, skip shadow
       // removal. With fewer than three luminance populations there is no
@@ -151,33 +153,36 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
     // pixel it should have kept), which is the safe failure direction here.
     cv.threshold(sat, satMask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
 
-    // Step 3: shadow candidate = in the SAM mask AND in the middle luminance
-    // class AND low saturation. One pass over the flat buffers.
-    candidate.create(mask.rows, mask.cols, cv.CV_8UC1);
+    // Step 3: removable candidate = in the SAM mask AND low saturation AND not
+    // dark tool (mid-luminance shadow or bright paper halo, v > t1). The bright
+    // class is included so plain paper the decoder wrapped around the tool is a
+    // candidate too, not just the mid-luminance shadow band. One pass over the
+    // flat buffers.
+    removable.create(mask.rows, mask.cols, cv.CV_8UC1);
     const maskData = mask.data;
     const satMaskData = satMask.data;
-    const candidateData = candidate.data;
+    const removableData = removable.data;
     for (let i = 0; i < maskData.length; i += 1) {
       const v = grayData[i];
-      candidateData[i] =
-        maskData[i] && v > t1 && v <= t2 && satMaskData[i] === 0 ? 255 : 0;
+      removableData[i] =
+        maskData[i] && v > t1 && satMaskData[i] === 0 ? 255 : 0;
     }
 
-    // Step 4: keep only shadow candidate components that touch the background.
-    // A real interior midtone (say a decal on the tool) is fully enclosed by
-    // tool pixels and must survive; a cast shadow hangs off the tool's edge and
-    // is 8-adjacent to background. Label the candidate with connected
-    // components, then dilate the ORIGINAL mask's complement by a 3x3 rect
-    // kernel so a candidate pixel is 8-adjacent to background exactly where the
-    // dilated complement is nonzero.
-    cv.connectedComponents(candidate, labels, 8, cv.CV_32S);
+    // Step 4: keep only candidate components that touch the background. A real
+    // interior midtone or bright speckle (a decal or a specular highlight on the
+    // tool) is fully enclosed by tool pixels and must survive; a cast shadow or
+    // paper halo hangs off the tool's edge and is 8-adjacent to background.
+    // Label the candidate with connected components, then dilate the ORIGINAL
+    // mask's complement by a 3x3 rect kernel so a candidate pixel is 8-adjacent
+    // to background exactly where the dilated complement is nonzero.
+    cv.connectedComponents(removable, labels, 8, cv.CV_32S);
     cv.bitwise_not(mask, bg);
     cv.dilate(bg, bgDilated, kernel);
     const labelData = labels.data32S;
     const bgDilatedData = bgDilated.data;
     const touches = new Map<number, boolean>();
-    for (let i = 0; i < candidateData.length; i += 1) {
-      if (candidateData[i] === 0) {
+    for (let i = 0; i < removableData.length; i += 1) {
+      if (removableData[i] === 0) {
         continue;
       }
       const label = labelData[i];
@@ -188,8 +193,8 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
         touches.set(label, true);
       }
     }
-    for (let i = 0; i < candidateData.length; i += 1) {
-      if (candidateData[i] !== 0 && touches.get(labelData[i])) {
+    for (let i = 0; i < removableData.length; i += 1) {
+      if (removableData[i] !== 0 && touches.get(labelData[i])) {
         maskData[i] = 0;
       }
     }
@@ -199,7 +204,7 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
       sat.delete();
     }
     satMask.delete();
-    candidate.delete();
+    removable.delete();
     labels.delete();
     bg.delete();
     bgDilated.delete();
