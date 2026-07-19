@@ -186,14 +186,16 @@ function draw(): void {
       ctx.stroke();
     }
   }
-  for (const point of points.value) {
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, 6, 0, 2 * Math.PI);
-    ctx.fillStyle = point.label === 1 ? '#4caf50' : '#f44336';
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+  if (!hideMask) {
+    for (const point of points.value) {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = point.label === 1 ? '#4caf50' : '#f44336';
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   }
   if (cal !== null && brushMode.value !== 'off') {
     // The canvas is drawn at the rectified resolution, so a brush radius in mm
@@ -751,7 +753,7 @@ const shortcutRows: { action: string; keys: string }[] = [
   { action: 'Zoom', keys: 'Mouse wheel' },
   { action: 'Pan', keys: 'Space drag or middle drag' },
   { action: 'Reset zoom', keys: '0' },
-  { action: 'Hide mask', keys: 'Hold Tab or eye button' },
+  { action: 'Hide mask and points', keys: 'Hold Tab or eye button' },
 ];
 
 /** Tooltip shown on the blocked accept and replace actions. */
@@ -897,7 +899,7 @@ function acceptTool(finish: boolean): void {
             @click="maskHiddenButton = !maskHiddenButton"
           >
             <v-icon :icon="maskHidden ? 'mdi-eye-off' : 'mdi-eye'" size="20" />
-            <v-tooltip activator="parent" location="bottom">Hide mask (hold Tab)</v-tooltip>
+            <v-tooltip activator="parent" location="bottom">Hide mask and points (hold Tab)</v-tooltip>
           </v-btn>
           <v-menu v-model="shortcutHelpOpen" location="top end" :close-on-content-click="false">
             <template #activator="{ props }">
