@@ -149,6 +149,7 @@ watch(
           : entry.product.kind === 'bin' && !entry.product.labelSlot
             ? 'plainBin'
             : 'bin',
+      fused: entry.product.kind === 'binWithInsert' ? entry.product.fused ?? false : false,
       heightUnits: bin.heightUnits,
       magnetHoles: bin.magnetHoles,
       labelText: content?.text ?? '',

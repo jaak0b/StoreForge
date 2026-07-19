@@ -497,6 +497,37 @@ describe('bin entry kinds in plan files', () => {
     );
   });
 
+  it('accepts a fused binWithInsert and round-trips the fused flag', () => {
+    const fused = entry({
+      id: 'f1',
+      product: {
+        kind: 'binWithInsert',
+        bin: manualBin(),
+        insert: { text: 'M3 x 20', text2: '', icon: 'countersunk screw' },
+        fused: true,
+      },
+    });
+    expect(validateEntry(fused)).toBeNull();
+    const result = parsePlanFile(serializePlanFile([fused], []));
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 4, entries: [fused], batches: [] },
+      warnings: [],
+    });
+  });
+
+  it('rejects a non-boolean fused value on a binWithInsert', () => {
+    const bad: Product = {
+      kind: 'binWithInsert',
+      bin: manualBin(),
+      insert: { text: 'M3', text2: '', icon: null },
+      fused: 'yes' as never,
+    };
+    expect(validateEntry(entry({ id: 'f1', product: bad }))).toBe(
+      'entry f1: fused must be true or false',
+    );
+  });
+
   it('rejects a traced bin without pockets', () => {
     const bad: Product = { kind: 'bin', bin: { ...tracedBin() } };
     delete (bad.bin as Record<string, unknown>).pockets;

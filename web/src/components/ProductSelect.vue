@@ -25,6 +25,10 @@ const props = defineProps<{
 
 const choice = defineModel<ProductChoice>({ required: true });
 
+// Whether a Bin + label insert prints as one fused piece. Only shown, and only
+// meaningful, when the choice is binWithInsert.
+const fused = defineModel<boolean>('fused', { default: false });
+
 const ALL_ITEMS: Array<{ value: ProductChoice; title: string; subtitle: string }> = [
   {
     value: 'binWithInsert',
@@ -73,4 +77,18 @@ const items = computed(() =>
       <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
     </template>
   </v-select>
+
+  <template v-if="choice === 'binWithInsert'">
+    <v-checkbox
+      v-model="fused"
+      label="Print the label as part of the bin"
+      density="comfortable"
+      hide-details
+      class="mt-1"
+    />
+    <div class="text-caption text-medium-emphasis ml-10 mt-n2">
+      The bin and its label print as one fused piece; the label is raised on the bin and
+      there is no swappable insert slot.
+    </div>
+  </template>
 </template>

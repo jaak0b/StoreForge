@@ -9,7 +9,7 @@ import {
   generateSlottedBin,
   generateSlottedBinUnion,
 } from '../../src/engine/gridfinity/binGenerator';
-import { buildInsertSolids } from '../../src/engine/label/slot';
+import { buildFusedLabel, buildInsertSolids, INSERT_TEXT_RAISE } from '../../src/engine/label/slot';
 import {
   layoutLabelFace,
   LABEL_LINE2_SCALE,
@@ -243,7 +243,54 @@ describe('generateSlottedBin', () => {
 describe('generateSlottedBinUnion', () => {
   it('matches the body mesh of generateSlottedBin with no insert riding along', () => {
     const { body } = generateSlottedBin(m, font, params());
-    const union = generateSlottedBinUnion(m, binParams());
+    const union = generateSlottedBinUnion(m, font, params());
     expect(meshVolume(union)).toBeCloseTo(meshVolume(body), 6);
+  });
+});
+
+describe('fused label', () => {
+  const spec = { text: 'M3 x 20', icon: null } as const;
+
+  it('builds a watertight raised label standing above the bin top', () => {
+    const label = buildFusedLabel(m, font, spec, binParams());
+    expect(label).not.toBeNull();
+    expect(label!.status()).toBe('NoError');
+    // The raised face tops out INSERT_TEXT_RAISE above the nominal bin top.
+    expect(label!.boundingBox().max[2]).toBeCloseTo(bodyTop + INSERT_TEXT_RAISE, 6);
+    label!.delete();
+  });
+
+  it('returns null for a blank spec', () => {
+    const label = buildFusedLabel(m, font, { text: '', icon: null }, binParams());
+    expect(label).toBeNull();
+  });
+
+  it('cuts no slot into the body: the body equals the plain unslotted bin', () => {
+    // The fused path builds the body with no slot (labelSlot false), exactly
+    // as the plan expansion produces it.
+    const fused = generateSlottedBin(
+      m,
+      font,
+      params({ labelSlot: false, fusedLabel: { ...spec, text2: '' } }),
+    );
+    expect(fused.label).not.toBeNull();
+    const plain = generateBin(m, binParams());
+    // A fused bin's body has no insert channel, so it matches the plain bin,
+    // unlike the slotted body whose volume differs (see above).
+    expect(meshVolume(fused.body)).toBeCloseTo(meshVolume(plain), 6);
+    const slotted = generateSlottedBin(m, font, params({ insert: null }));
+    expect(meshVolume(fused.body)).not.toBeCloseTo(meshVolume(slotted.body), 3);
+  });
+
+  it('unions the raised label into the single STL mesh', () => {
+    const fusedUnion = generateSlottedBinUnion(
+      m,
+      font,
+      params({ labelSlot: false, fusedLabel: { ...spec, text2: '' } }),
+    );
+    // The union is the plain unslotted bin plus the raised label, so it holds
+    // more material than the plain bin body alone.
+    const plain = generateBin(m, binParams());
+    expect(meshVolume(fusedUnion)).toBeGreaterThan(meshVolume(plain));
   });
 });

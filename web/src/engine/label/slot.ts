@@ -337,6 +337,52 @@ export function applySlotToBody(
   return slotted;
 }
 
+/**
+ * The fused label raised directly on the bin's top face, at the same XY the
+ * insert label would occupy in the slot (insertPositionInBin). Same layout
+ * and relief height as the insert's label (INSERT_TEXT_RAISE), but standing on
+ * the nominal bin top instead of on an insert plate: the raised face reaches
+ * INSERT_TEXT_WELD below the top face so the union with the body is one welded
+ * solid, and rises INSERT_TEXT_RAISE above it. Every dimension is reused from
+ * the insert label so no fused-only figure is introduced. Kept as its own
+ * solid so 3MF can color it on the second filament; the STL path unions it
+ * with the body. Returns null for a blank spec. The caller owns the manifold.
+ */
+export function buildFusedLabel(
+  m: ManifoldToplevel,
+  font: Font,
+  spec: LabelSpec,
+  params: BinParams,
+): Manifold | null {
+  if (!specHasLabel(spec)) return null;
+  const length = insertLengthMm(params.gridX);
+  const parts = layoutLabelFace(
+    font,
+    spec,
+    length - 2 * INSERT_TAB_LENGTH - 2 * LABEL_MARGIN,
+    INSERT_DEPTH - 2 * SHELF_DEPTH_MARGIN,
+  ).map((part) => boldenText(m, part));
+
+  const faceSolids = parts.map((part) =>
+    extrudeLabel(m, part.polygons, INSERT_TEXT_RAISE + INSERT_TEXT_WELD, part.fillRule),
+  );
+  const face = faceSolids.length === 1 ? faceSolids[0] : m.Manifold.union(faceSolids);
+  if (faceSolids.length > 1) {
+    for (const solid of faceSolids) solid.delete();
+  }
+  const at = insertPositionInBin(params);
+  const bodyTop = params.heightUnits * HEIGHT_UNIT;
+  // The face sits on the bin top face, reaching INSERT_TEXT_WELD into the body.
+  const label = face.translate(at.x, at.y, bodyTop - INSERT_TEXT_WELD);
+  face.delete();
+  if (label.status() !== 'NoError') {
+    const status = label.status();
+    label.delete();
+    throw new Error(`Fused label generation produced an invalid solid: ${status}`);
+  }
+  return label;
+}
+
 /** The two parts of a label insert, kept separate for per-part coloring. */
 export interface InsertSolids {
   /** The insert plate, always at its full constant thickness. */

@@ -33,7 +33,7 @@ const { smAndDown } = useDisplay();
 // regardless, so downloads stay available.
 const previewLoaded = ref(!smAndDown.value);
 
-const { productChoice, gridX, gridY, heightUnits, labelText, labelIcon, notes } =
+const { productChoice, fused, gridX, gridY, heightUnits, labelText, labelIcon, notes } =
   storeToRefs(store);
 
 const quantity = ref(1);
@@ -73,6 +73,7 @@ function loadEditingEntry(entryId: string | null): void {
     store.$patch({
       productChoice:
         product.kind === 'binWithInsert' ? 'binWithInsert' : product.labelSlot ? 'bin' : 'plainBin',
+      fused: product.kind === 'binWithInsert' ? product.fused ?? false : false,
       gridX: bin.gridX,
       gridY: bin.gridY,
       heightUnits: bin.heightUnits,
@@ -133,9 +134,12 @@ function designedProduct(): Product {
     dividerCountX: store.dividerCountX,
     dividerCountY: store.dividerCountY,
   };
-  return productChoice.value === 'binWithInsert'
-    ? { kind: 'binWithInsert', bin, insert: store.content }
-    : { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
+  if (productChoice.value === 'binWithInsert') {
+    const product: Product = { kind: 'binWithInsert', bin, insert: store.content };
+    if (store.fused) product.fused = true;
+    return product;
+  }
+  return { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
 }
 
 function saveEntry(): void {
@@ -191,7 +195,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generate
 <template>
   <v-row>
     <v-col cols="12" md="6">
-      <ProductSelect v-model="productChoice" />
+      <ProductSelect v-model="productChoice" v-model:fused="fused" />
 
       <template v-if="!insertOnly">
         <div class="text-caption text-medium-emphasis mb-1 mt-4">

@@ -21,10 +21,11 @@ import {
 import {
   buildInsertInSlotSolids,
   buildSlottedBinBody,
+  labelSpecOf,
   manifoldToMeshData,
   roundedRectPolygon,
 } from '../gridfinity/binGenerator';
-import { applySlotToBody, SLOT_REACH_DEPTH } from '../label/slot';
+import { applySlotToBody, buildFusedLabel, SLOT_REACH_DEPTH } from '../label/slot';
 import type { BinParams, MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 
 /** A slotted bin plus the tools whose pockets are sunk into its interior. */
@@ -327,7 +328,11 @@ export function generatePocketBin(
   let body = buildPocketBinBody(m, params);
   let label: Manifold | null = null;
   try {
-    if (params.insert !== null) {
+    if (params.fusedLabel != null) {
+      // Fused: the pocket bin body carries no slot, and the label is raised on
+      // the top face as the second-filament mesh.
+      label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
+    } else if (params.insert !== null) {
       // Like generateSlottedBin: the insert's plate joins the body mesh and
       // only its raised label face keeps the label color.
       const placed = buildInsertInSlotSolids(m, font, params.insert, params);
@@ -348,12 +353,31 @@ export function generatePocketBin(
 }
 
 /**
- * Generate a pocket bin as one unioned mesh for the single-mesh STL
- * download. The paired insert never rides along: it is its own part.
+ * Generate a pocket bin as one unioned mesh for the single-mesh STL download.
+ * A paired insert never rides along (it is its own part), but a fused label is
+ * part of the bin, so it is unioned into the single mesh.
  */
-export function generatePocketBinUnion(m: ManifoldToplevel, params: PocketBinParams): MeshData {
-  const body = buildPocketBinBody(m, params);
+export function generatePocketBinUnion(
+  m: ManifoldToplevel,
+  font: Font,
+  params: PocketBinParams,
+): MeshData {
+  let body = buildPocketBinBody(m, params);
   try {
+    if (params.fusedLabel != null) {
+      const label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
+      if (label !== null) {
+        const union = m.Manifold.union([body, label]);
+        body.delete();
+        label.delete();
+        if (union.status() !== 'NoError') {
+          const status = union.status();
+          union.delete();
+          throw new Error(`Fused pocket bin union produced an invalid solid: ${status}`);
+        }
+        body = union;
+      }
+    }
     return manifoldToMeshData(body);
   } finally {
     body.delete();

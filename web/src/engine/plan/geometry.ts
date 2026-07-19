@@ -26,6 +26,7 @@ export function toSlottedBinParams(
   bin: Bin,
   labelSlot: boolean,
   insert: SlottedBinParams['insert'],
+  fusedLabel: SlottedBinParams['fusedLabel'] = null,
 ): SlottedBinParams {
   return {
     gridX: bin.gridX,
@@ -37,6 +38,7 @@ export function toSlottedBinParams(
     dividerCountY: bin.origin === 'traced' ? 0 : bin.dividerCountY,
     labelSlot,
     insert,
+    fusedLabel,
   };
 }
 
@@ -57,6 +59,17 @@ export function partsOf(product: Product): PrintablePart[] {
     case 'binWithInsert': {
       const pockets = product.bin.origin === 'traced' ? product.bin.pockets : undefined;
       const insert = insertOf(product)!;
+      if (product.fused) {
+        // Fused: one part only, the bin with the label raised on its top face
+        // (no slot, no separate insert).
+        const bin: PrintablePart = {
+          part: 'bin',
+          bin: toSlottedBinParams(product.bin, false, null, insert.content),
+          pockets,
+        };
+        if (insert.content.text !== '') bin.labelText = insert.content.text;
+        return [bin];
+      }
       const bin: PrintablePart = {
         part: 'bin',
         bin: toSlottedBinParams(product.bin, true, null),
@@ -88,7 +101,11 @@ export function previewBinParams(product: Product): SlottedBinParams | null {
     case 'bin':
       return toSlottedBinParams(product.bin, product.labelSlot, null);
     case 'binWithInsert':
-      return toSlottedBinParams(product.bin, true, product.insert);
+      // Fused shows the raised label on the bin (no slot, no resting insert);
+      // otherwise the paired insert rides along resting in the slot.
+      return product.fused
+        ? toSlottedBinParams(product.bin, false, null, product.insert)
+        : toSlottedBinParams(product.bin, true, product.insert);
     case 'insert':
       return null;
     default:

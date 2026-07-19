@@ -48,7 +48,7 @@ import MoreOptions from './MoreOptions.vue';
 const app = useApp();
 const queue = useBinQueue();
 const store = useBinDesigner();
-const { productChoice } = storeToRefs(store);
+const { productChoice, fused } = storeToRefs(store);
 const { smAndDown } = useDisplay();
 
 const METRIC_THREADS = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
@@ -154,7 +154,9 @@ function productFor(
   };
   // A screw bin is printed to carry its label, so the tab offers no bin-alone
   // choice and never produces one.
-  return { kind: 'binWithInsert', bin, insert: content };
+  const product: Product = { kind: 'binWithInsert', bin, insert: content };
+  if (store.fused) product.fused = true;
+  return product;
 }
 
 function productSizeText(product: Product): string {
@@ -254,6 +256,7 @@ watch(
       // The tab offers only these two choices, and a stored screw bin without
       // its insert is repaired to one on load, so nothing else can arrive.
       productChoice: product.kind === 'insert' ? 'insert' : 'binWithInsert',
+      fused: product.kind === 'binWithInsert' ? product.fused ?? false : false,
       notes: entry.notes ?? '',
     };
     if (product.kind !== 'insert' && product.bin.origin === 'screw') {
@@ -378,6 +381,8 @@ function generatePreview(product: Product): Promise<PartMeshes> {
     return generateInsert({ cells: product.cells, content: product.content });
   }
   const bin = product.bin;
+  const fusedContent =
+    product.kind === 'binWithInsert' && product.fused ? product.insert : null;
   return generateSlottedBin({
     gridX: bin.gridX,
     gridY: bin.gridY,
@@ -385,8 +390,10 @@ function generatePreview(product: Product): Promise<PartMeshes> {
     magnetHoles: bin.magnetHoles,
     dividerCountX: bin.origin === 'traced' ? 0 : bin.dividerCountX,
     dividerCountY: bin.origin === 'traced' ? 0 : bin.dividerCountY,
-    labelSlot: product.kind === 'bin' ? product.labelSlot : true,
-    insert: product.kind === 'binWithInsert' ? product.insert : null,
+    labelSlot: fusedContent === null && (product.kind === 'bin' ? product.labelSlot : true),
+    insert:
+      product.kind === 'binWithInsert' && !product.fused ? product.insert : null,
+    fusedLabel: fusedContent,
   });
 }
 
@@ -519,7 +526,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         {{ error }}
       </v-alert>
 
-      <ProductSelect v-model="productChoice" hide-bin-alone class="mt-4" />
+      <ProductSelect v-model="productChoice" v-model:fused="fused" hide-bin-alone class="mt-4" />
 
       <MoreOptions :per-bin-fields="false" :insert-only="insertOnly" />
 

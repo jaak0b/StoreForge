@@ -142,6 +142,13 @@ function addPrimitive(): void {
  */
 const pocketParams = computed<PocketBinParams>(() => {
   const local = trace.toBinLocal();
+  const withInsert = designer.productChoice === 'binWithInsert';
+  const content = {
+    text: designer.labelText,
+    text2: designer.labelText2,
+    icon: designer.labelIcon,
+  };
+  const fusedContent = withInsert && designer.fused ? content : null;
   return {
     gridX: local.gridX,
     gridY: local.gridY,
@@ -150,15 +157,10 @@ const pocketParams = computed<PocketBinParams>(() => {
     // The pocket generator rejects divider walls, so a pocket bin never has any.
     dividerCountX: 0,
     dividerCountY: 0,
-    labelSlot: designer.productChoice !== 'plainBin',
-    insert:
-      designer.productChoice === 'binWithInsert'
-        ? {
-            text: designer.labelText,
-            text2: designer.labelText2,
-            icon: designer.labelIcon,
-          }
-        : null,
+    // A fused bin has no slot; the label is raised on the top face instead.
+    labelSlot: designer.productChoice !== 'plainBin' && fusedContent === null,
+    insert: withInsert && !designer.fused ? content : null,
+    fusedLabel: fusedContent,
     tools: JSON.parse(JSON.stringify(trace.tools)),
     placements: JSON.parse(JSON.stringify(local.placements)),
   };
@@ -254,10 +256,14 @@ async function addToQueue(): Promise<void> {
   const paper = source.paper ?? editingBin?.paper;
   if (traceSourceId !== undefined) bin.traceSourceId = traceSourceId;
   if (paper !== undefined) bin.paper = paper;
-  const product: Product =
-    params.insert !== null
-      ? { kind: 'binWithInsert', bin, insert: params.insert }
-      : { kind: 'bin', bin, labelSlot: params.labelSlot };
+  let product: Product;
+  if (params.fusedLabel != null) {
+    product = { kind: 'binWithInsert', bin, insert: params.fusedLabel, fused: true };
+  } else if (params.insert !== null) {
+    product = { kind: 'binWithInsert', bin, insert: params.insert };
+  } else {
+    product = { kind: 'bin', bin, labelSlot: params.labelSlot };
+  }
   if (props.editingEntry !== null) {
     queue.update(props.editingEntry.id, {
       product,
