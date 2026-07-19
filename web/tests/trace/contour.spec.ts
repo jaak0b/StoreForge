@@ -144,18 +144,69 @@ describe('maskToContour', () => {
     expect(result.reason).toBe('noContainingRegion');
   });
 
-  it('requires every include point to lie in the chosen region', async () => {
+  it('picks the region containing the most include points over the larger one', async () => {
     const cv = await loadOpenCv();
     const mask = emptyMask(cv);
-    // Two separate filled rectangles; one include point lands in each.
+    // A smaller left blob and a larger right blob. Two include points land in
+    // the left blob and one in the right, so the left blob wins on count even
+    // though the right blob has more area.
     fillRect(cv, mask, 20, 30, 90, 130);
-    fillRect(cv, mask, 150, 30, 230, 130);
+    fillRect(cv, mask, 150, 20, 240, 160);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [
+        { x: 40, y: 60 },
+        { x: 60, y: 100 },
+        { x: 190, y: 80 },
+      ],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Left blob 20..90 px and 30..130 px at 0.25 mm/px: 5..22.5 mm and
+    // 7.5..32.5 mm, hand-derived once. 0.5 mm tolerance covers the morphology
+    // kernel plus the simplification epsilon.
+    const box = bounds(result.outline.outer);
+    expect(Math.abs(box.minX - 5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxX - 22.5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.minY - 7.5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxY - 32.5)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('breaks an equal include-point count by choosing the larger region', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // One include point in each blob is a tie on count; the larger right blob
+    // wins the area tiebreak.
+    fillRect(cv, mask, 20, 30, 90, 130);
+    fillRect(cv, mask, 150, 20, 240, 160);
     const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
       includePoints: [
         { x: 55, y: 80 },
         { x: 190, y: 80 },
       ],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Right blob 150..240 px and 20..160 px at 0.25 mm/px: 37.5..60 mm and
+    // 5..40 mm, hand-derived once. 0.5 mm tolerance covers the morphology
+    // kernel plus the simplification epsilon.
+    const box = bounds(result.outline.outer);
+    expect(Math.abs(box.minX - 37.5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxX - 60)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.minY - 5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxY - 40)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('fails with no containing region when no include points are given', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    fillRect(cv, mask, 40, 30, 200, 130);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [],
     });
     mask.delete();
     expect(result.ok).toBe(false);

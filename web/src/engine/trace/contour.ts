@@ -20,7 +20,7 @@ export interface MaskContourOptions {
   mmPerPixel: number;
   /**
    * The include clicks (all label-1 prompts), in mask pixels. The chosen
-   * contour must contain every one of these points.
+   * contour is the one containing the most of these points.
    */
   includePoints: PixelPoint[];
   /**
@@ -82,13 +82,14 @@ function orient(points: MmPoint[], positive: boolean): MmPoint[] {
  * corners of straight tool edges, so closing is the better fit for hard-edged
  * tool silhouettes.
  *
- * Among the denoised external contours, the chosen one must contain every
- * include point; among those that qualify the largest by area is kept. Its
- * holes above minHoleAreaMm2 are kept as children. There is no nearest-contour
- * fallback: a click that lands outside every contour is a typed failure.
+ * Among the denoised external contours above the area floor, the chosen one
+ * contains the most include points (pointPolygonTest >= 0); ties break to the
+ * largest by area. Its holes above minHoleAreaMm2 are kept as children. There
+ * is no nearest-contour fallback: a click that lands outside every contour
+ * contributes to no count.
  *
  * Returns { ok: false, reason } when no contour survives denoising ('empty')
- * or when contours survive but none contains all include points
+ * or when contours survive but none contains any include point
  * ('noContainingRegion').
  */
 export function maskToContour(
@@ -124,6 +125,7 @@ export function maskToContour(
     const clicks = includePoints.map((point) => new cv.Point(point.x, point.y));
     let chosen = -1;
     let chosenArea = 0;
+    let chosenCount = 0;
     let sawAnyContour = false;
     for (let i = 0; i < contours.size(); i += 1) {
       if (hierarchy.data32S[i * 4 + 3] !== -1) {
@@ -139,14 +141,17 @@ export function maskToContour(
           continue;
         }
         sawAnyContour = true;
-        // Qualify only when the contour contains every include point (on the
-        // boundary counts as inside): measureDist=false returns >= 0 inside.
-        const containsAll = clicks.every(
-          (click) => cv.pointPolygonTest(contour, click, false) >= 0,
+        // Count how many include points this contour contains (on the boundary
+        // counts as inside): measureDist=false returns >= 0 inside. The winner
+        // is the contour containing the most; area breaks ties.
+        const count = clicks.reduce(
+          (total, click) => total + (cv.pointPolygonTest(contour, click, false) >= 0 ? 1 : 0),
+          0,
         );
-        if (containsAll && (chosen === -1 || area > chosenArea)) {
+        if (count > 0 && (count > chosenCount || (count === chosenCount && area > chosenArea))) {
           chosen = i;
           chosenArea = area;
+          chosenCount = count;
         }
       } finally {
         contour.delete();

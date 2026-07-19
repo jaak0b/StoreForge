@@ -152,7 +152,7 @@ async function toImageData(source: ImageBitmap | ArrayBuffer): Promise<ImageData
 function messageForContourFailure(reason: MaskContourFailure): string {
   switch (reason) {
     case 'noContainingRegion':
-      return 'Place all include clicks on one tool, away from its edges. The traced shape did not cover every click, which happens when clicks straddle two separate parts.';
+      return 'Add an include click on the tool itself. The traced shape contained none of your clicks, which happens when every include click landed on the background rather than a part.';
     case 'empty':
       return 'No usable shape was found at that click. Try clicking nearer the middle of the tool, or add more include clicks along it.';
   }
