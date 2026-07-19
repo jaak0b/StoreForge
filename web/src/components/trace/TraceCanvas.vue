@@ -61,6 +61,14 @@ const panY = ref(0);
 // True while the space bar is held; it turns a left-drag into a pan, taking
 // priority over the paint modes.
 const spaceHeld = ref(false);
+// True while Tab is held, and the eye button's own toggle; either one hides the
+// mask-derived layers so the raw rectified photo shows through. Click points and
+// brush aiming stay visible.
+const tabHeld = ref(false);
+const maskHiddenButton = ref(false);
+const maskHidden = computed(() => tabHeld.value || maskHiddenButton.value);
+// Whether the canvas shortcut help popover is open.
+const shortcutHelpOpen = ref(false);
 // The in-progress pan drag: the canvas-pixel pointer position and the pan
 // offset captured when the drag began; null when not panning.
 let panDrag: { startX: number; startY: number; panX: number; panY: number } | null = null;
@@ -156,13 +164,14 @@ function draw(): void {
   ctx.clearRect(0, 0, el.width, el.height);
   ctx.setTransform(zoom.value, 0, 0, zoom.value, panX.value, panY.value);
   ctx.drawImage(ensureBaseCanvas(preview), 0, 0);
-  if (maskPreview !== null) {
+  const hideMask = maskHidden.value;
+  if (maskPreview !== null && !hideMask) {
     // The mask overlay carries alpha, so it composites over the sheet.
     ctx.drawImage(ensureMaskCanvas(maskPreview), 0, 0);
   }
   const cal = calibration.value;
-  if (cal !== null) drawGhosts(ctx, el, cal.mmPerPixel);
-  if (outline.value !== null && cal !== null) {
+  if (cal !== null && !hideMask) drawGhosts(ctx, el, cal.mmPerPixel);
+  if (outline.value !== null && cal !== null && !hideMask) {
     ctx.strokeStyle = '#ff9800';
     ctx.lineWidth = 3;
     for (const loop of [outline.value.outer, ...outline.value.holes]) {
@@ -319,6 +328,8 @@ watch(rectifiedPreview, () => {
 // Tools can change from Layout mode (removal, re-trace) while this canvas
 // stays mounted; redraw so the ghost overlays track the store.
 watch(tools, () => draw(), { deep: true });
+// Hiding or showing the mask layers redraws the canvas.
+watch(maskHidden, () => draw());
 
 /** True when focus sits in a field where the shortcut keys are ordinary input. */
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -335,6 +346,19 @@ function isEditableTarget(target: EventTarget | null): boolean {
  */
 function onKeyDown(event: KeyboardEvent): void {
   if (isEditableTarget(event.target)) return;
+  // Tab held hides the mask-derived layers so the raw photo shows through;
+  // preventDefault stops focus from traversing away. Auto-repeat is ignored.
+  if (event.key === 'Tab') {
+    if (!event.repeat) tabHeld.value = true;
+    event.preventDefault();
+    return;
+  }
+  // Shift+/ ("?") toggles the shortcut help popover.
+  if (event.key === '?') {
+    shortcutHelpOpen.value = !shortcutHelpOpen.value;
+    event.preventDefault();
+    return;
+  }
   // Zoom and pan work whether or not an outline is pending.
   if (event.key === '0' && !event.ctrlKey && !event.metaKey && !event.altKey) {
     resetZoom();
@@ -387,6 +411,10 @@ function onKeyDown(event: KeyboardEvent): void {
 
 function onKeyUp(event: KeyboardEvent): void {
   if (event.key === ' ' || event.code === 'Space') spaceHeld.value = false;
+  if (event.key === 'Tab') {
+    tabHeld.value = false;
+    if (!isEditableTarget(event.target)) event.preventDefault();
+  }
 }
 
 onMounted(() => {
@@ -687,6 +715,22 @@ const helperText = computed(() => {
   return `Click the next tool in the photo to start Tool ${tools.value.length + 1}.`;
 });
 
+/** The canvas shortcuts listed in the help popover, in one place so future
+ * shortcuts extend the array rather than the template. */
+const shortcutRows: { action: string; keys: string }[] = [
+  { action: 'Add include point', keys: 'Click' },
+  { action: 'Add exclude point', keys: 'Shift click or right click' },
+  { action: 'Paint add', keys: 'B' },
+  { action: 'Paint erase', keys: 'E' },
+  { action: 'Pointer mode', keys: 'V or Escape' },
+  { action: 'Brush size', keys: '[ and ]' },
+  { action: 'Undo stroke', keys: 'Ctrl+Z' },
+  { action: 'Zoom', keys: 'Mouse wheel' },
+  { action: 'Pan', keys: 'Space drag or middle drag' },
+  { action: 'Reset zoom', keys: '0' },
+  { action: 'Hide mask', keys: 'Hold Tab or eye button' },
+];
+
 /** Tooltip shown on the blocked accept and replace actions. */
 const paintDroppedMessage =
   'Part of your painted area is not connected to the traced shape and would be lost. Erase the stray paint or connect it to the tool with a brush stroke.';
@@ -820,6 +864,36 @@ function acceptTool(finish: boolean): void {
             <v-icon icon="mdi-fit-to-screen" size="20" />
             <v-tooltip activator="parent" location="bottom">Reset zoom (0)</v-tooltip>
           </v-btn>
+        </div>
+        <div class="d-flex align-center ga-1" :class="{ 'ml-auto': zoom <= 1 }">
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            :color="maskHidden ? 'primary' : undefined"
+            @click="maskHiddenButton = !maskHiddenButton"
+          >
+            <v-icon :icon="maskHidden ? 'mdi-eye-off' : 'mdi-eye'" size="20" />
+            <v-tooltip activator="parent" location="bottom">Hide mask (hold Tab)</v-tooltip>
+          </v-btn>
+          <v-menu v-model="shortcutHelpOpen" location="top end" :close-on-content-click="false">
+            <template #activator="{ props }">
+              <v-btn icon size="small" variant="text" v-bind="props">
+                <v-icon icon="mdi-help-circle-outline" size="20" />
+                <v-tooltip activator="parent" location="bottom">Canvas shortcuts</v-tooltip>
+              </v-btn>
+            </template>
+            <v-card min-width="280" class="pa-2">
+              <div
+                v-for="row in shortcutRows"
+                :key="row.action"
+                class="d-flex align-center justify-space-between ga-4 px-2 py-1 shortcut-row"
+              >
+                <span class="text-body-2">{{ row.action }}</span>
+                <span class="text-caption text-medium-emphasis">{{ row.keys }}</span>
+              </div>
+            </v-card>
+          </v-menu>
         </div>
       </div>
       <div v-if="outline !== null" class="d-flex align-center flex-wrap ga-2 mt-2">
