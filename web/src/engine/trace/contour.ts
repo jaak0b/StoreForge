@@ -6,12 +6,23 @@ import type { Cv, CvMat } from './paper';
 import type { MmPoint, PixelPoint, TracedOutline } from './types';
 import { signedArea } from './edit';
 
+/** A failure reason from maskToContour, mapped to user prose by the caller. */
+export type MaskContourFailure = 'empty' | 'noContainingRegion';
+
+/** Discriminated result of maskToContour: an outline or a typed failure reason. */
+export type MaskContourResult =
+  | { ok: true; outline: TracedOutline }
+  | { ok: false; reason: MaskContourFailure };
+
 /** Options for maskToContour. */
 export interface MaskContourOptions {
   /** Millimeters per mask pixel, from the paper calibration. */
   mmPerPixel: number;
-  /** The first include click, in mask pixels; selects the intended contour. */
-  includePoint: PixelPoint;
+  /**
+   * The include clicks (all label-1 prompts), in mask pixels. The chosen
+   * contour must contain every one of these points.
+   */
+  includePoints: PixelPoint[];
   /**
    * Polygon simplification tolerance in mm (approxPolyDP epsilon). 0.2 mm by
    * default: below the 0.25 mm rectified pixel size, so simplification never
@@ -71,18 +82,25 @@ function orient(points: MmPoint[], positive: boolean): MmPoint[] {
  * corners of straight tool edges, so closing is the better fit for hard-edged
  * tool silhouettes.
  *
- * Among the denoised external contours, the largest one containing the include
- * click is chosen (or, if the click landed just outside every contour, the
- * nearest one). Its holes above minHoleAreaMm2 are kept as children.
+ * Among the denoised external contours, the chosen one must contain every
+ * include point; among those that qualify the largest by area is kept. Its
+ * holes above minHoleAreaMm2 are kept as children. There is no nearest-contour
+ * fallback: a click that lands outside every contour is a typed failure.
  *
- * Returns null when the mask contains no usable contour after denoising.
+ * Returns { ok: false, reason } when no contour survives denoising ('empty')
+ * or when contours survive but none contains all include points
+ * ('noContainingRegion').
  */
 export function maskToContour(
   cv: Cv,
   mask: CvMat,
   options: MaskContourOptions,
-): TracedOutline | null {
-  const { mmPerPixel, includePoint } = options;
+): MaskContourResult {
+  const { mmPerPixel, includePoints } = options;
+  if (includePoints.length === 0) {
+    // No include points would make every contour vacuously qualify; refuse.
+    return { ok: false, reason: 'noContainingRegion' };
+  }
   const toleranceMm = options.toleranceMm ?? DEFAULT_TOLERANCE_MM;
   const minHoleAreaMm2 = options.minHoleAreaMm2 ?? DEFAULT_MIN_HOLE_AREA_MM2;
   const epsilonPx = toleranceMm / mmPerPixel;
@@ -103,11 +121,10 @@ export function maskToContour(
     // holes directly inside them. Hierarchy rows are [next, prev, child, parent].
     cv.findContours(clean, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
 
-    const click = { x: includePoint.x, y: includePoint.y };
+    const clicks = includePoints.map((point) => new cv.Point(point.x, point.y));
     let chosen = -1;
     let chosenArea = 0;
-    let nearest = -1;
-    let nearestDistance = -Infinity;
+    let sawAnyContour = false;
     for (let i = 0; i < contours.size(); i += 1) {
       if (hierarchy.data32S[i * 4 + 3] !== -1) {
         continue; // A hole, handled through its parent below.
@@ -121,26 +138,22 @@ export function maskToContour(
         if (area < minHoleAreaPx) {
           continue;
         }
-        // Signed distance in px: positive inside, negative outside.
-        const distance = cv.pointPolygonTest(contour, click, true);
-        if (distance >= 0) {
-          if (chosen === -1 || area > chosenArea) {
-            chosen = i;
-            chosenArea = area;
-          }
-        } else if (distance > nearestDistance) {
-          nearest = i;
-          nearestDistance = distance;
+        sawAnyContour = true;
+        // Qualify only when the contour contains every include point (on the
+        // boundary counts as inside): measureDist=false returns >= 0 inside.
+        const containsAll = clicks.every(
+          (click) => cv.pointPolygonTest(contour, click, false) >= 0,
+        );
+        if (containsAll && (chosen === -1 || area > chosenArea)) {
+          chosen = i;
+          chosenArea = area;
         }
       } finally {
         contour.delete();
       }
     }
     if (chosen === -1) {
-      chosen = nearest;
-    }
-    if (chosen === -1) {
-      return null;
+      return { ok: false, reason: sawAnyContour ? 'noContainingRegion' : 'empty' };
     }
 
     const outerContour = contours.get(chosen);
@@ -151,7 +164,7 @@ export function maskToContour(
       outerContour.delete();
     }
     if (outer.length < 3) {
-      return null;
+      return { ok: false, reason: 'empty' };
     }
 
     const holes: MmPoint[][] = [];
@@ -173,7 +186,7 @@ export function maskToContour(
         holeContour.delete();
       }
     }
-    return { outer, holes };
+    return { ok: true, outline: { outer, holes } };
   } finally {
     kernel.delete();
     clean.delete();

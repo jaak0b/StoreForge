@@ -10,12 +10,15 @@ import { loadOpenCv } from './opencvLoader';
 import type { CvNamespace } from './opencvLoader';
 import { detectPaper, rectifyPaper } from '../engine/trace/paper';
 import {
-  bestMaskIndex,
   buildDecoderPrompt,
+  ENCODER_INPUT_SIZE,
+  LOW_RES_MASK_SIZE,
   lowResMaskToMat,
   prepareEncoderInput,
+  selectMaskIndex,
 } from '../engine/trace/sam';
 import { maskToContour } from '../engine/trace/contour';
+import type { MaskContourFailure } from '../engine/trace/contour';
 import type {
   PaperCalibration,
   PaperCorners,
@@ -145,6 +148,16 @@ async function toImageData(source: ImageBitmap | ArrayBuffer): Promise<ImageData
   return data;
 }
 
+/** User-worded message for a maskToContour failure reason. */
+function messageForContourFailure(reason: MaskContourFailure): string {
+  switch (reason) {
+    case 'noContainingRegion':
+      return 'Place all include clicks on one tool, away from its edges. The traced shape did not cover every click, which happens when clicks straddle two separate parts.';
+    case 'empty':
+      return 'No usable shape was found at that click. Try clicking nearer the middle of the tool, or add more include clicks along it.';
+  }
+}
+
 const api = {
   /** Store model URLs resolved on the main thread; must be called before use. */
   init(urls: VisionModelUrls): void {
@@ -255,6 +268,12 @@ const api = {
         error: 'Click on the tool itself first; exclude clicks alone cannot select a shape.',
       };
     }
+    const includePoints = points
+      .filter((point) => point.label === 1)
+      .map((point) => ({ x: point.x, y: point.y }));
+    const excludePoints = points
+      .filter((point) => point.label === 0)
+      .map((point) => ({ x: point.x, y: point.y }));
     const [cv, decoder] = await Promise.all([loadOpenCv(), loadDecoder()]);
     const prompt = buildDecoderPrompt(points, embedding.scale);
     const start = performance.now();
@@ -271,29 +290,33 @@ const api = {
       ),
     });
     const iou = (outputs.iou_predictions as ort.Tensor).data as Float32Array;
-    const maskIndex = bestMaskIndex(iou);
+    const lowResMasks = (outputs.low_res_masks as ort.Tensor).data as Float32Array;
+    const maskIndex = selectMaskIndex(
+      lowResMasks,
+      iou,
+      includePoints,
+      excludePoints,
+      (embedding.scale * LOW_RES_MASK_SIZE) / ENCODER_INPUT_SIZE,
+    );
     const maskWidth = rectified.cols;
     const maskHeight = rectified.rows;
     const maskMat = lowResMaskToMat(
       cv,
-      (outputs.low_res_masks as ort.Tensor).data as Float32Array,
+      lowResMasks,
       maskIndex,
       { width: embedding.encoderWidth, height: embedding.encoderHeight },
       maskWidth,
       maskHeight,
     );
     try {
-      const outline = maskToContour(cv, maskMat, {
+      const result = maskToContour(cv, maskMat, {
         mmPerPixel: rectifiedCalibration.mmPerPixel,
-        includePoint,
+        includePoints,
       });
-      if (!outline) {
-        return {
-          ok: false,
-          error:
-            'No usable shape was found at that click. Try clicking nearer the middle of the tool, or add more include clicks along it.',
-        };
+      if (!result.ok) {
+        return { ok: false, error: messageForContourFailure(result.reason) };
       }
+      const outline = result.outline;
       const maskPreview = new ImageData(maskWidth, maskHeight);
       const mask = maskMat.data;
       for (let i = 0; i < maskWidth * maskHeight; i += 1) {

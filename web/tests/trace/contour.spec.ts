@@ -49,13 +49,14 @@ describe('maskToContour', () => {
     // radius 16 px, centered at (120, 80).
     fillRect(cv, mask, 40, 30, 200, 130);
     cv.circle(mask, new cv.Point(120, 80), 16, new cv.Scalar(0), -1);
-    const outline = maskToContour(cv, mask, {
+    const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
-      includePoint: { x: 60, y: 50 },
+      includePoints: [{ x: 60, y: 50 }],
     });
     mask.delete();
-    expect(outline).not.toBeNull();
-    if (!outline) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const outline = result.outline;
     // 40..200 px and 30..130 px at 0.25 mm/px: 10..50 mm and 7.5..32.5 mm,
     // hand-derived once. 0.5 mm tolerance covers the 3x3 morphology kernel
     // plus the 0.2 mm simplification epsilon.
@@ -81,13 +82,14 @@ describe('maskToContour', () => {
     fillRect(cv, mask, 40, 30, 200, 130);
     // Radius 3 px = 0.75 mm: area 1.77 mm^2, below the 3 mm^2 default floor.
     cv.circle(mask, new cv.Point(120, 80), 3, new cv.Scalar(0), -1);
-    const outline = maskToContour(cv, mask, {
+    const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
-      includePoint: { x: 60, y: 50 },
+      includePoints: [{ x: 60, y: 50 }],
     });
     mask.delete();
-    expect(outline).not.toBeNull();
-    expect(outline?.holes).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.outline.holes).toHaveLength(0);
   });
 
   it('ignores speck islands and returns the clicked shape only', async () => {
@@ -97,13 +99,14 @@ describe('maskToContour', () => {
     // Single-pixel noise and a 2x2 speck far from the rectangle.
     fillRect(cv, mask, 230, 20, 231, 21);
     mask.data[10 * 256 + 220] = 255;
-    const outline = maskToContour(cv, mask, {
+    const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
-      includePoint: { x: 60, y: 50 },
+      includePoints: [{ x: 60, y: 50 }],
     });
     mask.delete();
-    expect(outline).not.toBeNull();
-    if (!outline) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const outline = result.outline;
     // Everything returned stays inside the rectangle's mm bounds; the specks
     // near (220, 10) px = (55, 2.5) mm never appear.
     const box = bounds(outline.outer);
@@ -111,34 +114,80 @@ describe('maskToContour', () => {
     expect(box.minY).toBeGreaterThan(7);
   });
 
-  it('returns null when the mask holds only noise the denoise pass removes', async () => {
+  it('reports an empty result when the mask holds only noise the denoise pass removes', async () => {
     const cv = await loadOpenCv();
     const mask = emptyMask(cv);
     mask.data[50 * 256 + 100] = 255;
     mask.data[80 * 256 + 30] = 255;
-    const outline = maskToContour(cv, mask, {
+    const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
-      includePoint: { x: 100, y: 50 },
+      includePoints: [{ x: 100, y: 50 }],
     });
     mask.delete();
-    expect(outline).toBeNull();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('empty');
   });
 
-  it('falls back to the nearest contour when the click lands just outside', async () => {
+  it('fails when the click lands outside every contour', async () => {
     const cv = await loadOpenCv();
     const mask = emptyMask(cv);
     fillRect(cv, mask, 40, 30, 200, 130);
-    const outline = maskToContour(cv, mask, {
+    const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
       // 5 px left of the rectangle's edge.
-      includePoint: { x: 35, y: 80 },
+      includePoints: [{ x: 35, y: 80 }],
     });
     mask.delete();
-    expect(outline).not.toBeNull();
-    if (!outline) return;
-    const box = bounds(outline.outer);
-    expect(Math.abs(box.minX - 10)).toBeLessThanOrEqual(0.5);
-    expect(Math.abs(box.maxX - 50)).toBeLessThanOrEqual(0.5);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('noContainingRegion');
+  });
+
+  it('requires every include point to lie in the chosen region', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // Two separate filled rectangles; one include point lands in each.
+    fillRect(cv, mask, 20, 30, 90, 130);
+    fillRect(cv, mask, 150, 30, 230, 130);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [
+        { x: 55, y: 80 },
+        { x: 190, y: 80 },
+      ],
+    });
+    mask.delete();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('noContainingRegion');
+  });
+
+  it('picks the region containing all include points among several blobs', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // A small left blob and a larger right blob; both include points land in
+    // the right one, so only that blob's bounds should come back.
+    fillRect(cv, mask, 20, 40, 60, 100);
+    fillRect(cv, mask, 130, 30, 240, 150);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [
+        { x: 150, y: 60 },
+        { x: 220, y: 120 },
+      ],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // 130..240 px and 30..150 px at 0.25 mm/px: 32.5..60 mm and 7.5..37.5 mm,
+    // hand-derived once. 0.5 mm tolerance covers the morphology kernel plus
+    // the simplification epsilon. The left blob (5..15 mm) never appears.
+    const box = bounds(result.outline.outer);
+    expect(Math.abs(box.minX - 32.5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxX - 60)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.minY - 7.5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxY - 37.5)).toBeLessThanOrEqual(0.5);
   });
 
   it('respects the simplification tolerance on a circle', async () => {
@@ -149,22 +198,24 @@ describe('maskToContour', () => {
       return mask;
     };
     const tight = drawCircleMask();
-    const tightOutline = maskToContour(cv, tight, {
+    const tightResult = maskToContour(cv, tight, {
       mmPerPixel: MM_PER_PX,
-      includePoint: { x: 128, y: 128 },
+      includePoints: [{ x: 128, y: 128 }],
       toleranceMm: 0.2,
     });
     tight.delete();
     const loose = drawCircleMask();
-    const looseOutline = maskToContour(cv, loose, {
+    const looseResult = maskToContour(cv, loose, {
       mmPerPixel: MM_PER_PX,
-      includePoint: { x: 128, y: 128 },
+      includePoints: [{ x: 128, y: 128 }],
       toleranceMm: 2,
     });
     loose.delete();
-    expect(tightOutline).not.toBeNull();
-    expect(looseOutline).not.toBeNull();
-    if (!tightOutline || !looseOutline) return;
+    expect(tightResult.ok).toBe(true);
+    expect(looseResult.ok).toBe(true);
+    if (!tightResult.ok || !looseResult.ok) return;
+    const tightOutline = tightResult.outline;
+    const looseOutline = looseResult.outline;
     // A radius-80 px circle is radius 20 mm centered at (32, 32) mm,
     // hand-derived once. At 0.2 mm tolerance every vertex must sit within
     // the tolerance plus one pixel (0.25 mm) plus the morphology kernel

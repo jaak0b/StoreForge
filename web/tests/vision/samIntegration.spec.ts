@@ -90,15 +90,16 @@ describe('MobileSAM click-to-segment integration', () => {
         512,
         384,
       );
-      const outline = maskToContour(cv, maskMat, {
+      const result = maskToContour(cv, maskMat, {
         mmPerPixel: 0.25,
-        includePoint: { x: 256, y: 192 },
+        includePoints: [{ x: 256, y: 192 }],
       });
       maskMat.delete();
       sheet.delete();
 
-      expect(outline).not.toBeNull();
-      if (!outline) return;
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const outline = result.outline;
       // The drawn blank is 200 x 120 px at 0.25 mm/px: 50 x 30 mm, area
       // 1500 mm^2, hand-derived once. 15 percent tolerance covers SAM's soft
       // mask boundary on a synthetic image.

@@ -5,7 +5,7 @@
 // standard SAM prompt decoder whose point coordinates live in the space of
 // the image as fed to the encoder.
 import type { Cv, CvMat } from './paper';
-import type { SamPoint } from './types';
+import type { PixelPoint, SamPoint } from './types';
 
 /**
  * The encoder's working resolution. Following SAM's ResizeLongestSide
@@ -96,6 +96,43 @@ export function bestMaskIndex(iouPredictions: Float32Array): number {
 
 /** Side length of the decoder's low_res_masks planes. */
 export const LOW_RES_MASK_SIZE = 256;
+
+/**
+ * Choose the low_res_masks plane to use. Among planes whose binarized mask
+ * (logit > 0) covers every include point and no exclude point, pick the
+ * highest predicted IoU. If no plane satisfies the criterion, fall back to
+ * plain argmax IoU so segmentation still returns a refinable mask.
+ *
+ * Points are in rectified-image pixels. scaleToLowRes maps a rectified pixel
+ * to the 256-grid low-res plane: embedding.scale * LOW_RES_MASK_SIZE / ENCODER_INPUT_SIZE.
+ */
+export function selectMaskIndex(
+  lowResMasks: Float32Array,
+  iouPredictions: Float32Array,
+  includePoints: PixelPoint[],
+  excludePoints: PixelPoint[],
+  scaleToLowRes: number,
+): number {
+  const size = LOW_RES_MASK_SIZE;
+  const planeStride = size * size;
+  const planeCount = iouPredictions.length;
+  const clamp = (value: number): number => Math.min(Math.max(value, 0), size - 1);
+  const logitAt = (plane: number, pt: PixelPoint): number => {
+    const gx = clamp(Math.floor(pt.x * scaleToLowRes));
+    const gy = clamp(Math.floor(pt.y * scaleToLowRes));
+    return lowResMasks[plane * planeStride + gy * size + gx];
+  };
+  let best = -1;
+  for (let plane = 0; plane < planeCount; plane += 1) {
+    const qualifies =
+      includePoints.every((pt) => logitAt(plane, pt) > 0) &&
+      excludePoints.every((pt) => logitAt(plane, pt) <= 0);
+    if (qualifies && (best === -1 || iouPredictions[plane] > iouPredictions[best])) {
+      best = plane;
+    }
+  }
+  return best === -1 ? bestMaskIndex(iouPredictions) : best;
+}
 
 /**
  * Turn one plane of the decoder's `low_res_masks` output (logits,
