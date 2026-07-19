@@ -9,7 +9,13 @@ import type {
   SlottedBinParams,
 } from './types';
 import { applySlotToBody, buildInsertSolids, insertPositionInBin } from '../label/slot';
-import { validateWalls, wallLength, type DividerWall } from './dividerModel';
+import {
+  validateWalls,
+  wallEndsOnInteriorBoundary,
+  wallLength,
+  type BinFootprint,
+  type DividerWall,
+} from './dividerModel';
 import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
@@ -292,18 +298,23 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | nul
   const stripHeight = pocketTop + 2 * eps;
   // One solid root strip under each divider wall, following the wall segment.
   // The strip is stripWidth wide (the wall thickness plus a base wall on each
-  // side) and extended at both ends by its own half-width, so the root welds
-  // to the perimeter and to any wall it meets end to end.
+  // side) and extended past a boundary endpoint by its own half-width, so the
+  // root reaches the foot shell and welds into it. A free endpoint gets no
+  // extension: where two walls meet, the strip already runs to the other
+  // wall's centreline and so overlaps that wall's own strip by half its width,
+  // which is a full weld, and where a wall ends in open interior an extension
+  // would only leave the root standing out beyond the wall it supports.
   for (const wall of dividerWalls) {
-    const length = wallLength(wall) + stripWidth;
-    const angleDeg = (Math.atan2(wall.y2 - wall.y1, wall.x2 - wall.x1) * 180) / Math.PI;
-    const mx = (wall.x1 + wall.x2) / 2;
-    const my = (wall.y1 + wall.y2) / 2;
     strips.push(
-      m.Manifold.cube([length, stripWidth, stripHeight], true)
-        .translate(0, 0, stripHeight / 2 - eps)
-        .rotate(0, 0, angleDeg)
-        .translate(mx, my, 0),
+      wallFollowingBox(
+        m,
+        wall,
+        params,
+        stripWidth,
+        stripHeight,
+        -eps,
+        stripWidth / 2,
+      ),
     );
   }
   // Per-cell rib lattice, kept out of the pocket so the ribs intersect the
@@ -522,28 +533,63 @@ function buildInteriorCutter(m: ManifoldToplevel, params: BinParams): Manifold {
  * an interior-span segment reaches the outer face and trims back to it, the
  * same solid the count-based generator produced.
  */
+/**
+ * A box following a divider wall's centreline: `width` across the wall,
+ * `height` tall with its base at `zBottom`, and running from endpoint to
+ * endpoint, extended past an endpoint by `extension` only when that endpoint
+ * lies on the interior boundary.
+ *
+ * The extension exists so an endpoint placed against a perimeter wall reaches
+ * into that wall's material and welds into it (the caller trims the result
+ * back to the outer envelope), which is what the evenly spaced dividers need
+ * and how they have always been built. Any other endpoint is left exactly
+ * where the user drew it: extending a wall that ends against another wall
+ * pushes a fin out through the far face of the wall it meets, and extending a
+ * wall that ends in open interior builds it longer than it was drawn. Where
+ * two walls meet, the union already welds them because the segments touch, so
+ * a junction needs no extension of its own.
+ */
+function wallFollowingBox(
+  m: ManifoldToplevel,
+  wall: DividerWall,
+  footprint: BinFootprint,
+  width: number,
+  height: number,
+  zBottom: number,
+  extension: number,
+): Manifold {
+  const [onBoundary1, onBoundary2] = wallEndsOnInteriorBoundary(wall, footprint);
+  const start = onBoundary1 ? extension : 0;
+  const end = onBoundary2 ? extension : 0;
+  const centreline = wallLength(wall);
+  const length = centreline + start + end;
+  const angleRad = Math.atan2(wall.y2 - wall.y1, wall.x2 - wall.x1);
+  // The box is centred on its own length, so an asymmetric pair of extensions
+  // shifts its centre along the wall by half their difference.
+  const shift = (end - start) / 2;
+  const mx = (wall.x1 + wall.x2) / 2 + Math.cos(angleRad) * shift;
+  const my = (wall.y1 + wall.y2) / 2 + Math.sin(angleRad) * shift;
+  return m.Manifold.cube([length, width, height], true)
+    .translate(0, 0, zBottom + height / 2)
+    .rotate(0, 0, (angleRad * 180) / Math.PI)
+    .translate(mx, my, 0);
+}
+
 function buildDividers(
   m: ManifoldToplevel,
   dividerWalls: DividerWall[],
+  footprint: BinFootprint,
   envelope: Manifold,
   bodyTop: number,
 ): Manifold {
   // Embedded into the floor slab (feet top to floor top) for a solid weld.
   const zBottom = FOOT_HEIGHT;
   const height = bodyTop - zBottom;
-  const boxes: Manifold[] = [];
-  for (const wall of dividerWalls) {
-    const length = wallLength(wall) + 2 * WALL_THICKNESS;
-    const angleDeg = (Math.atan2(wall.y2 - wall.y1, wall.x2 - wall.x1) * 180) / Math.PI;
-    const mx = (wall.x1 + wall.x2) / 2;
-    const my = (wall.y1 + wall.y2) / 2;
-    boxes.push(
-      m.Manifold.cube([length, DIVIDER_THICKNESS, height], true)
-        .translate(0, 0, zBottom + height / 2)
-        .rotate(0, 0, angleDeg)
-        .translate(mx, my, 0),
-    );
-  }
+  const boxes = dividerWalls.map((wall) =>
+    // A boundary end is extended by the perimeter wall's own thickness, so it
+    // reaches the outer face and the envelope intersection trims it flush.
+    wallFollowingBox(m, wall, footprint, DIVIDER_THICKNESS, height, zBottom, WALL_THICKNESS),
+  );
   return m.Manifold.intersection(m.Manifold.union(boxes), envelope);
 }
 
@@ -648,7 +694,7 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   }
 
   if (dividerWalls.length > 0) {
-    const dividers = buildDividers(m, dividerWalls, envelope, bodyTop);
+    const dividers = buildDividers(m, dividerWalls, params, envelope, bodyTop);
     result = m.Manifold.union([result, dividers]);
   }
 

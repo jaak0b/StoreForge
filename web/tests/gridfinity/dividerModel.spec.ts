@@ -322,6 +322,27 @@ describe('snapping', () => {
     expect(s.walls[0].y2).toBeCloseTo(9.5, 9);
   });
 
+  it('accumulates a snapped drag delivered as many small deltas', () => {
+    // A real mouse emits increments far smaller than the lattice step. Each
+    // is applied against the wall as it stood when the drag began, so the
+    // total is what snaps.
+    const start = { x1: 0, y1: -10.5, x2: 0, y2: 10.5 };
+    const many = state(3, 2, [start]);
+    const origin = { ...start };
+    const steps = 60;
+    for (let i = 1; i <= steps; i++) {
+      moveWall(many, 0, (i * 12) / steps, 0, on, origin);
+    }
+    const one = state(3, 2, [start]);
+    moveWall(one, 0, 12, 0, on, { ...start });
+    expect(many.walls[0]).toEqual(one.walls[0]);
+    // And it actually moved, onto the lattice position nearest 12 mm.
+    expect(many.walls[0].x1).toBeCloseTo(10.5, 9);
+    expect(many.walls[0].x2).toBeCloseTo(10.5, 9);
+    // The length is untouched: a translate never deforms the wall.
+    expect(many.walls[0].y2 - many.walls[0].y1).toBeCloseTo(21, 9);
+  });
+
   it('snaps a freshly drawn wall at both ends', () => {
     const s = state(3, 2);
     addWall(s, { x1: 1.0, y1: -9.6, x2: 1.3, y2: 9.4 }, on);

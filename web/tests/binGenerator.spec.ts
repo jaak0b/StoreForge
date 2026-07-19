@@ -10,6 +10,7 @@ import {
 } from '../src/engine/gridfinity/binGenerator';
 import {
   BASE_WALL_THICKNESS,
+  binInteriorSizeMm,
   binTopOpeningMm,
   DIVIDER_THICKNESS,
   FLOOR_PLATE_THICKNESS,
@@ -348,6 +349,14 @@ describe('buildBinManifold', () => {
   });
 });
 
+/**
+ * Volume in cubic mm of the default 2x2x3 bin with one even divider along X,
+ * recorded from the evenly spaced geometry as it has always been built. A pin
+ * on that case: only wall ends on the interior boundary are extended into the
+ * perimeter, and this is what proves the even dividers still are.
+ */
+const EVEN_DIVIDER_2X2_VOLUME_MM3 = 38002.874199748905;
+
 describe('interior dividers', () => {
   it('keeps the solid watertight with dividers on both axes', () => {
     const bin = buildBinManifold(m, params({ dividerCountX: 2, dividerCountY: 1 }));
@@ -494,6 +503,103 @@ describe('interior dividers', () => {
     );
     expect(bin.status()).toBe('NoError');
     expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('leaves no fin past the far face of a wall a wall ends against', () => {
+    // A T: a long wall along X, and a wall running up from it. The ending
+    // wall's endpoint is at the junction, in open interior, so nothing of it
+    // may appear on the far side of the wall it meets.
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        walls: [
+          { x1: -20, y1: 0, x2: 20, y2: 0 },
+          { x1: 0, y1: 0, x2: 0, y2: 18 },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // The junction wall is solid right up to its own far face.
+    const inside = m.Manifold.cube([DIVIDER_THICKNESS, 0.4, 2], true).translate(
+      0,
+      -DIVIDER_THICKNESS / 2 + 0.2,
+      midZ,
+    );
+    const insideHit = bin.intersect(inside);
+    expect(insideHit.isEmpty()).toBe(false);
+    insideHit.delete();
+    inside.delete();
+    // Beyond that face, along the ending wall's axis, there is only air.
+    const beyond = m.Manifold.cube([DIVIDER_THICKNESS, WALL_THICKNESS, 2], true).translate(
+      0,
+      -DIVIDER_THICKNESS / 2 - 0.05 - WALL_THICKNESS / 2,
+      midZ,
+    );
+    const beyondHit = bin.intersect(beyond);
+    expect(beyondHit.isEmpty()).toBe(true);
+    beyondHit.delete();
+    beyond.delete();
+    bin.delete();
+  });
+
+  it('builds a wall ending in open interior at the length it was drawn', () => {
+    // Both endpoints are free, so the wall is built exactly end to end. The
+    // scoop is off so the only material in the probe slab is the wall.
+    const drawn = 8;
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        scoop: false,
+        walls: [{ x1: 0, y1: -drawn, x2: 0, y2: drawn }],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // A slab thinner than the wall and well clear of the perimeter, so what
+    // it catches is the wall and nothing else; its Y extent is the built
+    // length.
+    const slab = m.Manifold.cube([DIVIDER_THICKNESS / 2, 60, 2], true).translate(0, 0, midZ);
+    const built = bin.intersect(slab);
+    expect(built.isEmpty()).toBe(false);
+    const box = built.boundingBox();
+    expect(box.min[1]).toBeCloseTo(-drawn, 5);
+    expect(box.max[1]).toBeCloseTo(drawn, 5);
+    built.delete();
+    slab.delete();
+    bin.delete();
+  });
+
+  it('still welds an even divider into the perimeter walls', () => {
+    // Both endpoints of an even divider lie on the interior boundary, so it
+    // is still extended into the perimeter wall and reaches it: the case the
+    // boundary test must keep protecting. The volume is pinned so the
+    // evenly spaced geometry cannot drift.
+    const bin = buildBinManifold(m, params({ gridX: 2, gridY: 2, dividerCountX: 1 }));
+    expect(bin.status()).toBe('NoError');
+    const hy = binInteriorSizeMm(2) / 2;
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // Solid divider material in the last tenth of a millimetre before the
+    // perimeter wall's interior face, at both ends.
+    for (const sign of [-1, 1]) {
+      const probe = m.Manifold.cube([DIVIDER_THICKNESS / 2, 0.1, 2], true).translate(
+        0,
+        sign * (hy - 0.05),
+        midZ,
+      );
+      const hit = bin.intersect(probe);
+      expect(hit.isEmpty()).toBe(false);
+      hit.delete();
+      probe.delete();
+    }
+    expect(bin.volume()).toBeCloseTo(EVEN_DIVIDER_2X2_VOLUME_MM3, 3);
     bin.delete();
   });
 

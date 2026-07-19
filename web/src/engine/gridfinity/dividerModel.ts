@@ -135,6 +135,14 @@ export interface BinFootprint {
 const SNAP_EPS = 1e-9;
 
 /**
+ * Tolerance in mm for the interior boundary tests: whether an endpoint counts
+ * as containment (validateWalls) and whether it counts as lying on the
+ * boundary (wallEndsOnInteriorBoundary). One constant so the validator and
+ * the generator cannot disagree about where the boundary is.
+ */
+export const WALL_BOUNDARY_EPS = 1e-6;
+
+/**
  * The distances along a ray at which a dragged endpoint may legitimately come
  * to rest: the ray's crossings with the position snapping lattice's grid
  * lines (standard ray/axis-aligned-line intersection, only the two crossings
@@ -363,7 +371,7 @@ export function validateWalls(
   gridX: number,
   gridY: number,
 ): string | null {
-  const eps = 1e-6;
+  const eps = WALL_BOUNDARY_EPS;
   const hx = binInteriorSizeMm(gridX) / 2;
   const hy = binInteriorSizeMm(gridY) / 2;
   for (const wall of walls) {
@@ -414,6 +422,40 @@ function interiorHalfExtents(footprint: BinFootprint): { hx: number; hy: number 
     hx: binInteriorSizeMm(footprint.gridX) / 2,
     hy: binInteriorSizeMm(footprint.gridY) / 2,
   };
+}
+
+/**
+ * Whether one endpoint of a wall lies on the interior rectangle's boundary,
+ * that is against a perimeter wall's interior face, within
+ * WALL_BOUNDARY_EPS. The single home for the question: the generator asks it
+ * to decide which wall ends must be extended into the perimeter so they weld
+ * into it (the ends evenDividerWalls places there), and which ends are free
+ * and must be built exactly where the user drew them.
+ */
+export function endpointOnInteriorBoundary(
+  footprint: BinFootprint,
+  x: number,
+  y: number,
+): boolean {
+  const { hx, hy } = interiorHalfExtents(footprint);
+  return (
+    Math.abs(Math.abs(x) - hx) <= WALL_BOUNDARY_EPS ||
+    Math.abs(Math.abs(y) - hy) <= WALL_BOUNDARY_EPS
+  );
+}
+
+/**
+ * Which of a wall's two endpoints lie on the interior boundary, in the
+ * endpoint order (x1,y1) then (x2,y2).
+ */
+export function wallEndsOnInteriorBoundary(
+  wall: DividerWall,
+  footprint: BinFootprint,
+): [boolean, boolean] {
+  return [
+    endpointOnInteriorBoundary(footprint, wall.x1, wall.y1),
+    endpointOnInteriorBoundary(footprint, wall.x2, wall.y2),
+  ];
 }
 
 /**
@@ -498,9 +540,21 @@ export function duplicateWall(state: DividerState, index: number): DividerWall |
 }
 
 /**
- * Translates both endpoints of the wall at index. The delta is reduced per
- * axis to the largest shift that keeps every endpoint inside the interior, so
- * a wall dragged against the bin wall stops rigid instead of deforming.
+ * Translates the wall at index by a delta measured from `origin`, the wall as
+ * it stood when the gesture began (defaulting to where the wall is now, which
+ * is the whole gesture for a single discrete move such as a keyboard nudge).
+ *
+ * The delta is taken from the origin rather than from the wall's present
+ * position because snapping quantizes the result: a pointer drag arrives as
+ * many small deltas, and re-snapping each one from the already snapped
+ * position rounds every increment back to zero, so the wall never moves. With
+ * the origin held for the gesture, the snapped position is a function of the
+ * origin plus the total delta, so the wall follows the pointer and still lands
+ * on the lattice. With snapping off the two formulations agree exactly.
+ *
+ * The delta is reduced per axis to the largest shift that keeps every endpoint
+ * inside the interior, so a wall dragged against the bin wall stops rigid
+ * instead of deforming.
  */
 export function moveWall(
   state: DividerState,
@@ -508,23 +562,23 @@ export function moveWall(
   dxMm: number,
   dyMm: number,
   snap: SnapOptions = SNAP_OFF,
+  origin?: DividerWall,
 ): void {
   if (index < 0 || index >= state.walls.length) return;
   const wall = state.walls[index];
-  // Snapping resolves against the lattice in absolute terms rather than
-  // accumulating the drag, so a wall held near a lattice position stays on it.
+  const from = origin ?? { x1: wall.x1, y1: wall.y1, x2: wall.x2, y2: wall.y2 };
   const shifted = snapWall(
-    { x1: wall.x1 + dxMm, y1: wall.y1 + dyMm, x2: wall.x2 + dxMm, y2: wall.y2 + dyMm },
+    { x1: from.x1 + dxMm, y1: from.y1 + dyMm, x2: from.x2 + dxMm, y2: from.y2 + dyMm },
     'translate',
     snap,
   );
-  const requestedDx = shifted.x1 - wall.x1;
-  const requestedDy = shifted.y1 - wall.y1;
+  const requestedDx = shifted.x1 - from.x1;
+  const requestedDy = shifted.y1 - from.y1;
   let dx = requestedDx;
   let dy = requestedDy;
   for (const end of [
-    { x: wall.x1, y: wall.y1 },
-    { x: wall.x2, y: wall.y2 },
+    { x: from.x1, y: from.y1 },
+    { x: from.x2, y: from.y2 },
   ]) {
     const clamped = clampPoint(state, end.x + requestedDx, end.y + requestedDy);
     const ex = clamped.x - end.x;
@@ -532,10 +586,10 @@ export function moveWall(
     if (Math.abs(ex) < Math.abs(dx)) dx = ex;
     if (Math.abs(ey) < Math.abs(dy)) dy = ey;
   }
-  wall.x1 += dx;
-  wall.y1 += dy;
-  wall.x2 += dx;
-  wall.y2 += dy;
+  wall.x1 = from.x1 + dx;
+  wall.y1 = from.y1 + dy;
+  wall.x2 = from.x2 + dx;
+  wall.y2 = from.y2 + dy;
 }
 
 /**

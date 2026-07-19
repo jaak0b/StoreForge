@@ -8,7 +8,7 @@ import {
   type DrawContext,
 } from '../../composables/useTopDownCanvas';
 import { binInteriorSizeMm, DIVIDER_THICKNESS } from '../../engine/gridfinity/constants';
-import { wallLength } from '../../engine/gridfinity/dividerModel';
+import { wallLength, type DividerWall } from '../../engine/gridfinity/dividerModel';
 import type { MmPoint } from '../../engine/trace/types';
 
 /**
@@ -126,14 +126,24 @@ type DragKind = 'body' | 'endpoint' | 'draw';
 let dragKind: DragKind | null = null;
 let dragIndex: number | null = null;
 let dragEndpoint: 1 | 2 = 2;
-let lastMm: MmPoint | null = null;
+/**
+ * Where the pointer went down, with the dragged wall as it stood then. A body
+ * drag is applied as the total delta from this origin rather than as the
+ * increment since the last move, because snapping quantizes the result and a
+ * mouse emits many increments smaller than one lattice step; each would round
+ * back to zero on its own. The frozen view keeps the mm frame fixed for the
+ * gesture, so the origin stays comparable throughout.
+ */
+let dragStartMm: MmPoint | null = null;
+let dragOriginWall: DividerWall | null = null;
 /** Where a drag-to-draw started; the new wall's first endpoint. */
 let drawStart: MmPoint | null = null;
 
 function onPointerDown(event: PointerEvent): void {
   freezeView();
   const p = clientToMm(event.clientX, event.clientY);
-  lastMm = p;
+  dragStartMm = p;
+  dragOriginWall = null;
   (event.target as HTMLElement).setPointerCapture(event.pointerId);
   const endpoint = endpointAt(p);
   if (endpoint !== null) {
@@ -147,6 +157,7 @@ function onPointerDown(event: PointerEvent): void {
     store.selectWall(index);
     dragKind = 'body';
     dragIndex = index;
+    dragOriginWall = { ...walls.value[index] };
     return;
   }
   // Empty interior: the drag draws a new wall. The wall is only created once
@@ -170,13 +181,12 @@ function updateHoverCursor(p: MmPoint): void {
 
 function onPointerMove(event: PointerEvent): void {
   const p = clientToMm(event.clientX, event.clientY);
-  if (dragKind === null || lastMm === null) {
+  if (dragKind === null || dragStartMm === null) {
     updateHoverCursor(p);
     return;
   }
-  const dx = p.x - lastMm.x;
-  const dy = p.y - lastMm.y;
-  lastMm = p;
+  const dx = p.x - dragStartMm.x;
+  const dy = p.y - dragStartMm.y;
   if (dragKind === 'draw') {
     if (drawStart === null) return;
     // Below the minimum wall length there is nothing worth creating yet.
@@ -194,7 +204,7 @@ function onPointerMove(event: PointerEvent): void {
   if (dragIndex === null) return;
   if (dragKind === 'body') {
     hoverCursor.value = 'grabbing';
-    store.moveWall(dragIndex, dx, dy);
+    store.moveWall(dragIndex, dx, dy, dragOriginWall ?? undefined);
     return;
   }
   hoverCursor.value = 'crosshair';
@@ -204,7 +214,8 @@ function onPointerMove(event: PointerEvent): void {
 function onPointerUp(): void {
   dragKind = null;
   dragIndex = null;
-  lastMm = null;
+  dragStartMm = null;
+  dragOriginWall = null;
   drawStart = null;
   releaseView();
 }

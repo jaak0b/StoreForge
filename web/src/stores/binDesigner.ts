@@ -122,8 +122,18 @@ export const useBinDesigner = defineStore('binDesigner', {
       if (divider.duplicateWall(this, index) === null) return;
       this.selectedWallIndex = this.walls.length - 1;
     },
-    moveWall(index: number, dxMm: number, dyMm: number): void {
-      divider.moveWall(this, index, dxMm, dyMm, this.snapOptions());
+    /**
+     * Translates a wall. During a drag the caller passes the wall as it stood
+     * at the start of the gesture together with the total delta since, so a
+     * snapped drag accumulates instead of rounding every increment away.
+     */
+    moveWall(
+      index: number,
+      dxMm: number,
+      dyMm: number,
+      origin?: DividerWall,
+    ): void {
+      divider.moveWall(this, index, dxMm, dyMm, this.snapOptions(), origin);
     },
     moveWallEndpoint(index: number, endpoint: 1 | 2, xMm: number, yMm: number): void {
       divider.moveWallEndpoint(this, index, endpoint, xMm, yMm, this.snapOptions());
