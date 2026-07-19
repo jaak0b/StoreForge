@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
@@ -247,7 +247,65 @@ watch(rectifiedPreview, () => {
 // Tools can change from Layout mode (removal, re-trace) while this canvas
 // stays mounted; redraw so the ghost overlays track the store.
 watch(tools, () => draw(), { deep: true });
-onMounted(() => void nextTick(draw));
+
+/** True when focus sits in a field where the shortcut keys are ordinary input. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+}
+
+/**
+ * Brush shortcuts, active only while the trace stage is mounted: B and E pick
+ * the paint modes, V and Escape turn painting off, the bracket keys step the
+ * brush size, and Ctrl+Z (or Cmd+Z) undoes the last stroke. The shortcuts do
+ * nothing until a mask exists, and never fire while focus is in a field.
+ */
+function onKeyDown(event: KeyboardEvent): void {
+  if (isEditableTarget(event.target)) return;
+  if (outline.value === null) return;
+  const key = event.key;
+  if ((event.ctrlKey || event.metaKey) && (key === 'z' || key === 'Z')) {
+    // Only claim the undo shortcut when there is a stroke to undo in a paint
+    // mode; otherwise let the browser's own undo run.
+    if (brushMode.value !== 'off' && strokes.value.length > 0 && !segmenting.value) {
+      event.preventDefault();
+      undoStroke();
+    }
+    return;
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  switch (key) {
+    case 'b':
+    case 'B':
+      brushMode.value = 'add';
+      break;
+    case 'e':
+    case 'E':
+      brushMode.value = 'erase';
+      break;
+    case 'v':
+    case 'V':
+    case 'Escape':
+      brushMode.value = 'off';
+      break;
+    case '[':
+      brushSizeMm.value = Math.max(1, brushSizeMm.value - 1);
+      break;
+    case ']':
+      brushSizeMm.value = Math.min(20, brushSizeMm.value + 1);
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown);
+  void nextTick(draw);
+});
+onUnmounted(() => window.removeEventListener('keydown', onKeyDown));
 
 function clearClicks(): void {
   retraceToolId.value = null;
@@ -519,42 +577,55 @@ function acceptTool(finish: boolean): void {
         </v-btn>
         <v-progress-circular v-if="segmenting" indeterminate size="20" width="2" />
       </div>
-      <div class="d-flex align-center flex-wrap ga-2 mt-2">
-        <v-btn-toggle v-model="brushMode" mandatory density="compact" variant="outlined">
-          <v-btn value="off" size="small">Off</v-btn>
-          <v-btn value="add" size="small">Paint add</v-btn>
-          <v-btn value="erase" size="small">Paint erase</v-btn>
+      <div v-if="outline !== null" class="d-flex align-center flex-wrap ga-2 mt-2">
+        <v-btn-toggle v-model="brushMode" mandatory density="compact" variant="text">
+          <v-btn value="off" icon size="small" :color="brushMode === 'off' ? 'primary' : undefined">
+            <v-icon icon="mdi-cursor-default-click" size="20" />
+            <v-tooltip activator="parent" location="bottom">Click to segment</v-tooltip>
+          </v-btn>
+          <v-btn value="add" icon size="small" :color="brushMode === 'add' ? 'info' : undefined">
+            <v-icon icon="mdi-brush" size="20" />
+            <v-tooltip activator="parent" location="bottom">Paint add (B)</v-tooltip>
+          </v-btn>
+          <v-btn value="erase" icon size="small" :color="brushMode === 'erase' ? 'error' : undefined">
+            <v-icon icon="mdi-eraser" size="20" />
+            <v-tooltip activator="parent" location="bottom">Paint erase (E)</v-tooltip>
+          </v-btn>
         </v-btn-toggle>
-        <v-slider
-          v-model="brushSizeMm"
-          :min="1"
-          :max="20"
-          :step="1"
-          hide-details
-          density="compact"
-          class="brush-slider"
-          :label="`Brush ${brushSizeMm} mm`"
-        />
+        <div class="brush-size d-flex align-center ga-2">
+          <v-slider
+            v-model="brushSizeMm"
+            :min="1"
+            :max="20"
+            :step="1"
+            hide-details
+            density="compact"
+            class="brush-slider"
+          />
+          <span class="text-caption text-medium-emphasis brush-readout">{{ brushSizeMm }} mm</span>
+          <v-tooltip activator="parent" location="bottom">Brush size ([ and ] to change)</v-tooltip>
+        </div>
         <v-btn
-          variant="outlined"
+          icon
           size="small"
+          variant="text"
           :disabled="strokes.length === 0 || segmenting"
           @click="undoStroke"
         >
-          Undo stroke
+          <v-icon icon="mdi-undo" size="20" />
+          <v-tooltip activator="parent" location="bottom">Undo stroke (Ctrl+Z)</v-tooltip>
         </v-btn>
         <v-btn
-          variant="outlined"
+          icon
           size="small"
+          variant="text"
           :disabled="strokes.length === 0 || segmenting"
           @click="clearStrokes"
         >
-          Clear strokes
+          <v-icon icon="mdi-delete-sweep" size="20" />
+          <v-tooltip activator="parent" location="bottom">Clear strokes</v-tooltip>
         </v-btn>
       </div>
-      <p class="text-caption text-medium-emphasis mt-1 mb-0">
-        Paint on the mask to add or erase; each stroke can be undone.
-      </p>
       <div v-if="iouScore !== null" class="text-caption text-medium-emphasis mt-2 readout">
         <div><span>Mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
         <div><span>Decode time</span><span>{{ decodeMs!.toFixed(0) }} ms</span></div>
@@ -583,8 +654,13 @@ function acceptTool(finish: boolean): void {
 }
 
 .brush-slider {
-  min-width: 150px;
-  max-width: 220px;
+  min-width: 120px;
+  max-width: 180px;
+}
+
+.brush-readout {
+  min-width: 42px;
+  white-space: nowrap;
 }
 
 /*
