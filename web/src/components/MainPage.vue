@@ -2,12 +2,8 @@
 import { computed, ref } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
-import {
-  binOf,
-  insertOf,
-  originOf,
-  type QueueEntry,
-} from '../engine/plan/types';
+import { originOf, type QueueEntry } from '../engine/plan/types';
+import { describeProduct, type RowDescriptor } from '../engine/plan/rowDescriptor';
 import { snapshotProduct, type BatchSelection } from '../engine/plan/batches';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
@@ -26,47 +22,21 @@ import CountStepper from './CountStepper.vue';
 const app = useApp();
 const queue = useBinQueue();
 
-/** The row's label icon, from the entry's insert content, when it has one. */
+/** The row's title, caption and icon, from the shared row descriptor. */
+function rowOf(entry: QueueEntry): RowDescriptor {
+  return describeProduct(entry.product);
+}
+
+/** The row's label icon, resolved from the descriptor's icon name. */
 function rowIcon(entry: QueueEntry): LabelIcon | null {
-  const icon = insertOf(entry.product)?.content.icon ?? null;
-  return icon !== null ? resolveLabelIcon(icon) : null;
+  const name = rowOf(entry).iconName;
+  return name !== null ? resolveLabelIcon(name) : null;
 }
 
-function sizeText(entry: QueueEntry): string {
-  const bin = binOf(entry.product);
-  if (bin === null) return '';
-  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
-}
-
-function rowTitle(entry: QueueEntry): string {
-  const insert = insertOf(entry.product);
-  if (insert !== null && insert.content.text !== '') return insert.content.text;
-  if (entry.product.kind === 'insert') return `${entry.product.cells}u label insert`;
-  return sizeText(entry);
-}
-
-function rowText2(entry: QueueEntry): string {
-  return insertOf(entry.product)?.content.text2 ?? '';
-}
-
-/** Chip text marking what the row prints beyond a slotted bin, or null. */
-function productChip(entry: QueueEntry): string | null {
-  switch (entry.product.kind) {
-    case 'binWithInsert':
-      return 'bin + insert';
-    case 'insert':
-      return 'insert only';
-    case 'bin':
-      return entry.product.labelSlot ? null : 'no slot';
-    default:
-      return null;
-  }
-}
-
-/** The traced bin's pocket count of the row, or null for other rows. */
-function pocketCount(entry: QueueEntry): number | null {
-  const bin = binOf(entry.product);
-  return bin !== null && bin.origin === 'traced' ? bin.pockets.placements.length : null;
+/** The full title line, for the tooltip on a row whose text is clipped. */
+function rowTitleFull(entry: QueueEntry): string {
+  const row = rowOf(entry);
+  return row.titleLine2 === '' ? row.title : `${row.title} ${row.titleLine2}`;
 }
 
 // Row selection for building a plate. Each selected row carries an amount
@@ -196,52 +166,33 @@ function removeRow(entry: QueueEntry): void {
           class="flex-grow-0 row-check"
           @click.stop="toggleSelected(entry)"
         />
-        <span class="swatch d-flex align-center justify-center">
-          <svg
-            v-if="rowIcon(entry) !== null"
-            width="18"
-            height="18"
-            :viewBox="rowIcon(entry)!.viewBox.join(' ')"
-            aria-hidden="true"
-          >
-            <path
-              :d="rowIcon(entry)!.path"
-              fill="currentColor"
-              fill-rule="evenodd"
-            />
-          </svg>
-          <v-icon v-else icon="mdi-cube-outline" size="16" class="text-medium-emphasis" />
-        </span>
-        <span class="row-name">
-          <span class="d-block text-body-2 font-weight-bold">{{ rowTitle(entry) }}</span>
-          <span
-            v-if="rowText2(entry) !== ''"
-            class="d-block text-caption text-medium-emphasis"
-          >
-            {{ rowText2(entry) }}
+        <span class="row-text">
+          <span class="row-title" :title="rowTitleFull(entry)">
+            <svg
+              v-if="rowIcon(entry) !== null"
+              width="15"
+              height="15"
+              :viewBox="rowIcon(entry)!.viewBox.join(' ')"
+              class="row-icon"
+              aria-hidden="true"
+            >
+              <path :d="rowIcon(entry)!.path" fill="currentColor" fill-rule="evenodd" />
+            </svg>
+            <span
+              class="text-body-2 font-weight-bold"
+              :class="{ 'title-placeholder': rowOf(entry).titlePlaceholder }"
+            >
+              {{ rowOf(entry).title }}
+            </span>
+            <span v-if="rowOf(entry).titleLine2 !== ''" class="text-body-2 title-second">
+              {{ rowOf(entry).titleLine2 }}
+            </span>
+          </span>
+          <span class="row-caption" :title="rowOf(entry).caption">
+            {{ rowOf(entry).caption }}
           </span>
         </span>
-        <v-chip
-          v-if="pocketCount(entry) !== null"
-          size="x-small"
-          variant="tonal"
-          color="primary"
-          class="flex-grow-0"
-        >
-          {{ pocketCount(entry) }}
-          {{ pocketCount(entry) === 1 ? 'pocket' : 'pockets' }}
-        </v-chip>
-        <v-chip
-          v-if="productChip(entry) !== null"
-          size="x-small"
-          variant="tonal"
-          color="secondary"
-          class="flex-grow-0"
-        >
-          {{ productChip(entry) }}
-        </v-chip>
-        <span class="row-dims">{{ rowTitle(entry) !== sizeText(entry) ? sizeText(entry) : '' }}</span>
-        <span class="qty-badge">x{{ entry.quantity }}</span>
+        <span class="qty-badge">×{{ entry.quantity }}</span>
         <div v-if="selectedIds.has(entry.id)" class="d-flex align-center ga-1" @click.stop>
           <span class="text-caption text-primary font-weight-bold">Plate:</span>
           <CountStepper
@@ -356,27 +307,36 @@ function removeRow(entry: QueueEntry): void {
   opacity: 1;
 }
 
-.swatch {
-  width: 34px;
-  height: 28px;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 6px;
-  flex-shrink: 0;
-}
-
-.row-name {
+.row-text {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.row-name > span {
+.row-title,
+.row-caption {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.row-dims {
-  flex: 0 0 auto;
+.row-icon {
+  vertical-align: -2px;
+  margin-right: 6px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+
+.title-second {
+  margin-left: 6px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+
+.title-placeholder {
+  font-style: italic;
+  color: rgba(var(--v-theme-on-surface), var(--v-disabled-opacity));
+}
+
+.row-caption {
   font-family: monospace;
   font-size: 12px;
   color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));

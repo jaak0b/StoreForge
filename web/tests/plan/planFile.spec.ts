@@ -436,17 +436,17 @@ describe('bin entry kinds in plan files', () => {
     const imperial = entry({
       id: 's1',
       product: {
-        kind: 'bin',
-        labelSlot: true,
+        kind: 'binWithInsert',
         bin: screwBin({ screw: screwSpec({ thread: '#8', lengthMm: 38, enteredLengthText: '1-1/2"' }) }),
+        insert: { text: '#8 x 1-1/2"', text2: '', icon: 'countersunk screw' },
       },
     });
     const lengthless = entry({
       id: 's2',
       product: {
-        kind: 'bin',
-        labelSlot: true,
+        kind: 'binWithInsert',
         bin: screwBin({ screw: screwSpec({ thread: 'M5', lengthMm: null, head: 'hex nut' }) }),
+        insert: { text: 'M5 NUT', text2: '', icon: 'hex nut' },
       },
     });
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
@@ -471,7 +471,14 @@ describe('bin entry kinds in plan files', () => {
     const withSnapshots = batch({
       items: [
         batchItem({ product: { kind: 'bin', labelSlot: true, bin: tracedBin() } }),
-        batchItem({ id: 'i2', product: { kind: 'bin', labelSlot: true, bin: screwBin() } }),
+        batchItem({
+          id: 'i2',
+          product: {
+            kind: 'binWithInsert',
+            bin: screwBin(),
+            insert: { text: 'M3 x 20', text2: '', icon: 'countersunk screw' },
+          },
+        }),
       ],
     });
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
@@ -511,7 +518,12 @@ describe('bin entry kinds in plan files', () => {
   });
 
   it('rejects a screw bin without its screw description', () => {
-    const bad = { ...entry({ id: 's1', product: { kind: 'bin', labelSlot: true, bin: screwBin() } }) };
+    const bad = {
+      ...entry({
+        id: 's1',
+        product: { kind: 'bin', labelSlot: true, bin: screwBin() } as unknown as Product,
+      }),
+    };
     delete (bad.product as { bin: Record<string, unknown> }).bin.screw;
     expect(validateEntry(bad)).toBe('entry s1: screw must be an object');
   });
@@ -523,7 +535,7 @@ describe('bin entry kinds in plan files', () => {
         kind: 'bin',
         labelSlot: true,
         bin: screwBin({ screw: { ...screwSpec(), head: 'mushroom' as never } }),
-      },
+      } as unknown as Product,
     });
     expect(validateEntry(bad)).toBe('entry s1: screw head must be a known head type or null');
   });
@@ -916,5 +928,96 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
     if (!result.ok) {
       expect(result.error).toContain('labelMode must be embossed, slot, slot-insert or insert');
     }
+  });
+});
+
+describe('screw bins stored without their label insert', () => {
+  it('repairs a version-4 entry, keeps the rest of the plan and warns', () => {
+    const bare = entry({
+      id: 's1',
+      product: {
+        kind: 'bin',
+        labelSlot: true,
+        bin: screwBin({ screw: screwSpec({ thread: 'M4', lengthMm: 12 }) }),
+      } as unknown as Product,
+    });
+    const manual = entry({ id: 'm1' });
+    const text = JSON.stringify({
+      version: 4,
+      entries: [bare, manual],
+      batches: [batch()],
+    });
+    const result = parsePlanFile(text);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.entries[0].product).toEqual({
+      kind: 'binWithInsert',
+      bin: screwBin({ screw: screwSpec({ thread: 'M4', lengthMm: 12 }) }),
+      insert: { text: 'M4 x 12', text2: '', icon: 'countersunk screw' },
+    });
+    expect(result.plan.entries[0].id).toBe('s1');
+    expect(result.plan.entries[1]).toEqual(manual);
+    expect(result.plan.batches).toEqual([batch()]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toBe(
+      'entry s1 was a screw bin ordered without its label insert; the insert was added back with the label "M4 x 12", because a screw bin is printed to carry that label.',
+    );
+  });
+
+  it('repairs a bare screw bin snapshotted inside a batch item', () => {
+    const withBare = batch({
+      items: [
+        batchItem(),
+        batchItem({
+          id: 'i2',
+          product: {
+            kind: 'bin',
+            labelSlot: false,
+            bin: screwBin({ screw: screwSpec({ thread: 'M5', lengthMm: null, head: 'washer' }) }),
+          } as unknown as Product,
+        }),
+      ],
+    });
+    const result = parsePlanFile(JSON.stringify({ version: 4, entries: [], batches: [withBare] }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const items = result.plan.batches[0].items;
+    expect(items[0]).toEqual(batchItem());
+    expect(items[1].product).toEqual({
+      kind: 'binWithInsert',
+      bin: screwBin({ screw: screwSpec({ thread: 'M5', lengthMm: null, head: 'washer' }) }),
+      insert: { text: 'M5 WASHER', text2: '', icon: 'washer' },
+    });
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain('batch batch1: item i2');
+  });
+
+  it('repairs a legacy slotted screw bin through the same path', () => {
+    const legacy = {
+      id: 'a1',
+      kind: 'screw',
+      gridX: 2,
+      gridY: 1,
+      heightUnits: 3,
+      magnetHoles: false,
+      dividerCountX: 0,
+      dividerCountY: 0,
+      labelText: '',
+      labelText2: '',
+      labelIcon: null,
+      labelMode: 'slot',
+      screw: screwSpec({ thread: 'M6', lengthMm: 30 }),
+      quantity: 1,
+      createdAt: '2026-07-01T10:00:00.000Z',
+    };
+    const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.entries[0].product).toEqual({
+      kind: 'binWithInsert',
+      bin: screwBin({ screw: screwSpec({ thread: 'M6', lengthMm: 30 }) }),
+      insert: { text: 'M6 x 30', text2: '', icon: 'countersunk screw' },
+    });
+    expect(result.warnings).toHaveLength(1);
   });
 });

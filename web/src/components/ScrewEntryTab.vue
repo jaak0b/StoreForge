@@ -5,8 +5,8 @@ import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
+import { describeProduct } from '../engine/plan/rowDescriptor';
 import {
-  insertOf,
   originOf,
   type LabelContent,
   type Product,
@@ -152,9 +152,9 @@ function productFor(
     dividerCountY: store.dividerCountY,
     screw,
   };
-  return productChoice.value === 'binWithInsert'
-    ? { kind: 'binWithInsert', bin, insert: content }
-    : { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
+  // A screw bin is printed to carry its label, so the tab offers no bin-alone
+  // choice and never produces one.
+  return { kind: 'binWithInsert', bin, insert: content };
 }
 
 function productSizeText(product: Product): string {
@@ -164,8 +164,7 @@ function productSizeText(product: Product): string {
 }
 
 function productLabelText(product: Product): string {
-  const insert = insertOf(product);
-  return insert !== null ? insert.content.text : productSizeText(product);
+  return describeProduct(product).title;
 }
 
 // Parsing the shorthand field is the single source of truth; the breakdown
@@ -252,12 +251,9 @@ watch(
     shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
     internalUpdate = false;
     const patch: Record<string, unknown> = {
-      productChoice:
-        product.kind === 'bin'
-          ? product.labelSlot
-            ? 'bin'
-            : 'plainBin'
-          : product.kind,
+      // The tab offers only these two choices, and a stored screw bin without
+      // its insert is repaired to one on load, so nothing else can arrive.
+      productChoice: product.kind === 'insert' ? 'insert' : 'binWithInsert',
       notes: entry.notes ?? '',
     };
     if (product.kind !== 'insert' && product.bin.origin === 'screw') {
@@ -523,7 +519,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         {{ error }}
       </v-alert>
 
-      <ProductSelect v-model="productChoice" class="mt-4" />
+      <ProductSelect v-model="productChoice" hide-bin-alone class="mt-4" />
 
       <MoreOptions :per-bin-fields="false" :insert-only="insertOnly" />
 

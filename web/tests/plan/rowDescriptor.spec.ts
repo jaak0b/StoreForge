@@ -1,0 +1,222 @@
+import { describe, expect, it } from 'vitest';
+import { describeProduct } from '../../src/engine/plan/rowDescriptor';
+import type {
+  BinPockets,
+  LabelContent,
+  ManualBin,
+  ScrewBin,
+  ScrewSpec,
+  TracedBin,
+} from '../../src/engine/plan/types';
+
+function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
+  return {
+    origin: 'manual',
+    gridX: 2,
+    gridY: 1,
+    heightUnits: 3,
+    magnetHoles: false,
+    dividerCountX: 0,
+    dividerCountY: 0,
+    ...overrides,
+  };
+}
+
+function screwSpec(): ScrewSpec {
+  return { thread: 'M3', lengthMm: 20, head: 'countersunk screw', enteredLengthText: null };
+}
+
+function screwBin(overrides: Partial<ScrewBin> = {}): ScrewBin {
+  return { ...manualBin({ gridX: 1, heightUnits: 6 }), origin: 'screw', screw: screwSpec(), ...overrides };
+}
+
+/** Pockets holding the given number of placements of one traced tool. */
+function pockets(placementCount: number): BinPockets {
+  return {
+    tools: [
+      {
+        id: 't1',
+        name: 'Wrench',
+        outline: {
+          outer: [
+            { x: -10, y: -5 },
+            { x: 10, y: -5 },
+            { x: 10, y: 5 },
+          ],
+          holes: [],
+        },
+        clicks: [],
+        rotationDeg: 0,
+        offsetMm: 0.5,
+        mirrored: false,
+        fingerHoles: [],
+      },
+    ],
+    placements: Array.from({ length: placementCount }, () => ({
+      toolId: 't1',
+      xMm: 0,
+      yMm: 0,
+      pocketDepthMm: 10,
+    })),
+  };
+}
+
+function tracedBin(placementCount: number, overrides: Partial<TracedBin> = {}): TracedBin {
+  return {
+    origin: 'traced',
+    gridX: 3,
+    gridY: 2,
+    heightUnits: 4,
+    magnetHoles: false,
+    pockets: pockets(placementCount),
+    ...overrides,
+  };
+}
+
+function content(overrides: Partial<LabelContent> = {}): LabelContent {
+  return { text: 'M3 x 20', text2: '', icon: 'countersunk screw', ...overrides };
+}
+
+describe('describeProduct titles', () => {
+  it('names a labeled row by its label, with line 2 and the icon separate', () => {
+    const row = describeProduct({
+      kind: 'binWithInsert',
+      bin: manualBin(),
+      insert: content({ text: 'M3 bolts', text2: 'drawer 2', icon: 'bolt' }),
+    });
+    expect(row.title).toBe('M3 bolts');
+    expect(row.titleLine2).toBe('drawer 2');
+    expect(row.iconName).toBe('bolt');
+    expect(row.titlePlaceholder).toBe(false);
+  });
+
+  it('marks an insert with no text as a placeholder', () => {
+    const row = describeProduct({
+      kind: 'insert',
+      origin: 'manual',
+      cells: 2,
+      content: content({ text: '', text2: '', icon: null }),
+    });
+    expect(row.title).toBe('Insert with no text');
+    expect(row.titlePlaceholder).toBe(true);
+    expect(row.iconName).toBe(null);
+  });
+
+  it('synthesizes a plain manual bin title from its own fields', () => {
+    const row = describeProduct({ kind: 'bin', bin: manualBin(), labelSlot: true });
+    expect(row.title).toBe('Bin');
+    expect(row.titleLine2).toBe('');
+    expect(row.titlePlaceholder).toBe(false);
+    expect(row.iconName).toBe(null);
+  });
+
+  it('names one divider in the singular and adds magnet holes', () => {
+    const row = describeProduct({
+      kind: 'bin',
+      bin: manualBin({ dividerCountX: 1, magnetHoles: true }),
+      labelSlot: true,
+    });
+    expect(row.title).toBe('Bin, 1 divider, magnet holes');
+  });
+
+  it('counts dividers across both axes in the plural', () => {
+    const row = describeProduct({
+      kind: 'bin',
+      bin: manualBin({ dividerCountX: 2, dividerCountY: 1 }),
+      labelSlot: false,
+    });
+    expect(row.title).toBe('Bin, 3 dividers');
+  });
+
+  it('names a traced bin by its pocket count', () => {
+    expect(describeProduct({ kind: 'bin', bin: tracedBin(1), labelSlot: true }).title).toBe(
+      'Traced bin, 1 pocket',
+    );
+    expect(describeProduct({ kind: 'bin', bin: tracedBin(3), labelSlot: true }).title).toBe(
+      'Traced bin, 3 pockets',
+    );
+    expect(describeProduct({ kind: 'bin', bin: tracedBin(0), labelSlot: true }).title).toBe(
+      'Traced bin',
+    );
+  });
+
+  it('never puts the size in the title', () => {
+    for (const row of [
+      describeProduct({ kind: 'bin', bin: manualBin(), labelSlot: true }),
+      describeProduct({ kind: 'bin', bin: tracedBin(2), labelSlot: true }),
+      describeProduct({ kind: 'insert', origin: 'manual', cells: 4, content: content() }),
+    ]) {
+      expect(row.title).not.toContain('×');
+    }
+  });
+});
+
+describe('describeProduct captions', () => {
+  it('describes a manual bin alone', () => {
+    expect(describeProduct({ kind: 'bin', bin: manualBin(), labelSlot: true }).caption).toBe(
+      'bin · 2×1×3 · manual',
+    );
+  });
+
+  it('describes a manual bin with its insert and divider detail', () => {
+    expect(
+      describeProduct({
+        kind: 'binWithInsert',
+        bin: manualBin({ dividerCountX: 1, dividerCountY: 1 }),
+        insert: content(),
+      }).caption,
+    ).toBe('bin + insert · 2×1×3 · manual · 2 dividers');
+  });
+
+  it('describes a screw bin with its insert', () => {
+    expect(
+      describeProduct({ kind: 'binWithInsert', bin: screwBin(), insert: content() }).caption,
+    ).toBe('bin + insert · 1×1×6 · screw');
+  });
+
+  it('omits a zero divider count entirely', () => {
+    expect(
+      describeProduct({ kind: 'binWithInsert', bin: manualBin(), insert: content() }).caption,
+    ).toBe('bin + insert · 2×1×3 · manual');
+  });
+
+  it('names a single divider in the singular', () => {
+    expect(
+      describeProduct({
+        kind: 'binWithInsert',
+        bin: manualBin({ dividerCountY: 1 }),
+        insert: content(),
+      }).caption,
+    ).toBe('bin + insert · 2×1×3 · manual · 1 divider');
+  });
+
+  it('describes a traced bin with and without pockets', () => {
+    expect(describeProduct({ kind: 'bin', bin: tracedBin(2), labelSlot: true }).caption).toBe(
+      'bin · 3×2×4 · traced · 2 pockets',
+    );
+    expect(
+      describeProduct({ kind: 'binWithInsert', bin: tracedBin(0), insert: content() }).caption,
+    ).toBe('bin + insert · 3×2×4 · traced');
+  });
+
+  it('sizes a manual insert by its cell width alone', () => {
+    expect(
+      describeProduct({ kind: 'insert', origin: 'manual', cells: 1, content: content() }).caption,
+    ).toBe('insert · 1 cell · manual');
+    expect(
+      describeProduct({ kind: 'insert', origin: 'manual', cells: 3, content: content() }).caption,
+    ).toBe('insert · 3 cells · manual');
+  });
+
+  it('sizes a screw insert by its cell width alone', () => {
+    expect(
+      describeProduct({
+        kind: 'insert',
+        origin: 'screw',
+        cells: 2,
+        content: content(),
+        screw: screwSpec(),
+      }).caption,
+    ).toBe('insert · 2 cells · screw');
+  });
+});

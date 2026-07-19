@@ -8,7 +8,8 @@ import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
 import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
-import { insertOf, originOf, type Product, type QueueEntry } from '../engine/plan/types';
+import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
+import { describeProduct } from '../engine/plan/rowDescriptor';
 import BinViewport from './BinViewport.vue';
 import LabelIconField from './LabelIconField.vue';
 import ProductSelect from './ProductSelect.vue';
@@ -159,11 +160,7 @@ function cancelEdit(): void {
 }
 
 function editingTitle(entry: QueueEntry): string {
-  const insert = insertOf(entry.product);
-  if (insert !== null && insert.content.text !== '') return insert.content.text;
-  if (entry.product.kind === 'insert') return `${entry.product.cells}u label insert`;
-  const bin = entry.product.bin;
-  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
+  return describeProduct(entry.product).title;
 }
 
 /** Everything the preview depends on, regenerated on any change. */

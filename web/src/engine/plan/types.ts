@@ -145,11 +145,15 @@ export type Bin = ManualBin | ScrewBin | TracedBin;
  * later) or stays a plain bin with no label feature at all. The flag lives
  * only on this product kind: a bin ordered with its insert always has the
  * slot, so "insert but no slot" is not representable.
+ *
+ * A screw-origin bin is deliberately excluded: a screw bin exists to carry
+ * the label naming its fastener, so it is always ordered with its insert.
+ * Plans that still hold one are repaired on load (see planFile).
  */
 export interface BinProduct {
   kind: 'bin';
   /** The bin body's design parameters. */
-  bin: Bin;
+  bin: ManualBin | TracedBin;
   /** Whether the body carries the empty label insert slot. */
   labelSlot: boolean;
 }

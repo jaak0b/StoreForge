@@ -3,15 +3,22 @@ import {
   type BatchItem,
   type Bin,
   type BinPockets,
+  type BinWithInsertProduct,
   type LabelContent,
   type PlanFile,
   type PrintBatch,
   type Product,
   type QueueEntry,
+  type ScrewBin,
   type ScrewSpec,
   type TracePaper,
 } from './types';
-import { HEAD_TYPES, type HeadType } from './screwListImport';
+import {
+  composeLabelText,
+  HEAD_ICON_NAME,
+  HEAD_TYPES,
+  type HeadType,
+} from './screwListImport';
 import type {
   FingerHole,
   MmPoint,
@@ -412,6 +419,50 @@ function pickBin(raw: Record<string, unknown>): Bin {
   return { ...envelope, ...dividers, origin: 'manual' };
 }
 
+/**
+ * Repairs a screw-origin bin that was stored without its label insert. A
+ * screw bin exists to carry the label naming its fastener, so ordering one
+ * bare is no longer representable; the insert is added back with the label
+ * the entry's own screw description composes. Earlier versions of the app
+ * could store such a row, so plans in localStorage and exported files still
+ * hold them and must load rather than be rejected.
+ */
+function repairScrewBinAlone(
+  bin: ScrewBin,
+  subject: string,
+  warnings: string[],
+): BinWithInsertProduct {
+  const insert: LabelContent = {
+    text: composeLabelText(
+      bin.screw.thread,
+      bin.screw.lengthMm,
+      bin.screw.head,
+      bin.screw.enteredLengthText,
+    ),
+    text2: '',
+    icon: bin.screw.head !== null ? HEAD_ICON_NAME[bin.screw.head] : null,
+  };
+  warnings.push(
+    `${subject} was a screw bin ordered without its label insert; the insert was added back with the label "${insert.text}", because a screw bin is printed to carry that label.`,
+  );
+  return { kind: 'binWithInsert', bin, insert };
+}
+
+/**
+ * A bin ordered without an insert, with the screw-origin repair applied. The
+ * single place that turns a bare bin into a product, so every load path
+ * (current and legacy) repairs the same way.
+ */
+function binAloneProduct(
+  bin: Bin,
+  labelSlot: boolean,
+  subject: string,
+  warnings: string[],
+): Product {
+  if (bin.origin === 'screw') return repairScrewBinAlone(bin, subject, warnings);
+  return { kind: 'bin', bin, labelSlot };
+}
+
 /** Validates a raw value as a Product. */
 export function validateProduct(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -448,14 +499,22 @@ export function validateProduct(raw: unknown, subject: string): string | null {
   return `${subject}: product kind must be bin, binWithInsert or insert`;
 }
 
-/** Copies only the known Product fields from a validated raw object. */
-export function pickProduct(raw: Record<string, unknown>): Product {
+/**
+ * Copies only the known Product fields from a validated raw object, applying
+ * the screw-origin bare-bin repair and appending its warning.
+ */
+export function pickProduct(
+  raw: Record<string, unknown>,
+  subject: string,
+  warnings: string[],
+): Product {
   if (raw.kind === 'bin') {
-    return {
-      kind: 'bin',
-      bin: pickBin(raw.bin as Record<string, unknown>),
-      labelSlot: (raw.labelSlot as boolean | undefined) ?? true,
-    };
+    return binAloneProduct(
+      pickBin(raw.bin as Record<string, unknown>),
+      (raw.labelSlot as boolean | undefined) ?? true,
+      subject,
+      warnings,
+    );
   }
   if (raw.kind === 'binWithInsert') {
     return {
@@ -501,12 +560,16 @@ export function validateEntry(raw: unknown): string | null {
 }
 
 /** Copies only the known QueueEntry fields from a validated raw object. */
-function pickEntry(raw: Record<string, unknown>): QueueEntry {
+function pickEntry(raw: Record<string, unknown>, warnings: string[]): QueueEntry {
   const entry: QueueEntry = {
     id: raw.id as string,
     quantity: raw.quantity as number,
     createdAt: raw.createdAt as string,
-    product: pickProduct(raw.product as Record<string, unknown>),
+    product: pickProduct(
+      raw.product as Record<string, unknown>,
+      `entry ${String(raw.id)}`,
+      warnings,
+    ),
   };
   if (raw.notes !== undefined) entry.notes = raw.notes as string;
   return entry;
@@ -555,11 +618,15 @@ export function validateBatch(raw: unknown): string | null {
 }
 
 /** Copies only the known PrintBatch fields from a validated raw object. */
-function pickBatch(raw: Record<string, unknown>): PrintBatch {
+function pickBatch(raw: Record<string, unknown>, warnings: string[]): PrintBatch {
   const items = (raw.items as Record<string, unknown>[]).map((rawItem) => {
     const item: BatchItem = {
       id: rawItem.id as string,
-      product: pickProduct(rawItem.product as Record<string, unknown>),
+      product: pickProduct(
+        rawItem.product as Record<string, unknown>,
+        `batch ${String(raw.id)}: item ${String(rawItem.id)}`,
+        warnings,
+      ),
       count: rawItem.count as number,
     };
     if (rawItem.sourceEntryId !== undefined) {
@@ -746,15 +813,18 @@ function legacyProductOf(
   // label as the paired insert; an embossed entry that never had a label was
   // physically a plain bin with no label feature, so it converts slot-less.
   if (mode === 'slot') {
-    if (hasContent) {
+    const product = binAloneProduct(bin, true, subject, warnings);
+    // A repaired screw bin keeps a label, so only a bin that really ends up
+    // without one loses its stored text.
+    if (hasContent && product.kind === 'bin') {
       warnings.push(
         `${subject} was a slotted bin that still carried unused label text; the text was dropped, because a bin without its insert has no label.`,
       );
     }
-    return { kind: 'bin', bin, labelSlot: true };
+    return product;
   }
   if (mode === 'embossed' && !hasContent) {
-    return { kind: 'bin', bin, labelSlot: false };
+    return binAloneProduct(bin, false, subject, warnings);
   }
   return { kind: 'binWithInsert', bin, insert: content };
 }
@@ -878,6 +948,10 @@ function pickLegacyBatch(raw: Record<string, unknown>, warnings: string[]): Prin
  * history of finished prints), and version-1/2 flat entries convert to
  * products (see legacyProductOf). Conversions that lose data append a
  * user-worded warning to the result.
+ *
+ * Current-version plans are repaired rather than rejected where a row is no
+ * longer representable: a screw bin stored without its label insert gets the
+ * insert back (see repairScrewBinAlone), also with a warning.
  */
 export function parsePlanFile(text: string): PlanParseResult {
   let raw: unknown;
@@ -921,7 +995,7 @@ export function parsePlanFile(text: string): PlanParseResult {
     }
     const rawEntry = item as Record<string, unknown>;
     if (version === 1 && rawEntry.status === 'printed') continue;
-    const entry = legacy ? pickLegacyEntry(rawEntry, warnings) : pickEntry(rawEntry);
+    const entry = legacy ? pickLegacyEntry(rawEntry, warnings) : pickEntry(rawEntry, warnings);
     if (seen.has(entry.id)) {
       return { ok: false, error: `The plan is invalid: entry id ${entry.id} appears twice.` };
     }
@@ -941,7 +1015,7 @@ export function parsePlanFile(text: string): PlanParseResult {
       }
       const batch = legacy
         ? pickLegacyBatch(item as Record<string, unknown>, warnings)
-        : pickBatch(item as Record<string, unknown>);
+        : pickBatch(item as Record<string, unknown>, warnings);
       if (seenBatchIds.has(batch.id)) {
         return { ok: false, error: `The plan is invalid: batch id ${batch.id} appears twice.` };
       }

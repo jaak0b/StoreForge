@@ -15,6 +15,12 @@ const props = defineProps<{
    * has no interior for tool pockets, so it cannot come from that tab.
    */
   hideInsertOnly?: boolean;
+  /**
+   * Hides both bin-alone choices. The Screw entry tab sets this: a screw bin
+   * is printed to carry the label naming its fastener, so it always comes
+   * with its insert.
+   */
+  hideBinAlone?: boolean;
 }>();
 
 const choice = defineModel<ProductChoice>({ required: true });
@@ -42,8 +48,14 @@ const ALL_ITEMS: Array<{ value: ProductChoice; title: string; subtitle: string }
   },
 ];
 
+const BIN_ALONE_CHOICES: ProductChoice[] = ['bin', 'plainBin'];
+
 const items = computed(() =>
-  props.hideInsertOnly ? ALL_ITEMS.filter((item) => item.value !== 'insert') : ALL_ITEMS,
+  ALL_ITEMS.filter(
+    (item) =>
+      !(props.hideInsertOnly && item.value === 'insert') &&
+      !(props.hideBinAlone && BIN_ALONE_CHOICES.includes(item.value)),
+  ),
 );
 </script>
 

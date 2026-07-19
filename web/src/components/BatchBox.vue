@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useBinQueue } from '../stores/binQueue';
-import { binOf, insertOf, type BatchItem, type PrintBatch } from '../engine/plan/types';
+import type { BatchItem, PrintBatch } from '../engine/plan/types';
+import { describeProduct, type RowDescriptor } from '../engine/plan/rowDescriptor';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
 import { downloadBatch, type BatchFormat } from '../binDownloads';
@@ -18,26 +19,21 @@ const props = defineProps<{ batch: PrintBatch }>();
 
 const queue = useBinQueue();
 
+/** The item's title, caption and icon, from the shared row descriptor. */
+function rowOf(item: BatchItem): RowDescriptor {
+  return describeProduct(item.product);
+}
+
+/** The item's label icon, resolved from the descriptor's icon name. */
 function itemIcon(item: BatchItem): LabelIcon | null {
-  const icon = insertOf(item.product)?.content.icon ?? null;
-  return icon !== null ? resolveLabelIcon(icon) : null;
+  const name = rowOf(item).iconName;
+  return name !== null ? resolveLabelIcon(name) : null;
 }
 
-function itemTitle(item: BatchItem): string {
-  const insert = insertOf(item.product);
-  if (insert !== null && insert.content.text !== '') return insert.content.text;
-  if (item.product.kind === 'insert') return `${item.product.cells}u label insert`;
-  return sizeText(item);
-}
-
-function itemText2(item: BatchItem): string {
-  return insertOf(item.product)?.content.text2 ?? '';
-}
-
-function sizeText(item: BatchItem): string {
-  const bin = binOf(item.product);
-  if (bin === null) return '';
-  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
+/** The full title line, for the tooltip on a row whose text is clipped. */
+function itemTitleFull(item: BatchItem): string {
+  const row = rowOf(item);
+  return row.titleLine2 === '' ? row.title : `${row.title} ${row.titleLine2}`;
 }
 
 // Name editing commits on change (blur or Enter).
@@ -173,33 +169,33 @@ async function download(format: BatchFormat): Promise<void> {
         :key="item.id"
         class="d-flex align-center ga-3 px-3 py-1 batch-row"
       >
-        <span class="swatch d-flex align-center justify-center">
-          <svg
-            v-if="itemIcon(item) !== null"
-            width="18"
-            height="18"
-            :viewBox="itemIcon(item)!.viewBox.join(' ')"
-            aria-hidden="true"
-          >
-            <path
-              :d="itemIcon(item)!.path"
-              fill="currentColor"
-              fill-rule="evenodd"
-            />
-          </svg>
-          <v-icon v-else icon="mdi-cube-outline" size="16" class="text-medium-emphasis" />
-        </span>
-        <span class="row-name">
-          <span class="d-block text-body-2 font-weight-bold">{{ itemTitle(item) }}</span>
-          <span
-            v-if="itemText2(item) !== ''"
-            class="d-block text-caption text-medium-emphasis"
-          >
-            {{ itemText2(item) }}
+        <span class="row-text">
+          <span class="row-title" :title="itemTitleFull(item)">
+            <svg
+              v-if="itemIcon(item) !== null"
+              width="15"
+              height="15"
+              :viewBox="itemIcon(item)!.viewBox.join(' ')"
+              class="row-icon"
+              aria-hidden="true"
+            >
+              <path :d="itemIcon(item)!.path" fill="currentColor" fill-rule="evenodd" />
+            </svg>
+            <span
+              class="text-body-2 font-weight-bold"
+              :class="{ 'title-placeholder': rowOf(item).titlePlaceholder }"
+            >
+              {{ rowOf(item).title }}
+            </span>
+            <span v-if="rowOf(item).titleLine2 !== ''" class="text-body-2 title-second">
+              {{ rowOf(item).titleLine2 }}
+            </span>
+          </span>
+          <span class="row-caption" :title="rowOf(item).caption">
+            {{ rowOf(item).caption }}
           </span>
         </span>
-        <span class="row-dims">{{ itemTitle(item) !== sizeText(item) ? sizeText(item) : '' }}</span>
-        <span class="qty-badge">x{{ item.count }}</span>
+        <span class="qty-badge">×{{ item.count }}</span>
         <v-spacer />
         <template v-if="confirmingItemId === item.id">
           <div
@@ -267,23 +263,39 @@ async function download(format: BatchFormat): Promise<void> {
   margin-bottom: 6px;
 }
 
-.swatch {
-  width: 34px;
-  height: 28px;
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  border-radius: 6px;
-  flex-shrink: 0;
+.row-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.row-name {
-  min-width: 140px;
+.row-title,
+.row-caption {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.row-dims {
+.row-icon {
+  vertical-align: -2px;
+  margin-right: 6px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+
+.title-second {
+  margin-left: 6px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+
+.title-placeholder {
+  font-style: italic;
+  color: rgba(var(--v-theme-on-surface), var(--v-disabled-opacity));
+}
+
+.row-caption {
   font-family: monospace;
   font-size: 12px;
   color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
-  min-width: 60px;
 }
 
 .qty-badge {
