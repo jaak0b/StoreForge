@@ -18,15 +18,15 @@ let resizeObserver: ResizeObserver | null = null;
 let animationHandle = 0;
 
 const material = new THREE.MeshStandardMaterial({
-  color: 0x9aa5b1,
+  color: 0xa8a8a8,
   metalness: 0.05,
   roughness: 0.65,
 });
 
-// The app's primary color (see main.ts) so the raised label face reads
-// clearly against the grey plate and matches the page accent.
+// A light near-neutral so the raised label face reads clearly against the
+// darker grey body, standing in for the second filament.
 const labelMaterial = new THREE.MeshStandardMaterial({
-  color: 0x5865f2,
+  color: 0xe0dcd5,
   metalness: 0.05,
   roughness: 0.55,
 });
@@ -83,7 +83,7 @@ onMounted(() => {
   renderer.domElement.style.display = 'block';
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x263238);
+  scene.background = new THREE.Color(0x121212);
 
   camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
   camera.position.set(90, 80, 110);
@@ -92,12 +92,12 @@ onMounted(() => {
   controls.target.set(0, 15, 0);
   controls.enableDamping = true;
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.1));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x4a4a4a, 1.1));
   const key = new THREE.DirectionalLight(0xffffff, 1.4);
   key.position.set(80, 120, 60);
   scene.add(key);
 
-  const grid = new THREE.GridHelper(420, 42, 0x546e7a, 0x37474f);
+  const grid = new THREE.GridHelper(420, 42, 0x3a3a3a, 0x242424);
   scene.add(grid);
 
   resizeObserver = new ResizeObserver(resize);
