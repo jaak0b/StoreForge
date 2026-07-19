@@ -10,6 +10,7 @@ import {
   prepareEncoderInput,
 } from '../../src/engine/trace/sam';
 import { maskToContour } from '../../src/engine/trace/contour';
+import { removeShadow } from '../../src/engine/trace/shadow';
 import type { MmPoint } from '../../src/engine/trace/types';
 
 // End-to-end run of the committed MobileSAM encoder and decoder on a
@@ -90,6 +91,11 @@ describe('MobileSAM click-to-segment integration', () => {
         512,
         384,
       );
+      // Exercise the shadow post-filter on the same path the worker takes.
+      // This sheet has only two luminance populations (dark tool, bright
+      // paper), so multilevel Otsu is degenerate and removeShadow is a no-op
+      // by construction; the expected geometry below is therefore unchanged.
+      removeShadow(cv, sheet, maskMat);
       const result = maskToContour(cv, maskMat, {
         mmPerPixel: 0.25,
         includePoints: [{ x: 256, y: 192 }],

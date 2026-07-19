@@ -19,6 +19,7 @@ import {
 } from '../engine/trace/sam';
 import { maskToContour } from '../engine/trace/contour';
 import type { MaskContourFailure } from '../engine/trace/contour';
+import { removeShadow } from '../engine/trace/shadow';
 import type {
   PaperCalibration,
   PaperCorners,
@@ -309,6 +310,10 @@ const api = {
       maskHeight,
     );
     try {
+      // Remove drop-shadow pixels the SAM mask picked up on the white sheet
+      // before the mask is traced. Uses the rectified color image kept
+      // worker-side.
+      removeShadow(cv, rectified, maskMat);
       const result = maskToContour(cv, maskMat, {
         mmPerPixel: rectifiedCalibration.mmPerPixel,
         includePoints,
