@@ -98,26 +98,13 @@ export function bestMaskIndex(iouPredictions: Float32Array): number {
 export const LOW_RES_MASK_SIZE = 256;
 
 /**
- * Factor mapping a rectified-image pixel to the decoder's low_res_masks grid.
- * `encoderScale` is the source-to-encoder scale from prepareEncoderInput: the
- * rectified image maps into the ENCODER_INPUT_SIZE frame by that factor, and
- * the low-res planes cover that same frame in LOW_RES_MASK_SIZE cells.
- *
- * This is the single home for the mapping. Its reciprocal is the low-res cell
- * pitch measured in rectified pixels, which is the mask's resolution limit.
- */
-export function lowResPerRectifiedPx(encoderScale: number): number {
-  return (encoderScale * LOW_RES_MASK_SIZE) / ENCODER_INPUT_SIZE;
-}
-
-/**
  * Choose the low_res_masks plane to use. Among planes whose binarized mask
  * (logit > 0) covers every include point and no exclude point, pick the
  * highest predicted IoU. If no plane satisfies the criterion, fall back to
  * plain argmax IoU so segmentation still returns a refinable mask.
  *
  * Points are in rectified-image pixels. scaleToLowRes maps a rectified pixel
- * to the 256-grid low-res plane; callers get it from lowResPerRectifiedPx.
+ * to the 256-grid low-res plane: embedding.scale * LOW_RES_MASK_SIZE / ENCODER_INPUT_SIZE.
  */
 export function selectMaskIndex(
   lowResMasks: Float32Array,
