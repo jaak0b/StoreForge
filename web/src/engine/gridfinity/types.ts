@@ -6,8 +6,6 @@ export interface BinParams {
   gridY: number;
   /** Bin height in Gridfinity height units (7 mm each). Integer, at least 2. */
   heightUnits: number;
-  /** Whether to add the stacking lip on top of the walls. */
-  stackingLip: boolean;
   /** Whether to subtract magnet holes from the underside of each foot. */
   magnetHoles: boolean;
   /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */

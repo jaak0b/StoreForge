@@ -150,7 +150,6 @@ watch(
             ? 'plainBin'
             : 'bin',
       heightUnits: bin.heightUnits,
-      stackingLip: bin.stackingLip,
       magnetHoles: bin.magnetHoles,
       labelText: content?.text ?? '',
       labelText2: content?.text2 ?? '',

@@ -22,7 +22,6 @@ function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
-    stackingLip: true,
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,

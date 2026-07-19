@@ -9,7 +9,7 @@ import {
   insertLengthMm,
   insertPositionInBin,
   SLOT_DEPTH,
-  slotFrontInsetMm,
+  SLOT_FRONT_INSET,
 } from '../../src/engine/label/slot';
 import {
   buildFoot,
@@ -34,7 +34,6 @@ function binParams(overrides: Partial<BinParams> = {}): BinParams {
     gridX: 1,
     gridY: 1,
     heightUnits: 3,
-    stackingLip: true,
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
@@ -153,13 +152,6 @@ describe('buildSlotShelf', () => {
     expect(shelf.boundingBox().max[2]).toBeCloseTo(21, 6);
     shelf.delete();
   });
-
-  it('keeps a flat-topped bin flat without a stacking lip', () => {
-    const shelf = buildSlotShelf(m, binParams({ stackingLip: false }));
-    expect(shelf.status()).toBe('NoError');
-    expect(shelf.boundingBox().max[2]).toBeCloseTo(21, 6);
-    shelf.delete();
-  });
 });
 
 describe('slotted bin front region (measured against the Pred 1x1x6 mesh)', () => {
@@ -244,7 +236,7 @@ describe('slotted bin front region (measured against the Pred 1x1x6 mesh)', () =
     // overhang over the slot.
     const p = binParams();
     const body = buildSlottedBinBody(m, p);
-    const yFront = -binOuterSizeMm(p.gridY) / 2 + slotFrontInsetMm(p);
+    const yFront = -binOuterSizeMm(p.gridY) / 2 + SLOT_FRONT_INSET;
     const volume = probeVolume(
       body,
       [-17, yFront + 0.05, 20.05],
@@ -324,17 +316,6 @@ describe('insert in slot', () => {
     const lifted = placedInsert({ ...p, labelText: 'M3' }).translate(0, 0, 0.4);
     const overlap = lifted.intersect(body);
     expect(overlap.volume()).toBeGreaterThan(0.01);
-    overlap.delete();
-    body.delete();
-    lifted.delete();
-  });
-
-  it('lifts freely out of a flat-topped bin, whose pockets have no ceiling', () => {
-    const p = binParams({ stackingLip: false });
-    const body = buildSlottedBinBody(m, p);
-    const lifted = placedInsert({ ...p, labelText: 'M3' }).translate(0, 0, 0.4);
-    const overlap = lifted.intersect(body);
-    expect(Math.abs(overlap.volume())).toBeLessThan(1e-9);
     overlap.delete();
     body.delete();
     lifted.delete();

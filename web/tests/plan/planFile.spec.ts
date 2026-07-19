@@ -26,7 +26,6 @@ function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
-    stackingLip: true,
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
@@ -127,7 +126,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     const entries = [entry(), entry({ id: 'b2', notes: 'reprint in PETG' })];
     const batches = [batch()];
     const result = parsePlanFile(serializePlanFile(entries, batches));
-    expect(result).toEqual({ ok: true, plan: { version: 3, entries, batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 4, entries, batches }, warnings: [] });
   });
 
   it('rejects text that is not JSON', () => {
@@ -141,19 +140,20 @@ describe('serializePlanFile / parsePlanFile', () => {
     expect(result).toEqual({ ok: false, error: 'The file does not contain a plan object.' });
   });
 
-  it('rejects an unknown envelope version', () => {
-    const result = parsePlanFile('{"version":4,"entries":[],"batches":[]}');
+  it('rejects an envelope version newer than this build reads', () => {
+    const result = parsePlanFile('{"version":5,"entries":[],"batches":[]}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('version 4');
+    if (!result.ok) expect(result.error).toContain('version 5');
+    if (!result.ok) expect(result.error).toContain('versions 1 to 4');
   });
 
   it('rejects a missing entries list', () => {
-    const result = parsePlanFile('{"version":3}');
+    const result = parsePlanFile('{"version":4}');
     expect(result).toEqual({ ok: false, error: 'The plan is missing its entries list.' });
   });
 
-  it('rejects a version-3 file without a batches list', () => {
-    const result = parsePlanFile('{"version":3,"entries":[]}');
+  it('rejects a version-4 file without a batches list', () => {
+    const result = parsePlanFile('{"version":4,"entries":[]}');
     expect(result).toEqual({ ok: false, error: 'The plan is missing its batches list.' });
   });
 
@@ -163,7 +163,7 @@ describe('serializePlanFile / parsePlanFile', () => {
       ...entry({ id: 'b2' }),
       product: { kind: 'bin', labelSlot: true, bin: { ...manualBin(), gridX: 'two' } },
     };
-    const text = JSON.stringify({ version: 3, entries: [good, bad], batches: [] });
+    const text = JSON.stringify({ version: 4, entries: [good, bad], batches: [] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -172,7 +172,7 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects duplicate entry ids', () => {
-    const text = JSON.stringify({ version: 3, entries: [entry(), entry()], batches: [] });
+    const text = JSON.stringify({ version: 4, entries: [entry(), entry()], batches: [] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -181,7 +181,7 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects duplicate batch ids', () => {
-    const text = JSON.stringify({ version: 3, entries: [], batches: [batch(), batch()] });
+    const text = JSON.stringify({ version: 4, entries: [], batches: [batch(), batch()] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -191,7 +191,7 @@ describe('serializePlanFile / parsePlanFile', () => {
 
   it('rejects a malformed batch item instead of dropping it', () => {
     const bad = batch({ items: [batchItem({ count: 0 })] });
-    const text = JSON.stringify({ version: 3, entries: [], batches: [bad] });
+    const text = JSON.stringify({ version: 4, entries: [], batches: [bad] });
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
@@ -202,11 +202,11 @@ describe('serializePlanFile / parsePlanFile', () => {
   it('drops unknown extra fields on an entry when parsing', () => {
     const withExtra = { ...entry(), somethingElse: 42 };
     const result = parsePlanFile(
-      JSON.stringify({ version: 3, entries: [withExtra], batches: [] }),
+      JSON.stringify({ version: 4, entries: [withExtra], batches: [] }),
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [entry()], batches: [] },
+      plan: { version: 4, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -220,6 +220,8 @@ describe('version-1 migration', () => {
       gridX: 2,
       gridY: 1,
       heightUnits: 3,
+      // Version-1 entries carried the stacking-lip flag. The lip is no longer
+      // optional, so the field is read and ignored.
       stackingLip: true,
       magnetHoles: false,
       dividerCountX: 0,
@@ -243,7 +245,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 4, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -258,7 +260,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [queued, printed] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 4, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -271,7 +273,47 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 4, entries: [plainBinEntry()], batches: [] },
+      warnings: [],
+    });
+  });
+});
+
+describe('version-3 migration', () => {
+  // Version-3 files carry the same product shape as version 4 plus the
+  // stacking-lip flag on every bin. The lip is now always present, so the
+  // field is ignored on read whichever value it holds, and the plan loads
+  // without an error or a warning.
+  function version3Bin(stackingLip: boolean): Record<string, unknown> {
+    return { ...manualBin(), stackingLip };
+  }
+
+  it.each([true, false])('ignores the stacking-lip flag on a version-3 bin (%s)', (flag) => {
+    const raw = {
+      ...entry(),
+      product: { kind: 'bin', labelSlot: true, bin: version3Bin(flag) },
+    };
+    const result = parsePlanFile(JSON.stringify({ version: 3, entries: [raw], batches: [] }));
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 4, entries: [entry()], batches: [] },
+      warnings: [],
+    });
+  });
+
+  it('ignores the stacking-lip flag on a version-3 batch item', () => {
+    const rawBatch = {
+      ...batch(),
+      items: [
+        { ...batchItem(), product: { kind: 'bin', labelSlot: true, bin: version3Bin(false) } },
+      ],
+    };
+    const result = parsePlanFile(
+      JSON.stringify({ version: 3, entries: [], batches: [rawBatch] }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 4, entries: [], batches: [batch()] },
       warnings: [],
     });
   });
@@ -286,7 +328,6 @@ describe('validateEntry', () => {
     ['gridX', 0, 'gridX must be an integer of at least 1'],
     ['gridY', 1.5, 'gridY must be an integer of at least 1'],
     ['heightUnits', 1, 'heightUnits must be an integer of at least 2'],
-    ['stackingLip', 'yes', 'stackingLip must be true or false'],
     ['magnetHoles', 1, 'magnetHoles must be true or false'],
     ['dividerCountX', -1, 'dividerCountX must be an integer of at least 0'],
     ['dividerCountY', 0.5, 'dividerCountY must be an integer of at least 0'],
@@ -411,7 +452,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [imperial, lengthless], batches: [] },
+      plan: { version: 4, entries: [imperial, lengthless], batches: [] },
       warnings: [],
     });
   });
@@ -421,7 +462,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [traced], batches: [] },
+      plan: { version: 4, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -436,7 +477,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [], batches: [withSnapshots] },
+      plan: { version: 4, entries: [], batches: [withSnapshots] },
       warnings: [],
     });
   });
@@ -509,7 +550,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [traced], batches: [] },
+      plan: { version: 4, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -524,7 +565,7 @@ describe('trace sources in plan files', () => {
       entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
     };
     delete raw.entries[0].product.bin.pockets.tools[0].clicks;
-    const result = parsePlanFile(JSON.stringify({ ...raw, version: 3, batches: [] }));
+    const result = parsePlanFile(JSON.stringify({ ...raw, version: 4, batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
       const bin = result.plan.entries[0].product as { bin: TracedBin };
@@ -578,7 +619,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSource]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [], batches: [withSource] },
+      plan: { version: 4, entries: [], batches: [withSource] },
       warnings: [],
     });
   });
@@ -649,7 +690,7 @@ describe('pockets in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 3, entries: [traced], batches: [] },
+      plan: { version: 4, entries: [traced], batches: [] },
       warnings: [],
     });
   });

@@ -23,8 +23,8 @@ beforeAll(async () => {
 });
 
 /**
- * L-shaped test tool, 30 mm wide by 25 mm tall with a 10 mm thick arm along
- * each leg, its bounding box spanning 0..30 by 0..25 in tool-local mm. The
+ * L-shaped test tool, 30 mm wide by 22 mm tall with a 10 mm thick arm along
+ * each leg, its bounding box spanning 0..30 by 0..22 in tool-local mm. The
  * outer loop is positively wound per the outline convention.
  */
 function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
@@ -37,8 +37,8 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
         { x: 30, y: 0 },
         { x: 30, y: 10 },
         { x: 10, y: 10 },
-        { x: 10, y: 25 },
-        { x: 0, y: 25 },
+        { x: 10, y: 22 },
+        { x: 0, y: 22 },
       ],
       holes: [],
     },
@@ -52,15 +52,15 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
 }
 
 /**
- * Centers the L tool's 30 x 25 bounding box on the bin's X axis, and keeps it
- * clear of the label insert slot along the front wall (every bin has the
- * slot now, so a pocket that used to sit safely at the geometric centre of a
- * pre-slot bin must move back to stay clear of it).
+ * Centers the L tool's 30 x 22 bounding box on the bin's X axis, and keeps it
+ * clear of the label insert slot along the front wall (every bin has the slot
+ * now, and the channel starts behind the stacking lip, so the protected strip
+ * reaches back to y -5.15 on this bin).
  */
 const centeredL: ToolPlacement = {
   toolId: 'l-tool',
   xMm: -15,
-  yMm: -5.5,
+  yMm: -5.1,
   pocketDepthMm: 5,
 };
 
@@ -69,7 +69,6 @@ function params(overrides: Partial<PocketBinParams> = {}): PocketBinParams {
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
-    stackingLip: false,
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
@@ -98,7 +97,7 @@ describe('buildPocketBinBody', () => {
   it('produces a watertight solid for a 2x1 bin with an L pocket and finger hole', () => {
     const tool = lTool({
       // Finger hole overhanging the bottom arm of the L, tool-local.
-      fingerHoles: [{ x: 20, y: 5, diameterMm: 12 }],
+      fingerHoles: [{ x: 20, y: 6.5, diameterMm: 12 }],
     });
     const body = buildPocketBinBody(m, params({ tools: [tool] }));
     expect(body.status()).toBe('NoError');
@@ -121,7 +120,7 @@ describe('buildPocketBinBody', () => {
     // The slot's second endpoint lands at bin-local x 65; with its 6 mm
     // radius it reaches far past the 2x1 interior's 40.8 mm half-width.
     const tool = lTool({
-      fingerHoles: [{ x: 20, y: 5, x2: 80, y2: 5, diameterMm: 12 }],
+      fingerHoles: [{ x: 20, y: 6.5, x2: 80, y2: 6.5, diameterMm: 12 }],
     });
     expect(() => buildPocketBinBody(m, params({ tools: [tool] }))).toThrow(/into the bin wall/);
   });
@@ -138,7 +137,7 @@ describe('buildPocketBinBody', () => {
   });
 
   it('keeps the floor plate solid under the pocket and under a finger hole', () => {
-    const tool = lTool({ fingerHoles: [{ x: 20, y: 5, diameterMm: 12 }] });
+    const tool = lTool({ fingerHoles: [{ x: 20, y: 6.5, diameterMm: 12 }] });
     const body = buildPocketBinBody(
       m,
       params({ tools: [tool], placements: [{ ...centeredL, pocketDepthMm: 14 }] }),
@@ -146,11 +145,11 @@ describe('buildPocketBinBody', () => {
     // The floor plate spans 4.8 to 7 mm. Probes centred at z 5.9 must come
     // back fully solid; the plate under pockets and finger holes is intact.
     expect(probeVolume(body, [-10, -1.5, 5.9], [2, 2, 1.5])).toBeCloseTo(6, 5);
-    // Finger hole centre lands at bin-local (5, -0.5).
-    expect(probeVolume(body, [5, -0.5, 5.9], [2, 2, 1.5])).toBeCloseTo(6, 5);
+    // Finger hole centre lands at bin-local (5, 1.4).
+    expect(probeVolume(body, [5, 1.4, 5.9], [2, 2, 1.5])).toBeCloseTo(6, 5);
     // Directly above the floor top the finger hole is cut, even though the
     // pocket bottom (at 7 mm for a 14 mm pocket) coincides with it here.
-    expect(probeVolume(body, [5, -0.5, 7.3], [2, 2, 0.5])).toBe(0);
+    expect(probeVolume(body, [5, 1.4, 7.3], [2, 2, 0.5])).toBe(0);
     body.delete();
   });
 
@@ -173,24 +172,24 @@ describe('buildPocketBinBody', () => {
 
   it('is unaffected by the interior scoop: pockets reach the back wall cleanly', () => {
     // Standard bins carry the scoop fillet against the back (+Y) wall, which
-    // for this 2x1 bin would fill the corner from y 9.8 to the wall at 19.8
-    // between z 7 and 17. Pocket bins skip it: a full-depth pocket whose arm
-    // ends near the back wall (tool-local y 0..25 placed at yMm -5.5 reaches
-    // y 19.5) bottoms out flat at the floor top with no fillet intruding.
+    // for this 2x1 bin fills the corner around the arc centred at y 9.8,
+    // z 17. Pocket bins skip it: a full-depth pocket whose arm runs back into
+    // that corner (tool-local y 0..22 placed at yMm -5.1 reaches y 16.9)
+    // bottoms out flat at the floor top with no fillet intruding.
     const body = buildPocketBinBody(
       m,
       params({ placements: [{ ...centeredL, pocketDepthMm: 14 }] }),
     );
-    // Inside the pocket near the back wall, where the scoop fillet would be
-    // solid (12.5 mm from the would-be fillet centre at y 9.8, z 17): air.
-    expect(probeVolume(body, [-10, 18, 7.5], [2, 1, 0.5])).toBe(0);
+    // Inside the pocket, where the scoop fillet would be solid (11.4 mm from
+    // the would-be fillet centre at y 9.8, z 17, outside its radius): air.
+    expect(probeVolume(body, [-10, 16.2, 7.5], [2, 1, 0.5])).toBe(0);
     // The plain bin generator does place scoop material there.
     const { insert: _i, tools: _t, placements: _p, ...binParams } = params();
     void _i;
     void _t;
     void _p;
     const plain = buildBinManifold(m, binParams);
-    const scooped = m.Manifold.cube([2, 1, 0.5], true).translate(-10, 18, 7.5);
+    const scooped = m.Manifold.cube([2, 1, 0.5], true).translate(-10, 16.2, 7.5);
     const hit = plain.intersect(scooped);
     expect(hit.volume()).toBeCloseTo(2 * 1 * 0.5, 3);
     hit.delete();
@@ -223,7 +222,7 @@ describe('buildPocketBinBody', () => {
     const tools = [lTool(), lTool({ id: 'l-2', name: 'Second wrench' })];
     const placements: ToolPlacement[] = [
       centeredL,
-      { toolId: 'l-2', xMm: -10, yMm: -5.5, pocketDepthMm: 5 },
+      { toolId: 'l-2', xMm: -10, yMm: -5.1, pocketDepthMm: 5 },
     ];
     expect(() => buildPocketBinBody(m, params({ tools, placements }))).toThrow(/overlap/);
   });
@@ -263,15 +262,15 @@ describe('validatePocketLayout', () => {
     // chamfer, one 1.0 mm plate thickness behind the channel's back edge
     // (measured on the reference 1x1x6 mesh, chamfer top y 26.15 against the
     // stop base's back at 26.25), 0.1 mm deeper than the end stop base. On
-    // this lipless 2x1 bin the strip ends at y -6.8; a pocket starting at
-    // y -6.89 clears the old stop-depth strip (to -6.9) but shaves the
-    // chamfer, and one starting at y -6.75 is fine.
-    const rejected = params({ placements: [{ ...centeredL, yMm: -6.89 }] });
+    // this 2x1 bin the strip ends at y -5.15; a pocket starting at y -5.24
+    // clears the stop-depth strip alone (which would end at -5.25) but shaves
+    // the chamfer, and one starting at y -5.1 is fine.
+    const rejected = params({ placements: [{ ...centeredL, yMm: -5.24 }] });
     const placedRejected = placeTools(m, rejected.tools, rejected.placements);
     expect(() => validatePocketLayout(m, rejected, placedRejected)).toThrow(
       /label insert slot/,
     );
-    const accepted = params({ placements: [{ ...centeredL, yMm: -6.75 }] });
+    const accepted = params({ placements: [{ ...centeredL, yMm: -5.1 }] });
     const placedAccepted = placeTools(m, accepted.tools, accepted.placements);
     expect(() => validatePocketLayout(m, accepted, placedAccepted)).not.toThrow();
   });

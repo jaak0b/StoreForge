@@ -24,7 +24,7 @@ import {
   manifoldToMeshData,
   roundedRectPolygon,
 } from '../gridfinity/binGenerator';
-import { applySlotToBody, slotReachDepthMm } from '../label/slot';
+import { applySlotToBody, SLOT_REACH_DEPTH } from '../label/slot';
 import type { BinParams, MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 
 /** A slotted bin plus the tools whose pockets are sunk into its interior. */
@@ -181,13 +181,13 @@ export function validatePocketLayout(
   // floor must stay whole for the insert to rest on, and the shelf's plate
   // chamfer and support ribs under it must stay solid), so pockets must stay
   // clear of the slot structure's full plan reach: pockets are cut from the
-  // bin top down, and slotReachDepthMm is the structure's widest plan extent
+  // bin top down, and SLOT_REACH_DEPTH is the structure's widest plan extent
   // at every depth. A bin without the slot has no such region to protect.
   let slotStrip: CrossSection | null = null;
   if (params.labelSlot !== false) {
     const outerWidth = binOuterSizeMm(params.gridX);
     const outerDepth = binOuterSizeMm(params.gridY);
-    const stripDepth = slotReachDepthMm(params);
+    const stripDepth = SLOT_REACH_DEPTH;
     slotStrip = new m.CrossSection(
       [
         [
@@ -255,7 +255,7 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
   validatePocketLayout(m, params, placed);
 
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  const solidTop = params.stackingLip ? bodyTop + LIP_HEIGHT : bodyTop;
+  const solidTop = bodyTop + LIP_HEIGHT;
   // Overlap used to avoid coincident-face gaps in the CSG union/subtraction
   // below. It only extends cuts past free surfaces or fill into material it
   // unions with; it never alters a finished dimension, since the extra 0.01

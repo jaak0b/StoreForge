@@ -186,12 +186,11 @@ export function binInteriorSizeMm(cells: number): number {
 
 /**
  * Clear opening in mm at the very top of the bin along one axis: the
- * narrowest width an object dropped in through the top must pass. With a
- * stacking lip the lip tip overhangs the interior, LIP_DEPTH in from the
- * outer face per side; without one the opening is the interior itself. The
- * single home for this figure.
+ * narrowest width an object dropped in through the top must pass. The
+ * stacking lip tip overhangs the interior, LIP_DEPTH in from the outer face
+ * per side, so it and not the interior sets the opening. The single home for
+ * this figure.
  */
-export function binTopOpeningMm(cells: number, stackingLip: boolean = true): number {
-  if (!stackingLip) return binInteriorSizeMm(cells);
+export function binTopOpeningMm(cells: number): number {
   return binOuterSizeMm(cells) - 2 * LIP_DEPTH;
 }

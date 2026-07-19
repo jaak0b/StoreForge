@@ -354,9 +354,6 @@ function validateBin(raw: unknown, subject: string): string | null {
   if (!isPositiveInteger(bin.heightUnits, 2)) {
     return `${subject}: heightUnits must be an integer of at least 2`;
   }
-  if (typeof bin.stackingLip !== 'boolean') {
-    return `${subject}: stackingLip must be true or false`;
-  }
   if (typeof bin.magnetHoles !== 'boolean') {
     return `${subject}: magnetHoles must be true or false`;
   }
@@ -389,7 +386,6 @@ function pickBin(raw: Record<string, unknown>): Bin {
     gridX: raw.gridX as number,
     gridY: raw.gridY as number,
     heightUnits: raw.heightUnits as number,
-    stackingLip: raw.stackingLip as boolean,
     magnetHoles: raw.magnetHoles as boolean,
   };
   if (raw.origin === 'traced') {
@@ -595,9 +591,6 @@ function validateLegacyParams(entry: Record<string, unknown>, subject: string): 
   if (!isPositiveInteger(entry.heightUnits, 2)) {
     return `${subject}: heightUnits must be an integer of at least 2`;
   }
-  if (typeof entry.stackingLip !== 'boolean') {
-    return `${subject}: stackingLip must be true or false`;
-  }
   if (typeof entry.magnetHoles !== 'boolean') {
     return `${subject}: magnetHoles must be true or false`;
   }
@@ -724,7 +717,6 @@ function legacyProductOf(
     gridX: raw.gridX as number,
     gridY: raw.gridY as number,
     heightUnits: raw.heightUnits as number,
-    stackingLip: raw.stackingLip as boolean,
     magnetHoles: raw.magnetHoles as boolean,
   };
   let bin: Bin;
@@ -900,7 +892,12 @@ export function parsePlanFile(text: string): PlanParseResult {
   }
   const envelope = raw as Record<string, unknown>;
   const version = envelope.version;
-  if (version !== 1 && version !== 2 && version !== PLAN_FILE_VERSION) {
+  if (
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 1 ||
+    version > PLAN_FILE_VERSION
+  ) {
     return {
       ok: false,
       error: `The file has plan version ${String(envelope.version)}, but this app reads versions 1 to ${PLAN_FILE_VERSION}.`,
@@ -909,7 +906,11 @@ export function parsePlanFile(text: string): PlanParseResult {
   if (!Array.isArray(envelope.entries)) {
     return { ok: false, error: 'The plan is missing its entries list.' };
   }
-  const legacy = version !== PLAN_FILE_VERSION;
+  // Versions 1 and 2 carry flat design fields per entry and convert through
+  // the legacy path. Version 3 already has the current product/bin shape and
+  // differs from version 4 only by the removed stacking-lip flag, which the
+  // validators and pickers now ignore, so it reads through the current path.
+  const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];
   const seen = new Set<string>();

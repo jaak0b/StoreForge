@@ -147,7 +147,6 @@ function productFor(
     gridX: cells,
     gridY: 1,
     heightUnits: binHeightUnits,
-    stackingLip: store.stackingLip,
     magnetHoles: store.magnetHoles,
     dividerCountX: store.dividerCountX,
     dividerCountY: store.dividerCountY,
@@ -262,7 +261,6 @@ watch(
       notes: entry.notes ?? '',
     };
     if (product.kind !== 'insert' && product.bin.origin === 'screw') {
-      patch.stackingLip = product.bin.stackingLip;
       patch.magnetHoles = product.bin.magnetHoles;
       patch.dividerCountX = product.bin.dividerCountX;
       patch.dividerCountY = product.bin.dividerCountY;
@@ -388,7 +386,6 @@ function generatePreview(product: Product): Promise<PartMeshes> {
     gridX: bin.gridX,
     gridY: bin.gridY,
     heightUnits: bin.heightUnits,
-    stackingLip: bin.stackingLip,
     magnetHoles: bin.magnetHoles,
     dividerCountX: bin.origin === 'traced' ? 0 : bin.dividerCountX,
     dividerCountY: bin.origin === 'traced' ? 0 : bin.dividerCountY,

@@ -32,7 +32,6 @@ function params(overrides: Partial<SlottedBinParams> = {}): SlottedBinParams {
     gridX: 1,
     gridY: 1,
     heightUnits: 3,
-    stackingLip: false,
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
@@ -224,11 +223,11 @@ describe('generateSlottedBin', () => {
     }
   });
 
-  it('does not raise the body top above the bin top', () => {
+  it('tops the body out at the stacking lip crest, not above it', () => {
     const labeled = generateSlottedBin(m, font, params());
-    expect(meshMaxZ(labeled.body)).toBeCloseTo(bodyTop, 6);
-    const withLip = generateSlottedBin(m, font, params({ stackingLip: true }));
-    expect(meshMaxZ(withLip.body)).toBeGreaterThan(bodyTop);
+    // The lip crest apex sits 4.4 - 0.6 * sqrt(2) = 3.5515 above the
+    // nominal top; nothing the slot or insert adds reaches higher.
+    expect(meshMaxZ(labeled.body)).toBeCloseTo(bodyTop + 3.5515, 3);
   });
 
   it('returns a null label mesh for a bin ordered with an empty slot', () => {

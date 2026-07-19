@@ -36,7 +36,6 @@ function params(overrides: Partial<BinParams> = {}): BinParams {
     gridX: 1,
     gridY: 1,
     heightUnits: 3,
-    stackingLip: false,
     magnetHoles: false,
     dividerCountX: 0,
     dividerCountY: 0,
@@ -69,26 +68,27 @@ describe('buildBinManifold', () => {
     bin.delete();
   });
 
-  it('matches the expected outer dimensions for a 1x1x3 bin without lip', () => {
+  it('matches the expected footprint for a 1x1x3 bin', () => {
     const bin = buildBinManifold(m, params());
     const box = bin.boundingBox();
     expect(box.max[0] - box.min[0]).toBeCloseTo(1 * PITCH - 0.5, 5);
     expect(box.max[1] - box.min[1]).toBeCloseTo(1 * PITCH - 0.5, 5);
-    expect(box.max[2] - box.min[2]).toBeCloseTo(3 * HEIGHT_UNIT, 5);
     bin.delete();
   });
 
-  it('matches the expected outer dimensions for a 2x1x6 bin without lip', () => {
+  it('matches the expected outer dimensions for a 2x1x6 bin', () => {
     const bin = buildBinManifold(m, params({ gridX: 2, gridY: 1, heightUnits: 6 }));
     const box = bin.boundingBox();
     expect(box.max[0] - box.min[0]).toBeCloseTo(2 * PITCH - 0.5, 5);
     expect(box.max[1] - box.min[1]).toBeCloseTo(1 * PITCH - 0.5, 5);
-    expect(box.max[2] - box.min[2]).toBeCloseTo(6 * HEIGHT_UNIT, 5);
+    // The lip is always present, so the height runs to the crest apex:
+    // 4.4 - 0.6 * sqrt(2) = 3.5515 above the nominal top of 42.
+    expect(box.max[2] - box.min[2]).toBeCloseTo(45.5515, 3);
     bin.delete();
   });
 
   it('ends the stacking lip at the filleted crest apex above the nominal top', () => {
-    const bin = buildBinManifold(m, params({ stackingLip: true }));
+    const bin = buildBinManifold(m, params());
     const box = bin.boundingBox();
     // The lip profile is 0.7 + 1.8 + 1.9 = 4.4 tall (kennetek
     // STACKING_LIP_LINE), but the crest fillet (radius 0.6, kennetek
@@ -101,7 +101,7 @@ describe('buildBinManifold', () => {
   });
 
   it('recesses the outer rim groove below the nominal top of a lipped bin', () => {
-    const bin = buildBinManifold(m, params({ stackingLip: true }));
+    const bin = buildBinManifold(m, params());
     // Measured from the Pred reference bin: the outer face steps inward 0.7
     // over 45 degrees, runs vertical for 1.0 ending at the nominal top, and
     // returns to the outer face 0.7 above it. Nominal top here is 21, outer
@@ -121,7 +121,7 @@ describe('buildBinManifold', () => {
   });
 
   it('seats a stacked foot in the lip with clearance and self-centres it', () => {
-    const bin = buildBinManifold(m, params({ stackingLip: true }));
+    const bin = buildBinManifold(m, params());
     const foot = buildFoot(m);
     // A foot resting centred at the nominal top (21 for 3 height units)
     // nests in the lip seat without touching: the seat profile 0.7/1.8/1.9
@@ -400,7 +400,7 @@ describe('interior dividers', () => {
   it('keeps dividers below the stacking lip seat and inside the outline', () => {
     const bin = buildBinManifold(
       m,
-      params({ stackingLip: true, dividerCountX: 1, dividerCountY: 1 }),
+      params({ dividerCountX: 1, dividerCountY: 1 }),
     );
     expect(bin.status()).toBe('NoError');
     const box = bin.boundingBox();
@@ -473,7 +473,7 @@ describe('interior scoop', () => {
     // bin gridfinitybin_1x1x6_d1_l12_s10 keeps its corner arc unchanged
     // through the same band). A probe box spanning the diagonal just outside
     // the radius-4 corner arc but inside where the nub was must stay empty.
-    const bin = buildBinManifold(m, params({ heightUnits: 6, stackingLip: true }));
+    const bin = buildBinManifold(m, params({ heightUnits: 6 }));
     for (const sx of [-1, 1]) {
       // Box corner nearest the arc centre (16.75, 16.75) is (19.7, 19.7),
       // 4.17 mm from it: the whole box lies outside the outer outline.
@@ -493,7 +493,7 @@ describe('interior scoop', () => {
   it('stays watertight with the stacking lip and with dividers crossing the scoop', () => {
     const bin = buildBinManifold(
       m,
-      params({ stackingLip: true, dividerCountX: 1, dividerCountY: 1 }),
+      params({ dividerCountX: 1, dividerCountY: 1 }),
     );
     expect(bin.status()).toBe('NoError');
     // Dividers only ever overlap the scoop's added material, so they weld in.
@@ -502,23 +502,25 @@ describe('interior scoop', () => {
   });
 
   it('clamps the scoop radius to the wall height on a 2-unit bin', () => {
-    // A 1x1x2 bin without lip has 14 - 7 = 7 mm of interior wall above the
-    // floor, less than the measured 10 mm radius, so the fillet is clamped
-    // to radius 7 (centre y 12.8, z 14).
+    // On a 1x1x2 bin the vertical interior wall face ends where the lip's
+    // support taper starts, at 14 - 1.2 - (2.6 - 0.95) = 11.15, leaving
+    // 11.15 - 7 = 4.15 mm of wall above the floor: less than the measured
+    // 10 mm radius, so the fillet is clamped to radius 4.15 (centre y 15.65,
+    // z 11.15).
     const bin = buildBinManifold(m, params({ heightUnits: 2 }));
     expect(bin.status()).toBe('NoError');
     expect(bin.genus()).toBe(0);
-    // Nothing pokes above the nominal top.
-    expect(bin.boundingBox().max[2]).toBeCloseTo(2 * HEIGHT_UNIT, 5);
+    // Nothing pokes above the lip crest apex.
+    expect(bin.boundingBox().max[2]).toBeCloseTo(2 * HEIGHT_UNIT + 3.5515, 3);
     // Probe (y 17.5, z 10): outside the unclamped radius-10 arc (it would be
-    // solid), but inside the clamped radius-7 arc, so it stays air.
+    // solid), but inside the clamped arc, so it stays air.
     const air = m.Manifold.cube([2, 0.5, 0.5], true).translate(0, 17.5, 10);
     const airHit = bin.intersect(air);
     expect(airHit.isEmpty()).toBe(true);
     airHit.delete();
     air.delete();
     // The clamped fillet's own material is present near the corner
-    // (y 19.3, z 8: 8.85 mm from the clamped centre, outside the arc).
+    // (y 19.3, z 8: 4.82 mm from the clamped centre, outside the arc).
     const solid = m.Manifold.cube([2, 0.4, 0.4], true).translate(0, 19.3, 8);
     const solidHit = bin.intersect(solid);
     expect(solidHit.volume()).toBeCloseTo(2 * 0.4 * 0.4, 3);
@@ -534,11 +536,6 @@ describe('binTopOpeningMm', () => {
     // STACKING_LIP_SIZE.x): the widest object that drops in from above.
     expect(binTopOpeningMm(1)).toBeCloseTo(36.3, 9);
     expect(binTopOpeningMm(2)).toBeCloseTo(78.3, 9);
-  });
-
-  it('equals the interior for a bin without a stacking lip', () => {
-    // Outer size 41.5 minus the 0.95 wall per side.
-    expect(binTopOpeningMm(1, false)).toBeCloseTo(39.6, 9);
   });
 });
 

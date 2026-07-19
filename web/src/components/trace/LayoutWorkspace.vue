@@ -135,7 +135,6 @@ const pocketParams = computed<PocketBinParams>(() => {
     gridX: local.gridX,
     gridY: local.gridY,
     heightUnits: designer.heightUnits,
-    stackingLip: designer.stackingLip,
     magnetHoles: designer.magnetHoles,
     // The pocket generator rejects divider walls, so a pocket bin never has any.
     dividerCountX: 0,
@@ -237,7 +236,6 @@ async function addToQueue(): Promise<void> {
     gridX: params.gridX,
     gridY: params.gridY,
     heightUnits: params.heightUnits,
-    stackingLip: params.stackingLip,
     magnetHoles: params.magnetHoles,
     pockets,
   };

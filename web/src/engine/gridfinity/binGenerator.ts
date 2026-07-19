@@ -414,8 +414,8 @@ function crestArcPoint(angle: number): { inset: number; rise: number } {
 }
 
 /**
- * Height of the top of the interior vertical wall face for a stacking-lip
- * bin: the z where the wall-thickness interior stops rising and the lip's
+ * Height of the top of the interior vertical wall face: the z where the
+ * wall-thickness interior stops rising and the lip's
  * 45-degree support taper begins narrowing the opening toward the lip tip.
  * Measured down from the nominal bin top by the vertical support band
  * (LIP_SUPPORT_HEIGHT) and the run of the taper (LIP_DEPTH - WALL_THICKNESS).
@@ -439,26 +439,18 @@ export function prismFromProfile(
 }
 
 /**
- * The bin's outer wall envelope from the top of the feet up: a plain prism
- * of the outer outline to the nominal top for a flat-topped bin. With the
- * stacking lip, the outer face carries the measured rim groove below the
- * nominal top (LIP_GROOVE_INSET / LIP_GROOVE_VERTICAL, measured from the
- * Pred reference bin), runs straight through the lip band, and closes in the
- * crest fillet (LIP_FILLET_RADIUS, sampled as LIP_FILLET_SEGMENTS chords)
- * ending at the apex LIP_CREST_HEIGHT above the nominal top. Also the shape
- * the slot shelf and dividers are clipped to, so nothing pokes through the
- * groove or past the crest.
+ * The bin's outer wall envelope from the top of the feet up. The outer face
+ * carries the measured rim groove below the nominal top (LIP_GROOVE_INSET /
+ * LIP_GROOVE_VERTICAL, measured from the Pred reference bin), runs straight
+ * through the lip band, and closes in the crest fillet (LIP_FILLET_RADIUS,
+ * sampled as LIP_FILLET_SEGMENTS chords) ending at the apex LIP_CREST_HEIGHT
+ * above the nominal top. Also the shape the slot shelf and dividers are
+ * clipped to, so nothing pokes through the groove or past the crest.
  */
 export function buildOuterEnvelope(m: ManifoldToplevel, params: BinParams): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  if (!params.stackingLip) {
-    return loftChain(m, outerWidth, outerDepth, [
-      { inset: 0, z: FOOT_HEIGHT },
-      { inset: 0, z: bodyTop },
-    ]);
-  }
   const sections: Array<{ inset: number; z: number }> = [
     { inset: 0, z: FOOT_HEIGHT },
     // Measured rim groove: 45-degree step in, vertical band ending at the
@@ -582,18 +574,19 @@ function buildDividers(
  * reference bin's scoop is likewise bounded by the wall faces at its ends.
  * It only adds material at the wall/floor junction: it sits entirely above
  * the floor plate (so the hollowed base pocket is untouched), and any
- * divider wall crossing it simply welds into the added material. On low bins the measured radius may exceed the vertical
- * interior wall height (with a stacking lip the wall face ends where the
- * lip's 45-degree support taper begins), so the radius is clamped to the
- * available wall height to keep the arc tangent to a real wall face.
+ * divider wall crossing it simply welds into the added material. On low bins
+ * the measured radius may exceed the vertical interior wall height (the wall
+ * face ends where the lip's 45-degree support taper begins), so the radius is
+ * clamped to the available wall height to keep the arc tangent to a real wall
+ * face.
  * Returns null when no wall height is available at all.
  */
 function buildScoop(m: ManifoldToplevel, params: BinParams, bodyTop: number): Manifold | null {
   const innerWidth = binInteriorSizeMm(params.gridX);
   const innerDepth = binInteriorSizeMm(params.gridY);
-  // Top of the vertical interior wall face: the nominal top for a flat bin,
-  // or where the lip's support taper starts narrowing the interior.
-  const wallTop = params.stackingLip ? interiorWallTopZ(bodyTop) : bodyTop;
+  // Top of the vertical interior wall face: where the lip's support taper
+  // starts narrowing the interior.
+  const wallTop = interiorWallTopZ(bodyTop);
   const radius = Math.min(SCOOP_RADIUS, wallTop - FLOOR_TOP);
   if (radius <= 0) return null;
   // Profile in (y, z): the interior face of the back wall, the floor, and
@@ -620,15 +613,7 @@ function buildScoop(m: ManifoldToplevel, params: BinParams, bodyTop: number): Ma
  */
 export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifold {
   validateParams(params);
-  const {
-    gridX,
-    gridY,
-    heightUnits,
-    stackingLip,
-    magnetHoles,
-    dividerCountX,
-    dividerCountY,
-  } = params;
+  const { gridX, gridY, heightUnits, magnetHoles, dividerCountX, dividerCountY } = params;
 
   const outerWidth = binOuterSizeMm(gridX);
   const outerDepth = binOuterSizeMm(gridY);
@@ -649,28 +634,11 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   }
 
   // Body: the outer wall envelope from the top of the feet to the top of the
-  // walls (rim groove and crest fillet included when the lip is enabled).
+  // walls, rim groove and crest fillet included.
   const envelope = buildOuterEnvelope(m, params);
   const solid = m.Manifold.union([...feet, envelope]);
 
-  const eps = 0.01;
-  const cutters: Manifold[] = [];
-  if (stackingLip) {
-    cutters.push(buildInteriorCutter(m, params));
-  } else {
-    const innerPoly = roundedRectPolygon(
-      outerWidth - 2 * WALL_THICKNESS,
-      outerDepth - 2 * WALL_THICKNESS,
-      OUTER_CORNER_RADIUS - WALL_THICKNESS,
-    );
-    cutters.push(
-      m.Manifold.extrude([innerPoly], bodyTop - FLOOR_TOP + eps).translate(
-        0,
-        0,
-        FLOOR_TOP,
-      ),
-    );
-  }
+  const cutters: Manifold[] = [buildInteriorCutter(m, params)];
 
   // Hollow the base (lite-style pocket) after the interior cavity is cut.
   const basePocket = buildBasePocket(m, params);

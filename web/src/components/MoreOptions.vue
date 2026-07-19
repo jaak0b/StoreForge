@@ -16,7 +16,7 @@ const props = defineProps<{
   /** Hides the divider fields; a pocket bin cannot have divider walls. */
   hideDividers?: boolean;
   /**
-   * Hides every bin body option (dividers, stacking lip, magnet holes); an
+   * Hides every bin body option (dividers, magnet holes); an
    * insert-only design has no bin body to configure.
    */
   insertOnly?: boolean;
@@ -27,7 +27,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useBinDesigner();
-const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, notes, moreOptionsOpen: open } =
+const { labelText2, dividerCountX, dividerCountY, magnetHoles, notes, moreOptionsOpen: open } =
   storeToRefs(store);
 </script>
 
@@ -83,14 +83,7 @@ const { labelText2, dividerCountX, dividerCountY, stackingLip, magnetHoles, note
           hide-details
         />
       </div>
-      <div v-if="!props.insertOnly" class="options-grid mt-3">
-        <v-switch
-          v-model="stackingLip"
-          color="primary"
-          density="compact"
-          hide-details
-          label="Stacking lip"
-        />
+      <div v-if="!props.insertOnly" class="mt-3">
         <v-switch
           v-model="magnetHoles"
           color="primary"

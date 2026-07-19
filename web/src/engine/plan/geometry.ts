@@ -31,7 +31,6 @@ export function toSlottedBinParams(
     gridX: bin.gridX,
     gridY: bin.gridY,
     heightUnits: bin.heightUnits,
-    stackingLip: bin.stackingLip,
     magnetHoles: bin.magnetHoles,
     // The pocket generator rejects divider walls, so a traced bin has none.
     dividerCountX: bin.origin === 'traced' ? 0 : bin.dividerCountX,

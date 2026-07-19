@@ -89,8 +89,6 @@ export interface BinEnvelope {
   gridY: number;
   /** Bin height in Gridfinity height units (7 mm each). Integer, at least 2. */
   heightUnits: number;
-  /** Whether the bin has the stacking lip on top of the walls. */
-  stackingLip: boolean;
   /** Whether the bin has magnet holes under each foot. */
   magnetHoles: boolean;
 }
@@ -335,8 +333,8 @@ export interface PrintBatch {
 
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
-  /** Envelope format version. Currently 3. */
-  version: 3;
+  /** Envelope format version. Currently 4. */
+  version: 4;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -344,4 +342,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 3;
+export const PLAN_FILE_VERSION = 4;
