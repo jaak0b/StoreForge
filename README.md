@@ -2,7 +2,7 @@
 
 A browser-based Gridfinity print planner: queue bins by size and label, preview them in 3D, and export a ready-to-slice build plate, all running client-side with no upload.
 
-**[Screenshot: the queue page, showing a few queued bins with labels and the 3D preview pane]**
+![Screw entry with a live 3D preview of the resulting bin](img/ScrewBinGridfinityBinGenerator.png)
 
 ## Why this exists
 
@@ -20,9 +20,9 @@ Everything runs in your browser. The 3D geometry (Gridfinity bin bodies, stackin
 - **Tool tracing.** Photograph an object (a tool, a part) against a sheet of paper, click to segment it, and StoreForge fits a bin around the traced outline, including a measured interior scoop for tools that need a fingertip to reach in.
 - **Magnet holes and stacking lip**, generated from the same MIT-licensed reference geometry as `kennetek/gridfinity-rebuilt-openscad` (42 mm pitch, 41.5 mm base footprint, 7 mm height units).
 
-**[Screenshot: the plate/build-plate page with several bins arranged and ready to export]**
+![The queue with a build plate batch ready to confirm and download](img/QueuGridfinityBinGenerator.png)
 
-**[Screenshot: the tool trace page, mid-trace on a photographed tool]**
+![Tracing a tool's outline from a photo to size a bin around it](img/ToolTraceGridfinityBinGenerator.png)
 
 ## Roadmap
 
