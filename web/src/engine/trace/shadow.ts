@@ -141,31 +141,59 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
       return;
     }
 
-    // Step 2: 2-class Otsu on the saturation channel. The RGBA -> RGB -> HSV
-    // channel path lives in paper.ts's extractSaturation, shared so it is not
-    // duplicated here. Otsu splits neutral (gray) from chromatic pixels;
-    // 255 = chromatic, 0 = neutral.
+    // Step 2: classify each pixel as neutral (removal-eligible) or chromatic
+    // (protected) from the saturation channel. The RGBA -> RGB -> HSV channel
+    // path lives in paper.ts's extractSaturation, shared so it is not
+    // duplicated here.
     sat = extractSaturation(cv, rectified);
-    // On a fully grayscale scene the saturation channel is just sensor noise,
-    // and Otsu will still split it into "neutral" and "chromatic" halves, so
-    // some neutral pixels get classed chromatic and are spared from removal.
-    // That only makes the filter remove less than it could (it never removes a
-    // pixel it should have kept), which is the safe failure direction here.
-    cv.threshold(sat, satMask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    const satData = sat.data;
+    // multilevel Otsu on the saturation channel; the low and middle classes are
+    // neutral (paper may carry a slight tint), the high class is chromatic tool
+    // color. Build the 256-bin saturation histogram with a plain loop, the same
+    // pattern as the luminance histogram above.
+    const satHist = new Float64Array(256);
+    for (let i = 0; i < satData.length; i += 1) {
+      satHist[satData[i]] += 1;
+    }
+    const satOtsu = multilevelOtsu(satHist);
+    // satNeutral[i] is 1 where the pixel counts as neutral (removal-eligible).
+    const satNeutral = new Uint8Array(satData.length);
+    if (satOtsu.classesNonEmpty) {
+      // Three saturation populations: low + middle are neutral (t <= t2), the
+      // high class is chromatic and protected.
+      const t2 = satOtsu.t2;
+      for (let i = 0; i < satData.length; i += 1) {
+        satNeutral[i] = satData[i] <= t2 ? 1 : 0;
+      }
+    } else {
+      // Degenerate: a saturation class is empty (fewer than three saturation
+      // populations), so the 2-class split is the right model. Same emptiness
+      // reasoning as the luminance side. Otsu splits neutral (gray) from
+      // chromatic pixels; 255 = chromatic, 0 = neutral.
+      //
+      // On a fully grayscale scene the saturation channel is just sensor noise,
+      // and Otsu will still split it into "neutral" and "chromatic" halves, so
+      // some neutral pixels get classed chromatic and are spared from removal.
+      // That only makes the filter remove less than it could (it never removes a
+      // pixel it should have kept), which is the safe failure direction here.
+      cv.threshold(sat, satMask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+      const satMaskData = satMask.data;
+      for (let i = 0; i < satData.length; i += 1) {
+        satNeutral[i] = satMaskData[i] === 0 ? 1 : 0;
+      }
+    }
 
-    // Step 3: removable candidate = in the SAM mask AND low saturation AND not
-    // dark tool (mid-luminance shadow or bright paper halo, v > t1). The bright
-    // class is included so plain paper the decoder wrapped around the tool is a
+    // Step 3: removable candidate = in the SAM mask AND neutral AND not dark
+    // tool (mid-luminance shadow or bright paper halo, v > t1). The bright class
+    // is included so plain paper the decoder wrapped around the tool is a
     // candidate too, not just the mid-luminance shadow band. One pass over the
     // flat buffers.
     removable.create(mask.rows, mask.cols, cv.CV_8UC1);
     const maskData = mask.data;
-    const satMaskData = satMask.data;
     const removableData = removable.data;
     for (let i = 0; i < maskData.length; i += 1) {
       const v = grayData[i];
-      removableData[i] =
-        maskData[i] && v > t1 && satMaskData[i] === 0 ? 255 : 0;
+      removableData[i] = maskData[i] && v > t1 && satNeutral[i] ? 255 : 0;
     }
 
     // Step 4: keep only candidate components that touch the background. A real

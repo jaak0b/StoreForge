@@ -15,6 +15,10 @@ const MID_GRAY = [150, 150, 150, 255] as const;
 // A mid-luminance, high-saturation blue (dominant B channel): stands in for a
 // genuinely colored feature that must survive the neutral-only shadow filter.
 const MID_BLUE = [60, 120, 230, 255] as const;
+// Blue-tinted bright paper (S ~48, a genuinely low but non-zero tint) and a
+// truly-neutral (S 0) surface, used by the halo-survival reproduction below.
+const BLUE_PAPER = [195, 205, 240, 255] as const;
+const NEUTRAL_GRAY = [140, 140, 140, 255] as const;
 
 function sheet(cv: Cv, rows: number, cols: number, rgba: readonly number[]): CvMat {
   return new cv.Mat(rows, cols, cv.CV_8UC4, new cv.Scalar(...rgba));
@@ -180,6 +184,70 @@ describe('removeShadow', () => {
 
     expect(maskAt(mask, 47, 47)).toBe(255);
     expect(maskAt(mask, 20, 20)).toBe(255);
+
+    rectified.delete();
+    mask.delete();
+  });
+
+  // REGRESSION for the halo-survival bug (commit 371b9c4 follow-up).
+  //
+  // Root cause: removeShadow used one global 2-class Otsu on the saturation
+  // channel to split "neutral" from "chromatic". When the scene carries a large
+  // truly-neutral population (S~0: metal/black tools, a gray cast shadow, washed
+  // near-white highlights) that is well separated from a moderately blue-tinted
+  // paper (S~48), the 2-class Otsu puts its split BELOW the paper tint (here at
+  // 0). The blue paper then lands in the "chromatic" class, fails the
+  // low-saturation predicate, is never made a removable candidate, and the paper
+  // halo survives. The fix classifies saturation with the 3-class multilevel
+  // Otsu (low + middle neutral, high chromatic), so the tinted paper is neutral.
+  it('removes a blue-paper halo even when a large neutral mass is present', async () => {
+    const cv = await loadOpenCv();
+    const rows = 200;
+    const cols = 320;
+    const rectified = sheet(cv, rows, cols, BLUE_PAPER);
+    // A large truly-neutral (S 0) mass over roughly a quarter of the sheet: this
+    // is what drags the saturation Otsu split below the paper's blue tint. Its
+    // mid luminance also supplies the middle luminance class, so the multilevel
+    // Otsu guard is non-degenerate and shadow removal actually runs.
+    fillRect(cv, rectified, 0, 0, 130, 130, NEUTRAL_GRAY);
+    // A small chromatic tool sitting on the blue paper at the right.
+    fillRect(cv, rectified, 170, 40, 190, 80, [210, 40, 40, 255]);
+    fillRect(cv, rectified, 190, 52, 210, 68, DARK_TOOL);
+    // The SAM mask covers the tool plus a generous ring of blue-paper halo.
+    const mask = emptyMask(cv, rows, cols);
+    fillMask(cv, mask, 155, 30, 215, 90);
+
+    removeShadow(cv, rectified, mask);
+
+    // The halo pixel (160, 35) is blue paper inside the mask, off the tool: the
+    // filter should clear it. It currently survives.
+    expect(maskAt(mask, 160, 35)).toBe(0);
+
+    rectified.delete();
+    mask.delete();
+  });
+
+  it('keeps chromatic and removes neutral when only two saturation populations exist', async () => {
+    const cv = await loadOpenCv();
+    // Fallback path: the scene has three luminance populations (bright paper,
+    // dark tool, mid-gray shadow) so shadow removal runs, but only two
+    // saturation populations (S 0 neutral surfaces and a strongly chromatic
+    // tool color, no lightly tinted paper). The saturation multilevel Otsu is
+    // degenerate, so the 2-class Otsu fallback must still split neutral from
+    // chromatic: the mid-gray shadow is removable, the blue region protected.
+    const rectified = sheet(cv, 90, 120, BRIGHT_PAPER);
+    fillRect(cv, rectified, 20, 20, 60, 70, DARK_TOOL);
+    fillRect(cv, rectified, 61, 20, 80, 45, MID_GRAY);
+    fillRect(cv, rectified, 61, 46, 80, 70, MID_BLUE);
+    const mask = emptyMask(cv, 90, 120);
+    fillMask(cv, mask, 20, 20, 80, 70);
+
+    removeShadow(cv, rectified, mask);
+
+    // Neutral mid-gray shadow cleared, chromatic blue kept, dark tool kept.
+    expect(maskAt(mask, 70, 30)).toBe(0);
+    expect(maskAt(mask, 70, 60)).toBe(255);
+    expect(maskAt(mask, 40, 45)).toBe(255);
 
     rectified.delete();
     mask.delete();
