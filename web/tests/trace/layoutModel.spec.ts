@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_CLEARANCE_MM,
   addTool,
   binPlacement,
   layoutBounds,
@@ -372,11 +373,16 @@ describe('tool list and transform actions', () => {
       20,
     );
     // The clearance-grown box starts at 3.2 mm (cell inset 1.2 plus margin
-    // 2): the recentred 70 mm bar's placement is 3.2 + 35 + 0.5 = 38.7 by
-    // 3.2 + 6 + 0.5 = 9.7, and the grown extent 1.2..76.2 covers two cells.
+    // 2): the recentred 70 mm bar's placement is 3.2 + 35 by 3.2 + 6, each
+    // shifted by the default clearance, and the grown extent covers two cells.
     expect(s.gridX).toBe(2);
     expect(s.gridY).toBe(1);
-    expect(s.placements[0]).toEqual({ toolId: bar.id, xMm: 38.7, yMm: 9.7, pocketDepthMm: 20 });
+    expect(s.placements[0]).toEqual({
+      toolId: bar.id,
+      xMm: 3.2 + 35 + DEFAULT_CLEARANCE_MM,
+      yMm: 3.2 + 6 + DEFAULT_CLEARANCE_MM,
+      pocketDepthMm: 20,
+    });
     addTool(
       s,
       {
@@ -403,8 +409,8 @@ describe('tool list and transform actions', () => {
     // (150..160, 90..100): placed at their sheet positions their placements
     // are the bounding-box middles (45, 45) and (155, 95), restoring every
     // outline point's sheet coordinates. They stay 110 mm apart instead of
-    // stacking, and the extent grown by the 0.5 mm default clearance plus
-    // the 2 mm margin (37.5..162.5 by 37.5..102.5) covers cells 0..3 by
+    // stacking, and the extent grown by the 1.5 mm default clearance plus
+    // the 2 mm margin (36.5..163.5 by 36.5..103.5) covers cells 0..3 by
     // 0..2 of the fixed world grid.
     const s = state([], []);
     const square = (x0: number, y0: number) => ({

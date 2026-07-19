@@ -24,11 +24,11 @@ import { binInteriorSizeMm, PITCH } from '../gridfinity/constants';
 export const AUTO_SIZE_MARGIN_MM = 2;
 
 /**
- * Default outward clearance for a new tool. 0.5 mm is a typical FDM XY fit
- * clearance: enough to slide the tool into the pocket snugly without binding
- * on printer dimensional error.
+ * Default outward clearance for a new tool. 1.5 mm leaves room to lift the
+ * tool out of the pocket by hand, on top of the printer dimensional error a
+ * snug fit already has to absorb.
  */
-export const DEFAULT_CLEARANCE_MM = 0.5;
+export const DEFAULT_CLEARANCE_MM = 1.5;
 
 /** The layout state the model's actions operate on, mutated in place. */
 export interface LayoutState {
