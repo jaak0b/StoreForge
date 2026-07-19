@@ -24,6 +24,7 @@ import {
   WALL_THICKNESS,
 } from '../src/engine/gridfinity/constants';
 import type { BinParams } from '../src/engine/gridfinity/types';
+import { evenDividerWalls, type DividerWall } from '../src/engine/gridfinity/dividerModel';
 
 let m: ManifoldToplevel;
 
@@ -31,15 +32,30 @@ beforeAll(async () => {
   m = await loadManifold();
 });
 
-function params(overrides: Partial<BinParams> = {}): BinParams {
-  return {
+/**
+ * Build BinParams for a test. The old evenly spaced divider counts are still
+ * accepted as a convenience (converted to walls through evenDividerWalls, the
+ * production conversion), so the count-based geometry tests keep exercising
+ * the same solids; a test that needs a free wall passes walls directly.
+ */
+function params(
+  overrides: Partial<Omit<BinParams, 'walls'>> & {
+    walls?: DividerWall[];
+    dividerCountX?: number;
+    dividerCountY?: number;
+  } = {},
+): BinParams {
+  const { dividerCountX = 0, dividerCountY = 0, walls, ...rest } = overrides;
+  const base = {
     gridX: 1,
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
-    ...overrides,
+    ...rest,
+  };
+  return {
+    ...base,
+    walls: walls ?? evenDividerWalls(base.gridX, base.gridY, dividerCountX, dividerCountY),
   };
 }
 
@@ -416,9 +432,94 @@ describe('interior dividers', () => {
     bin.delete();
   });
 
-  it('rejects negative or fractional divider counts', () => {
-    expect(() => validateParams(params({ dividerCountX: -1 }))).toThrow(/dividerCountX/);
-    expect(() => validateParams(params({ dividerCountY: 1.5 }))).toThrow(/dividerCountY/);
+  it('rejects a wall running outside the interior or two walls too close', () => {
+    // A wall reaching well past the interior rectangle.
+    expect(() =>
+      validateParams(params({ walls: [{ x1: -100, y1: 0, x2: 100, y2: 0 }] })),
+    ).toThrow(/outside the bin interior/);
+    // Two parallel walls closer than the minimum compartment gap.
+    expect(() =>
+      validateParams(
+        params({
+          gridX: 3,
+          walls: [
+            { x1: 0, y1: -10, x2: 0, y2: 10 },
+            { x1: 3, y1: -10, x2: 3, y2: 10 },
+          ],
+        }),
+      ),
+    ).toThrow(/minimum compartment gap/);
+  });
+
+  it('keeps a single partial-length free wall watertight', () => {
+    const bin = buildBinManifold(
+      m,
+      params({ gridX: 2, walls: [{ x1: 0, y1: -8, x2: 0, y2: 8 }] }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('keeps an angled free wall watertight', () => {
+    // A wall at 30 degrees through the interior of a 2x2 bin.
+    const r = 15;
+    const a = (30 * Math.PI) / 180;
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        walls: [
+          { x1: -r * Math.cos(a), y1: -r * Math.sin(a), x2: r * Math.cos(a), y2: r * Math.sin(a) },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('keeps a T-junction of free walls watertight', () => {
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        walls: [
+          { x1: -20, y1: 0, x2: 20, y2: 0 },
+          { x1: 0, y1: 0, x2: 0, y2: 18 },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('keeps an asymmetric compartment layout watertight', () => {
+    // A 2x3 bin split down the middle, the left half into two rows and the
+    // right half into three, every wall reaching the perimeter or the centre
+    // wall so the partition is clean (genus 0). The deeper bin keeps the
+    // staggered rows clear of the minimum compartment gap.
+    const hx = (2 * PITCH - 0.5 - 2 * WALL_THICKNESS) / 2;
+    const hy = (3 * PITCH - 0.5 - 2 * WALL_THICKNESS) / 2;
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 3,
+        walls: [
+          { x1: 0, y1: -hy, x2: 0, y2: hy },
+          { x1: -hx, y1: 0, x2: 0, y2: 0 },
+          { x1: 0, y1: -hy / 3, x2: hx, y2: -hy / 3 },
+          { x1: 0, y1: hy / 3, x2: hx, y2: hy / 3 },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeProduct } from '../../src/engine/plan/rowDescriptor';
+import { evenDividerWalls } from '../../src/engine/gridfinity/dividerModel';
 import type {
   BinPockets,
   LabelContent,
@@ -9,16 +10,25 @@ import type {
   TracedBin,
 } from '../../src/engine/plan/types';
 
-function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
-  return {
-    origin: 'manual',
+function manualBin(
+  overrides: Partial<Omit<ManualBin, 'walls'>> & {
+    walls?: ManualBin['walls'];
+    dividerCountX?: number;
+    dividerCountY?: number;
+  } = {},
+): ManualBin {
+  const { dividerCountX = 0, dividerCountY = 0, walls, ...rest } = overrides;
+  const base = {
+    origin: 'manual' as const,
     gridX: 2,
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
-    ...overrides,
+    ...rest,
+  };
+  return {
+    ...base,
+    walls: walls ?? evenDividerWalls(base.gridX, base.gridY, dividerCountX, dividerCountY),
   };
 }
 

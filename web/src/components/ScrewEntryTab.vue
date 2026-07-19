@@ -16,6 +16,7 @@ import {
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
 import type { PartMeshes } from '../engine/gridfinity/types';
+import { dividerCountsOf, evenDividerWalls } from '../engine/gridfinity/dividerModel';
 import { iconByName } from '../engine/label/icons';
 import {
   composeLabelText,
@@ -148,8 +149,7 @@ function productFor(
     gridY: 1,
     heightUnits: binHeightUnits,
     magnetHoles: store.magnetHoles,
-    dividerCountX: store.dividerCountX,
-    dividerCountY: store.dividerCountY,
+    walls: evenDividerWalls(cells, 1, store.dividerCountX, store.dividerCountY),
     screw,
   };
   // A screw bin is printed to carry its label, so the tab offers no bin-alone
@@ -258,8 +258,9 @@ watch(
     };
     if (product.kind !== 'insert' && product.bin.origin === 'screw') {
       patch.magnetHoles = product.bin.magnetHoles;
-      patch.dividerCountX = product.bin.dividerCountX;
-      patch.dividerCountY = product.bin.dividerCountY;
+      const counts = dividerCountsOf(product.bin.walls);
+      patch.dividerCountX = counts.countX;
+      patch.dividerCountY = counts.countY;
     }
     store.$patch(patch);
   },
@@ -383,8 +384,7 @@ function generatePreview(product: Product): Promise<PartMeshes> {
     gridY: bin.gridY,
     heightUnits: bin.heightUnits,
     magnetHoles: bin.magnetHoles,
-    dividerCountX: bin.origin === 'traced' ? 0 : bin.dividerCountX,
-    dividerCountY: bin.origin === 'traced' ? 0 : bin.dividerCountY,
+    walls: bin.origin === 'traced' ? [] : bin.walls,
     labelSlot: product.kind === 'bin' ? product.labelSlot : true,
     insert: product.kind === 'binWithInsert' ? product.insert : null,
   });

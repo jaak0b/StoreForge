@@ -9,6 +9,7 @@ import type {
   SlottedBinParams,
 } from './types';
 import { applySlotToBody, buildInsertSolids, insertPositionInBin } from '../label/slot';
+import { validateWalls, wallLength, type DividerWall } from './dividerModel';
 import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
@@ -270,11 +271,9 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
  * stays solid.
  */
 function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | null {
-  const { gridX, gridY, magnetHoles, dividerCountX, dividerCountY } = params;
+  const { gridX, gridY, magnetHoles, walls: dividerWalls } = params;
   const eps = 0.01;
   const pocketTop = FLOOR_TOP - FLOOR_PLATE_THICKNESS;
-  const outerWidth = binOuterSizeMm(gridX);
-  const outerDepth = binOuterSizeMm(gridY);
 
   const cellPocket = buildCellBasePocket(m, magnetHoles);
   if (cellPocket === null) return null;
@@ -291,26 +290,20 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | nul
   const strips: Manifold[] = [];
   const stripWidth = DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS;
   const stripHeight = pocketTop + 2 * eps;
-  const innerWidth = binInteriorSizeMm(gridX);
-  const innerDepth = binInteriorSizeMm(gridY);
-  for (let i = 1; i <= dividerCountX; i++) {
-    const x = -innerWidth / 2 + (i * innerWidth) / (dividerCountX + 1);
+  // One solid root strip under each divider wall, following the wall segment.
+  // The strip is stripWidth wide (the wall thickness plus a base wall on each
+  // side) and extended at both ends by its own half-width, so the root welds
+  // to the perimeter and to any wall it meets end to end.
+  for (const wall of dividerWalls) {
+    const length = wallLength(wall) + stripWidth;
+    const angleDeg = (Math.atan2(wall.y2 - wall.y1, wall.x2 - wall.x1) * 180) / Math.PI;
+    const mx = (wall.x1 + wall.x2) / 2;
+    const my = (wall.y1 + wall.y2) / 2;
     strips.push(
-      m.Manifold.cube([stripWidth, outerDepth, stripHeight], true).translate(
-        x,
-        0,
-        stripHeight / 2 - eps,
-      ),
-    );
-  }
-  for (let i = 1; i <= dividerCountY; i++) {
-    const y = -innerDepth / 2 + (i * innerDepth) / (dividerCountY + 1);
-    strips.push(
-      m.Manifold.cube([outerWidth, stripWidth, stripHeight], true).translate(
-        0,
-        y,
-        stripHeight / 2 - eps,
-      ),
+      m.Manifold.cube([length, stripWidth, stripHeight], true)
+        .translate(0, 0, stripHeight / 2 - eps)
+        .rotate(0, 0, angleDeg)
+        .translate(mx, my, 0),
     );
   }
   // Per-cell rib lattice, kept out of the pocket so the ribs intersect the
@@ -517,49 +510,41 @@ function buildInteriorCutter(m: ManifoldToplevel, params: BinParams): Manifold {
 }
 
 /**
- * Interior divider walls. dividerCountX walls stand perpendicular to the X
- * axis (splitting the width into dividerCountX + 1 equal compartments), and
- * likewise for Y. Each wall is DIVIDER_THICKNESS thick, rises from inside the
- * floor slab (top of the feet) to the nominal bin top (below the stacking lip
- * seat), and is trimmed to the outer wall envelope so it welds into the walls
- * and floor without poking outside the bin or through the rim groove.
+ * Interior divider walls. Each wall is a free segment (see DividerWall): it
+ * runs from (x1,y1) to (x2,y2) at any angle, is DIVIDER_THICKNESS thick, and
+ * rises from inside the floor slab (top of the feet) to the nominal bin top
+ * (below the stacking lip seat). Every wall is extended slightly at both ends
+ * along its own direction so a wall reaching the perimeter overlaps into the
+ * side wall for a solid weld; the whole set is then trimmed to the outer wall
+ * envelope so nothing pokes outside the bin or through the rim groove. Axis
+ * aligned full-interior-span walls (from evenDividerWalls) reproduce the old
+ * evenly spaced dividers exactly: the end extension equals WALL_THICKNESS, so
+ * an interior-span segment reaches the outer face and trims back to it, the
+ * same solid the count-based generator produced.
  */
 function buildDividers(
   m: ManifoldToplevel,
-  params: BinParams,
+  dividerWalls: DividerWall[],
   envelope: Manifold,
-  outerWidth: number,
-  outerDepth: number,
   bodyTop: number,
 ): Manifold {
-  const { dividerCountX, dividerCountY } = params;
-  const innerWidth = binInteriorSizeMm(params.gridX);
-  const innerDepth = binInteriorSizeMm(params.gridY);
   // Embedded into the floor slab (feet top to floor top) for a solid weld.
   const zBottom = FOOT_HEIGHT;
   const height = bodyTop - zBottom;
-  const walls: Manifold[] = [];
-  for (let i = 1; i <= dividerCountX; i++) {
-    const x = -innerWidth / 2 + (i * innerWidth) / (dividerCountX + 1);
-    walls.push(
-      m.Manifold.cube([DIVIDER_THICKNESS, outerDepth, height], true).translate(
-        x,
-        0,
-        zBottom + height / 2,
-      ),
+  const boxes: Manifold[] = [];
+  for (const wall of dividerWalls) {
+    const length = wallLength(wall) + 2 * WALL_THICKNESS;
+    const angleDeg = (Math.atan2(wall.y2 - wall.y1, wall.x2 - wall.x1) * 180) / Math.PI;
+    const mx = (wall.x1 + wall.x2) / 2;
+    const my = (wall.y1 + wall.y2) / 2;
+    boxes.push(
+      m.Manifold.cube([length, DIVIDER_THICKNESS, height], true)
+        .translate(0, 0, zBottom + height / 2)
+        .rotate(0, 0, angleDeg)
+        .translate(mx, my, 0),
     );
   }
-  for (let i = 1; i <= dividerCountY; i++) {
-    const y = -innerDepth / 2 + (i * innerDepth) / (dividerCountY + 1);
-    walls.push(
-      m.Manifold.cube([outerWidth, DIVIDER_THICKNESS, height], true).translate(
-        0,
-        y,
-        zBottom + height / 2,
-      ),
-    );
-  }
-  return m.Manifold.intersection(m.Manifold.union(walls), envelope);
+  return m.Manifold.intersection(m.Manifold.union(boxes), envelope);
 }
 
 /**
@@ -613,10 +598,8 @@ function buildScoop(m: ManifoldToplevel, params: BinParams, bodyTop: number): Ma
  */
 export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifold {
   validateParams(params);
-  const { gridX, gridY, heightUnits, magnetHoles, dividerCountX, dividerCountY } = params;
+  const { gridX, gridY, heightUnits, magnetHoles, walls: dividerWalls } = params;
 
-  const outerWidth = binOuterSizeMm(gridX);
-  const outerDepth = binOuterSizeMm(gridY);
   const bodyTop = heightUnits * HEIGHT_UNIT;
 
   // Feet: one stacking foot per grid cell, plus optional magnet holes.
@@ -664,8 +647,8 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
     }
   }
 
-  if (dividerCountX > 0 || dividerCountY > 0) {
-    const dividers = buildDividers(m, params, envelope, outerWidth, outerDepth, bodyTop);
+  if (dividerWalls.length > 0) {
+    const dividers = buildDividers(m, dividerWalls, envelope, bodyTop);
     result = m.Manifold.union([result, dividers]);
   }
 
@@ -677,29 +660,21 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
 
 /** Validate and reject out-of-range parameters with a clear message. */
 export function validateParams(params: BinParams): void {
-  const { gridX, gridY, heightUnits, dividerCountX, dividerCountY } = params;
+  const { gridX, gridY, heightUnits, walls } = params;
   for (const [name, value, min] of [
     ['gridX', gridX, 1],
     ['gridY', gridY, 1],
     ['heightUnits', heightUnits, 2],
-    ['dividerCountX', dividerCountX, 0],
-    ['dividerCountY', dividerCountY, 0],
   ] as const) {
     if (!Number.isInteger(value) || value < min) {
       throw new Error(`${name} must be an integer of at least ${min}, got ${value}`);
     }
   }
-  // Each compartment must keep a positive clear width between divider walls.
-  for (const [name, count, inner] of [
-    ['dividerCountX', dividerCountX, binInteriorSizeMm(gridX)],
-    ['dividerCountY', dividerCountY, binInteriorSizeMm(gridY)],
-  ] as const) {
-    const clear = (inner - count * DIVIDER_THICKNESS) / (count + 1);
-    if (count > 0 && clear <= 0) {
-      throw new Error(
-        `${name} is too large: ${count} dividers leave no room between compartment walls`,
-      );
-    }
+  // Divider wall geometry (containment, minimum length, compartment gaps) is
+  // owned by the divider model; surface its user-worded message as an error.
+  const wallProblem = validateWalls(walls, gridX, gridY);
+  if (wallProblem !== null) {
+    throw new Error(wallProblem);
   }
 }
 

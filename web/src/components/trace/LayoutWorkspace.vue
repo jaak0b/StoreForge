@@ -148,8 +148,7 @@ const pocketParams = computed<PocketBinParams>(() => {
     heightUnits: designer.heightUnits,
     magnetHoles: designer.magnetHoles,
     // The pocket generator rejects divider walls, so a pocket bin never has any.
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     labelSlot: designer.productChoice !== 'plainBin',
     insert:
       designer.productChoice === 'binWithInsert'

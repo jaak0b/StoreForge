@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import type { InsertContentParams, SlottedBinParams } from '../engine/gridfinity/types';
+import { evenDividerWalls } from '../engine/gridfinity/dividerModel';
 import type { LabelContent } from '../engine/plan/types';
 
 /**
@@ -60,8 +61,16 @@ export const useBinDesigner = defineStore('binDesigner', {
         gridY: state.gridY,
         heightUnits: state.heightUnits,
         magnetHoles: state.magnetHoles,
-        dividerCountX: state.dividerCountX,
-        dividerCountY: state.dividerCountY,
+        // The store keeps the two count fields as its editing representation
+        // (the More options UI is unchanged); the free divider walls the
+        // geometry layer consumes are derived from the counts here. Temporary
+        // until the Stage 2 canvas editor edits walls directly.
+        walls: evenDividerWalls(
+          state.gridX,
+          state.gridY,
+          state.dividerCountX,
+          state.dividerCountY,
+        ),
         labelSlot: state.productChoice !== 'plainBin',
         insert,
       };

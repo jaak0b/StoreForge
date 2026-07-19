@@ -1,5 +1,8 @@
 import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trace/types';
+import type { DividerWall } from '../gridfinity/dividerModel';
 import type { HeadType } from './screwListImport';
+
+export type { DividerWall };
 
 /**
  * Tool pockets sunk into a bin's interior, as designed on the Tool trace tab.
@@ -93,22 +96,18 @@ export interface BinEnvelope {
   magnetHoles: boolean;
 }
 
-/** A bin designed by hand on the Manual bin tab, with divider walls. */
+/** A bin designed by hand on the Manual bin tab, with free divider walls. */
 export interface ManualBin extends BinEnvelope {
   origin: 'manual';
-  /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */
-  dividerCountX: number;
-  /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
-  dividerCountY: number;
+  /** Free interior divider wall segments in bin-local mm. Empty for none. */
+  walls: DividerWall[];
 }
 
-/** A bin created from a screw description on the Screw entry tab, with divider walls. */
+/** A bin created from a screw description on the Screw entry tab, with free divider walls. */
 export interface ScrewBin extends BinEnvelope {
   origin: 'screw';
-  /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */
-  dividerCountX: number;
-  /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
-  dividerCountY: number;
+  /** Free interior divider wall segments in bin-local mm. Empty for none. */
+  walls: DividerWall[];
   /** The screw the bin was sized for. */
   screw: ScrewSpec;
 }
@@ -116,7 +115,7 @@ export interface ScrewBin extends BinEnvelope {
 /**
  * A bin with tool pockets from the Tool trace tab. The pocket generator
  * rejects divider walls, so a traced bin deliberately carries no divider
- * fields at all: dividerCountX/Y are only legal on ManualBin and ScrewBin.
+ * fields at all: walls is only legal on ManualBin and ScrewBin.
  */
 export interface TracedBin extends BinEnvelope {
   origin: 'traced';
@@ -337,8 +336,8 @@ export interface PrintBatch {
 
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
-  /** Envelope format version. Currently 4. */
-  version: 4;
+  /** Envelope format version. Currently 5. */
+  version: 5;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -346,4 +345,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 4;
+export const PLAN_FILE_VERSION = 5;

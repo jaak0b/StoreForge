@@ -8,6 +8,7 @@ import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
 import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
+import { dividerCountsOf, evenDividerWalls } from '../engine/gridfinity/dividerModel';
 import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import BinViewport from './BinViewport.vue';
@@ -77,8 +78,7 @@ function loadEditingEntry(entryId: string | null): void {
       gridY: bin.gridY,
       heightUnits: bin.heightUnits,
       magnetHoles: bin.magnetHoles,
-      dividerCountX: bin.dividerCountX,
-      dividerCountY: bin.dividerCountY,
+      ...dividerCountsOf(bin.walls),
       labelText: content?.text ?? '',
       labelText2: content?.text2 ?? '',
       labelIcon: content?.icon ?? null,
@@ -130,8 +130,7 @@ function designedProduct(): Product {
     gridY: store.gridY,
     heightUnits: store.heightUnits,
     magnetHoles: store.magnetHoles,
-    dividerCountX: store.dividerCountX,
-    dividerCountY: store.dividerCountY,
+    walls: evenDividerWalls(store.gridX, store.gridY, store.dividerCountX, store.dividerCountY),
   };
   return productChoice.value === 'binWithInsert'
     ? { kind: 'binWithInsert', bin, insert: store.content }

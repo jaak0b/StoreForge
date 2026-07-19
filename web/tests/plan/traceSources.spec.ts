@@ -24,15 +24,13 @@ function manualBin(): ManualBin {
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
   };
 }
 
 function tracedBin(traceSourceId?: string): TracedBin {
-  const { dividerCountX, dividerCountY, origin, ...base } = manualBin();
-  void dividerCountX;
-  void dividerCountY;
+  const { walls, origin, ...base } = manualBin();
+  void walls;
   void origin;
   const bin: TracedBin = {
     ...base,

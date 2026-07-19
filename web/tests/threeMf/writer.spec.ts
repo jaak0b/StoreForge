@@ -202,8 +202,7 @@ describe('writePlate3mf with two real labeled bins', () => {
       gridY: 1,
       heightUnits: 3,
       magnetHoles: false,
-      dividerCountX: 0,
-      dividerCountY: 0,
+      walls: [],
       insert: { text: 'M3', text2: '', icon: null },
     });
     binB = generateSlottedBin(m, font, {
@@ -211,8 +210,7 @@ describe('writePlate3mf with two real labeled bins', () => {
       gridY: 1,
       heightUnits: 2,
       magnetHoles: false,
-      dividerCountX: 0,
-      dividerCountY: 0,
+      walls: [],
       insert: { text: 'M4', text2: '', icon: null },
     });
   });

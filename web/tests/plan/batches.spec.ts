@@ -23,8 +23,7 @@ function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     ...overrides,
   };
 }
@@ -269,9 +268,8 @@ describe('pockets in batches', () => {
   }
 
   function tracedEntry(): QueueEntry {
-    const { dividerCountX, dividerCountY, origin, ...base } = manualBin();
-    void dividerCountX;
-    void dividerCountY;
+    const { walls, origin, ...base } = manualBin();
+    void walls;
     void origin;
     const tracedBin: TracedBin = { ...base, origin: 'traced', pockets: pockets() };
     return entry({ id: 'a1', product: { kind: 'bin', bin: tracedBin } });

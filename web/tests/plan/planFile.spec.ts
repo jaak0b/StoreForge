@@ -19,6 +19,7 @@ import type {
   ScrewSpec,
   TracedBin,
 } from '../../src/engine/plan/types';
+import { evenDividerWalls } from '../../src/engine/gridfinity/dividerModel';
 
 function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
@@ -27,8 +28,7 @@ function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     ...overrides,
   };
 }
@@ -86,9 +86,8 @@ function pockets(): BinPockets {
 }
 
 function tracedBin(overrides: Partial<TracedBin> = {}): TracedBin {
-  const { dividerCountX, dividerCountY, origin, ...base } = manualBin();
-  void dividerCountX;
-  void dividerCountY;
+  const { walls, origin, ...base } = manualBin();
+  void walls;
   void origin;
   return { ...base, origin: 'traced', pockets: pockets(), ...overrides };
 }
@@ -128,7 +127,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     const entries = [entry(), entry({ id: 'b2', notes: 'reprint in PETG' })];
     const batches = [batch()];
     const result = parsePlanFile(serializePlanFile(entries, batches));
-    expect(result).toEqual({ ok: true, plan: { version: 4, entries, batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches }, warnings: [] });
   });
 
   it('rejects text that is not JSON', () => {
@@ -143,10 +142,10 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects an envelope version newer than this build reads', () => {
-    const result = parsePlanFile('{"version":5,"entries":[],"batches":[]}');
+    const result = parsePlanFile('{"version":6,"entries":[],"batches":[]}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('version 5');
-    if (!result.ok) expect(result.error).toContain('versions 1 to 4');
+    if (!result.ok) expect(result.error).toContain('version 6');
+    if (!result.ok) expect(result.error).toContain('versions 1 to 5');
   });
 
   it('rejects a missing entries list', () => {
@@ -208,7 +207,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [entry()], batches: [] },
+      plan: { version: 5, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -247,7 +246,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -262,7 +261,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [queued, printed] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -275,7 +274,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -298,7 +297,7 @@ describe('version-3 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 3, entries: [raw], batches: [] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [entry()], batches: [] },
+      plan: { version: 5, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -315,7 +314,37 @@ describe('version-3 migration', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [], batches: [batch()] },
+      plan: { version: 5, entries: [], batches: [batch()] },
+      warnings: [],
+    });
+  });
+});
+
+describe('divider walls migration', () => {
+  it('converts version-4 divider counts to walls on load', () => {
+    const v4Bin = { ...manualBin(), dividerCountX: 2, dividerCountY: 1 } as unknown;
+    delete (v4Bin as Record<string, unknown>).walls;
+    const raw = { ...entry(), product: { kind: 'bin', labelSlot: true, bin: v4Bin } };
+    const result = parsePlanFile(JSON.stringify({ version: 4, entries: [raw], batches: [] }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = result.plan.entries[0].product;
+    if (bin.kind !== 'bin' || bin.bin.origin !== 'manual') throw new Error('unexpected product');
+    expect(bin.bin.walls).toEqual(evenDividerWalls(2, 1, 2, 1));
+  });
+
+  it('round-trips version-5 walls verbatim', () => {
+    const walls = [
+      { x1: -5, y1: -8, x2: -5, y2: 8 },
+      { x1: 6, y1: -3, x2: 20, y2: 4 },
+    ];
+    const withWalls = entry({
+      product: { kind: 'bin', labelSlot: true, bin: manualBin({ walls }) },
+    });
+    const result = parsePlanFile(serializePlanFile([withWalls], []));
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 5, entries: [withWalls], batches: [] },
       warnings: [],
     });
   });
@@ -331,8 +360,8 @@ describe('validateEntry', () => {
     ['gridY', 1.5, 'gridY must be an integer of at least 1'],
     ['heightUnits', 1, 'heightUnits must be an integer of at least 2'],
     ['magnetHoles', 1, 'magnetHoles must be true or false'],
-    ['dividerCountX', -1, 'dividerCountX must be an integer of at least 0'],
-    ['dividerCountY', 0.5, 'dividerCountY must be an integer of at least 0'],
+    ['walls', 'nope', 'walls must be a list'],
+    ['walls', [{ x1: 0, y1: 0, x2: 1 }], 'a divider wall needs finite x1, y1, x2 and y2'],
   ])('rejects a bad bin %s field', (field, value, message) => {
     const raw = entry({
       product: { kind: 'bin', labelSlot: true, bin: { ...manualBin(), [field]: value } },
@@ -454,7 +483,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [imperial, lengthless], batches: [] },
+      plan: { version: 5, entries: [imperial, lengthless], batches: [] },
       warnings: [],
     });
   });
@@ -464,7 +493,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [traced], batches: [] },
+      plan: { version: 5, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -486,7 +515,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [], batches: [withSnapshots] },
+      plan: { version: 5, entries: [], batches: [withSnapshots] },
       warnings: [],
     });
   });
@@ -564,7 +593,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [traced], batches: [] },
+      plan: { version: 5, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -653,7 +682,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [traced], batches: [] },
+      plan: { version: 5, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -770,7 +799,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSource]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [], batches: [withSource] },
+      plan: { version: 5, entries: [], batches: [withSource] },
       warnings: [],
     });
   });
@@ -841,7 +870,7 @@ describe('pockets in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 4, entries: [traced], batches: [] },
+      plan: { version: 5, entries: [traced], batches: [] },
       warnings: [],
     });
   });

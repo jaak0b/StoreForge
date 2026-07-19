@@ -33,8 +33,7 @@ function params(overrides: Partial<SlottedBinParams> = {}): SlottedBinParams {
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     insert: null,
     ...overrides,
   };
