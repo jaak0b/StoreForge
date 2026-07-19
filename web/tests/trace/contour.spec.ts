@@ -278,17 +278,45 @@ describe('maskToContour', () => {
     expect(Math.abs(box.maxY - 37.5)).toBeLessThanOrEqual(0.5);
   });
 
-  it('lets painted include evidence flip the selection to the painted blob', async () => {
+  it('keeps the clicked blob when many painted points land on a different blob', async () => {
     const cv = await loadOpenCv();
     const mask = emptyMask(cv);
-    // Two disjoint blobs. One include click lands in the left blob, but many
-    // add-stroke vertices land in the right blob, so the right blob wins on
-    // include-point count.
+    // Two disjoint blobs. One include click lands in the left blob; a brush drag
+    // deposits many add-stroke vertices in the right blob. Clicks decide, so the
+    // painted vote never outweighs the explicit click and the left blob wins.
     fillRect(cv, mask, 20, 30, 90, 130);
     fillRect(cv, mask, 150, 20, 240, 160);
     const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
       includePoints: [{ x: 55, y: 80 }],
+      paintedIncludePoints: [
+        { x: 180, y: 60 },
+        { x: 190, y: 80 },
+        { x: 200, y: 100 },
+        { x: 210, y: 120 },
+        { x: 170, y: 40 },
+      ],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Left blob 20..90 px at 0.25 mm/px: 5..22.5 mm, hand-derived once.
+    const box = bounds(result.outline.outer);
+    expect(Math.abs(box.minX - 5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxX - 22.5)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('falls back to painted points to pick a blob when the click lands outside every contour', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // Two disjoint blobs. The include click lands in the gap between them,
+    // inside no contour, but painted add-stroke vertices land in the right
+    // blob, so the fallback selects that blob.
+    fillRect(cv, mask, 20, 30, 90, 130);
+    fillRect(cv, mask, 150, 20, 240, 160);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 120, y: 80 }],
       paintedIncludePoints: [
         { x: 180, y: 60 },
         { x: 190, y: 80 },

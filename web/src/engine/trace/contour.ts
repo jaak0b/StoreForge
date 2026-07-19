@@ -103,14 +103,20 @@ function orient(points: PixelPoint[], positive: boolean): PixelPoint[] {
  * corners of straight tool edges, so closing is the better fit for hard-edged
  * tool silhouettes.
  *
- * Among the denoised external contours above the area floor, the chosen one
- * contains the most include points (pointPolygonTest >= 0); ties break to the
- * largest by area. Add-stroke vertices (paintedIncludePoints) count as include
- * evidence in that score, so a painted region becomes selectable, but they do
- * not relax the requirement that at least one include click was given. Its
- * holes above minHoleAreaMm2 are kept as children. There
- * is no nearest-contour fallback: a click that lands outside every contour
- * contributes to no count.
+ * Selection follows a strict hierarchy over the denoised external contours
+ * above the area floor. First, include clicks decide: the chosen contour
+ * contains the most include clicks (pointPolygonTest >= 0), ties breaking to
+ * the largest by area. Only when no contour contains any include click do
+ * add-stroke vertices (paintedIncludePoints) rescue the selection, rescored the
+ * same way (plurality, area tiebreak), so a region the user painted can still
+ * be picked when the clicks miss. Painted vertices never dilute the click vote:
+ * a brush drag contributes many vertices whose count would otherwise swamp the
+ * explicit clicks and vary with the pointer sampling rate. Connected paint still
+ * merges into the clicked contour before selection, so a bridging stroke grows
+ * the clicked region rather than competing with it. The requirement that at
+ * least one include click was given is never relaxed. The chosen contour's
+ * holes above minHoleAreaMm2 are kept as children. There is no nearest-contour
+ * fallback: a point that lands outside every contour contributes to no count.
  *
  * Returns { ok: false, reason } when no contour survives denoising ('empty')
  * or when contours survive but none contains any include point
@@ -146,16 +152,11 @@ export function maskToContour(
     // holes directly inside them. Hierarchy rows are [next, prev, child, parent].
     cv.findContours(clean, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
 
-    // A painted add region that is not physically connected to the clicked
-    // region by a brush stroke cannot survive as a second separate outline,
-    // because a traced tool is a single outer loop; a connecting drag merges
-    // the regions into one contour before selection.
-    const scoringPoints = [...includePoints, ...(options.paintedIncludePoints ?? [])];
-    const clicks = scoringPoints.map((point) => new cv.Point(point.x, point.y));
-    let chosen = -1;
-    let chosenArea = 0;
-    let chosenCount = 0;
-    let sawAnyContour = false;
+    // Collect the external contours above the area floor once. The open pass
+    // removes small specks; this floor drops any leftover island too small to
+    // be a tool (reusing the hole threshold, since a real tool outline is
+    // orders of magnitude larger).
+    const eligible: { index: number; area: number }[] = [];
     for (let i = 0; i < contours.size(); i += 1) {
       if (hierarchy.data32S[i * 4 + 3] !== -1) {
         continue; // A hole, handled through its parent below.
@@ -163,31 +164,52 @@ export function maskToContour(
       const contour = contours.get(i);
       try {
         const area = cv.contourArea(contour);
-        // The open pass removes small specks; this floor drops any leftover
-        // island too small to be a tool (reusing the hole threshold, since a
-        // real tool outline is orders of magnitude larger).
-        if (area < minHoleAreaPx) {
-          continue;
-        }
-        sawAnyContour = true;
-        // Count how many include points this contour contains (on the boundary
-        // counts as inside): measureDist=false returns >= 0 inside. The winner
-        // is the contour containing the most; area breaks ties.
-        const count = clicks.reduce(
-          (total, click) => total + (cv.pointPolygonTest(contour, click, false) >= 0 ? 1 : 0),
-          0,
-        );
-        if (count > 0 && (count > chosenCount || (count === chosenCount && area > chosenArea))) {
-          chosen = i;
-          chosenArea = area;
-          chosenCount = count;
+        if (area >= minHoleAreaPx) {
+          eligible.push({ index: i, area });
         }
       } finally {
         contour.delete();
       }
     }
+
+    // Score the eligible contours by how many of the given points each contains
+    // (pointPolygonTest with measureDist=false returns >= 0 inside, boundary
+    // counting as inside). The winner holds the most; area breaks ties. Returns
+    // -1 when no contour contains any point.
+    const selectByPoints = (points: PixelPoint[]): number => {
+      const testPoints = points.map((point) => new cv.Point(point.x, point.y));
+      let chosenIndex = -1;
+      let chosenArea = 0;
+      let chosenCount = 0;
+      for (const { index, area } of eligible) {
+        const contour = contours.get(index);
+        try {
+          const count = testPoints.reduce(
+            (total, point) => total + (cv.pointPolygonTest(contour, point, false) >= 0 ? 1 : 0),
+            0,
+          );
+          if (count > 0 && (count > chosenCount || (count === chosenCount && area > chosenArea))) {
+            chosenIndex = index;
+            chosenArea = area;
+            chosenCount = count;
+          }
+        } finally {
+          contour.delete();
+        }
+      }
+      return chosenIndex;
+    };
+
+    // Include clicks decide the selection. Only when no contour contains any
+    // include click do painted add-stroke vertices rescue it, rescored the same
+    // way; a painted region that is physically connected to the clicked region
+    // by a brush stroke has already merged into one contour before this point.
+    let chosen = selectByPoints(includePoints);
     if (chosen === -1) {
-      return { ok: false, reason: sawAnyContour ? 'noContainingRegion' : 'empty' };
+      chosen = selectByPoints(options.paintedIncludePoints ?? []);
+    }
+    if (chosen === -1) {
+      return { ok: false, reason: eligible.length > 0 ? 'noContainingRegion' : 'empty' };
     }
 
     const outerContour = contours.get(chosen);
