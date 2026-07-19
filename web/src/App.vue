@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { useDisplay } from 'vuetify';
 import { useApp } from './stores/app';
 import { useBinQueue } from './stores/binQueue';
 import { triggerDownload } from './binDownloads';
@@ -7,6 +8,10 @@ import MainPage from './components/MainPage.vue';
 
 const app = useApp();
 const queue = useBinQueue();
+
+// Narrow viewports drop the backup button labels so the help and GitHub
+// buttons stay on screen.
+const { smAndDown } = useDisplay();
 
 // The one global keyboard shortcut listener.
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -89,12 +94,24 @@ function finishImport(mode: 'merge' | 'replace'): void {
          border and no shadow, so no large area carries the accent colour. -->
     <v-app-bar color="background" density="comfortable" flat border="b">
       <v-app-bar-title>StoreForge</v-app-bar-title>
-      <v-btn variant="text" prepend-icon="mdi-upload" @click="openImportPicker">
-        Import backup
-      </v-btn>
-      <v-btn variant="text" prepend-icon="mdi-download" @click="exportBackup">
-        Export backup
-      </v-btn>
+      <template v-if="smAndDown">
+        <v-btn icon variant="text" @click="openImportPicker">
+          <v-icon icon="mdi-upload" />
+          <v-tooltip activator="parent" location="bottom">Import backup</v-tooltip>
+        </v-btn>
+        <v-btn icon variant="text" @click="exportBackup">
+          <v-icon icon="mdi-download" />
+          <v-tooltip activator="parent" location="bottom">Export backup</v-tooltip>
+        </v-btn>
+      </template>
+      <template v-else>
+        <v-btn variant="text" prepend-icon="mdi-upload" @click="openImportPicker">
+          Import backup
+        </v-btn>
+        <v-btn variant="text" prepend-icon="mdi-download" @click="exportBackup">
+          Export backup
+        </v-btn>
+      </template>
       <v-btn icon variant="text" @click="app.shortcutSheetOpen = true">
         <v-icon icon="mdi-help-circle-outline" />
         <v-tooltip activator="parent" location="bottom">Keyboard shortcuts (?)</v-tooltip>
