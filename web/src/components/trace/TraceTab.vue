@@ -227,6 +227,17 @@ async function openPhotoStage(): Promise<void> {
   stage.value = 1;
 }
 
+/**
+ * A newly chosen photo has already reset the trace store. The edited entry's
+ * stored photo is no longer the one in the workspace, so it is dropped here
+ * too; otherwise resuming it would load the old photo back over the new one.
+ */
+function onPhotoReplaced(): void {
+  storedPhoto.value = null;
+  photoMissing.value = false;
+  resumeError.value = null;
+}
+
 /** After a save or a cancelled edit the tab starts over at the Photo stage. */
 function restart(): void {
   stage.value = 1;
@@ -269,7 +280,7 @@ function restart(): void {
         {{ resumeError }}
       </v-alert>
       <v-progress-linear v-if="resumeBusy" indeterminate />
-      <PhotoStage @confirmed="onSheetConfirmed" />
+      <PhotoStage @confirmed="onSheetConfirmed" @photo-replaced="onPhotoReplaced" />
     </template>
 
     <div v-else>
@@ -291,8 +302,9 @@ function restart(): void {
           class="text-body-2 text-medium-emphasis"
         >
           The original photo of this trace is not stored on this device, so its
-          tools cannot be re-traced. Edit the layout here, or load a new photo
-          in the Photo stage to trace more tools.
+          tools cannot be re-traced. You can still edit the layout here.
+          Loading a new photo in the Photo stage starts a new trace and
+          discards these tools.
         </p>
         <v-alert v-if="resumeError" type="error" density="compact" class="mb-2">
           {{ resumeError }}
