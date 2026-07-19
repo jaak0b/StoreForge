@@ -306,9 +306,10 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
   if (params.labelSlot !== false) {
     body = applySlotToBody(m, params, body);
   }
-  if (body.status() !== 'NoError') {
+  const status = body.status();
+  if (status !== 'NoError') {
     body.delete();
-    throw new Error(`Pocket bin generation produced an invalid solid: ${body.status()}`);
+    throw new Error(`Pocket bin generation produced an invalid solid: ${status}`);
   }
   return body;
 }

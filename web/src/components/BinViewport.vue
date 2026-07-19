@@ -17,10 +17,14 @@ let labelMesh: THREE.Mesh | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let animationHandle = 0;
 
+// CSG output is welded: every face is planar and every shared edge is a
+// genuinely hard edge, so averaged vertex normals smear across them. Flat
+// shading uses the face normal instead.
 const material = new THREE.MeshStandardMaterial({
   color: 0xa8a8a8,
   metalness: 0.05,
   roughness: 0.65,
+  flatShading: true,
 });
 
 // A light near-neutral so the raised label face reads clearly against the
@@ -29,6 +33,7 @@ const labelMaterial = new THREE.MeshStandardMaterial({
   color: 0xe0dcd5,
   metalness: 0.05,
   roughness: 0.55,
+  flatShading: true,
 });
 
 function buildMesh(mesh: MeshData, meshMaterial: THREE.Material): THREE.Mesh {
