@@ -73,9 +73,9 @@ const api = {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
     return transferMeshes(generateSlottedBin(m, font, params));
   },
-  async generateSlottedBinUnion(params: BinParams): Promise<MeshData> {
-    const m = await loadManifold();
-    return transferMesh(generateSlottedBinUnion(m, params));
+  async generateSlottedBinUnion(params: SlottedBinParams): Promise<MeshData> {
+    const [m, font] = await Promise.all([loadManifold(), loadFont()]);
+    return transferMesh(generateSlottedBinUnion(m, font, params));
   },
   async generateInsert(params: InsertParams): Promise<PartMeshes> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
@@ -90,8 +90,8 @@ const api = {
     return transferMeshes(generatePocketBin(m, font, params));
   },
   async generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
-    const m = await loadManifold();
-    return transferMesh(generatePocketBinUnion(m, params));
+    const [m, font] = await Promise.all([loadManifold(), loadFont()]);
+    return transferMesh(generatePocketBinUnion(m, font, params));
   },
 };
 

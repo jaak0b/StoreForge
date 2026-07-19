@@ -41,10 +41,21 @@ export function withResolvedContent(content: InsertContentParams): InsertContent
   return { ...content, iconPath: custom.path };
 }
 
-/** withResolvedContent applied to a bin's paired insert content, when set. */
+/**
+ * withResolvedContent applied to a bin's paired insert content and its fused
+ * label content, when either is set: the single place that resolves custom
+ * icon paths for a bin's label, so both the swappable-insert and the fused
+ * flows (preview and STL union) reach the worker with the icon path attached.
+ */
 export function withResolvedBinInsert<T extends SlottedBinParams>(params: T): T {
-  if (params.insert === null) return params;
-  return { ...params, insert: withResolvedContent(params.insert) };
+  let resolved = params;
+  if (resolved.insert !== null) {
+    resolved = { ...resolved, insert: withResolvedContent(resolved.insert) };
+  }
+  if (resolved.fusedLabel != null) {
+    resolved = { ...resolved, fusedLabel: withResolvedContent(resolved.fusedLabel) };
+  }
+  return resolved;
 }
 
 /** withResolvedContent applied to a standalone insert's content. */

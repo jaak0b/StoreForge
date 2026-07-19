@@ -8,7 +8,7 @@ import type {
   PartMeshes,
   SlottedBinParams,
 } from './types';
-import { applySlotToBody, buildInsertSolids, insertPositionInBin } from '../label/slot';
+import { applySlotToBody, buildFusedLabel, buildInsertSolids, insertPositionInBin } from '../label/slot';
 import type { LabelSpec } from '../label/placement';
 import { iconByName } from '../label/icons';
 import {
@@ -784,7 +784,11 @@ export function generateSlottedBin(
   let body = buildSlottedBinBody(m, params);
   let label: Manifold | null = null;
   try {
-    if (params.insert !== null) {
+    if (params.fusedLabel != null) {
+      // Fused: no slot in the body (labelSlot is false), the label raised on
+      // the top face as the second-filament mesh.
+      label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
+    } else if (params.insert !== null) {
       const placed = buildInsertInSlotSolids(m, font, params.insert, params);
       const withPlate = m.Manifold.union([body, placed.plate]);
       body.delete();
@@ -803,15 +807,31 @@ export function generateSlottedBin(
 }
 
 /**
- * Generate a bin as one unioned solid for the STL download. The paired
- * insert never rides along: it is its own printable part.
+ * Generate a bin as one unioned solid for the STL download. A paired insert
+ * never rides along (it is its own printable part), but a fused label is part
+ * of the bin, so it is unioned into the single mesh.
  */
 export function generateSlottedBinUnion(
   m: ManifoldToplevel,
-  params: BinParams & { labelSlot?: boolean },
+  font: Font,
+  params: SlottedBinParams,
 ): MeshData {
-  const body = buildSlottedBinBody(m, params);
+  let body = buildSlottedBinBody(m, params);
   try {
+    if (params.fusedLabel != null) {
+      const label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
+      if (label !== null) {
+        const union = m.Manifold.union([body, label]);
+        body.delete();
+        label.delete();
+        if (union.status() !== 'NoError') {
+          const status = union.status();
+          union.delete();
+          throw new Error(`Fused bin union produced an invalid solid: ${status}`);
+        }
+        body = union;
+      }
+    }
     return manifoldToMeshData(body);
   } finally {
     body.delete();

@@ -33,7 +33,7 @@ const emit = defineEmits<{
 const designer = useBinDesigner();
 const trace = useToolTrace();
 
-const { labelText, labelIcon, productChoice, heightUnits } = storeToRefs(designer);
+const { labelText, labelIcon, productChoice, fused, heightUnits } = storeToRefs(designer);
 const {
   tools,
   selectedToolId,
@@ -386,7 +386,7 @@ function toolSummary(rotationDeg: number, offsetMm: number, minHoleWidthMm: numb
         v-model:icon="labelIcon"
         class="mt-2"
       />
-      <ProductSelect v-model="productChoice" hide-insert-only class="mt-2" />
+      <ProductSelect v-model="productChoice" v-model:fused="fused" hide-insert-only class="mt-2" />
       <MoreOptions
         per-bin-fields
         hide-dividers

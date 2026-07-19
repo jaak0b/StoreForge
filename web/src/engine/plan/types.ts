@@ -170,6 +170,15 @@ export interface BinWithInsertProduct {
   bin: Bin;
   /** The insert's printed content. Its width is bin.gridX. */
   insert: LabelContent;
+  /**
+   * When true, the bin and its label print as one fused piece: no insert slot
+   * is cut into the bin and no separate insert part is printed; instead the
+   * label content is raised directly on the bin's top face at the position the
+   * insert label would occupy. Absent or false keeps the swappable-insert
+   * packaging. Applies to bins of every origin (manual, screw, traced), since
+   * they all order the label through this product kind.
+   */
+  fused?: boolean;
 }
 
 /**

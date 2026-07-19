@@ -30,6 +30,12 @@ export const useBinDesigner = defineStore('binDesigner', {
     labelText: '',
     labelText2: '',
     labelIcon: null as string | null,
+    /**
+     * Whether a Bin + label insert product prints as one fused piece (label
+     * raised on the bin, no swappable insert slot). Only meaningful when the
+     * product choice is binWithInsert.
+     */
+    fused: false,
     notes: '',
     moreOptionsOpen: false,
   }),
@@ -51,10 +57,13 @@ export const useBinDesigner = defineStore('binDesigner', {
      * riding along for the preview when the product includes the insert.
      */
     binParams(state): SlottedBinParams {
-      const insert: InsertContentParams | null =
-        state.productChoice === 'binWithInsert'
-          ? { text: state.labelText, text2: state.labelText2, icon: state.labelIcon }
-          : null;
+      const content: InsertContentParams = {
+        text: state.labelText,
+        text2: state.labelText2,
+        icon: state.labelIcon,
+      };
+      const withInsert = state.productChoice === 'binWithInsert';
+      const fused = withInsert && state.fused;
       return {
         gridX: state.gridX,
         gridY: state.gridY,
@@ -62,8 +71,10 @@ export const useBinDesigner = defineStore('binDesigner', {
         magnetHoles: state.magnetHoles,
         dividerCountX: state.dividerCountX,
         dividerCountY: state.dividerCountY,
-        labelSlot: state.productChoice !== 'plainBin',
-        insert,
+        // A fused bin has no slot; the label is raised on the top face instead.
+        labelSlot: state.productChoice !== 'plainBin' && !fused,
+        insert: withInsert && !fused ? content : null,
+        fusedLabel: fused ? content : null,
       };
     },
   },

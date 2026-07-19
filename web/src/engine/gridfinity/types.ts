@@ -56,6 +56,15 @@ export interface SlottedBinParams extends BinParams {
   labelSlot: boolean;
   /** Content of the paired label insert, or null for a bin alone. */
   insert: InsertContentParams | null;
+  /**
+   * Content of a fused label raised directly on the bin's top face, or null
+   * for a bin without one. When set, the body is built with no insert slot
+   * (labelSlot is false) and no separate insert prints: the label content is
+   * raised on the top face at the position the insert label would occupy, and
+   * the raised label is the part's second-filament mesh. Mutually exclusive
+   * with a paired insert.
+   */
+  fusedLabel?: InsertContentParams | null;
 }
 
 /** Parameters describing a standalone label insert to generate. */

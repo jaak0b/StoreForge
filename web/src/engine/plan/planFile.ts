@@ -538,6 +538,11 @@ export function validateProduct(raw: unknown, subject: string): string | null {
   if (product.kind === 'binWithInsert') {
     const binProblem = validateBin(product.bin, subject);
     if (binProblem !== null) return binProblem;
+    // fused was added after the first binWithInsert plans shipped; older files
+    // omit it, so undefined is accepted and means the swappable insert.
+    if (product.fused !== undefined && typeof product.fused !== 'boolean') {
+      return `${subject}: fused must be true or false`;
+    }
     return validateContent(product.insert, subject);
   }
   if (product.kind === 'insert') {
@@ -575,11 +580,13 @@ export function pickProduct(
     );
   }
   if (raw.kind === 'binWithInsert') {
-    return {
+    const product: Product = {
       kind: 'binWithInsert',
       bin: pickBin(raw.bin as Record<string, unknown>),
       insert: pickContent(raw.insert as Record<string, unknown>),
     };
+    if (raw.fused === true) product.fused = true;
+    return product;
   }
   const base = {
     kind: 'insert' as const,

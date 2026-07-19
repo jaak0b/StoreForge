@@ -33,8 +33,8 @@ export async function generateSlottedBin(params: SlottedBinParams): Promise<Part
 }
 
 /** Generate a slotted bin as one unioned mesh for the STL download. */
-export async function generateSlottedBinUnion(params: BinParams): Promise<MeshData> {
-  return getWorker().generateSlottedBinUnion(params);
+export async function generateSlottedBinUnion(params: SlottedBinParams): Promise<MeshData> {
+  return getWorker().generateSlottedBinUnion(withResolvedBinInsert(params));
 }
 
 /** Generate a label insert as separate plate and inlay meshes. */
@@ -54,5 +54,5 @@ export async function generatePocketBin(params: PocketBinParams): Promise<PartMe
 
 /** Generate a pocket bin as one unioned mesh for the STL download. */
 export async function generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
-  return getWorker().generatePocketBinUnion(params);
+  return getWorker().generatePocketBinUnion(withResolvedBinInsert(params));
 }
