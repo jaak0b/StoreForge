@@ -251,7 +251,43 @@ describe('snapping', () => {
     expect(snapped.x1).toBe(-7.3);
     expect(snapped.y1).toBe(4.1);
     expect(snapped.y2).toBeCloseTo(4.1, 9);
-    expect(snapped.x2).toBeCloseTo(13.7, 9);
+    // The dragged end lands on the lattice itself: it is the position that
+    // snaps, not the length. The drag reached 13.6, and 10.5 is the nearest
+    // lattice column to it along the snapped direction.
+    expect(snapped.x2).toBeCloseTo(10.5, 9);
+  });
+
+  it('spans the whole interior of a one wide bin when dragged to the edge', () => {
+    // A one wide bin's interior is 39.6 mm deep, which is not a multiple of
+    // the 10.5 mm lattice step. Quantizing the length would stop the wall at
+    // 31.5 mm and never reach the bin wall, so the most common divider of all,
+    // a full span one, would be impossible to draw with snapping on.
+    const s = state(1, 1, [{ x1: 0, y1: -19.8, x2: 0, y2: 0 }]);
+    moveWallEndpoint(s, 0, 2, 0, 500, on);
+    expect(s.walls[0].x2).toBeCloseTo(0, 9);
+    expect(s.walls[0].y2).toBeCloseTo(19.8, 9);
+    expect(wallLength(s.walls[0])).toBeCloseTo(39.6, 9);
+    expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
+  });
+
+  it('spans the whole interior of a three wide bin when dragged to the edge', () => {
+    // A three wide bin's interior is 123.6 mm across, again not a whole
+    // number of 10.5 mm steps: the last lattice crossing before the wall is
+    // at 53.7 mm and the boundary is at 61.8 mm.
+    const s = state(3, 2, [{ x1: -61.8, y1: 0, x2: 0, y2: 0 }]);
+    moveWallEndpoint(s, 0, 2, 500, 0, on);
+    expect(s.walls[0].y2).toBeCloseTo(0, 9);
+    expect(s.walls[0].x2).toBeCloseTo(61.8, 9);
+    expect(wallLength(s.walls[0])).toBeCloseTo(123.6, 9);
+    expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
+  });
+
+  it('takes the lattice crossing when the drag stops short of the bin wall', () => {
+    // Dragged to 12 mm, well inside the bin, so the boundary at 19.8 mm is
+    // not the nearest stopping point and the lattice wins.
+    const s = state(1, 1, [{ x1: 0, y1: -19.8, x2: 0, y2: 0 }]);
+    moveWallEndpoint(s, 0, 2, 0, 12, on);
+    expect(s.walls[0].y2).toBeCloseTo(10.5, 9);
   });
 
   it('keeps the angle of a wall that is only being translated', () => {

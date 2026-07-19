@@ -122,23 +122,97 @@ export function snapPoint(
 export type SnapAnchor = 'translate' | 1 | 2;
 
 /**
+ * A bin footprint in grid cells: everything the interior rectangle derives
+ * from. Snapping takes one so the interior boundary can be a snap target;
+ * DividerState satisfies it, so the editor paths pass their own state.
+ */
+export interface BinFootprint {
+  gridX: number;
+  gridY: number;
+}
+
+/** Tolerance for the degenerate direction and boundary containment tests. */
+const SNAP_EPS = 1e-9;
+
+/**
+ * The distances along a ray at which a dragged endpoint may legitimately come
+ * to rest: the ray's crossings with the position snapping lattice's grid
+ * lines (standard ray/axis-aligned-line intersection, only the two crossings
+ * per axis bracketing the drag distance, since a farther one can never be the
+ * nearest), plus, when the footprint is known, the ray's intersections with
+ * the interior rectangle's boundary. The boundary belongs in the set because
+ * it is where a full span wall terminates, exactly as evenDividerWalls places
+ * its endpoints. Candidates behind the anchor, and any landing outside the
+ * interior, are dropped.
+ */
+function snapStopsAlongRay(
+  anchor: { x: number; y: number },
+  ux: number,
+  uy: number,
+  dragLength: number,
+  footprint?: BinFootprint,
+): number[] {
+  const axes = [
+    { origin: anchor.x, direction: ux },
+    { origin: anchor.y, direction: uy },
+  ];
+  const stops: number[] = [];
+  for (const axis of axes) {
+    if (Math.abs(axis.direction) < SNAP_EPS) continue;
+    const at = axis.origin + dragLength * axis.direction;
+    const line = at / SNAP_STEP_MM;
+    for (const k of [Math.floor(line), Math.ceil(line)]) {
+      stops.push((k * SNAP_STEP_MM - axis.origin) / axis.direction);
+    }
+  }
+  if (footprint) {
+    const { hx, hy } = interiorHalfExtents(footprint);
+    const edges = [
+      { origin: anchor.x, direction: ux, at: hx },
+      { origin: anchor.x, direction: ux, at: -hx },
+      { origin: anchor.y, direction: uy, at: hy },
+      { origin: anchor.y, direction: uy, at: -hy },
+    ];
+    for (const edge of edges) {
+      if (Math.abs(edge.direction) < SNAP_EPS) continue;
+      stops.push((edge.at - edge.origin) / edge.direction);
+    }
+  }
+  return stops.filter((t) => {
+    if (!(t > SNAP_EPS)) return false;
+    if (!footprint) return true;
+    const { hx, hy } = interiorHalfExtents(footprint);
+    return (
+      Math.abs(anchor.x + t * ux) <= hx + SNAP_EPS &&
+      Math.abs(anchor.y + t * uy) <= hy + SNAP_EPS
+    );
+  });
+}
+
+/**
  * The snapped form of a wall for the edit that produced it.
  *
  * Translating ('translate') moves both endpoints by the offset that puts the
  * first endpoint on the lattice, which leaves the length and the angle exactly
  * as they were. Reshaping (1 or 2, the endpoint being dragged) holds the other
- * endpoint fixed and rebuilds the dragged one from a direction rounded to
- * SNAP_ANGLE_STEP_DEG and a length rounded to the lattice step, so a wall
- * grown from a snapped anchor ends on the lattice too. The length never
- * rounds below one step, since a zero length wall is not a wall.
+ * endpoint fixed, rounds the direction to SNAP_ANGLE_STEP_DEG, and then places
+ * the dragged endpoint at the legitimate stopping point along that ray nearest
+ * the drag: a lattice crossing, or the interior boundary, so a wall can span
+ * the interior exactly. The endpoint's position is what quantizes; the length
+ * follows from it and is never quantized as a proxy.
+ *
+ * Passing the footprint makes the interior boundary a snap target and keeps
+ * the result inside the interior; without it only the lattice applies.
  *
  * Returns a copy of the wall unchanged when snapping is off. Pure: standard
- * rounding, atan2 and rotation about a point, with no tuned constants.
+ * rounding, atan2, rotation about a point and ray/line intersection, with no
+ * tuned constants.
  */
 export function snapWall(
   wall: DividerWall,
   anchor: SnapAnchor,
   options: SnapOptions,
+  footprint?: BinFootprint,
 ): DividerWall {
   if (!options.enabled) return { ...wall };
   if (anchor === 'translate') {
@@ -154,13 +228,28 @@ export function snapWall(
   }
   const fixed = anchor === 1 ? { x: wall.x2, y: wall.y2 } : { x: wall.x1, y: wall.y1 };
   const moved = anchor === 1 ? { x: wall.x1, y: wall.y1 } : { x: wall.x2, y: wall.y2 };
+  const dragLength = Math.hypot(moved.x - fixed.x, moved.y - fixed.y);
+  if (dragLength === 0) return { ...wall };
   const angle = Math.atan2(moved.y - fixed.y, moved.x - fixed.x);
   const step = (SNAP_ANGLE_STEP_DEG * Math.PI) / 180;
   const snappedAngle = roundToMultiple(angle, step);
-  const length = Math.max(SNAP_STEP_MM, roundToMultiple(Math.hypot(moved.x - fixed.x, moved.y - fixed.y), SNAP_STEP_MM));
+  const ux = Math.cos(snappedAngle);
+  const uy = Math.sin(snappedAngle);
+  const stops = snapStopsAlongRay(fixed, ux, uy, dragLength, footprint);
+  // With no stop reachable (an anchor already outside the interior), the drag
+  // distance stands and the caller's clamp is what bounds the wall.
+  let distance = dragLength;
+  let best = Infinity;
+  for (const stop of stops) {
+    const error = Math.abs(stop - dragLength);
+    if (error < best) {
+      best = error;
+      distance = stop;
+    }
+  }
   const end = {
-    x: fixed.x + length * Math.cos(snappedAngle),
-    y: fixed.y + length * Math.sin(snappedAngle),
+    x: fixed.x + distance * ux,
+    y: fixed.y + distance * uy,
   };
   return anchor === 1
     ? { x1: end.x, y1: end.y, x2: fixed.x, y2: fixed.y }
@@ -315,17 +404,15 @@ export function validateWalls(
  * model's LayoutState, and the designer store satisfies it structurally, so
  * the store's actions are one-to-one wrappers with no logic of their own.
  */
-export interface DividerState {
+export interface DividerState extends BinFootprint {
   walls: DividerWall[];
-  gridX: number;
-  gridY: number;
 }
 
 /** Half-extents of a footprint's interior rectangle, in bin-local mm. */
-function interiorHalfExtents(state: DividerState): { hx: number; hy: number } {
+function interiorHalfExtents(footprint: BinFootprint): { hx: number; hy: number } {
   return {
-    hx: binInteriorSizeMm(state.gridX) / 2,
-    hy: binInteriorSizeMm(state.gridY) / 2,
+    hx: binInteriorSizeMm(footprint.gridX) / 2,
+    hy: binInteriorSizeMm(footprint.gridY) / 2,
   };
 }
 
@@ -379,7 +466,7 @@ export function addWall(
   // rebuilds the second about it, so both the position and the angle are
   // clean; with snapping off both passes are the identity.
   const positioned = snapWall(wall, 'translate', snap);
-  state.walls.push(clampWall(state, snapWall(positioned, 2, snap)));
+  state.walls.push(clampWall(state, snapWall(positioned, 2, snap, state)));
   return state.walls[state.walls.length - 1];
 }
 
@@ -451,41 +538,6 @@ export function moveWall(
   wall.y2 += dy;
 }
 
-/** Whether a point lies within the interior rectangle. */
-function insideInterior(state: DividerState, x: number, y: number): boolean {
-  const { hx, hy } = interiorHalfExtents(state);
-  const eps = 1e-9;
-  return Math.abs(x) <= hx + eps && Math.abs(y) <= hy + eps;
-}
-
-/**
- * The snapped endpoint to actually place, given the anchor it pivots about.
- * Clamping a snapped endpoint into the interior would pull it off the angle
- * it was just snapped to, so the wall is shortened by whole lattice steps
- * until it fits, which keeps the snapped direction exact. When not even one
- * step fits, the caller's clamp applies and the angle gives way to the bin.
- */
-function fitSnappedEndpoint(
-  state: DividerState,
-  anchor: { x: number; y: number },
-  end: { x: number; y: number },
-): { x: number; y: number } {
-  const dx = end.x - anchor.x;
-  const dy = end.y - anchor.y;
-  const length = Math.hypot(dx, dy);
-  if (length === 0) return end;
-  const ux = dx / length;
-  const uy = dy / length;
-  for (let steps = Math.round(length / SNAP_STEP_MM); steps >= 1; steps--) {
-    const candidate = {
-      x: anchor.x + ux * steps * SNAP_STEP_MM,
-      y: anchor.y + uy * steps * SNAP_STEP_MM,
-    };
-    if (insideInterior(state, candidate.x, candidate.y)) return candidate;
-  }
-  return end;
-}
-
 /**
  * Moves one endpoint of the wall at index to an absolute bin-local position,
  * clamped into the interior, leaving the other endpoint where it is: the
@@ -507,16 +559,13 @@ export function moveWallEndpoint(
     endpoint === 1
       ? { x1: xMm, y1: yMm, x2: wall.x2, y2: wall.y2 }
       : { x1: wall.x1, y1: wall.y1, x2: xMm, y2: yMm };
-  const snapped = snapWall(dragged, endpoint, snap);
-  let target =
+  // The footprint goes with it, so the snapped position can land on the
+  // interior boundary and a full span wall is reachable with snapping on.
+  const snapped = snapWall(dragged, endpoint, snap, state);
+  const target =
     endpoint === 1
       ? { x: snapped.x1, y: snapped.y1 }
       : { x: snapped.x2, y: snapped.y2 };
-  if (snap.enabled) {
-    const anchor =
-      endpoint === 1 ? { x: snapped.x2, y: snapped.y2 } : { x: snapped.x1, y: snapped.y1 };
-    target = fitSnappedEndpoint(state, anchor, target);
-  }
   const p = clampPoint(state, target.x, target.y);
   if (endpoint === 1) {
     wall.x1 = p.x;
