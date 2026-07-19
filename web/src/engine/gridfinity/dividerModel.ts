@@ -6,7 +6,7 @@
 // Every counts-to-walls conversion (the designer store, plan file legacy
 // load) goes through evenDividerWalls so there is one spacing source; every
 // generation and edit path validates through validateWalls.
-import { binInteriorSizeMm, DIVIDER_THICKNESS, MIN_COMPARTMENT_MM } from './constants';
+import { binInteriorSizeMm, DIVIDER_THICKNESS, MIN_COMPARTMENT_MM, PITCH } from './constants';
 
 /**
  * One interior divider wall: a free segment in bin-local mm (bin centred on
@@ -52,6 +52,119 @@ export function evenDividerWalls(
 /** Length of a divider wall's centreline segment. */
 export function wallLength(wall: DividerWall): number {
   return Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
+}
+
+/**
+ * Direction of a divider wall in degrees, measured from the +X axis towards
+ * +Y, in the range (-180, 180]. The single home for the figure, so the
+ * editor's readout and the snapping math cannot disagree about it.
+ */
+export function wallAngleDeg(wall: DividerWall): number {
+  return (Math.atan2(wall.y2 - wall.y1, wall.x2 - wall.x1) * 180) / Math.PI;
+}
+
+/**
+ * Editor snapping settings. A single global editor setting, not a per wall
+ * property: it constrains how an edit is applied, and leaves no trace on the
+ * wall it produced, so a wall drawn with snapping on is an ordinary free
+ * segment afterwards.
+ */
+export interface SnapOptions {
+  enabled: boolean;
+}
+
+/** Snapping off: the identity setting, so callers can always pass something. */
+export const SNAP_OFF: SnapOptions = { enabled: false };
+
+/**
+ * How many equal parts of the Gridfinity grid pitch a snapped position may
+ * land on. Quarters of the 42 mm pitch put every cell boundary on the lattice
+ * for both odd and even footprints (the bin is centred on the origin, so
+ * boundaries fall on multiples of half the pitch), and add two intermediate
+ * positions per cell. Derived from PITCH; never a literal spacing.
+ */
+export const SNAP_PITCH_DIVISIONS = 4;
+
+/** Spacing in mm of the position snapping lattice. */
+export const SNAP_STEP_MM = PITCH / SNAP_PITCH_DIVISIONS;
+
+/**
+ * Angle increment in degrees a snapped wall's direction lands on. 15 degrees
+ * covers the axis-aligned and diagonal cases (0, 45, 90) and the common
+ * thirds (30, 60) in one step size.
+ */
+export const SNAP_ANGLE_STEP_DEG = 15;
+
+/** Rounds a value to the nearest multiple of step. */
+function roundToMultiple(value: number, step: number): number {
+  return Math.round(value / step) * step;
+}
+
+/**
+ * The nearest point on the position snapping lattice, which is anchored on
+ * the bin's centre (the origin of the wall model's coordinates). Returns the
+ * point unchanged when snapping is off.
+ */
+export function snapPoint(
+  x: number,
+  y: number,
+  options: SnapOptions,
+): { x: number; y: number } {
+  if (!options.enabled) return { x, y };
+  return { x: roundToMultiple(x, SNAP_STEP_MM), y: roundToMultiple(y, SNAP_STEP_MM) };
+}
+
+/**
+ * How a snapped edit is anchored. Translating a whole wall keeps its
+ * direction, so only its position snaps; reshaping pivots about the endpoint
+ * that is staying put, so its direction snaps as well.
+ */
+export type SnapAnchor = 'translate' | 1 | 2;
+
+/**
+ * The snapped form of a wall for the edit that produced it.
+ *
+ * Translating ('translate') moves both endpoints by the offset that puts the
+ * first endpoint on the lattice, which leaves the length and the angle exactly
+ * as they were. Reshaping (1 or 2, the endpoint being dragged) holds the other
+ * endpoint fixed and rebuilds the dragged one from a direction rounded to
+ * SNAP_ANGLE_STEP_DEG and a length rounded to the lattice step, so a wall
+ * grown from a snapped anchor ends on the lattice too. The length never
+ * rounds below one step, since a zero length wall is not a wall.
+ *
+ * Returns a copy of the wall unchanged when snapping is off. Pure: standard
+ * rounding, atan2 and rotation about a point, with no tuned constants.
+ */
+export function snapWall(
+  wall: DividerWall,
+  anchor: SnapAnchor,
+  options: SnapOptions,
+): DividerWall {
+  if (!options.enabled) return { ...wall };
+  if (anchor === 'translate') {
+    const snapped = snapPoint(wall.x1, wall.y1, options);
+    const dx = snapped.x - wall.x1;
+    const dy = snapped.y - wall.y1;
+    return {
+      x1: wall.x1 + dx,
+      y1: wall.y1 + dy,
+      x2: wall.x2 + dx,
+      y2: wall.y2 + dy,
+    };
+  }
+  const fixed = anchor === 1 ? { x: wall.x2, y: wall.y2 } : { x: wall.x1, y: wall.y1 };
+  const moved = anchor === 1 ? { x: wall.x1, y: wall.y1 } : { x: wall.x2, y: wall.y2 };
+  const angle = Math.atan2(moved.y - fixed.y, moved.x - fixed.x);
+  const step = (SNAP_ANGLE_STEP_DEG * Math.PI) / 180;
+  const snappedAngle = roundToMultiple(angle, step);
+  const length = Math.max(SNAP_STEP_MM, roundToMultiple(Math.hypot(moved.x - fixed.x, moved.y - fixed.y), SNAP_STEP_MM));
+  const end = {
+    x: fixed.x + length * Math.cos(snappedAngle),
+    y: fixed.y + length * Math.sin(snappedAngle),
+  };
+  return anchor === 1
+    ? { x1: end.x, y1: end.y, x2: fixed.x, y2: fixed.y }
+    : { x1: fixed.x, y1: fixed.y, x2: end.x, y2: end.y };
 }
 
 /**
@@ -257,8 +370,16 @@ export function nextDefaultWall(state: DividerState): DividerWall {
  * Appends a wall, clamped into the interior, and returns the stored wall (the
  * reactive instance when the state is a store).
  */
-export function addWall(state: DividerState, wall: DividerWall): DividerWall {
-  state.walls.push(clampWall(state, wall));
+export function addWall(
+  state: DividerState,
+  wall: DividerWall,
+  snap: SnapOptions = SNAP_OFF,
+): DividerWall {
+  // Snapping a new wall puts its first endpoint on the lattice and then
+  // rebuilds the second about it, so both the position and the angle are
+  // clean; with snapping off both passes are the identity.
+  const positioned = snapWall(wall, 'translate', snap);
+  state.walls.push(clampWall(state, snapWall(positioned, 2, snap)));
   return state.walls[state.walls.length - 1];
 }
 
@@ -294,16 +415,31 @@ export function duplicateWall(state: DividerState, index: number): DividerWall |
  * axis to the largest shift that keeps every endpoint inside the interior, so
  * a wall dragged against the bin wall stops rigid instead of deforming.
  */
-export function moveWall(state: DividerState, index: number, dxMm: number, dyMm: number): void {
+export function moveWall(
+  state: DividerState,
+  index: number,
+  dxMm: number,
+  dyMm: number,
+  snap: SnapOptions = SNAP_OFF,
+): void {
   if (index < 0 || index >= state.walls.length) return;
   const wall = state.walls[index];
-  let dx = dxMm;
-  let dy = dyMm;
+  // Snapping resolves against the lattice in absolute terms rather than
+  // accumulating the drag, so a wall held near a lattice position stays on it.
+  const shifted = snapWall(
+    { x1: wall.x1 + dxMm, y1: wall.y1 + dyMm, x2: wall.x2 + dxMm, y2: wall.y2 + dyMm },
+    'translate',
+    snap,
+  );
+  const requestedDx = shifted.x1 - wall.x1;
+  const requestedDy = shifted.y1 - wall.y1;
+  let dx = requestedDx;
+  let dy = requestedDy;
   for (const end of [
     { x: wall.x1, y: wall.y1 },
     { x: wall.x2, y: wall.y2 },
   ]) {
-    const clamped = clampPoint(state, end.x + dxMm, end.y + dyMm);
+    const clamped = clampPoint(state, end.x + requestedDx, end.y + requestedDy);
     const ex = clamped.x - end.x;
     const ey = clamped.y - end.y;
     if (Math.abs(ex) < Math.abs(dx)) dx = ex;
@@ -313,6 +449,41 @@ export function moveWall(state: DividerState, index: number, dxMm: number, dyMm:
   wall.y1 += dy;
   wall.x2 += dx;
   wall.y2 += dy;
+}
+
+/** Whether a point lies within the interior rectangle. */
+function insideInterior(state: DividerState, x: number, y: number): boolean {
+  const { hx, hy } = interiorHalfExtents(state);
+  const eps = 1e-9;
+  return Math.abs(x) <= hx + eps && Math.abs(y) <= hy + eps;
+}
+
+/**
+ * The snapped endpoint to actually place, given the anchor it pivots about.
+ * Clamping a snapped endpoint into the interior would pull it off the angle
+ * it was just snapped to, so the wall is shortened by whole lattice steps
+ * until it fits, which keeps the snapped direction exact. When not even one
+ * step fits, the caller's clamp applies and the angle gives way to the bin.
+ */
+function fitSnappedEndpoint(
+  state: DividerState,
+  anchor: { x: number; y: number },
+  end: { x: number; y: number },
+): { x: number; y: number } {
+  const dx = end.x - anchor.x;
+  const dy = end.y - anchor.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return end;
+  const ux = dx / length;
+  const uy = dy / length;
+  for (let steps = Math.round(length / SNAP_STEP_MM); steps >= 1; steps--) {
+    const candidate = {
+      x: anchor.x + ux * steps * SNAP_STEP_MM,
+      y: anchor.y + uy * steps * SNAP_STEP_MM,
+    };
+    if (insideInterior(state, candidate.x, candidate.y)) return candidate;
+  }
+  return end;
 }
 
 /**
@@ -326,10 +497,27 @@ export function moveWallEndpoint(
   endpoint: 1 | 2,
   xMm: number,
   yMm: number,
+  snap: SnapOptions = SNAP_OFF,
 ): void {
   if (index < 0 || index >= state.walls.length) return;
   const wall = state.walls[index];
-  const p = clampPoint(state, xMm, yMm);
+  // The endpoint that is staying put anchors the snap, so the wall pivots
+  // about it onto a clean angle instead of drifting.
+  const dragged =
+    endpoint === 1
+      ? { x1: xMm, y1: yMm, x2: wall.x2, y2: wall.y2 }
+      : { x1: wall.x1, y1: wall.y1, x2: xMm, y2: yMm };
+  const snapped = snapWall(dragged, endpoint, snap);
+  let target =
+    endpoint === 1
+      ? { x: snapped.x1, y: snapped.y1 }
+      : { x: snapped.x2, y: snapped.y2 };
+  if (snap.enabled) {
+    const anchor =
+      endpoint === 1 ? { x: snapped.x2, y: snapped.y2 } : { x: snapped.x1, y: snapped.y1 };
+    target = fitSnappedEndpoint(state, anchor, target);
+  }
+  const p = clampPoint(state, target.x, target.y);
   if (endpoint === 1) {
     wall.x1 = p.x;
     wall.y1 = p.y;

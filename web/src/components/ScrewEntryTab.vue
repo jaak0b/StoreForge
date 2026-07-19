@@ -105,18 +105,22 @@ function headIconPath(headType: HeadType): string {
 }
 
 /**
- * Divider walls carried by the screw entry being edited. This tab derives the
- * bin footprint from the screw and can produce several bins at once, so it
- * offers no divider editor yet; keeping the loaded walls here means editing a
- * screw entry that has them and saving again does not throw them away. Walls
- * that no longer fit the derived footprint are dropped, since they would only
- * fail the geometry layer's validation.
+ * The divider walls of a screw bin live in the designer store, the same place
+ * the Manual bin tab edits them, so both tabs share one editor and one wall
+ * list. This tab derives the bin footprint from the screw rather than from a
+ * field, and a comma list can produce bins of several widths at once. A wall
+ * list is authored against one interior, so it is only meaningful when the
+ * pending submit yields a single footprint: see singleFootprint below, which
+ * gates both the editor and the submit.
+ *
+ * The walls are passed through as entered and never filtered here: a wall the
+ * derived footprint cannot hold blocks the submit with the validator's own
+ * message (see wallProblem) rather than disappearing on save.
  */
-const loadedWalls = ref<DividerWall[]>([]);
-
-function wallsFor(cells: number): DividerWall[] {
-  if (validateWalls(loadedWalls.value, cells, 1) !== null) return [];
-  return loadedWalls.value.map((wall) => ({ ...wall }));
+function wallsFor(): DividerWall[] {
+  // Detached plain objects: the walls travel to the geometry worker by
+  // structured clone, which cannot clone the store's reactive proxies.
+  return store.walls.map((wall) => ({ ...wall }));
 }
 
 /** The width in cells and label content a screw batch turns into. */
@@ -164,7 +168,7 @@ function productFor(
     gridY: 1,
     heightUnits: binHeightUnits,
     magnetHoles: store.magnetHoles,
-    walls: wallsFor(cells),
+    walls: wallsFor(),
     screw,
   };
   // A screw bin is printed to carry its label, so the tab offers no bin-alone
@@ -246,7 +250,6 @@ const keptEnteredText = computed(() =>
 watch(
   () => (app.editingKind === 'screw' ? app.editingEntryId : null),
   (entryId) => {
-    loadedWalls.value = [];
     if (entryId === null) return;
     const entry = queue.entryById(entryId);
     if (entry === null || originOf(entry.product) !== 'screw') return;
@@ -274,7 +277,10 @@ watch(
     };
     if (product.kind !== 'insert' && product.bin.origin === 'screw') {
       patch.magnetHoles = product.bin.magnetHoles;
-      loadedWalls.value = product.bin.walls.map((wall: DividerWall) => ({ ...wall }));
+      // The loaded entry's walls become the editor's walls, so editing a screw
+      // bin that has dividers shows them rather than starting from empty.
+      patch.walls = product.bin.walls.map((wall: DividerWall) => ({ ...wall }));
+      patch.selectedWallIndex = null;
     }
     store.$patch(patch);
   },
@@ -327,6 +333,64 @@ const pending = computed<{
   };
 });
 
+/**
+ * The distinct bin widths in cells the pending submit would produce. Divider
+ * walls are bin-local millimetres against one interior, so a submit that
+ * yields several widths has no single interior to author them against.
+ */
+const pendingFootprints = computed<number[]>(() => [
+  ...new Set(
+    pending.value.batches
+      .map(({ product }) => (product.kind === 'insert' ? null : product.bin.gridX))
+      .filter((cells): cells is number => cells !== null),
+  ),
+]);
+
+/** The one footprint the pending submit produces, or null when it is not one. */
+const singleFootprint = computed<number | null>(() =>
+  pendingFootprints.value.length === 1 ? pendingFootprints.value[0] : null,
+);
+
+// The divider editor draws the interior from the store's footprint, so the
+// derived screw footprint is published there. gridY is 1 because a screw bin
+// is always one cell deep.
+watch(
+  singleFootprint,
+  (cells) => {
+    if (cells === null) return;
+    store.gridX = cells;
+    store.gridY = 1;
+  },
+  { immediate: true },
+);
+
+/**
+ * Why the divider editor is unavailable, or null when it is offered. Walls
+ * already entered are never discarded behind the user's back: while this is
+ * set, the submit is blocked instead (see wallProblem).
+ */
+const dividerNotice = computed<string | null>(() => {
+  if (insertOnly.value || singleFootprint.value !== null) return null;
+  return 'Divider walls apply to one bin size. Enter a single screw to add them.';
+});
+
+/**
+ * Why the entered divider walls stop the submit, or null when they are fine.
+ * Walls are never dropped behind the user's back: either they go into every
+ * bin the submit creates, or the submit says why they cannot. A wall list the
+ * derived footprint cannot hold reports the divider validator's own message.
+ */
+const wallProblem = computed<string | null>(() => {
+  if (insertOnly.value || store.walls.length === 0) return null;
+  if (singleFootprint.value === null) {
+    return (
+      'The divider walls you entered fit one bin size, and this list produces bins of ' +
+      'several widths. Enter one screw at a time, or delete the walls, to continue.'
+    );
+  }
+  return validateWalls(store.walls, singleFootprint.value, 1);
+});
+
 const resultText = computed(() => {
   if (isMultiple.value) {
     const n = completeBatches.value.length;
@@ -340,7 +404,7 @@ const resultText = computed(() => {
   return `Resulting bin: ${productLabelText(product)} (${productSizeText(product)}).`;
 });
 
-const formValid = computed(() => pending.value.batches.length > 0);
+const formValid = computed(() => pending.value.batches.length > 0 && wallProblem.value === null);
 
 const addedSnackbar = ref(false);
 const addedText = ref('');
@@ -535,7 +599,11 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
 
       <ProductSelect v-model="productChoice" hide-bin-alone class="mt-4" />
 
-      <MoreOptions :per-bin-fields="false" :insert-only="insertOnly" hide-dividers />
+      <MoreOptions
+        :per-bin-fields="false"
+        :insert-only="insertOnly"
+        :divider-notice="dividerNotice"
+      />
 
       <div class="d-flex ga-2 mt-4">
         <v-btn
@@ -552,6 +620,9 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
           Cancel edit
         </v-btn>
       </div>
+      <v-alert v-if="wallProblem" type="warning" variant="tonal" density="compact" class="mt-2">
+        {{ wallProblem }}
+      </v-alert>
       <v-alert
         v-if="editingEntry !== null"
         type="info"

@@ -36,6 +36,14 @@ export const useBinDesigner = defineStore('binDesigner', {
     walls: [] as DividerWall[],
     /** Index of the wall the canvas editor has selected, or null for none. */
     selectedWallIndex: null as number | null,
+    /**
+     * Whether interactive divider edits snap to the quarter pitch lattice and
+     * to 15 degree directions. A global editor setting rather than a property
+     * of any wall: it constrains how an edit is applied and leaves nothing
+     * behind on the wall it produced. On by default, since clean layouts are
+     * the common case and free angles are the deliberate exception.
+     */
+    snapEnabled: true,
     labelText: '',
     labelText2: '',
     labelIcon: null as string | null,
@@ -90,9 +98,19 @@ export const useBinDesigner = defineStore('binDesigner', {
       this.selectedWallIndex =
         index !== null && index >= 0 && index < this.walls.length ? index : null;
     },
+    /** The current snapping settings, as the divider model takes them. */
+    snapOptions(): divider.SnapOptions {
+      return { enabled: this.snapEnabled };
+    },
     /** Adds a wall, selects it, and returns its index. */
     addWall(wall?: DividerWall): number {
-      divider.addWall(this, wall ?? divider.nextDefaultWall(this));
+      // A wall placed by the toolbar already sits on a generated position, so
+      // only a wall drawn on the canvas is worth snapping.
+      divider.addWall(
+        this,
+        wall ?? divider.nextDefaultWall(this),
+        wall === undefined ? divider.SNAP_OFF : this.snapOptions(),
+      );
       this.selectedWallIndex = this.walls.length - 1;
       return this.selectedWallIndex;
     },
@@ -105,11 +123,12 @@ export const useBinDesigner = defineStore('binDesigner', {
       this.selectedWallIndex = this.walls.length - 1;
     },
     moveWall(index: number, dxMm: number, dyMm: number): void {
-      divider.moveWall(this, index, dxMm, dyMm);
+      divider.moveWall(this, index, dxMm, dyMm, this.snapOptions());
     },
     moveWallEndpoint(index: number, endpoint: 1 | 2, xMm: number, yMm: number): void {
-      divider.moveWallEndpoint(this, index, endpoint, xMm, yMm);
+      divider.moveWallEndpoint(this, index, endpoint, xMm, yMm, this.snapOptions());
     },
+    /** Exact numeric entry, which is deliberate and so never snapped. */
     setWall(index: number, wall: DividerWall): void {
       divider.setWall(this, index, wall);
     },

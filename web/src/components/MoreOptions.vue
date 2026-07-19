@@ -19,6 +19,12 @@ const props = defineProps<{
   /** Hides the divider fields; a pocket bin cannot have divider walls. */
   hideDividers?: boolean;
   /**
+   * Why the divider editor is unavailable for this entry, shown in its place.
+   * Set by a caller whose bin footprint is not a single known size, since a
+   * wall list is authored against one interior and means nothing without it.
+   */
+  dividerNotice?: string | null;
+  /**
    * Hides every bin body option (dividers, magnet holes); an
    * insert-only design has no bin body to configure.
    */
@@ -65,7 +71,12 @@ const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(st
           @update:model-value="emit('update:quantity', Number($event))"
         />
       </div>
-      <DividerEditor v-if="!props.hideDividers && !props.insertOnly" class="mt-4" />
+      <template v-if="!props.hideDividers && !props.insertOnly">
+        <div v-if="props.dividerNotice" class="text-caption text-medium-emphasis mt-4">
+          {{ props.dividerNotice }}
+        </div>
+        <DividerEditor v-else class="mt-4" />
+      </template>
       <div v-if="!props.insertOnly" class="mt-3">
         <v-switch
           v-model="magnetHoles"

@@ -7,6 +7,8 @@ import {
   moveWall,
   moveWallEndpoint,
   nextDefaultWall,
+  snapPoint,
+  snapWall,
   segmentSegmentDistance,
   setWall,
   validateWalls,
@@ -209,5 +211,108 @@ describe('divider editor mutations', () => {
     const s = state(1, 1);
     addWall(s, nextDefaultWall(s));
     expect(validateWalls(s.walls, 1, 1)).toBeNull();
+  });
+});
+
+// The snapping lattice is a quarter of the 42 mm Gridfinity pitch, so a
+// snapped coordinate is a multiple of 10.5 mm, and a snapped direction is a
+// multiple of 15 degrees. Every expectation below is that hand-computed
+// ground truth written out, never rederived from the production constants.
+describe('snapping', () => {
+  const on = { enabled: true };
+  const off = { enabled: false };
+
+  it('rounds a point to the nearest quarter of the grid pitch', () => {
+    const p = snapPoint(11.9, -2.0, on);
+    expect(p.x).toBeCloseTo(10.5, 9);
+    expect(p.y).toBeCloseTo(0, 9);
+  });
+
+  it('rounds a near horizontal wall to exactly zero degrees', () => {
+    const snapped = snapWall({ x1: 0, y1: 0, x2: 21, y2: 1.3 }, 2, on);
+    expect(snapped.x1).toBeCloseTo(0, 9);
+    expect(snapped.y1).toBeCloseTo(0, 9);
+    expect(snapped.x2).toBeCloseTo(21, 9);
+    // Exactly zero, not merely small: the wall must come out axis aligned.
+    expect(snapped.y2).toBeCloseTo(0, 9);
+  });
+
+  it('rounds a wall near thirty degrees to exactly thirty degrees', () => {
+    // A 21 mm wall at 28 degrees from the origin.
+    const snapped = snapWall({ x1: 0, y1: 0, x2: 18.5419, y2: 9.8589 }, 2, on);
+    // 21 mm at exactly 30 degrees: 21 * cos 30 and 21 * sin 30.
+    expect(snapped.x2).toBeCloseTo(18.186533479, 6);
+    expect(snapped.y2).toBeCloseTo(10.5, 6);
+  });
+
+  it('pivots about the endpoint that is not being dragged', () => {
+    const snapped = snapWall({ x1: -7.3, y1: 4.1, x2: 13.6, y2: 5.2 }, 2, on);
+    // The fixed end keeps its exact coordinates, however untidy they are.
+    expect(snapped.x1).toBe(-7.3);
+    expect(snapped.y1).toBe(4.1);
+    expect(snapped.y2).toBeCloseTo(4.1, 9);
+    expect(snapped.x2).toBeCloseTo(13.7, 9);
+  });
+
+  it('keeps the angle of a wall that is only being translated', () => {
+    const snapped = snapWall({ x1: 3.2, y1: 1.1, x2: 9.7, y2: 25.4 }, 'translate', on);
+    expect(snapped.x1).toBeCloseTo(0, 9);
+    expect(snapped.y1).toBeCloseTo(0, 9);
+    // Both endpoints shifted by the same offset, so the free angle survives.
+    expect(snapped.x2).toBeCloseTo(6.5, 9);
+    expect(snapped.y2).toBeCloseTo(24.3, 9);
+  });
+
+  it('leaves a wall untouched when snapping is disabled', () => {
+    const wall = { x1: 3.2, y1: 1.1, x2: 9.7, y2: 25.4 };
+    expect(snapWall(wall, 2, off)).toEqual(wall);
+    expect(snapWall(wall, 'translate', off)).toEqual(wall);
+    expect(snapPoint(11.9, -2.0, off)).toEqual({ x: 11.9, y: -2.0 });
+  });
+
+  it('lands a dragged wall on the lattice without deforming it', () => {
+    const s = state(3, 2, [{ x1: 0, y1: -10, x2: 0, y2: 10 }]);
+    // Short of half a lattice step along X, so the wall holds its column; the
+    // first snapped move does pull its off lattice Y onto the lattice.
+    moveWall(s, 0, 4.2, 0, on);
+    expect(s.walls[0].x1).toBeCloseTo(0, 9);
+    expect(s.walls[0].y1).toBeCloseTo(-10.5, 9);
+    // Past half a step, so it lands on the next lattice position.
+    moveWall(s, 0, 6, 0, on);
+    expect(s.walls[0].x1).toBeCloseTo(10.5, 9);
+    expect(s.walls[0].x2).toBeCloseTo(10.5, 9);
+    // The 20 mm length is unchanged: a translate never deforms the wall.
+    expect(s.walls[0].y1).toBeCloseTo(-10.5, 9);
+    expect(s.walls[0].y2).toBeCloseTo(9.5, 9);
+  });
+
+  it('snaps a freshly drawn wall at both ends', () => {
+    const s = state(3, 2);
+    addWall(s, { x1: 1.0, y1: -9.6, x2: 1.3, y2: 9.4 }, on);
+    expect(s.walls[0].x1).toBeCloseTo(0, 9);
+    expect(s.walls[0].y1).toBeCloseTo(-10.5, 9);
+    expect(s.walls[0].x2).toBeCloseTo(0, 9);
+    expect(s.walls[0].y2).toBeCloseTo(10.5, 9);
+    expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
+  });
+
+  it('keeps the snapped angle when the drag runs past the bin wall', () => {
+    // A 3x1 bin is much wider than it is deep, so clamping a 45 degree drag
+    // into the interior would stop X at 61.8 mm and Y at 19.8 mm and leave
+    // the wall at some arbitrary shallow angle.
+    const s = state(3, 1, [{ x1: 0, y1: 0, x2: 10.5, y2: 0 }]);
+    moveWallEndpoint(s, 0, 2, 400, 400, on);
+    const wall = s.walls[0];
+    // Shortened by whole steps instead, so the run and the rise stay equal
+    // and the wall is still at exactly 45 degrees.
+    expect(wall.x2 - wall.x1).toBeCloseTo(wall.y2 - wall.y1, 9);
+    expect(wall.y2).toBeLessThanOrEqual(19.8);
+    expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
+  });
+
+  it('drags an endpoint freely when snapping is disabled', () => {
+    const s = state(3, 2, [{ x1: -10, y1: 0, x2: 10, y2: 0 }]);
+    moveWallEndpoint(s, 0, 2, 11.3, 2.7, off);
+    expect(s.walls[0]).toEqual({ x1: -10, y1: 0, x2: 11.3, y2: 2.7 });
   });
 });
