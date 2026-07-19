@@ -20,7 +20,9 @@ import {
 import { maskToContour } from '../engine/trace/contour';
 import type { MaskContourFailure } from '../engine/trace/contour';
 import { removeShadow } from '../engine/trace/shadow';
+import { applyStrokes } from '../engine/trace/strokeMask';
 import type {
+  BrushStroke,
   PaperCalibration,
   PaperCorners,
   PaperDetectionResult,
@@ -153,7 +155,7 @@ async function toImageData(source: ImageBitmap | ArrayBuffer): Promise<ImageData
 function messageForContourFailure(reason: MaskContourFailure): string {
   switch (reason) {
     case 'noContainingRegion':
-      return 'Add an include click on the tool itself. The traced shape contained none of your clicks, which happens when every include click landed on the background rather than a part.';
+      return 'Add an include click on the tool, or paint over it. The traced shape contained none of your clicks or painted areas, which happens when every include click and brush stroke landed on the background rather than a part.';
     case 'empty':
       return 'No usable shape was found at that click. Try clicking nearer the middle of the tool, or add more include clicks along it.';
   }
@@ -254,7 +256,7 @@ const api = {
    * pixels) and return the traced outline in sheet millimeters plus a mask
    * overlay for the UI.
    */
-  async segmentAt(points: SamPoint[]): Promise<SegmentResult> {
+  async segmentAt(points: SamPoint[], strokes: BrushStroke[]): Promise<SegmentResult> {
     if (!embedding || !rectified || !rectifiedCalibration) {
       return {
         ok: false,
@@ -314,9 +316,16 @@ const api = {
       // before the mask is traced. Uses the rectified color image kept
       // worker-side.
       removeShadow(cv, rectified, maskMat);
+      // Painted pixels are applied after shadow removal so the shadow filter
+      // never removes user paint.
+      applyStrokes(cv, maskMat, strokes, rectifiedCalibration.mmPerPixel);
+      const paintedIncludePoints = strokes
+        .filter((stroke) => stroke.mode === 'add')
+        .flatMap((stroke) => stroke.points.map((point) => ({ x: point.x, y: point.y })));
       const result = maskToContour(cv, maskMat, {
         mmPerPixel: rectifiedCalibration.mmPerPixel,
         includePoints,
+        paintedIncludePoints,
       });
       if (!result.ok) {
         return { ok: false, error: messageForContourFailure(result.reason) };

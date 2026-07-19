@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, shallowRef } from 'vue';
 import type {
+  BrushStroke,
   PaperCalibration,
   PaperCorners,
   PaperKind,
@@ -145,6 +146,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     name?: string,
     clicks: SamPoint[] = [],
     placeAtSheetPosition = false,
+    brushStrokes: BrushStroke[] = [],
   ): TracedTool {
     toolCounter += 1;
     const tool = layout.addTool(
@@ -154,6 +156,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
       defaultDepthMm.value,
       clicks,
       placeAtSheetPosition,
+      brushStrokes,
     );
     selectedToolId.value = tool.id;
     return tool;
@@ -163,8 +166,9 @@ export const useToolTrace = defineStore('toolTrace', () => {
     toolId: string,
     outline: TracedOutline,
     clicks: SamPoint[],
+    brushStrokes: BrushStroke[] = [],
   ): void {
-    layout.replaceToolOutline(layoutState, toolId, outline, clicks);
+    layout.replaceToolOutline(layoutState, toolId, outline, clicks, brushStrokes);
   }
 
   function removeTool(toolId: string): void {

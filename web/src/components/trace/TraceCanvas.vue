@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
-import type { MmPoint, SamPoint, TracedOutline } from '../../engine/trace/types';
+import type { BrushStroke, MmPoint, SamPoint, TracedOutline } from '../../engine/trace/types';
 import { centroidOf, pointInPolygon } from '../../engine/trace/edit';
 
 /**
@@ -26,6 +26,17 @@ const iouScore = ref<number | null>(null);
 const decodeMs = ref<number | null>(null);
 const segmenting = ref(false);
 const errorMessage = ref<string | null>(null);
+
+// Brush strokes painted onto the mask (rectified-image pixels), the painting
+// mode, and the brush radius in mm. brushSizeMm ranges 1..20.
+const strokes = ref<BrushStroke[]>([]);
+const brushMode = ref<'off' | 'add' | 'erase'>('off');
+const brushSizeMm = ref(4);
+// The stroke being painted between pointer down and up; null when not painting.
+let activeStroke: BrushStroke | null = null;
+// The pointer position in canvas pixels while a paint mode is on, for the ring
+// cursor; null when the pointer is off the canvas.
+const cursorPx = ref<{ x: number; y: number } | null>(null);
 
 let maskPreview: ImageData | null = null;
 
@@ -53,6 +64,9 @@ watch(
     store.retraceRequestId = null;
     if (tool === undefined || tool.clicks.length === 0) return;
     points.value = JSON.parse(JSON.stringify(tool.clicks)) as SamPoint[];
+    strokes.value = tool.brushStrokes
+      ? (JSON.parse(JSON.stringify(tool.brushStrokes)) as BrushStroke[])
+      : [];
     retraceToolId.value = tool.id;
     void runSegment();
   },
@@ -103,6 +117,55 @@ function draw(): void {
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
+  if (cal !== null && brushMode.value !== 'off') {
+    // The canvas is drawn at the rectified resolution, so a brush radius in mm
+    // converts to canvas pixels with the same mm-per-pixel figure the mask uses.
+    const radiusPx = brushSizeMm.value / cal.mmPerPixel;
+    if (activeStroke !== null) {
+      drawProvisionalStroke(ctx, activeStroke, radiusPx);
+    }
+    if (cursorPx.value !== null) {
+      // Ring cursor showing where the next stroke lands and how wide it is.
+      ctx.beginPath();
+      ctx.arc(cursorPx.value.x, cursorPx.value.y, radiusPx, 0, 2 * Math.PI);
+      ctx.strokeStyle = brushMode.value === 'add' ? '#4285f4' : '#f44336';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+}
+
+/**
+ * Draws a provisional brush stroke on the 2D context as filled vertex discs and
+ * thick connecting segments, matching the swept-disc region the mask rasterizer
+ * will union or subtract. add is translucent blue, erase translucent red.
+ */
+function drawProvisionalStroke(
+  ctx: CanvasRenderingContext2D,
+  stroke: BrushStroke,
+  radiusPx: number,
+): void {
+  ctx.save();
+  const color = stroke.mode === 'add' ? 'rgba(66, 133, 244, 0.5)' : 'rgba(244, 67, 54, 0.5)';
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2 * radiusPx;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const point of stroke.points) {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radiusPx, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  if (stroke.points.length > 1) {
+    ctx.beginPath();
+    stroke.points.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /**
@@ -190,6 +253,10 @@ function clearClicks(): void {
   retraceToolId.value = null;
   justSavedNumber.value = null;
   points.value = [];
+  strokes.value = [];
+  brushMode.value = 'off';
+  activeStroke = null;
+  cursorPx.value = null;
   outline.value = null;
   iouScore.value = null;
   decodeMs.value = null;
@@ -202,7 +269,10 @@ async function runSegment(): Promise<void> {
   segmenting.value = true;
   errorMessage.value = null;
   try {
-    const result = await segmentAt(JSON.parse(JSON.stringify(points.value)) as SamPoint[]);
+    const result = await segmentAt(
+      JSON.parse(JSON.stringify(points.value)) as SamPoint[],
+      JSON.parse(JSON.stringify(strokes.value)) as BrushStroke[],
+    );
     if (!result.ok) {
       errorMessage.value = result.error;
       outline.value = null;
@@ -222,17 +292,103 @@ async function runSegment(): Promise<void> {
   }
 }
 
-function onClick(event: MouseEvent, exclude: boolean): void {
+/** Converts a pointer event to canvas pixels, or null when the canvas is gone. */
+function toCanvasPixel(event: MouseEvent): { x: number; y: number } | null {
   const el = canvas.value;
-  if (!el || segmenting.value || !embedReady.value) return;
+  if (!el) return null;
   const rect = el.getBoundingClientRect();
-  const x = ((event.clientX - rect.left) / rect.width) * el.width;
-  const y = ((event.clientY - rect.top) / rect.height) * el.height;
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * el.width,
+    y: ((event.clientY - rect.top) / rect.height) * el.height,
+  };
+}
+
+function onClick(event: MouseEvent, exclude: boolean): void {
+  if (brushMode.value !== 'off') return;
+  if (segmenting.value || !embedReady.value) return;
+  const pt = toCanvasPixel(event);
+  if (pt === null) return;
   justSavedNumber.value = null;
   const label: 0 | 1 = exclude || event.shiftKey ? 0 : 1;
-  points.value = [...points.value, { x, y, label }];
+  points.value = [...points.value, { x: pt.x, y: pt.y, label }];
   void runSegment();
 }
+
+// Undo and clear re-run the SAM decode with the updated strokes, the same cost
+// as adding or removing a click.
+function undoStroke(): void {
+  if (strokes.value.length === 0 || segmenting.value) return;
+  strokes.value = strokes.value.slice(0, -1);
+  void runSegment();
+}
+
+function clearStrokes(): void {
+  if (strokes.value.length === 0 || segmenting.value) return;
+  strokes.value = [];
+  void runSegment();
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (brushMode.value === 'off') return;
+  if (segmenting.value || !embedReady.value) return;
+  const pt = toCanvasPixel(event);
+  if (pt === null) return;
+  const el = canvas.value;
+  if (el) el.setPointerCapture(event.pointerId);
+  justSavedNumber.value = null;
+  activeStroke = { mode: brushMode.value, radiusMm: brushSizeMm.value, points: [pt] };
+  cursorPx.value = pt;
+  draw();
+}
+
+function onPointerMove(event: PointerEvent): void {
+  if (brushMode.value === 'off') return;
+  const pt = toCanvasPixel(event);
+  if (pt === null) return;
+  cursorPx.value = pt;
+  if (activeStroke !== null) {
+    activeStroke.points.push(pt);
+  }
+  draw();
+}
+
+/** Commits the active stroke and re-segments; a single-vertex stroke is a dot. */
+function commitStroke(event: PointerEvent): void {
+  if (activeStroke === null) return;
+  const el = canvas.value;
+  if (el) {
+    try {
+      el.releasePointerCapture(event.pointerId);
+    } catch {
+      // No capture to release (the pointer left before capture); nothing to do.
+    }
+  }
+  strokes.value = [
+    ...strokes.value,
+    JSON.parse(JSON.stringify(activeStroke)) as BrushStroke,
+  ];
+  activeStroke = null;
+  void runSegment();
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (brushMode.value === 'off') return;
+  commitStroke(event);
+}
+
+function onPointerLeave(event: PointerEvent): void {
+  cursorPx.value = null;
+  if (activeStroke !== null) {
+    commitStroke(event);
+  } else {
+    draw();
+  }
+}
+
+/** CSS cursor class: the ring cursor replaces the pointer in paint modes. */
+const canvasCursorClass = computed(() =>
+  brushMode.value === 'off' ? 'cursor-crosshair' : 'cursor-none',
+);
 
 /** The 1-based number of the tool the canvas is currently tracing. */
 const activeToolNumber = computed(() => {
@@ -287,16 +443,17 @@ function finishTracing(): void {
 function acceptTool(finish: boolean): void {
   if (outline.value === null) return;
   const clicks = JSON.parse(JSON.stringify(points.value)) as SamPoint[];
+  const brushStrokes = JSON.parse(JSON.stringify(strokes.value)) as BrushStroke[];
   const sheetOutline = JSON.parse(JSON.stringify(outline.value)) as TracedOutline;
   let savedNumber: number;
   if (retraceToolId.value !== null) {
     const toolId = retraceToolId.value;
-    store.replaceToolOutline(toolId, outline.value, clicks);
+    store.replaceToolOutline(toolId, outline.value, clicks, brushStrokes);
     ghostOutlines.set(toolId, sheetOutline);
     const index = tools.value.findIndex((t) => t.id === toolId);
     savedNumber = index >= 0 ? index + 1 : tools.value.length;
   } else {
-    const tool = store.addTool(outline.value, undefined, clicks, true);
+    const tool = store.addTool(outline.value, undefined, clicks, true, brushStrokes);
     ghostOutlines.set(tool.id, sheetOutline);
     savedNumber = tools.value.length;
   }
@@ -336,8 +493,13 @@ function acceptTool(finish: boolean): void {
     <canvas
       ref="canvas"
       class="trace-canvas"
+      :class="canvasCursorClass"
       @click="onClick($event, false)"
       @contextmenu.prevent="onClick($event, true)"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @pointerleave="onPointerLeave"
     />
     <div class="action-island">
       <div class="d-flex align-center flex-wrap ga-2">
@@ -357,6 +519,42 @@ function acceptTool(finish: boolean): void {
         </v-btn>
         <v-progress-circular v-if="segmenting" indeterminate size="20" width="2" />
       </div>
+      <div class="d-flex align-center flex-wrap ga-2 mt-2">
+        <v-btn-toggle v-model="brushMode" mandatory density="compact" variant="outlined">
+          <v-btn value="off" size="small">Off</v-btn>
+          <v-btn value="add" size="small">Paint add</v-btn>
+          <v-btn value="erase" size="small">Paint erase</v-btn>
+        </v-btn-toggle>
+        <v-slider
+          v-model="brushSizeMm"
+          :min="1"
+          :max="20"
+          :step="1"
+          hide-details
+          density="compact"
+          class="brush-slider"
+          :label="`Brush ${brushSizeMm} mm`"
+        />
+        <v-btn
+          variant="outlined"
+          size="small"
+          :disabled="strokes.length === 0 || segmenting"
+          @click="undoStroke"
+        >
+          Undo stroke
+        </v-btn>
+        <v-btn
+          variant="outlined"
+          size="small"
+          :disabled="strokes.length === 0 || segmenting"
+          @click="clearStrokes"
+        >
+          Clear strokes
+        </v-btn>
+      </div>
+      <p class="text-caption text-medium-emphasis mt-1 mb-0">
+        Paint on the mask to add or erase; each stroke can be undone.
+      </p>
       <div v-if="iouScore !== null" class="text-caption text-medium-emphasis mt-2 readout">
         <div><span>Mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
         <div><span>Decode time</span><span>{{ decodeMs!.toFixed(0) }} ms</span></div>
@@ -372,8 +570,21 @@ function acceptTool(finish: boolean): void {
 .trace-canvas {
   max-width: 100%;
   border-radius: 8px;
-  cursor: crosshair;
   display: block;
+}
+
+.cursor-crosshair {
+  cursor: crosshair;
+}
+
+/* The ring drawn on the canvas replaces the pointer while a paint mode is on. */
+.cursor-none {
+  cursor: none;
+}
+
+.brush-slider {
+  min-width: 150px;
+  max-width: 220px;
 }
 
 /*

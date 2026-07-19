@@ -12,7 +12,16 @@
 // exact rounded-rect containment only within the interior corner radius, in
 // practice covered by the AUTO_SIZE_MARGIN_MM margin; a genuine miss still
 // surfaces as the preview's validation error.
-import type { FingerHole, MmPoint, SamPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
+import type { BrushStroke, FingerHole, MmPoint, SamPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
+
+/** Deep-copies brush strokes so stored strokes never alias a caller's array. */
+function cloneStrokes(strokes: BrushStroke[]): BrushStroke[] {
+  return strokes.map((stroke) => ({
+    mode: stroke.mode,
+    radiusMm: stroke.radiusMm,
+    points: stroke.points.map((point) => ({ x: point.x, y: point.y })),
+  }));
+}
 import { boundsOf, transformTool } from './edit';
 import { binInteriorSizeMm, PITCH } from '../gridfinity/constants';
 
@@ -357,12 +366,14 @@ export function addTool(
   pocketDepthMm: number,
   clicks: SamPoint[] = [],
   placeAtSheetPosition = false,
+  brushStrokes: BrushStroke[] = [],
 ): TracedTool {
   const tool: TracedTool = {
     id: crypto.randomUUID(),
     name,
     outline: recentred(outline),
     clicks,
+    brushStrokes: cloneStrokes(brushStrokes),
     rotationDeg: 0,
     offsetMm: DEFAULT_CLEARANCE_MM,
     mirrored: false,
@@ -418,11 +429,13 @@ export function replaceToolOutline(
   toolId: string,
   outline: TracedOutline,
   clicks: SamPoint[],
+  brushStrokes: BrushStroke[] = [],
 ): void {
   const tool = state.tools.find((t) => t.id === toolId);
   if (tool === undefined) return;
   tool.outline = recentred(outline);
   tool.clicks = clicks;
+  tool.brushStrokes = cloneStrokes(brushStrokes);
   tool.filledHoleIndices = [];
   const placement = state.placements.find((p) => p.toolId === toolId);
   if (placement !== undefined) {

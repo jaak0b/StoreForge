@@ -640,6 +640,98 @@ describe('trace sources in plan files', () => {
     ).toBe('entry t1: pocket tool t1: a click needs x, y and a label of 0 or 1');
   });
 
+  it('round-trips a tool carrying mixed add and erase brush strokes', () => {
+    const withStrokes = pockets();
+    (withStrokes.tools[0] as Record<string, unknown>).brushStrokes = [
+      { mode: 'add', radiusMm: 4, points: [{ x: 12, y: 20 }, { x: 30, y: 24 }] },
+      { mode: 'erase', radiusMm: 2.5, points: [{ x: 50, y: 60 }] },
+    ];
+    const traced = entry({
+      id: 't1',
+      product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: withStrokes }) },
+    });
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 4, entries: [traced], batches: [] },
+      warnings: [],
+    });
+  });
+
+  it('leaves a tool without brush strokes free of the brushStrokes key', () => {
+    const traced = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = result.plan.entries[0].product as { bin: TracedBin };
+    expect('brushStrokes' in bin.bin.pockets.tools[0]).toBe(false);
+  });
+
+  it('loads a legacy plan whose tools predate brush strokes without a warning', () => {
+    const legacy = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
+    const raw = JSON.parse(serializePlanFile([legacy], [])) as {
+      entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+    };
+    delete raw.entries[0].product.bin.pockets.tools[0].brushStrokes;
+    const result = parsePlanFile(JSON.stringify({ ...raw, version: 4, batches: [] }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.warnings).toEqual([]);
+  });
+
+  it('rejects a brush stroke with an unknown mode', () => {
+    const bad = pockets();
+    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+      { mode: 'paint', radiusMm: 4, points: [{ x: 1, y: 2 }] },
+    ];
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe(
+      'entry t1: pocket tool t1: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list',
+    );
+  });
+
+  it('rejects a brush stroke with a non-positive radius', () => {
+    const bad = pockets();
+    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+      { mode: 'add', radiusMm: 0, points: [{ x: 1, y: 2 }] },
+    ];
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe(
+      'entry t1: pocket tool t1: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list',
+    );
+  });
+
+  it('rejects a brush stroke whose points is not a list', () => {
+    const bad = pockets();
+    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+      { mode: 'add', radiusMm: 4, points: 'here' },
+    ];
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe(
+      'entry t1: pocket tool t1: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list',
+    );
+  });
+
+  it('rejects a brush stroke point with a non-finite coordinate', () => {
+    const bad = pockets();
+    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+      { mode: 'add', radiusMm: 4, points: [{ x: 1, y: Number.NaN }] },
+    ];
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe('entry t1: pocket tool t1: a brush stroke point needs x and y');
+  });
+
+  it('rejects a brushStrokes field that is not a list', () => {
+    const bad = pockets();
+    (bad.tools[0] as Record<string, unknown>).brushStrokes = { mode: 'add' };
+    expect(
+      validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
+    ).toBe('entry t1: pocket tool t1: brushStrokes must be a list');
+  });
+
   it('rejects an empty traceSourceId', () => {
     const bad = entry({
       id: 't1',

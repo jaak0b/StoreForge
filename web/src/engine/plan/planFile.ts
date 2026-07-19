@@ -20,6 +20,7 @@ import {
   type HeadType,
 } from './screwListImport';
 import type {
+  BrushStroke,
   FingerHole,
   MmPoint,
   PaperCorners,
@@ -149,6 +150,32 @@ export function validatePockets(raw: unknown, subject: string): string | null {
         }
       }
     }
+    // brushStrokes were added with the mask-painting tool, after the first
+    // traced entries shipped; older plans omit them, so undefined is accepted.
+    if (tool.brushStrokes !== undefined) {
+      if (!Array.isArray(tool.brushStrokes)) {
+        return `${subject}: pocket tool ${tool.id}: brushStrokes must be a list`;
+      }
+      for (const rawStroke of tool.brushStrokes) {
+        const stroke = rawStroke as Record<string, unknown> | null;
+        if (
+          typeof stroke !== 'object' ||
+          stroke === null ||
+          (stroke.mode !== 'add' && stroke.mode !== 'erase') ||
+          !isFiniteNumber(stroke.radiusMm) ||
+          (stroke.radiusMm as number) <= 0 ||
+          !Array.isArray(stroke.points)
+        ) {
+          return `${subject}: pocket tool ${tool.id}: a brush stroke needs mode add or erase, a radiusMm above 0 and a points list`;
+        }
+        for (const rawPt of stroke.points as unknown[]) {
+          const pt = rawPt as Record<string, unknown> | null;
+          if (typeof pt !== 'object' || pt === null || !isFiniteNumber(pt.x) || !isFiniteNumber(pt.y)) {
+            return `${subject}: pocket tool ${tool.id}: a brush stroke point needs x and y`;
+          }
+        }
+      }
+    }
     if (!Array.isArray(tool.fingerHoles)) {
       return `${subject}: pocket tool ${tool.id}: fingerHoles must be a list`;
     }
@@ -211,6 +238,15 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
         y: p.y,
         label: p.label,
       })),
+      ...(tool.brushStrokes !== undefined
+        ? {
+            brushStrokes: (tool.brushStrokes as BrushStroke[]).map((s) => ({
+              mode: s.mode,
+              radiusMm: s.radiusMm,
+              points: s.points.map((p) => ({ x: p.x, y: p.y })),
+            })),
+          }
+        : {}),
       rotationDeg: tool.rotationDeg as number,
       offsetMm: tool.offsetMm as number,
       mirrored: tool.mirrored as boolean,

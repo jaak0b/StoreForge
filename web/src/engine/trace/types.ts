@@ -7,6 +7,20 @@ export interface PixelPoint {
   y: number;
 }
 
+/**
+ * A freehand brush stroke painted onto the segmentation mask, in
+ * rectified-image pixels (the same frame as TracedTool.clicks). An 'add'
+ * stroke unions its swept-disc region into the mask; an 'erase' stroke
+ * subtracts it. Strokes apply in stored order, last stroke wins on overlap.
+ */
+export interface BrushStroke {
+  mode: 'add' | 'erase';
+  /** Brush radius in millimeters; the swept disc has this radius. */
+  radiusMm: number;
+  /** Polyline vertices in rectified-image pixels; one vertex is a dot. */
+  points: PixelPoint[];
+}
+
 /** Sheet corners in photo pixels, ordered top-left, top-right, bottom-right, bottom-left. */
 export interface PaperCorners {
   tl: PixelPoint;
@@ -106,6 +120,12 @@ export interface TracedTool {
    * plans that predate click storage.
    */
   clicks: SamPoint[];
+  /**
+   * Brush strokes painted onto the mask during tracing (rectified-image
+   * pixels), kept so re-tracing can restore and reapply them. Absent for
+   * primitive shapes and for tools imported from plans that predate painting.
+   */
+  brushStrokes?: BrushStroke[];
   /** Counterclockwise rotation in degrees applied about the outline centroid. */
   rotationDeg: number;
   /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. */

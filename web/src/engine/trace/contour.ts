@@ -24,6 +24,13 @@ export interface MaskContourOptions {
    */
   includePoints: PixelPoint[];
   /**
+   * Additional include evidence from add-stroke vertices (rectified pixels).
+   * Counted toward each contour's include score exactly like includePoints,
+   * so a region the user painted becomes selectable, but they do not relax
+   * the "at least one include click" precondition. Default empty.
+   */
+  paintedIncludePoints?: PixelPoint[];
+  /**
    * Polygon simplification tolerance in mm (approxPolyDP epsilon). 0.2 mm by
    * default: below the 0.25 mm rectified pixel size, so simplification never
    * costs more accuracy than the raster already did.
@@ -84,7 +91,10 @@ function orient(points: MmPoint[], positive: boolean): MmPoint[] {
  *
  * Among the denoised external contours above the area floor, the chosen one
  * contains the most include points (pointPolygonTest >= 0); ties break to the
- * largest by area. Its holes above minHoleAreaMm2 are kept as children. There
+ * largest by area. Add-stroke vertices (paintedIncludePoints) count as include
+ * evidence in that score, so a painted region becomes selectable, but they do
+ * not relax the requirement that at least one include click was given. Its
+ * holes above minHoleAreaMm2 are kept as children. There
  * is no nearest-contour fallback: a click that lands outside every contour
  * contributes to no count.
  *
@@ -122,7 +132,12 @@ export function maskToContour(
     // holes directly inside them. Hierarchy rows are [next, prev, child, parent].
     cv.findContours(clean, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
 
-    const clicks = includePoints.map((point) => new cv.Point(point.x, point.y));
+    // A painted add region that is not physically connected to the clicked
+    // region by a brush stroke cannot survive as a second separate outline,
+    // because a traced tool is a single outer loop; a connecting drag merges
+    // the regions into one contour before selection.
+    const scoringPoints = [...includePoints, ...(options.paintedIncludePoints ?? [])];
+    const clicks = scoringPoints.map((point) => new cv.Point(point.x, point.y));
     let chosen = -1;
     let chosenArea = 0;
     let chosenCount = 0;

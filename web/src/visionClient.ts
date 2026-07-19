@@ -9,6 +9,7 @@ import type {
   VisionWorkerApi,
 } from './worker/vision.worker';
 import type {
+  BrushStroke,
   PaperCorners,
   PaperDetectionResult,
   PaperKind,
@@ -84,12 +85,16 @@ export async function embedImage(): Promise<EmbedResult> {
 }
 
 /**
- * Segment the tool at the given click prompts (rectified-image pixels) and
- * return its outline in sheet millimeters plus a mask overlay preview.
+ * Segment the tool at the given click prompts (rectified-image pixels), with
+ * the given brush strokes painted onto the mask, and return its outline in
+ * sheet millimeters plus a mask overlay preview.
  */
-export async function segmentAt(points: SamPoint[]): Promise<SegmentResult> {
+export async function segmentAt(
+  points: SamPoint[],
+  strokes: BrushStroke[],
+): Promise<SegmentResult> {
   const worker = await getReadyWorker();
-  return worker.segmentAt(points);
+  return worker.segmentAt(points, strokes);
 }
 
 /** Verify that OpenCV and both MobileSAM ONNX sessions load in the worker. */

@@ -4,6 +4,7 @@ import {
   DEFAULT_MIN_HOLE_WIDTH_MM,
   addTool,
   binPlacement,
+  duplicateTool,
   layoutBounds,
   moveTool,
   removeTool,
@@ -587,5 +588,57 @@ describe('replaceToolOutline hole fields', () => {
     }, []);
     expect(tool.filledHoleIndices).toEqual([]);
     expect(tool.minHoleWidthMm).toBe(3.2);
+  });
+});
+
+describe('brush strokes on tools', () => {
+  const square = {
+    outer: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ],
+    holes: [],
+  };
+
+  it('stores a deep copy of brush strokes so later input mutation is ignored', () => {
+    const s = state([], []);
+    const strokes = [
+      { mode: 'add' as const, radiusMm: 4, points: [{ x: 5, y: 6 }] },
+    ];
+    const tool = addTool(s, square, 'Square', 20, [], false, strokes);
+    // Mutate the caller's array and its nested point after the call.
+    strokes[0].points[0].x = 999;
+    strokes.push({ mode: 'erase', radiusMm: 2, points: [] });
+    expect(tool.brushStrokes).toEqual([
+      { mode: 'add', radiusMm: 4, points: [{ x: 5, y: 6 }] },
+    ]);
+  });
+
+  it('replaces brush strokes and clears filled holes on re-trace', () => {
+    const tool = twoHoleTool({ filledHoleIndices: [0] });
+    tool.brushStrokes = [{ mode: 'add', radiusMm: 4, points: [{ x: 1, y: 1 }] }];
+    const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
+    replaceToolOutline(s, 'holed', square, [], [
+      { mode: 'erase', radiusMm: 3, points: [{ x: 2, y: 2 }] },
+    ]);
+    expect(tool.brushStrokes).toEqual([
+      { mode: 'erase', radiusMm: 3, points: [{ x: 2, y: 2 }] },
+    ]);
+    expect(tool.filledHoleIndices).toEqual([]);
+  });
+
+  it('copies brush strokes onto a duplicated tool', () => {
+    const s = state([], []);
+    const strokes = [
+      { mode: 'add' as const, radiusMm: 4, points: [{ x: 5, y: 6 }] },
+    ];
+    const original = addTool(s, square, 'Square', 20, [], false, strokes);
+    const copy = duplicateTool(s, original.id);
+    expect(copy).not.toBeNull();
+    expect(copy?.brushStrokes).toEqual([
+      { mode: 'add', radiusMm: 4, points: [{ x: 5, y: 6 }] },
+    ]);
   });
 });

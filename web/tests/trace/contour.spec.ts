@@ -241,6 +241,86 @@ describe('maskToContour', () => {
     expect(Math.abs(box.maxY - 37.5)).toBeLessThanOrEqual(0.5);
   });
 
+  it('lets painted include evidence flip the selection to the painted blob', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // Two disjoint blobs. One include click lands in the left blob, but many
+    // add-stroke vertices land in the right blob, so the right blob wins on
+    // include-point count.
+    fillRect(cv, mask, 20, 30, 90, 130);
+    fillRect(cv, mask, 150, 20, 240, 160);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 55, y: 80 }],
+      paintedIncludePoints: [
+        { x: 180, y: 60 },
+        { x: 190, y: 80 },
+        { x: 200, y: 100 },
+      ],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Right blob 150..240 px at 0.25 mm/px: 37.5..60 mm, hand-derived once.
+    const box = bounds(result.outline.outer);
+    expect(Math.abs(box.minX - 37.5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxX - 60)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('still fails with no containing region when only painted points are given', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    fillRect(cv, mask, 40, 30, 200, 130);
+    // Painted evidence does not relax the "at least one include click" rule.
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [],
+      paintedIncludePoints: [{ x: 100, y: 80 }],
+    });
+    mask.delete();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('noContainingRegion');
+  });
+
+  it('returns a single contour whole when a painted bridge merges two regions', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // Two blobs joined by a thin painted bridge become one contour. Left blob
+    // 20..90 x 40..120 px, right blob 150..220 x 40..120 px, bridge along
+    // y 78..82 px between them.
+    fillRect(cv, mask, 20, 40, 90, 120);
+    fillRect(cv, mask, 150, 40, 220, 120);
+    fillRect(cv, mask, 90, 78, 150, 82);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 55, y: 80 }],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // One outer loop spanning both blobs: 20..220 px = 5..55 mm in x.
+    const box = bounds(result.outline.outer);
+    expect(Math.abs(box.minX - 5)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxX - 55)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('behaves unchanged when paintedIncludePoints is omitted', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    fillRect(cv, mask, 40, 30, 200, 130);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 60, y: 50 }],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const box = bounds(result.outline.outer);
+    expect(Math.abs(box.minX - 10)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(box.maxX - 50)).toBeLessThanOrEqual(0.5);
+  });
+
   it('respects the simplification tolerance on a circle', async () => {
     const cv = await loadOpenCv();
     const drawCircleMask = (): CvMat => {
