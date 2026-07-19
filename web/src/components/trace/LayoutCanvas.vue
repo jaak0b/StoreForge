@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { boundsOf, holeIndexAt, transformTool } from '../../engine/trace/edit';
-import { PITCH } from '../../engine/gridfinity/constants';
+import {
+  segmentDistance,
+  useTopDownCanvas,
+  type DrawContext,
+} from '../../composables/useTopDownCanvas';
 import type { FingerHole, MmPoint, TracedTool } from '../../engine/trace/types';
 
 /**
@@ -34,50 +38,16 @@ const {
   fillHolesMode,
 } = storeToRefs(store);
 
-const canvas = ref<HTMLCanvasElement | null>(null);
-
-/** Canvas pixel width, following the container width (full-bleed layout). */
-const canvasWidth = ref(640);
-
-/** The view never grows taller than this, however wide the container is. */
-const MAX_HEIGHT_PX = 640;
-
 /** Drags shorter than this in mm commit a circular hole, not a slot. */
 const SLOT_MIN_DRAG_MM = 3;
 
-/** World mm shown around the bin interior when fitting the view. */
-const VIEW_SLACK_MM = 15;
-
-/** The world-to-canvas mapping: scale plus the world point at canvas centre. */
-interface ViewTransform {
-  s: number;
-  cxMm: number;
-  cyMm: number;
-  heightPx: number;
-}
-
-/** Fits the view to the derived bin plus slack on every side. */
-function fitView(): ViewTransform {
-  const bin = store.binPlacement;
-  const w = bin.widthMm + 2 * VIEW_SLACK_MM;
-  const h = bin.heightMm + 2 * VIEW_SLACK_MM;
-  // Fill the container width, but never taller than the height cap; the
-  // spare width just shows more world around the bin.
-  const s = Math.min(canvasWidth.value / w, MAX_HEIGHT_PX / h);
-  return {
-    s,
-    cxMm: bin.minX + bin.widthMm / 2,
-    cyMm: bin.minY + bin.heightMm / 2,
-    heightPx: Math.round(h * s),
-  };
-}
-
-/** Frozen at pointerdown so the viewport never moves mid-drag. */
-let frozenView: ViewTransform | null = null;
-
-function currentView(): ViewTransform {
-  return frozenView ?? fitView();
-}
+// The view math, the responsive width, the frozen-view-at-drag-start rule and
+// the outline plus cell boundaries all come from the shared top-down canvas.
+const { setCanvas, canvasWidth, hoverCursor, scheduleDraw, clientToMm, freezeView, releaseView } =
+  useTopDownCanvas({
+    bin: () => store.binPlacement,
+    drawContent,
+  });
 
 /** Traces a finger hole (circle or capsule) as the current canvas path. */
 function holePath(
@@ -100,49 +70,8 @@ function holePath(
   }
 }
 
-function draw(): void {
-  const el = canvas.value;
-  if (!el) return;
-  const view = currentView();
-  const bin = store.binPlacement;
+function drawContent({ ctx, view, toPx }: DrawContext): void {
   const s = view.s;
-  el.width = canvasWidth.value;
-  el.height = view.heightPx;
-  const ctx = el.getContext('2d');
-  if (!ctx) return;
-  ctx.clearRect(0, 0, el.width, el.height);
-  const toPx = (p: MmPoint): [number, number] => [
-    el.width / 2 + (p.x - view.cxMm) * s,
-    el.height / 2 + (p.y - view.cyMm) * s,
-  ];
-  // Interior outline, at the bin's derived world position.
-  const [binX, binY] = toPx({ x: bin.minX, y: bin.minY });
-  ctx.strokeStyle = 'rgba(128, 128, 128, 0.9)';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(binX, binY, bin.widthMm * s, bin.heightMm * s);
-  // Dotted lines on the 42 mm cell boundaries, so it is visible which grid
-  // cells the layout occupies and where to drag tools to shrink the bin.
-  ctx.save();
-  ctx.strokeStyle = 'rgba(128, 128, 128, 0.5)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([3, 4]);
-  const binCxMm = bin.minX + bin.widthMm / 2;
-  const binCyMm = bin.minY + bin.heightMm / 2;
-  for (let k = 1; k < bin.gridX; k++) {
-    const [x] = toPx({ x: binCxMm + (k - bin.gridX / 2) * PITCH, y: 0 });
-    ctx.beginPath();
-    ctx.moveTo(x, binY);
-    ctx.lineTo(x, binY + bin.heightMm * s);
-    ctx.stroke();
-  }
-  for (let k = 1; k < bin.gridY; k++) {
-    const [, y] = toPx({ x: 0, y: binCyMm + (k - bin.gridY / 2) * PITCH });
-    ctx.beginPath();
-    ctx.moveTo(binX, y);
-    ctx.lineTo(binX + bin.widthMm * s, y);
-    ctx.stroke();
-  }
-  ctx.restore();
   // Tools.
   for (const tool of tools.value) {
     const placement = store.placementOf(tool.id);
@@ -240,25 +169,9 @@ function draw(): void {
 
 watch(
   [tools, placements, gridX, gridY, gridManual, selectedToolId, canvasWidth],
-  () => void nextTick(draw),
+  scheduleDraw,
   { deep: true },
 );
-
-// The canvas fills its container; a ResizeObserver keeps the pixel width in
-// step with the layout (drawer opening and closing, window resizes).
-let resizeObserver: ResizeObserver | null = null;
-onMounted(() => {
-  const parent = canvas.value?.parentElement;
-  if (parent) {
-    resizeObserver = new ResizeObserver((entries) => {
-      const width = Math.floor(entries[0].contentRect.width);
-      if (width > 0) canvasWidth.value = Math.max(320, width);
-    });
-    resizeObserver.observe(parent);
-  }
-  void nextTick(draw);
-});
-onUnmounted(() => resizeObserver?.disconnect());
 
 // Pointer interaction. All three drags (move a tool, move a hole, stretch a
 // new hole) advance by mm deltas from the last pointer position. The view
@@ -272,16 +185,6 @@ let draggingHole: FingerHole | null = null;
 /** Which endpoint of draggingHole an 'endpoint' drag moves. */
 let draggingEnd: 'start' | 'end' = 'end';
 let lastMm: MmPoint | null = null;
-
-function clientToMm(clientX: number, clientY: number): MmPoint {
-  const el = canvas.value!;
-  const rect = el.getBoundingClientRect();
-  const view = currentView();
-  return {
-    x: view.cxMm + (((clientX - rect.left) / rect.width) * el.width - el.width / 2) / view.s,
-    y: view.cyMm + (((clientY - rect.top) / rect.height) * el.height - el.height / 2) / view.s,
-  };
-}
 
 function toolAt(p: MmPoint): TracedTool | null {
   // Last drawn wins, so iterate back to front.
@@ -300,18 +203,6 @@ function toolAt(p: MmPoint): TracedTool | null {
     }
   }
   return null;
-}
-
-/** Distance from a point to the segment between a and b. */
-function segmentDistance(p: MmPoint, a: MmPoint, b: MmPoint): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lengthSq = dx * dx + dy * dy;
-  const t =
-    lengthSq < 1e-12
-      ? 0
-      : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq));
-  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
 /** The topmost finger hole (circle or capsule) under the point, with its tool. */
@@ -438,7 +329,7 @@ function owningTool(p: MmPoint): TracedTool | null {
 }
 
 function onPointerDown(event: PointerEvent): void {
-  frozenView = fitView();
+  freezeView();
   const p = clientToMm(event.clientX, event.clientY);
   lastMm = p;
   // An endpoint handle of a placed hole reshapes that hole, and takes
@@ -513,8 +404,6 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 /** Cursor over the canvas: grab over draggable holes and tools. */
-const hoverCursor = ref('default');
-
 function updateHoverCursor(p: MmPoint): void {
   if (fillHolesMode.value) {
     // A hole under the pointer can be clicked to fill it; nothing here drags.
@@ -580,14 +469,13 @@ function onPointerUp(): void {
   draggingHole = null;
   lastMm = null;
   // Unfreeze and refit the view to wherever the bin ended up.
-  frozenView = null;
-  draw();
+  releaseView();
 }
 </script>
 
 <template>
   <canvas
-    ref="canvas"
+    :ref="setCanvas"
     class="layout-canvas"
     :style="{ cursor: hoverCursor }"
     @pointerdown="onPointerDown"

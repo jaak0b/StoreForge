@@ -74,8 +74,12 @@ export function wallLength(wall: DividerWall): number {
   return Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
 }
 
-/** Standard 2D distance from point p to the segment a-b. */
-function pointSegmentDistance(
+/**
+ * Standard 2D distance from point p to the segment a-b. Exported as the one
+ * segment hit-test primitive: the top-down canvas composable picks walls,
+ * tools and finger holes with it rather than keeping its own copy.
+ */
+export function pointSegmentDistance(
   px: number,
   py: number,
   ax: number,
