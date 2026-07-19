@@ -11,14 +11,14 @@ import type { CvNamespace } from './opencvLoader';
 import { detectPaper, rectifyPaper } from '../engine/trace/paper';
 import {
   buildDecoderPrompt,
-  ENCODER_INPUT_SIZE,
-  LOW_RES_MASK_SIZE,
   lowResMaskToMat,
+  lowResPerRectifiedPx,
   prepareEncoderInput,
   selectMaskIndex,
 } from '../engine/trace/sam';
 import { maskToContour } from '../engine/trace/contour';
 import type { MaskContourFailure } from '../engine/trace/contour';
+import { smoothToResolutionLimit } from '../engine/trace/resolutionFilter';
 import { removeShadow } from '../engine/trace/shadow';
 import { applyStrokes } from '../engine/trace/strokeMask';
 import type {
@@ -329,12 +329,16 @@ const api = {
     });
     const iou = (outputs.iou_predictions as ort.Tensor).data as Float32Array;
     const lowResMasks = (outputs.low_res_masks as ort.Tensor).data as Float32Array;
+    // Rectified pixel to low-res mask grid factor, used both to sample the
+    // low-res planes at the click points and, as its reciprocal, as the mask's
+    // resolution limit in rectified pixels.
+    const lowResPerRectified = lowResPerRectifiedPx(embedding.scale);
     const maskIndex = selectMaskIndex(
       lowResMasks,
       iou,
       includePoints,
       excludePoints,
-      (embedding.scale * LOW_RES_MASK_SIZE) / ENCODER_INPUT_SIZE,
+      lowResPerRectified,
     );
     const maskWidth = rectified.cols;
     const maskHeight = rectified.rows;
@@ -351,6 +355,12 @@ const api = {
       // before the mask is traced. Uses the rectified color image kept
       // worker-side.
       removeShadow(cv, rectified, maskMat);
+      // Filter the mask boundary at the decoder's own resolution limit: one
+      // low-res mask cell measured in rectified pixels. This runs before the
+      // brush strokes are applied because the user paints at full rectified
+      // resolution, so painted pixels are real signal rather than the
+      // sub-resolution staircase this filter exists to remove.
+      smoothToResolutionLimit(cv, maskMat, 1 / lowResPerRectified);
       // Painted pixels are applied after shadow removal so the shadow filter
       // never removes user paint.
       applyStrokes(cv, maskMat, strokes, rectifiedCalibration.mmPerPixel);
