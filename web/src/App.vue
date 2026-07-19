@@ -85,7 +85,9 @@ function finishImport(mode: 'merge' | 'replace'): void {
 
 <template>
   <v-app>
-    <v-app-bar color="primary" density="comfortable">
+    <!-- The bar reads as part of the page: page background, a hairline bottom
+         border and no shadow, so no large area carries the accent colour. -->
+    <v-app-bar color="background" density="comfortable" flat border="b">
       <v-app-bar-title>StoreForge</v-app-bar-title>
       <v-btn variant="text" prepend-icon="mdi-upload" @click="openImportPicker">
         Import backup

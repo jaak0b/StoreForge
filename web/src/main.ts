@@ -9,33 +9,55 @@ import './styles.css';
 import App from './App.vue';
 import { useBinQueue } from './stores/binQueue';
 
+// The surface ladder, darkest to lightest: page, card, control. Every grey in
+// the app resolves to one of these three, and the muted neutral is also the
+// hairline border colour, so none of them is written down twice.
+const PAGE = '#1a1815';
+const CARD = '#26231f';
+const CONTROL = '#332f29';
+const MUTED_NEUTRAL = '#4a443c';
+// Warm off-white body text. The second text level is this colour at the
+// medium-emphasis opacity below, and there is no third level.
+const TEXT = '#ece7df';
+
 const vuetify = createVuetify({
   components,
   directives,
   theme: {
     defaultTheme: 'workshop',
     themes: {
+      // Warm graphite surfaces with a single muted amber accent. The accent is
+      // reserved for the primary button, the active tab indicator and focus
+      // rings; large areas stay neutral so nothing high-chroma is painted over
+      // a big part of the screen.
       workshop: {
         dark: true,
         colors: {
-          background: '#1e1f22',
-          surface: '#2b2d31',
-          'surface-bright': '#313338',
-          'surface-variant': '#383a40',
-          'on-surface-variant': '#dbdee1',
-          primary: '#5865f2',
-          secondary: '#4e5058',
+          background: PAGE,
+          surface: CARD,
+          'surface-variant': CONTROL,
+          // Vuetify's own lighter-surface token, kept on the control level so
+          // components that reach for it land on the same step.
+          'surface-bright': CONTROL,
+          primary: '#d4964a',
+          // White label text on the amber accent, as reviewed and approved on
+          // the mockup.
+          'on-primary': '#ffffff',
+          secondary: MUTED_NEUTRAL,
           success: '#23a55a',
           warning: '#f0b232',
           error: '#da373c',
           info: '#00a8fc',
-          'on-background': '#dbdee1',
-          'on-surface': '#dbdee1',
+          'on-background': TEXT,
+          'on-surface': TEXT,
+          'on-surface-variant': TEXT,
         },
         variables: {
-          'medium-emphasis-opacity': 0.64,
-          'border-color': '#3f4147',
-          'border-opacity': 0.8,
+          // Body text sits at full strength; secondary text at this opacity.
+          // Those two levels are the whole text ramp.
+          'medium-emphasis-opacity': 0.68,
+          'border-color': MUTED_NEUTRAL,
+          'border-opacity': 0.9,
         },
       },
     },
@@ -43,9 +65,10 @@ const vuetify = createVuetify({
   defaults: {
     VBtn: { variant: 'flat', rounded: 'lg' },
     VCard: { rounded: 'lg', flat: true },
-    VTextField: { variant: 'solo-filled', flat: true, density: 'comfortable', rounded: 'lg' },
-    VTextarea: { variant: 'solo-filled', flat: true, rounded: 'lg' },
-    VSelect: { variant: 'solo-filled', flat: true, density: 'comfortable', rounded: 'lg' },
+    // Outlined inputs so fields read as thin outlines rather than filled slabs.
+    VTextField: { variant: 'outlined', density: 'comfortable', rounded: 'lg' },
+    VTextarea: { variant: 'outlined', rounded: 'lg' },
+    VSelect: { variant: 'outlined', density: 'comfortable', rounded: 'lg' },
     VChip: { rounded: 'lg' },
   },
 });

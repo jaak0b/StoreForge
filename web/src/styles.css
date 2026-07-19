@@ -1,5 +1,5 @@
-/* Native number-input spinners render cramped inside the solo-filled fields,
-   so they are hidden everywhere. Users type values; compact row inputs get
+/* Native number-input spinners render cramped inside the outlined fields, so
+   they are hidden everywhere. Users type values; compact row inputs get
    explicit minus/plus buttons (CountStepper). */
 input[type='number']::-webkit-outer-spin-button,
 input[type='number']::-webkit-inner-spin-button {
