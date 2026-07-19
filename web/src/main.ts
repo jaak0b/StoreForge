@@ -12,10 +12,10 @@ import { useBinQueue } from './stores/binQueue';
 // The surface ladder, darkest to lightest: page, card, control. Every grey in
 // the app resolves to one of these three, and the muted neutral is also the
 // hairline border colour, so none of them is written down twice.
-const PAGE = '#1a1815';
-const CARD = '#26231f';
-const CONTROL = '#332f29';
-const MUTED_NEUTRAL = '#4a443c';
+const PAGE = '#101010';
+const CARD = '#1a1a1a';
+const CONTROL = '#2f2f2f';
+const MUTED_NEUTRAL = '#444444';
 // Warm off-white body text. The second text level is this colour at the
 // medium-emphasis opacity below, and there is no third level.
 const TEXT = '#ece7df';
@@ -39,7 +39,7 @@ const vuetify = createVuetify({
           // Vuetify's own lighter-surface token, kept on the control level so
           // components that reach for it land on the same step.
           'surface-bright': CONTROL,
-          primary: '#d4964a',
+          primary: '#b8752a',
           // White label text on the amber accent, as reviewed and approved on
           // the mockup.
           'on-primary': '#ffffff',
