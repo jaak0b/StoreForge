@@ -101,8 +101,7 @@ function params(overrides: Partial<PocketBinParams> = {}): PocketBinParams {
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     insert: null,
     tools: [lTool()],
     placements: [centeredL],
@@ -270,7 +269,9 @@ describe('buildPocketBinBody', () => {
   });
 
   it('rejects combining pockets with divider walls', () => {
-    expect(() => buildPocketBinBody(m, params({ dividerCountX: 1 }))).toThrow(/divider/i);
+    expect(() =>
+      buildPocketBinBody(m, params({ walls: [{ x1: 0, y1: -5, x2: 0, y2: 5 }] })),
+    ).toThrow(/divider/i);
   });
 
   it('rejects a pocket that reaches into the bin wall', () => {

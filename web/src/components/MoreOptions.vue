@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../stores/binDesigner';
+import DividerEditor from './divider/DividerEditor.vue';
 
 /**
  * The "More options" disclosure shared by the Manual bin and Screw entry
@@ -18,6 +19,12 @@ const props = defineProps<{
   /** Hides the divider fields; a pocket bin cannot have divider walls. */
   hideDividers?: boolean;
   /**
+   * Why the divider editor is unavailable for this entry, shown in its place.
+   * Set by a caller whose bin footprint is not a single known size, since a
+   * wall list is authored against one interior and means nothing without it.
+   */
+  dividerNotice?: string | null;
+  /**
    * Hides every bin body option (dividers, magnet holes); an
    * insert-only design has no bin body to configure.
    */
@@ -29,8 +36,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useBinDesigner();
-const { labelText2, dividerCountX, dividerCountY, magnetHoles, notes, moreOptionsOpen: open } =
-  storeToRefs(store);
+const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(store);
 </script>
 
 <template>
@@ -64,27 +70,13 @@ const { labelText2, dividerCountX, dividerCountY, magnetHoles, notes, moreOption
           hide-details
           @update:model-value="emit('update:quantity', Number($event))"
         />
-        <v-text-field
-          v-if="!props.hideDividers && !props.insertOnly"
-          v-model.number="dividerCountX"
-          type="number"
-          min="0"
-          step="1"
-          label="Dividers along X"
-          density="comfortable"
-          hide-details
-        />
-        <v-text-field
-          v-if="!props.hideDividers && !props.insertOnly"
-          v-model.number="dividerCountY"
-          type="number"
-          min="0"
-          step="1"
-          label="Dividers along Y"
-          density="comfortable"
-          hide-details
-        />
       </div>
+      <template v-if="!props.hideDividers && !props.insertOnly">
+        <div v-if="props.dividerNotice" class="text-caption text-medium-emphasis mt-4">
+          {{ props.dividerNotice }}
+        </div>
+        <DividerEditor v-else class="mt-4" />
+      </template>
       <div v-if="!props.insertOnly" class="mt-3">
         <v-switch
           v-model="magnetHoles"

@@ -164,7 +164,7 @@ export function validatePocketLayout(
   params: BinParams & { labelSlot?: boolean } & Pick<SlottedBinParams, 'fusedLabel'>,
   placed: PlacedPocket[],
 ): void {
-  if (params.dividerCountX > 0 || params.dividerCountY > 0) {
+  if (params.walls.length > 0) {
     throw new Error(
       'Tool pockets cannot be combined with divider walls. Remove the dividers to add pockets.',
     );

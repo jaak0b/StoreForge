@@ -20,7 +20,7 @@ import {
   generateInsertUnion,
   generateSlottedBin,
 } from '../../src/engine/gridfinity/binGenerator';
-import { binOuterSizeMm, HEIGHT_UNIT } from '../../src/engine/gridfinity/constants';
+import { binOuterSizeMm, HEIGHT_UNIT, PITCH, WALL_THICKNESS } from '../../src/engine/gridfinity/constants';
 import type { BinParams, SlottedBinParams } from '../../src/engine/gridfinity/types';
 
 let m: ManifoldToplevel;
@@ -37,8 +37,7 @@ function binParams(overrides: Partial<BinParams> = {}): BinParams {
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     ...overrides,
   };
 }
@@ -175,6 +174,19 @@ describe('slotted bin front region (measured against the Pred 1x1x6 mesh)', () =
 
   it('is watertight with genus 0 (no handles, no internal gaps)', () => {
     const body = buildSlottedBinBody(m, binParams());
+    expect(body.status()).toBe('NoError');
+    expect(body.genus()).toBe(0);
+    body.delete();
+  });
+
+  it('stays watertight when a divider wall crosses the label slot region', () => {
+    // The slot sits at the front (-Y) of a 2-wide bin; a full-depth divider
+    // down the middle runs straight through the slotted front wall.
+    const hy = (PITCH - 0.5 - 2 * WALL_THICKNESS) / 2;
+    const body = buildSlottedBinBody(
+      m,
+      binParams({ gridX: 2, walls: [{ x1: 0, y1: -hy, x2: 0, y2: hy }] }),
+    );
     expect(body.status()).toBe('NoError');
     expect(body.genus()).toBe(0);
     body.delete();

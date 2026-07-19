@@ -9,8 +9,7 @@ function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     ...overrides,
   };
 }

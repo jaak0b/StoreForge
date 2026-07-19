@@ -10,6 +10,7 @@ import {
 } from '../src/engine/gridfinity/binGenerator';
 import {
   BASE_WALL_THICKNESS,
+  binInteriorSizeMm,
   binTopOpeningMm,
   DIVIDER_THICKNESS,
   FLOOR_PLATE_THICKNESS,
@@ -24,6 +25,7 @@ import {
   WALL_THICKNESS,
 } from '../src/engine/gridfinity/constants';
 import type { BinParams } from '../src/engine/gridfinity/types';
+import { evenDividerWalls, type DividerWall } from '../src/engine/gridfinity/dividerModel';
 
 let m: ManifoldToplevel;
 
@@ -31,15 +33,30 @@ beforeAll(async () => {
   m = await loadManifold();
 });
 
-function params(overrides: Partial<BinParams> = {}): BinParams {
-  return {
+/**
+ * Build BinParams for a test. The old evenly spaced divider counts are still
+ * accepted as a convenience (converted to walls through evenDividerWalls, the
+ * production conversion), so the count-based geometry tests keep exercising
+ * the same solids; a test that needs a free wall passes walls directly.
+ */
+function params(
+  overrides: Partial<Omit<BinParams, 'walls'>> & {
+    walls?: DividerWall[];
+    dividerCountX?: number;
+    dividerCountY?: number;
+  } = {},
+): BinParams {
+  const { dividerCountX = 0, dividerCountY = 0, walls, ...rest } = overrides;
+  const base = {
     gridX: 1,
     gridY: 1,
     heightUnits: 3,
     magnetHoles: false,
-    dividerCountX: 0,
-    dividerCountY: 0,
-    ...overrides,
+    ...rest,
+  };
+  return {
+    ...base,
+    walls: walls ?? evenDividerWalls(base.gridX, base.gridY, dividerCountX, dividerCountY),
   };
 }
 
@@ -332,6 +349,14 @@ describe('buildBinManifold', () => {
   });
 });
 
+/**
+ * Volume in cubic mm of the default 2x2x3 bin with one even divider along X,
+ * recorded from the evenly spaced geometry as it has always been built. A pin
+ * on that case: only wall ends on the interior boundary are extended into the
+ * perimeter, and this is what proves the even dividers still are.
+ */
+const EVEN_DIVIDER_2X2_VOLUME_MM3 = 38002.874199748905;
+
 describe('interior dividers', () => {
   it('keeps the solid watertight with dividers on both axes', () => {
     const bin = buildBinManifold(m, params({ dividerCountX: 2, dividerCountY: 1 }));
@@ -416,9 +441,191 @@ describe('interior dividers', () => {
     bin.delete();
   });
 
-  it('rejects negative or fractional divider counts', () => {
-    expect(() => validateParams(params({ dividerCountX: -1 }))).toThrow(/dividerCountX/);
-    expect(() => validateParams(params({ dividerCountY: 1.5 }))).toThrow(/dividerCountY/);
+  it('rejects a wall running outside the interior or two walls too close', () => {
+    // A wall reaching well past the interior rectangle.
+    expect(() =>
+      validateParams(params({ walls: [{ x1: -100, y1: 0, x2: 100, y2: 0 }] })),
+    ).toThrow(/outside the bin interior/);
+    // Two parallel walls closer than the minimum compartment gap.
+    expect(() =>
+      validateParams(
+        params({
+          gridX: 3,
+          walls: [
+            { x1: 0, y1: -10, x2: 0, y2: 10 },
+            { x1: 3, y1: -10, x2: 3, y2: 10 },
+          ],
+        }),
+      ),
+    ).toThrow(/minimum compartment gap/);
+  });
+
+  it('keeps a single partial-length free wall watertight', () => {
+    const bin = buildBinManifold(
+      m,
+      params({ gridX: 2, walls: [{ x1: 0, y1: -8, x2: 0, y2: 8 }] }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('keeps an angled free wall watertight', () => {
+    // A wall at 30 degrees through the interior of a 2x2 bin.
+    const r = 15;
+    const a = (30 * Math.PI) / 180;
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        walls: [
+          { x1: -r * Math.cos(a), y1: -r * Math.sin(a), x2: r * Math.cos(a), y2: r * Math.sin(a) },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('keeps a T-junction of free walls watertight', () => {
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        walls: [
+          { x1: -20, y1: 0, x2: 20, y2: 0 },
+          { x1: 0, y1: 0, x2: 0, y2: 18 },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('leaves no fin past the far face of a wall a wall ends against', () => {
+    // A T: a long wall along X, and a wall running up from it. The ending
+    // wall's endpoint is at the junction, in open interior, so nothing of it
+    // may appear on the far side of the wall it meets.
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        walls: [
+          { x1: -20, y1: 0, x2: 20, y2: 0 },
+          { x1: 0, y1: 0, x2: 0, y2: 18 },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // The junction wall is solid right up to its own far face.
+    const inside = m.Manifold.cube([DIVIDER_THICKNESS, 0.4, 2], true).translate(
+      0,
+      -DIVIDER_THICKNESS / 2 + 0.2,
+      midZ,
+    );
+    const insideHit = bin.intersect(inside);
+    expect(insideHit.isEmpty()).toBe(false);
+    insideHit.delete();
+    inside.delete();
+    // Beyond that face, along the ending wall's axis, there is only air.
+    const beyond = m.Manifold.cube([DIVIDER_THICKNESS, WALL_THICKNESS, 2], true).translate(
+      0,
+      -DIVIDER_THICKNESS / 2 - 0.05 - WALL_THICKNESS / 2,
+      midZ,
+    );
+    const beyondHit = bin.intersect(beyond);
+    expect(beyondHit.isEmpty()).toBe(true);
+    beyondHit.delete();
+    beyond.delete();
+    bin.delete();
+  });
+
+  it('builds a wall ending in open interior at the length it was drawn', () => {
+    // Both endpoints are free, so the wall is built exactly end to end. The
+    // scoop is off so the only material in the probe slab is the wall.
+    const drawn = 8;
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        scoop: false,
+        walls: [{ x1: 0, y1: -drawn, x2: 0, y2: drawn }],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // A slab thinner than the wall and well clear of the perimeter, so what
+    // it catches is the wall and nothing else; its Y extent is the built
+    // length.
+    const slab = m.Manifold.cube([DIVIDER_THICKNESS / 2, 60, 2], true).translate(0, 0, midZ);
+    const built = bin.intersect(slab);
+    expect(built.isEmpty()).toBe(false);
+    const box = built.boundingBox();
+    expect(box.min[1]).toBeCloseTo(-drawn, 5);
+    expect(box.max[1]).toBeCloseTo(drawn, 5);
+    built.delete();
+    slab.delete();
+    bin.delete();
+  });
+
+  it('still welds an even divider into the perimeter walls', () => {
+    // Both endpoints of an even divider lie on the interior boundary, so it
+    // is still extended into the perimeter wall and reaches it: the case the
+    // boundary test must keep protecting. The volume is pinned so the
+    // evenly spaced geometry cannot drift.
+    const bin = buildBinManifold(m, params({ gridX: 2, gridY: 2, dividerCountX: 1 }));
+    expect(bin.status()).toBe('NoError');
+    const hy = binInteriorSizeMm(2) / 2;
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // Solid divider material in the last tenth of a millimetre before the
+    // perimeter wall's interior face, at both ends.
+    for (const sign of [-1, 1]) {
+      const probe = m.Manifold.cube([DIVIDER_THICKNESS / 2, 0.1, 2], true).translate(
+        0,
+        sign * (hy - 0.05),
+        midZ,
+      );
+      const hit = bin.intersect(probe);
+      expect(hit.isEmpty()).toBe(false);
+      hit.delete();
+      probe.delete();
+    }
+    expect(bin.volume()).toBeCloseTo(EVEN_DIVIDER_2X2_VOLUME_MM3, 3);
+    bin.delete();
+  });
+
+  it('keeps an asymmetric compartment layout watertight', () => {
+    // A 2x3 bin split down the middle, the left half into two rows and the
+    // right half into three, every wall reaching the perimeter or the centre
+    // wall so the partition is clean (genus 0). The deeper bin keeps the
+    // staggered rows clear of the minimum compartment gap.
+    const hx = (2 * PITCH - 0.5 - 2 * WALL_THICKNESS) / 2;
+    const hy = (3 * PITCH - 0.5 - 2 * WALL_THICKNESS) / 2;
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 3,
+        walls: [
+          { x1: 0, y1: -hy, x2: 0, y2: hy },
+          { x1: -hx, y1: 0, x2: 0, y2: 0 },
+          { x1: 0, y1: -hy / 3, x2: hx, y2: -hy / 3 },
+          { x1: 0, y1: hy / 3, x2: hx, y2: hy / 3 },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    bin.delete();
   });
 });
 

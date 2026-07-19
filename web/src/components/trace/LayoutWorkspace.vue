@@ -155,8 +155,7 @@ const pocketParams = computed<PocketBinParams>(() => {
     heightUnits: designer.heightUnits,
     magnetHoles: designer.magnetHoles,
     // The pocket generator rejects divider walls, so a pocket bin never has any.
-    dividerCountX: 0,
-    dividerCountY: 0,
+    walls: [],
     // A fused bin has no insert channel; the label is raised on the solid
     // fused shelf the body builder puts in the channel's place.
     labelSlot: designer.productChoice !== 'plainBin' && fusedContent === null,

@@ -12,7 +12,9 @@ import {
   type ScrewBin,
   type ScrewSpec,
   type TracePaper,
+  type DividerWall,
 } from './types';
+import { evenDividerWalls } from '../gridfinity/dividerModel';
 import {
   composeLabelText,
   HEAD_ICON_NAME,
@@ -404,6 +406,53 @@ function pickContent(raw: Record<string, unknown>): LabelContent {
   };
 }
 
+/**
+ * Validates a raw value as a list of divider walls (each a segment of finite
+ * x1, y1, x2, y2). Returns null when valid, otherwise a message. Geometric
+ * validity (containment, minimum length, compartment gaps) is enforced at
+ * generation time by the divider model, not on load, so a plan that no longer
+ * fits its bin still reads back rather than being rejected.
+ */
+function validateWallList(raw: unknown, subject: string): string | null {
+  if (!Array.isArray(raw)) {
+    return `${subject}: walls must be a list`;
+  }
+  for (const rawWall of raw) {
+    const wall = rawWall as Record<string, unknown> | null;
+    if (
+      typeof wall !== 'object' ||
+      wall === null ||
+      !isFiniteNumber(wall.x1) ||
+      !isFiniteNumber(wall.y1) ||
+      !isFiniteNumber(wall.x2) ||
+      !isFiniteNumber(wall.y2)
+    ) {
+      return `${subject}: a divider wall needs finite x1, y1, x2 and y2`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The divider walls of a validated raw bin. A version-5 bin carries walls
+ * verbatim; a version 1 to 4 bin carries dividerCountX/Y, converted to walls
+ * through evenDividerWalls (the single counts-to-walls source). The one place
+ * every load path resolves a bin's walls, so old and new plans agree.
+ */
+function pickWalls(raw: Record<string, unknown>): DividerWall[] {
+  if (Array.isArray(raw.walls)) {
+    return (raw.walls as Record<string, number>[]).map((wall) => ({
+      x1: wall.x1,
+      y1: wall.y1,
+      x2: wall.x2,
+      y2: wall.y2,
+    }));
+  }
+  const countX = (raw.dividerCountX as number | undefined) ?? 0;
+  const countY = (raw.dividerCountY as number | undefined) ?? 0;
+  return evenDividerWalls(raw.gridX as number, raw.gridY as number, countX, countY);
+}
+
 /** Validates the BinEnvelope fields plus the origin-specific bin fields. */
 function validateBin(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -423,11 +472,18 @@ function validateBin(raw: unknown, subject: string): string | null {
     return `${subject}: magnetHoles must be true or false`;
   }
   if (bin.origin === 'manual' || bin.origin === 'screw') {
-    if (!isPositiveInteger(bin.dividerCountX, 0)) {
-      return `${subject}: dividerCountX must be an integer of at least 0`;
-    }
-    if (!isPositiveInteger(bin.dividerCountY, 0)) {
-      return `${subject}: dividerCountY must be an integer of at least 0`;
+    // Version 5 carries walls; versions 1 to 4 carry dividerCountX/Y. Accept
+    // whichever the bin has (converted to walls on pick); neither means none.
+    if (bin.walls !== undefined) {
+      const wallProblem = validateWallList(bin.walls, subject);
+      if (wallProblem !== null) return wallProblem;
+    } else {
+      if (bin.dividerCountX !== undefined && !isPositiveInteger(bin.dividerCountX, 0)) {
+        return `${subject}: dividerCountX must be an integer of at least 0`;
+      }
+      if (bin.dividerCountY !== undefined && !isPositiveInteger(bin.dividerCountY, 0)) {
+        return `${subject}: dividerCountY must be an integer of at least 0`;
+      }
     }
     if (bin.origin === 'screw') {
       return validateScrew(bin.screw, subject);
@@ -435,7 +491,11 @@ function validateBin(raw: unknown, subject: string): string | null {
     return null;
   }
   if (bin.origin === 'traced') {
-    if (bin.dividerCountX !== undefined || bin.dividerCountY !== undefined) {
+    if (
+      bin.walls !== undefined ||
+      bin.dividerCountX !== undefined ||
+      bin.dividerCountY !== undefined
+    ) {
       return `${subject}: a traced bin cannot have divider walls`;
     }
     const pocketsProblem = validatePockets(bin.pockets, subject);
@@ -462,19 +522,16 @@ function pickBin(raw: Record<string, unknown>): Bin {
     assignTraceSource(bin, raw);
     return bin;
   }
-  const dividers = {
-    dividerCountX: raw.dividerCountX as number,
-    dividerCountY: raw.dividerCountY as number,
-  };
+  const walls = pickWalls(raw);
   if (raw.origin === 'screw') {
     return {
       ...envelope,
-      ...dividers,
+      walls,
       origin: 'screw',
       screw: pickScrew(raw.screw as Record<string, unknown>),
     };
   }
-  return { ...envelope, ...dividers, origin: 'manual' };
+  return { ...envelope, walls, origin: 'manual' };
 }
 
 /**
@@ -860,19 +917,16 @@ function legacyProductOf(
     };
     assignTraceSource(bin, raw);
   } else {
-    const dividers = {
-      dividerCountX: (raw.dividerCountX as number | undefined) ?? 0,
-      dividerCountY: (raw.dividerCountY as number | undefined) ?? 0,
-    };
+    const walls = pickWalls(raw);
     bin =
       kind === 'screw'
         ? {
             ...envelope,
-            ...dividers,
+            walls,
             origin: 'screw',
             screw: pickScrew(raw.screw as Record<string, unknown>),
           }
-        : { ...envelope, ...dividers, origin: 'manual' };
+        : { ...envelope, walls, origin: 'manual' };
   }
   // slot stays a slotted bin alone; embossed and slot-insert keep their
   // label as the paired insert; an embossed entry that never had a label was
@@ -1046,9 +1100,10 @@ export function parsePlanFile(text: string): PlanParseResult {
     return { ok: false, error: 'The plan is missing its entries list.' };
   }
   // Versions 1 and 2 carry flat design fields per entry and convert through
-  // the legacy path. Version 3 already has the current product/bin shape and
-  // differs from version 4 only by the removed stacking-lip flag, which the
-  // validators and pickers now ignore, so it reads through the current path.
+  // the legacy path. Versions 3, 4 and 5 already have the current product/bin
+  // shape and read through the current path; versions 3 and 4 carry divider
+  // counts (converted to walls on pick) where version 5 carries walls, and
+  // the validators and pickers accept either.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];

@@ -54,7 +54,7 @@ function detailToken(bin: Bin): string {
     const pockets = bin.pockets.placements.length;
     return pockets === 0 ? '' : countPhrase(pockets, 'pocket');
   }
-  const dividers = bin.dividerCountX + bin.dividerCountY;
+  const dividers = bin.walls.length;
   return dividers === 0 ? '' : countPhrase(dividers, 'divider');
 }
 
@@ -69,7 +69,7 @@ function synthesizedTitle(bin: ManualBin | TracedBin): string {
     return pockets === 0 ? 'Traced bin' : `Traced bin, ${countPhrase(pockets, 'pocket')}`;
   }
   const parts = ['Bin'];
-  const dividers = bin.dividerCountX + bin.dividerCountY;
+  const dividers = bin.walls.length;
   if (dividers > 0) parts.push(countPhrase(dividers, 'divider'));
   if (bin.magnetHoles) parts.push('magnet holes');
   return parts.join(', ');

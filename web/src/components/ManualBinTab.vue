@@ -8,6 +8,7 @@ import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
 import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
+import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import BinViewport from './BinViewport.vue';
@@ -40,6 +41,11 @@ const quantity = ref(1);
 const gridXField = ref<{ focus: () => void } | null>(null);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
+
+/** Detaches a wall list, so the form and a stored entry never share one. */
+function copyWalls(walls: DividerWall[]): DividerWall[] {
+  return walls.map((wall) => ({ ...wall }));
+}
 
 function resetForm(): void {
   const keepOpen = store.moreOptionsOpen;
@@ -78,8 +84,10 @@ function loadEditingEntry(entryId: string | null): void {
       gridY: bin.gridY,
       heightUnits: bin.heightUnits,
       magnetHoles: bin.magnetHoles,
-      dividerCountX: bin.dividerCountX,
-      dividerCountY: bin.dividerCountY,
+      // Copied, so editing the loaded walls never writes through to the
+      // stored queue entry before the edit is saved.
+      walls: copyWalls(bin.walls),
+      selectedWallIndex: null,
       labelText: content?.text ?? '',
       labelText2: content?.text2 ?? '',
       labelIcon: content?.icon ?? null,
@@ -131,8 +139,7 @@ function designedProduct(): Product {
     gridY: store.gridY,
     heightUnits: store.heightUnits,
     magnetHoles: store.magnetHoles,
-    dividerCountX: store.dividerCountX,
-    dividerCountY: store.dividerCountY,
+    walls: copyWalls(store.walls),
   };
   if (productChoice.value === 'binWithInsert') {
     const product: Product = { kind: 'binWithInsert', bin, insert: store.content };

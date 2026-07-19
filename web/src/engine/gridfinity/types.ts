@@ -1,3 +1,5 @@
+import type { DividerWall } from './dividerModel';
+
 /** Parameters describing a Gridfinity bin. */
 export interface BinParams {
   /** Number of grid cells along X (42 mm pitch each). Integer, at least 1. */
@@ -8,10 +10,8 @@ export interface BinParams {
   heightUnits: number;
   /** Whether to subtract magnet holes from the underside of each foot. */
   magnetHoles: boolean;
-  /** Number of divider walls perpendicular to the X axis. Integer, at least 0. */
-  dividerCountX: number;
-  /** Number of divider walls perpendicular to the Y axis. Integer, at least 0. */
-  dividerCountY: number;
+  /** Free interior divider wall segments in bin-local mm. Empty for none. */
+  walls: DividerWall[];
   /**
    * Whether the interior gets the scoop: the measured circular fillet
    * sweeping the floor up into the back wall (opposite the label slot).

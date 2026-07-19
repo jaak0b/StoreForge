@@ -166,6 +166,14 @@ export const CORNER_SEGMENTS = 12;
 export const DIVIDER_THICKNESS = 1.2;
 
 /**
+ * Smallest usable compartment gap between two separate divider walls: the
+ * minimum clear distance the validator requires between two walls that do not
+ * touch or cross, so a compartment stays wide enough to be usable. Owner-set
+ * value, not a measured constant.
+ */
+export const MIN_COMPARTMENT_MM = 8;
+
+/**
  * Outer footprint size in mm of a bin spanning `cells` grid cells along one
  * axis: the grid pitch per cell minus the shared footprint clearance
  * (PITCH - BASE_TOP_SIZE, a quarter millimetre per side). The single home for
