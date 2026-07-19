@@ -76,6 +76,43 @@ describe('maskToContour', () => {
     expect(Math.abs(holeArea)).toBeLessThan(55.3);
   });
 
+  it('returns the chosen region in pixel space alongside the mm outline', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // Same rectangle-with-hole as the mm test: pixels 40..200 x 30..130 with a
+    // radius-16 px hole centered at (120, 80). The pixel outline literals below
+    // are the drawing coordinates, independent of any mm conversion.
+    fillRect(cv, mask, 40, 30, 200, 130);
+    cv.circle(mask, new cv.Point(120, 80), 16, new cv.Scalar(0), -1);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 60, y: 50 }],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The pixel outline has one outer loop and one kept hole, and its vertex
+    // counts match the mm outline (same simplified polygons before scaling).
+    const px = result.pixelOutline;
+    expect(px.holes).toHaveLength(1);
+    expect(px.outer.length).toBe(result.outline.outer.length);
+    expect(px.holes[0].length).toBe(result.outline.holes[0].length);
+    // Outer pixel bounds are the drawing coordinates within 2 px, covering the
+    // 3x3 morphology kernel and the 0.8 px simplification epsilon.
+    const box = bounds(px.outer);
+    expect(Math.abs(box.minX - 40)).toBeLessThanOrEqual(2);
+    expect(Math.abs(box.maxX - 200)).toBeLessThanOrEqual(2);
+    expect(Math.abs(box.minY - 30)).toBeLessThanOrEqual(2);
+    expect(Math.abs(box.maxY - 130)).toBeLessThanOrEqual(2);
+    // The kept hole is the radius-16 px circle at (120, 80): bounds 104..136 x
+    // 64..96, hand-derived once, within 2 px for rasterization and smoothing.
+    const holeBox = bounds(px.holes[0]);
+    expect(Math.abs(holeBox.minX - 104)).toBeLessThanOrEqual(2);
+    expect(Math.abs(holeBox.maxX - 136)).toBeLessThanOrEqual(2);
+    expect(Math.abs(holeBox.minY - 64)).toBeLessThanOrEqual(2);
+    expect(Math.abs(holeBox.maxY - 96)).toBeLessThanOrEqual(2);
+  });
+
   it('drops a hole smaller than the minimum hole area', async () => {
     const cv = await loadOpenCv();
     const mask = emptyMask(cv);

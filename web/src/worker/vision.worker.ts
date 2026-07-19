@@ -27,6 +27,7 @@ import type {
   PaperCorners,
   PaperDetectionResult,
   PaperKind,
+  PixelPoint,
   SamPoint,
   TracedOutline,
 } from '../engine/trace/types';
@@ -129,11 +130,19 @@ export type SegmentResult =
       decodeMs: number;
       /** The chosen mask at rectified resolution, for drawing as a UI overlay. */
       maskPreview: ImageData;
+      /**
+       * True when an add-brush stroke painted area that lands outside the
+       * chosen region, so the paint would be lost from the trace. The UI blocks
+       * accepting until the user fixes it. SAM's own stray blobs do not set this.
+       */
+      paintedAreaDropped: boolean;
     }
   | { ok: false; error: string };
 
-/** Semi-transparent blue for the mask overlay preview. */
+/** Semi-transparent blue for kept mask pixels (the traced region). */
 const MASK_OVERLAY_RGBA = [66, 133, 244, 140] as const;
+/** Semi-transparent red for mask pixels dropped from the traced region. */
+const MASK_DROPPED_RGBA = [244, 67, 54, 140] as const;
 
 async function toImageData(source: ImageBitmap | ArrayBuffer): Promise<ImageData> {
   const bitmap =
@@ -158,6 +167,32 @@ function messageForContourFailure(reason: MaskContourFailure): string {
       return 'Add an include click on the tool, or paint over it. The traced shape contained none of your clicks or painted areas, which happens when every include click and brush stroke landed on the background rather than a part.';
     case 'empty':
       return 'No usable shape was found at that click. Try clicking nearer the middle of the tool, or add more include clicks along it.';
+  }
+}
+
+/**
+ * Fill one pixel-space polygon into a CV_8UC1 target with cv.fillPoly, setting
+ * its interior to `value` (0 or 255). Used to rasterize the chosen region's
+ * outer loop and to clear its kept holes back out.
+ */
+function fillPolygon(
+  cv: CvNamespace,
+  target: InstanceType<CvNamespace['Mat']>,
+  polygon: PixelPoint[],
+  value: number,
+): void {
+  const flat: number[] = [];
+  for (const point of polygon) {
+    flat.push(point.x, point.y);
+  }
+  const mat = cv.matFromArray(polygon.length, 1, cv.CV_32SC2, flat);
+  const vec = new cv.MatVector();
+  try {
+    vec.push_back(mat);
+    cv.fillPoly(target, vec, new cv.Scalar(value));
+  } finally {
+    mat.delete();
+    vec.delete();
   }
 }
 
@@ -331,16 +366,62 @@ const api = {
         return { ok: false, error: messageForContourFailure(result.reason) };
       }
       const outline = result.outline;
+      const pixelOutline = result.pixelOutline;
       const maskPreview = new ImageData(maskWidth, maskHeight);
-      const mask = maskMat.data;
-      for (let i = 0; i < maskWidth * maskHeight; i += 1) {
-        if (mask[i]) {
-          maskPreview.data.set(MASK_OVERLAY_RGBA, i * 4);
+
+      // Rasterize the chosen region back to a pixel mask (outer filled, kept
+      // holes cleared) so preview pixels can be split into kept (blue) and
+      // dropped (red), and painted-but-dropped area can be detected. Reuses the
+      // selection maskToContour already made instead of recomputing it.
+      const kept = cv.Mat.zeros(maskHeight, maskWidth, cv.CV_8UC1);
+      const notKept = new cv.Mat();
+      const dropped = new cv.Mat();
+      const paintMask = cv.Mat.zeros(maskHeight, maskWidth, cv.CV_8UC1);
+      const paintDropped = new cv.Mat();
+      let paintedAreaDropped = false;
+      try {
+        fillPolygon(cv, kept, pixelOutline.outer, 255);
+        for (const hole of pixelOutline.holes) {
+          fillPolygon(cv, kept, hole, 0);
         }
+        // dropped = mask AND NOT kept: mask pixels the trace discards.
+        cv.bitwise_not(kept, notKept);
+        cv.bitwise_and(maskMat, notKept, dropped);
+
+        const mask = maskMat.data;
+        const keptData = kept.data;
+        for (let i = 0; i < maskWidth * maskHeight; i += 1) {
+          if (mask[i]) {
+            maskPreview.data.set(keptData[i] ? MASK_OVERLAY_RGBA : MASK_DROPPED_RGBA, i * 4);
+          }
+        }
+
+        // Rasterize only add strokes (erase strokes never contribute paint) and
+        // test whether any painted pixel falls in the dropped region.
+        const addStrokes = strokes.filter((stroke) => stroke.mode === 'add');
+        if (addStrokes.length > 0) {
+          applyStrokes(cv, paintMask, addStrokes, rectifiedCalibration.mmPerPixel);
+          cv.bitwise_and(paintMask, dropped, paintDropped);
+          paintedAreaDropped = cv.countNonZero(paintDropped) > 0;
+        }
+      } finally {
+        kept.delete();
+        notKept.delete();
+        dropped.delete();
+        paintMask.delete();
+        paintDropped.delete();
       }
+
       const decodeMs = performance.now() - start;
       return Comlink.transfer(
-        { ok: true, outline, iouScore: iou[maskIndex], decodeMs, maskPreview },
+        {
+          ok: true,
+          outline,
+          iouScore: iou[maskIndex],
+          decodeMs,
+          maskPreview,
+          paintedAreaDropped,
+        },
         [maskPreview.data.buffer],
       );
     } finally {

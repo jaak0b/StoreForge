@@ -26,6 +26,10 @@ const iouScore = ref<number | null>(null);
 const decodeMs = ref<number | null>(null);
 const segmenting = ref(false);
 const errorMessage = ref<string | null>(null);
+// True when the worker reports that an add-brush stroke painted area that falls
+// outside the traced region, so accepting would silently lose that paint. The
+// accept and replace actions are blocked while this holds.
+const paintedAreaDropped = ref(false);
 
 // Brush strokes painted onto the mask (rectified-image pixels), the painting
 // mode, and the brush radius in mm. brushSizeMm ranges 1..20.
@@ -320,6 +324,7 @@ function clearClicks(): void {
   decodeMs.value = null;
   maskPreview = null;
   errorMessage.value = null;
+  paintedAreaDropped.value = false;
   draw();
 }
 
@@ -335,11 +340,13 @@ async function runSegment(): Promise<void> {
       errorMessage.value = result.error;
       outline.value = null;
       maskPreview = null;
+      paintedAreaDropped.value = false;
     } else {
       outline.value = result.outline;
       iouScore.value = result.iouScore;
       decodeMs.value = result.decodeMs;
       maskPreview = result.maskPreview;
+      paintedAreaDropped.value = result.paintedAreaDropped;
     }
   } catch (error) {
     errorMessage.value =
@@ -474,6 +481,10 @@ const helperText = computed(() => {
   return `Click the next tool in the photo to start Tool ${tools.value.length + 1}.`;
 });
 
+/** Tooltip shown on the blocked accept and replace actions. */
+const paintDroppedMessage =
+  'Part of your painted area is not connected to the traced shape and would be lost. Erase the stray paint or connect it to the tool with a brush stroke.';
+
 /** The label of the finish button, which accepts only when an outline is pending. */
 const finishLabel = computed(() => {
   if (outline.value === null) return 'Finish';
@@ -561,17 +572,37 @@ function acceptTool(finish: boolean): void {
     />
     <div class="action-island">
       <div class="d-flex align-center flex-wrap ga-2">
-        <v-btn
-          color="primary"
-          variant="flat"
-          :disabled="outline === null || segmenting"
-          @click="acceptTool(false)"
+        <v-tooltip location="top" :disabled="!paintedAreaDropped" :text="paintDroppedMessage">
+          <template #activator="{ props }">
+            <span v-bind="props">
+              <v-btn
+                color="primary"
+                variant="flat"
+                :disabled="outline === null || segmenting || paintedAreaDropped"
+                @click="acceptTool(false)"
+              >
+                {{ retraceToolId !== null ? 'Replace and continue' : 'Accept and trace next' }}
+              </v-btn>
+            </span>
+          </template>
+        </v-tooltip>
+        <v-tooltip
+          location="top"
+          :disabled="!(paintedAreaDropped && outline !== null)"
+          :text="paintDroppedMessage"
         >
-          {{ retraceToolId !== null ? 'Replace and continue' : 'Accept and trace next' }}
-        </v-btn>
-        <v-btn variant="outlined" :disabled="segmenting" @click="finishTracing">
-          {{ finishLabel }}
-        </v-btn>
+          <template #activator="{ props }">
+            <span v-bind="props">
+              <v-btn
+                variant="outlined"
+                :disabled="segmenting || (paintedAreaDropped && outline !== null)"
+                @click="finishTracing"
+              >
+                {{ finishLabel }}
+              </v-btn>
+            </span>
+          </template>
+        </v-tooltip>
         <v-btn variant="outlined" :disabled="points.length === 0" @click="clearClicks">
           Clear clicks
         </v-btn>

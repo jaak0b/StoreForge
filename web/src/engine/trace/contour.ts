@@ -9,9 +9,22 @@ import { signedArea } from './edit';
 /** A failure reason from maskToContour, mapped to user prose by the caller. */
 export type MaskContourFailure = 'empty' | 'noContainingRegion';
 
+/**
+ * The chosen region in rectified-image PIXEL coordinates: the same simplified
+ * polygons as the mm `outline`, before the mm conversion. The worker rasterizes
+ * these back to a pixel mask (outer filled, kept holes cleared) to tell mask
+ * pixels that survive into the trace from stray regions that get dropped,
+ * reusing this module's selection instead of recomputing it (see the coloring
+ * and painted-area checks in the vision worker).
+ */
+export interface PixelOutline {
+  outer: PixelPoint[];
+  holes: PixelPoint[][];
+}
+
 /** Discriminated result of maskToContour: an outline or a typed failure reason. */
 export type MaskContourResult =
-  | { ok: true; outline: TracedOutline }
+  | { ok: true; outline: TracedOutline; pixelOutline: PixelOutline }
   | { ok: false; reason: MaskContourFailure };
 
 /** Options for maskToContour. */
@@ -47,22 +60,14 @@ export interface MaskContourOptions {
 const DEFAULT_TOLERANCE_MM = 0.2;
 const DEFAULT_MIN_HOLE_AREA_MM2 = 3;
 
-/** Simplify a contour Mat with approxPolyDP and convert its vertices to mm. */
-function contourToMmPolygon(
-  cv: Cv,
-  contour: CvMat,
-  epsilonPx: number,
-  mmPerPixel: number,
-): MmPoint[] {
+/** Simplify a contour Mat with approxPolyDP, returning its vertices in pixels. */
+function contourToPixelPolygon(cv: Cv, contour: CvMat, epsilonPx: number): PixelPoint[] {
   const approx = new cv.Mat();
   try {
     cv.approxPolyDP(contour, approx, epsilonPx, true);
-    const points: MmPoint[] = [];
+    const points: PixelPoint[] = [];
     for (let i = 0; i < approx.rows; i += 1) {
-      points.push({
-        x: approx.data32S[i * 2] * mmPerPixel,
-        y: approx.data32S[i * 2 + 1] * mmPerPixel,
-      });
+      points.push({ x: approx.data32S[i * 2], y: approx.data32S[i * 2 + 1] });
     }
     return points;
   } finally {
@@ -70,8 +75,17 @@ function contourToMmPolygon(
   }
 }
 
-/** Reverse the polygon in place if its shoelace area sign does not match. */
-function orient(points: MmPoint[], positive: boolean): MmPoint[] {
+/** Scale a pixel polygon to millimeters, preserving vertex order and winding. */
+function pixelToMmPolygon(points: PixelPoint[], mmPerPixel: number): MmPoint[] {
+  return points.map((p) => ({ x: p.x * mmPerPixel, y: p.y * mmPerPixel }));
+}
+
+/**
+ * Reverse the polygon in place if its shoelace area sign does not match. The
+ * pixel-to-mm scaling is a positive uniform scale, so the winding sign is the
+ * same in either frame; orienting the pixel polygon fixes both.
+ */
+function orient(points: PixelPoint[], positive: boolean): PixelPoint[] {
   const area = signedArea(points);
   if ((area > 0) !== positive) {
     points.reverse();
@@ -177,17 +191,17 @@ export function maskToContour(
     }
 
     const outerContour = contours.get(chosen);
-    let outer: MmPoint[];
+    let outerPx: PixelPoint[];
     try {
-      outer = orient(contourToMmPolygon(cv, outerContour, epsilonPx, mmPerPixel), true);
+      outerPx = orient(contourToPixelPolygon(cv, outerContour, epsilonPx), true);
     } finally {
       outerContour.delete();
     }
-    if (outer.length < 3) {
+    if (outerPx.length < 3) {
       return { ok: false, reason: 'empty' };
     }
 
-    const holes: MmPoint[][] = [];
+    const holesPx: PixelPoint[][] = [];
     for (
       let child = hierarchy.data32S[chosen * 4 + 2];
       child !== -1;
@@ -198,15 +212,21 @@ export function maskToContour(
         if (cv.contourArea(holeContour) < minHoleAreaPx) {
           continue;
         }
-        const hole = orient(contourToMmPolygon(cv, holeContour, epsilonPx, mmPerPixel), false);
-        if (hole.length >= 3) {
-          holes.push(hole);
+        const holePx = orient(contourToPixelPolygon(cv, holeContour, epsilonPx), false);
+        if (holePx.length >= 3) {
+          holesPx.push(holePx);
         }
       } finally {
         holeContour.delete();
       }
     }
-    return { ok: true, outline: { outer, holes } };
+    const outer = pixelToMmPolygon(outerPx, mmPerPixel);
+    const holes = holesPx.map((hole) => pixelToMmPolygon(hole, mmPerPixel));
+    return {
+      ok: true,
+      outline: { outer, holes },
+      pixelOutline: { outer: outerPx, holes: holesPx },
+    };
   } finally {
     kernel.delete();
     clean.delete();
