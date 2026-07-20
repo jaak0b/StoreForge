@@ -64,31 +64,33 @@ const items = computed(() =>
 </script>
 
 <template>
-  <v-select
-    v-model="choice"
-    :items="items"
-    item-title="title"
-    item-value="value"
-    label="Parts to print"
-    density="comfortable"
-    hide-details
-  >
-    <template #item="{ props: itemProps, item }">
-      <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
-    </template>
-  </v-select>
-
-  <template v-if="choice === 'binWithInsert'">
-    <v-checkbox
-      v-model="fused"
-      label="Print the label as part of the bin"
+  <div>
+    <v-select
+      v-model="choice"
+      :items="items"
+      item-title="title"
+      item-value="value"
+      label="Parts to print"
       density="comfortable"
       hide-details
-      class="mt-1"
-    />
-    <div class="text-caption text-medium-emphasis ml-10 mt-n2">
-      The bin and its label print as one fused piece; the label is raised on the bin and
-      there is no swappable insert slot.
-    </div>
-  </template>
+    >
+      <template #item="{ props: itemProps, item }">
+        <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
+      </template>
+    </v-select>
+
+    <template v-if="choice === 'binWithInsert'">
+      <v-checkbox
+        v-model="fused"
+        label="Print the label as part of the bin"
+        density="comfortable"
+        hide-details
+        class="mt-1"
+      />
+      <div class="text-caption text-medium-emphasis ml-10 mt-n2">
+        The bin and its label print as one fused piece; the label is raised on the bin and
+        there is no swappable insert slot.
+      </div>
+    </template>
+  </div>
 </template>
