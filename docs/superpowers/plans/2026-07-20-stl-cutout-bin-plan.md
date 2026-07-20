@@ -3,6 +3,44 @@
 Date: 2026-07-20. Companion to `docs/superpowers/specs/2026-07-20-stl-cutout-bin-design.md`.
 Read the design first; this document does not restate its reasoning.
 
+## What is being built
+
+A fourth way to make a bin: **upload a 3D model and let the bin close around it.**
+
+The user opens a new Cutout bin tab, uploads one or more STL files, drags each into place
+inside a translucent bin in the 3D view, and the bin's interior fills in solid around them,
+leaving a pocket shaped like each model. Each pocket is cut slightly larger than its model so
+the real part drops in rather than jamming, and that amount is set per model because different
+objects in one tray want different fits. Whether a pocket ends up open at the top or fully
+enclosed depends only on how high the user placed the model. The uploaded files are kept on the
+device so a bin stays editable later.
+
+## How the work is shaped
+
+Nine stages. The order is driven by one idea: **build it from the geometry outward.**
+
+1. Stages 1 and 2 are pure geometry with real test coverage, and they land first because
+   everything else depends on the carve being correct.
+2. Stages 3 to 5 are the data layer: the bin type, the plan file, and storing the uploaded
+   files on the device.
+3. Stage 6 connects the geometry to the app through the background worker.
+4. Stages 7 to 9 are what the user actually touches, and their verification is partly a
+   hands on check by the owner, because there is no automated test for how a 3D drag feels.
+
+Stage 1 is the one that carries risk to existing work: it pulls shared geometry out of the
+already shipped tool trace bin. Its whole definition of done is that the existing tests still
+pass untouched.
+
+Two project rules shape most of the decisions below, and are worth stating plainly:
+
+- **One source of truth.** Where the trace bin and the cutout bin do the same thing, the code
+  lives in one place used by both. Where a figure is derived, it is derived once and quoted
+  everywhere else, never restated.
+- **Established methods, no tuned constants.** Every number in the geometry is derived from
+  something real (the clearance, the printer's nozzle width, the bin's own dimensions) rather
+  than picked because it made one test look right. Where a number is a pure interface choice,
+  it is labelled as one and put to the owner.
+
 ## How to use this plan
 
 Nine stages, ordered by dependency. Every stage's definition of done includes `npm run build`
@@ -15,17 +53,22 @@ reports rather than deciding.
 
 ## Stage 0: owner decisions before any code
 
-**[CHECKPOINT]** Answer the six open questions in design section 11 before stage 1 begins.
-Three of them change code written in the early stages and are cheap now, expensive later:
+**Already decided by the owner on 2026-07-20: clearance is per model, not per bin.** Each
+uploaded model carries its own value, defaulting to 0.4 mm. This is settled and is not to be
+reopened; design sections 5.2, 7.10 and 8.6 carry the reasoning and the consequences. It
+affects stages 2, 3, 4, 6 and 8, and each of those stages says how.
+
+**[CHECKPOINT]** Answer the five remaining open questions in design section 11 before stage 1
+begins. Two of them change code written in the early stages and are cheap now, expensive later:
 
 | Question | Affects | Default if unanswered |
 | --- | --- | --- |
-| Per model clearance versus per bin | Stage 3 data model, stage 4 validators | per model |
 | Read only versus editable transform rows | Stage 8 | read only |
 | Second worker instance for previews | Stage 6 | second instance |
 
-The remaining three (gizmo handle size, translation snap increment, `Fit bin to models` as a
-button) can be answered at their own stages and are marked there.
+The remaining three (gizmo handle size, the 1 mm translation snap and the 0.05 mm clearance
+step, `Fit bin to models` as a button) can be answered at their own stages and are marked
+there.
 
 ## Stage 1: extract the shared carve module
 
@@ -68,7 +111,8 @@ engine, no worker, no UI, no persistence.
 
 **Created.**
 - `web/src/engine/cutout/cutoutBin.ts`: `CutoutModelSpec`, `CutoutBinParams`,
-  `DEFAULT_CUTOUT_CLEARANCE_MM`, `simplifyToleranceMm(clearanceMm)`,
+  `DEFAULT_CUTOUT_CLEARANCE_MM`, `maxClearanceMm(gridX, gridY)`,
+  `simplifyToleranceMm(clearanceMm)`,
   `offsetSphereSegments(clearanceMm, toleranceMm)`, `prepareCutoutModel` (the import stage:
   centre, simplify, offset), `placeCutter` (rotate then translate),
   `validateCutoutPlacement` returning warnings as an array, `buildCutoutBinBody`,
@@ -91,13 +135,29 @@ against the implementation's own output.
 
 **Tests from the design.** Section 10.2, all seventeen.
 
+**Clearance is per model here, and this is where that is established.** `prepareCutoutModel`
+takes one model's clearance and nothing else knows about any other model's. Specifically:
+
+- `simplifyToleranceMm` is a pure function of **one** model's clearance, so the tolerance is
+  per model too. Design section 8.2 works through why the derivation still holds when two
+  models in one bin carry different tolerances, and confirms nothing downstream assumed a
+  single bin wide value.
+- The shared carve stage from stage 1 receives finished cutter solids and never sees a
+  clearance or a tolerance. If it needs either, the layering is wrong.
+- The zero clearance fast path that skips simplify and Minkowski is per model, so a bin can
+  mix an exact model and a dilated one.
+
 **Definition of done.**
 - `npm run build` and `npm test` green.
 - Every warning in design section 9.2 that belongs to the carve is **returned** in the result
   array, never thrown. A test asserts that a model fully outside the bin still yields a
   watertight solid.
-- The simplify tolerance and the sphere segment count are computed from their formulas. A
-  literal `0.04` or `7` anywhere in the module fails this stage.
+- The simplify tolerance, the sphere segment count and the clearance ceiling are computed from
+  their formulas. A literal `0.04`, `7` or a hardcoded millimetre cap anywhere in the module
+  fails this stage.
+- The two mixed clearance tests from design section 10.2 pass: two models with different
+  clearances each get their own dilation, and a bin mixing 0 mm with 0.4 mm carves both
+  correctly. These are what prove per model actually reached the geometry.
 
 ## Stage 3: plan layer types
 
@@ -143,6 +203,16 @@ produces its own message.
 - `web/tests/plan/planFile.spec.ts`: new cases.
 
 **Depends on.** Stage 3.
+
+**Clearance specifics.** `validateCutoutModels` takes the bin's `gridX` and `gridY`, which
+`validateBin` already has, so the out of range message can quote the real limit from
+`maxClearanceMm` rather than saying the value is merely wrong. This follows the precedent of
+the existing pocket depth message, which names the depth the bin actually allows. An absent
+`clearanceMm` defaults to `DEFAULT_CUTOUT_CLEARANCE_MM` on pick, following the precedent of
+`minHoleWidthMm`, so a plan written by an early build still loads.
+
+Do not restate 0.4 or the ceiling formula in this module. Both are imported from
+`engine/cutout/cutoutBin.ts`, which is their single home.
 
 **Tests from the design.** Section 10.4, the round trip, defaulting, walls exclusion, version
 5 compatibility and version 7 rejection rows.
@@ -231,11 +301,23 @@ building, not by reading.
 - If the owner chose a second worker instance in stage 0, `workerClient.ts` holds two
   `Comlink.Remote` handles and routes cutout previews to the second.
 
+**The cache key is the load bearing detail of this stage.** It is
+`${modelSourceId}:${clearanceMm}`, model identity and clearance together, and getting it wrong
+has no visible symptom. A cache keyed by model alone would silently reuse the previous dilation
+after a clearance change: the preview renders, the solid is watertight, the download succeeds,
+and the printed part is simply the wrong size. Design section 8.6 has the full treatment,
+including that only the changed model's offset is recomputed while the bin is then re-carved
+whole, and why the carve is deliberately not made incremental.
+
 **Definition of done.**
 - `npm run build` and `npm test` green.
 - A test drives the worker's cache logic at the engine level: importing the same model twice
   performs the Minkowski offset once. Assert on a call count through an injected seam rather
   than on wall clock time, which is not a stable assertion in CI.
+- The two cache tests from design section 10.2 pass: the key changes with clearance and not
+  with placement, and recomputing one model's offset leaves the other models' entries intact.
+- `releaseCutoutModels` drops superseded clearance keys for a model still in the bin, so
+  tuning a clearance through several values does not accumulate solids in the WASM heap.
 - **[CHECKPOINT]** Owner confirms the cancellation refinement is worth keeping. If the `await`
   yield between models does not in fact let a queued cancel through (design section 11, last
   bullet), the honest response is to drop the cancellation and rely on the ghost tier and the
@@ -320,8 +402,26 @@ existing scene scaffolding.
   the rest.
 - Deep clone everything crossing into the worker to strip Vue proxies.
 
-**[CHECKPOINT]** Confirm the translation snap increment (1 mm proposed) and whether
-`Fit bin to models` is a button rather than continuous auto sizing.
+**The clearance control, per design section 7.10.** One per model row, and the only control in
+this tab that triggers slow work, so it gets its own handling:
+
+- A number field with stepper arrows, step 0.05 mm, **committed on blur or on Enter**, not a
+  slider and not per keystroke. Exact entry is the point (a user going from 0.4 to 0.5 after a
+  tight fit), and every intermediate value a slider or a keystroke would pass through is a
+  fresh Minkowski sum.
+- Bounds are 0 to `maxClearanceMm(gridX, gridY)`, so the field cannot express a value the
+  stage 4 validator would reject. Zero is legal and takes the fast path.
+- While one model's offset recomputes: an indeterminate progress bar on **that row only**, its
+  clearance field disabled so a second change cannot queue behind the first, every other row
+  fully editable, and the gizmo still live. The bin shows the previous carve with the `Stale`
+  chip. It must never look frozen.
+- On failure: the field reverts to the last clearance that succeeded, the bin keeps generating
+  with it, and the row shows `Applying a clearance of C mm to the model "NAME" failed
+  (DETAIL). The model is still using its previous clearance of P mm.` Reverting rather than
+  blocking leaves the user with a working bin and a clear statement of what did not happen.
+
+**[CHECKPOINT]** Confirm the two interface increments (1 mm gizmo translation snap, 0.05 mm
+clearance step) and whether `Fit bin to models` is a button rather than continuous auto sizing.
 
 **Definition of done.**
 - `npm run build` and `npm test` green.
@@ -329,6 +429,10 @@ existing scene scaffolding.
   see the ghost tier during a drag and the real carve after, queue the bin, reload the page,
   reopen the bin for editing, and find both models still there and still placed correctly.
   The reload is the part that proves the IndexedDB path; nothing else can.
+- **[CHECKPOINT]** Owner confirms the per model clearance in the browser: set the two models
+  to clearly different clearances, for example 0.2 mm and 1.0 mm, and confirm the two pockets
+  differ accordingly and that changing one does not alter the other. Confirm the recomputing
+  row stays responsive and that the rest of the tab keeps working while it runs.
 
 ## Stage 9: downloads and batches
 
@@ -351,8 +455,10 @@ existing scene scaffolding.
   the label part is on the second extruder slot. The export format is not considered proven
   until this happens.
 - **[CHECKPOINT]** Owner prints one cutout bin and confirms the real object drops into the
-  pocket. The 0.4 mm clearance is a reasoned default, not a measured one, and only a physical
-  print settles whether it is right.
+  pocket. The 0.4 mm default is a reasoned starting value, not a measured one, and only a
+  physical print settles whether it is right. If it proves too tight or too loose, the fix is
+  to change the default in its single home in `engine/cutout/cutoutBin.ts`, and the per model
+  control means an individual model can be tuned without disturbing the default.
 
 ## Summary of ordering constraints
 

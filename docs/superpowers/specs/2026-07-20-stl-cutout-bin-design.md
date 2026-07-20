@@ -2,6 +2,35 @@
 
 Date: 2026-07-20. Status: proposed, awaiting owner approval.
 
+## In plain terms
+
+Today a bin is an open box, optionally split by divider walls or carved with tool shaped
+pockets traced from a photo. This adds a fourth way to make one: **drop a 3D model into the
+bin and let the bin close around it.**
+
+The user opens a new Cutout bin tab, uploads one or more STL files, and sees each model
+floating inside a translucent bin in the 3D view. They drag each model into place with the
+usual arrows and rotation rings, and the bin's interior fills in solid around them, leaving a
+pocket shaped exactly like each model. Print the bin and the real objects drop into their
+pockets.
+
+Three things follow from that, and they are the whole design:
+
+- **Each pocket is cut slightly larger than its model** so the real part actually fits rather
+  than jamming. The amount is set per model, because a socket set and a wrench in the same
+  tray do not want the same fit.
+- **Where a model sits in height decides whether its pocket is open or closed.** Push a model
+  up through the rim and its pocket opens at the top; sink it fully and the bin closes over
+  it. There is no setting for this and no mode to choose, only where the user put the model.
+- **The uploaded files are kept on the device**, so a bin can still be opened and rearranged
+  weeks later rather than becoming a one shot export.
+
+What the user sees and does, end to end: pick the tab, upload files, drag them into position,
+watch the bin carve itself, add it to the print queue like any other bin, and download it as
+STL or 3MF.
+
+The rest of this document is the implementation detail behind that.
+
 ## 1. Summary and scope
 
 A new bin type whose interior is carved by subtracting user supplied STL models. The user
@@ -195,6 +224,10 @@ here, over and above it being a true 3D offset rather than a per axis one.
 
 That splits the pipeline into a slow import stage that runs once and a fast edit stage that
 runs on every drag end.
+
+**Because clearance is per model (5.2), the cached offset is keyed by model identity and
+clearance together.** Section 8.6 works through what that costs and how the UI covers it.
+Moving a model is cheap; changing its clearance is not.
 
 ### 3.2 Import stage, once per model (and again if its clearance changes)
 
@@ -414,9 +447,15 @@ export interface CutoutModel {
   /** Where the model sits in the bin. */
   placement: ModelPlacement;
   /**
-   * How far the pocket is dilated beyond the model surface, in mm, as a true
-   * 3D offset. Per model rather than per bin, because a snug locating pocket
-   * and a loose drop-in pocket can reasonably share one bin.
+   * How far this model's pocket is dilated beyond the model surface, in mm, as
+   * a true 3D offset. Per model, not per bin: a socket set and a wrench in one
+   * tray do not want the same fit.
+   *
+   * Deliberately a sibling of placement rather than a field inside it. A
+   * placement change is cheap (a lazy transform of a cached solid); a clearance
+   * change is expensive (it invalidates that cache and re-runs the Minkowski
+   * sum). Keeping them apart lets the diff between two model records answer
+   * "was this cheap or expensive?" directly, with no extra bookkeeping.
    */
   clearanceMm: number;
 }
@@ -440,7 +479,7 @@ export type ProductOrigin = 'manual' | 'screw' | 'traced' | 'cutout';
 so a cutout bin can be ordered with an empty slot or with no label feature at all.
 `BinWithInsertProduct.bin` is already `Bin` and needs no change.
 
-### 5.2 Default clearance
+### 5.2 Clearance is per model, and that was a deliberate trade
 
 ```ts
 /**
@@ -452,7 +491,20 @@ export const DEFAULT_CUTOUT_CLEARANCE_MM = 0.4;
 ```
 
 Its home is `engine/cutout/cutoutBin.ts` and both the store default and the plan loader
-default read it from there.
+default read it from there. It is the single source: no other module restates 0.4.
+
+**Recorded for the future: the owner considered one clearance per bin and rejected it.** The
+reasoning is that models sharing a tray genuinely differ in the fit they want, a snug locating
+pocket beside a loose drop in one, and a single bin wide value would force the user to print
+two bins to get two fits. The costs of per model are accepted knowingly:
+
+- an extra control on every model row rather than one control per bin,
+- a cache keyed by clearance as well as model, so changing one model's clearance re-runs the
+  expensive offset for that model (8.6),
+- a per model simplify tolerance, since the tolerance is derived from the clearance (8.2).
+
+None of these is a reason to revisit the decision. They are written down so that a later
+reader finds the trade already reasoned through rather than reopening it.
 
 ### 5.3 Plan file version bump
 
@@ -492,6 +544,28 @@ Exact messages, in check order:
 | `placement` not an object | `${subject}: cutout model ${id}: placement must be an object` |
 | any placement field not finite | `${subject}: cutout model ${id}: placement ${field} must be a number` |
 | `clearanceMm` not finite or negative | `${subject}: cutout model ${id}: clearanceMm must be a number of at least 0` |
+| `clearanceMm` above the bin's limit | `${subject}: cutout model ${id}: clearanceMm is C mm, but a bin GX by GY cells allows at most M mm` |
+
+The clearance ceiling is derived, not picked. A clearance dilates the model in every
+direction, so once it exceeds half the bin's narrowest interior dimension the dilation alone
+is wider than the bin and no model can fit whatever its size:
+
+```ts
+/**
+ * The largest clearance a bin of this footprint can hold: half its narrowest
+ * interior dimension, beyond which the dilation alone exceeds the interior.
+ * The single home for this figure; the validator message and the clearance
+ * field's maximum both quote it.
+ */
+export function maxClearanceMm(gridX: number, gridY: number): number {
+  return Math.min(binInteriorSizeMm(gridX), binInteriorSizeMm(gridY)) / 2;
+}
+```
+
+`validateCutoutModels` therefore takes the bin's `gridX` and `gridY`, which `validateBin`
+already has, so the message can quote the real limit. This follows the precedent set by the
+pocket depth message, which names the actual depth the bin allows rather than saying the value
+is out of range.
 
 In `validateBin`, a new branch mirroring the traced one:
 
@@ -945,6 +1019,42 @@ unrelated flows to roughly triple its size with gizmo arbitration, raycast selec
 ghost management that two of those three flows will never use. The composable keeps the
 sharing at the layer that is genuinely shared.
 
+### 7.10 The clearance control
+
+One control per model row, since clearance is per model (5.2). It is the only control in this
+tab that triggers genuinely slow work, so it is specified separately from the gizmo.
+
+**Recommendation: a number field with stepper arrows, step 0.05 mm, committed on blur or on
+Enter. Not a slider.**
+
+Three reasons, in order of weight:
+
+1. **Exact entry is the point.** The realistic use is a user whose printed pocket was too
+   tight going from 0.4 to 0.5 precisely, then to 0.6 if that still binds. A slider makes an
+   exact value awkward to hit and impossible to read back confidently. This is the opposite
+   of the gizmo, where the whole interaction is judging position by eye and no exact number is
+   wanted (7.7).
+2. **A slider invites dragging, and dragging this value is expensive.** Every intermediate
+   value a slider passes through is a distinct cache key and a fresh Minkowski sum. A field
+   that commits once, on blur or Enter, produces exactly one recompute per decision the user
+   actually made.
+3. It matches how every other numeric dimension in this app is entered.
+
+Committing on blur or Enter rather than per keystroke is deliberate for the same reason:
+typing `0.45` would otherwise fire recomputes for `0`, `0.4` and `0.45`. A debounce alone
+would not fix it, since a slow typist still commits intermediate values. Explicit commit is
+both cheaper and more predictable.
+
+Field bounds: minimum 0, maximum `maxClearanceMm(gridX, gridY)` from 5.4, so the field cannot
+express a value the validator would reject. Entering 0 is legal and meaningful: it asks for an
+exact subtraction, and it takes the fast path that skips both the simplify and the Minkowski
+stages entirely (3.2).
+
+The step of 0.05 mm is a user interface increment, not a derived geometric constant. It is
+justified as roughly an eighth of a nozzle width, fine enough to tune a fit that is close but
+not right, and coarse enough that stepping to the next sensible value takes one or two clicks.
+**[Owner checkpoint]** alongside the other interface increments.
+
 ## 8. Performance
 
 ### 8.1 Where the time goes
@@ -979,6 +1089,29 @@ simplification is invisible in the printed part.
 
 When `clearanceMm` is 0 there is no budget to spend, so no simplification happens and no
 Minkowski runs at all. The user asked for an exact subtraction and gets one.
+
+**The tolerance is therefore per model, because the clearance is.** Two models in one bin
+carrying different clearances carry different tolerances, and one may be simplified while
+another, at zero clearance, is not simplified at all. The derivation still holds, and it is
+worth being explicit about why, because "a bin wide error budget" would be the natural thing
+to assume and it is not what this is:
+
+- **The guarantee is per model.** Each real object must fit its own pocket. There is no bin
+  wide fit property, so there is nothing for a bin wide tolerance to protect. Model A's
+  simplification cannot affect whether object B fits pocket B.
+- **The union preserves the bound.** The cutters are unioned before subtraction, and the
+  union of solids each within `t_i` of its true model is within `max(t_i)` of the union of the
+  true models. Mixing tolerances degrades nothing beyond the worst individual bound, and each
+  individual bound is already one tenth of that model's own clearance.
+- **Nothing downstream assumed a single value.** `simplifyToleranceMm(clearanceMm)` is a pure
+  function of one model's clearance and is called once per model in the import stage. The
+  shared carve stage (section 2) receives finished cutter solids and never sees a tolerance.
+  The subtraction, the slot restoration and the status check are all tolerance blind.
+
+The sphere resolution is the one place this could have leaked, and it does not: as 8.3 shows,
+the derived segment count comes out independent of the clearance value, so every model's
+offset sphere is the same regardless of its clearance. That is a consequence of tying the
+sphere's faceting error to the same proportional budget, not a coincidence.
 
 ### 8.3 Offset sphere resolution
 
@@ -1064,7 +1197,84 @@ Given that, the responsiveness strategy in priority order is:
 3. The 300 ms debounce plus the drag end trigger, which collapses a gesture into one carve.
 4. Model granularity cancellation of superseded preview carves, as a refinement.
 
-### 8.6 Worker instance
+### 8.6 Changing a clearance: the one expensive control
+
+Dragging is cheap because the offset is cached. Changing a clearance is expensive because it
+invalidates that cache entry. This is the only control in the tab with that property, and it
+needs its own treatment.
+
+#### The cache
+
+Lives in the geometry worker, at module scope, as `Map<string, Manifold>` keyed by:
+
+```
+`${modelSourceId}:${clearanceMm}`
+```
+
+Model identity and clearance together. It holds the finished import stage product: centred,
+simplified, and offset, ready to be transformed and subtracted. It lives in the worker and
+not on the main thread because a `Manifold` is a WASM heap object that cannot cross a thread
+boundary, and because the worker is the only place that can use it.
+
+A miss is not an error. `missingCutoutModels(ids)` reports which keys the worker lacks and the
+client sends the bytes for those, which is the same path a fresh upload takes. So a clearance
+change and a first upload are the same operation as far as the worker is concerned, and there
+is one code path rather than two.
+
+Eviction is explicit, through `releaseCutoutModels(keepIds)`, called when the tab resets or a
+model is removed. Superseded clearance keys for a model still in the bin are released the same
+way, so tuning a clearance through five values does not leave five solids in the WASM heap.
+
+#### What re-runs
+
+**Only the changed model's offset is recomputed. The bin is then re-carved in full, cheaply.**
+
+The expensive stage is per model, so a bin with four models where one clearance changed pays
+for one Minkowski sum, not four. The other three cached offsets are reused untouched.
+
+The carve stage, though, is not incremental and is not made so. `Manifold.difference` runs once
+against the union of all cutters; there is no partial subtraction to update. Caching a
+partially carved bin per subset of models would mean a cache entry per combination, and worse,
+it would put a second derivation of "what a carved bin is" beside the one in the shared carve
+module, which rule 10 forbids. Since the carve stage is the cheap one (8.1), re-running it
+whole costs little and keeps a single derivation.
+
+So the cost of a clearance change is: one Minkowski sum, plus one ordinary carve. The cost of a
+drag is: one ordinary carve. The difference between them is exactly the one operation that
+had to re-run.
+
+#### What the user sees
+
+The failure to avoid is the tab looking frozen while a multi second offset runs.
+
+| Where | During the recompute |
+| --- | --- |
+| That model's row | Indeterminate progress bar on the row, and the clearance field disabled so a second change cannot queue behind the first |
+| Other model rows | Untouched and fully editable. Their offsets are cached and unaffected |
+| The bin solid | The previous carve, with the `Stale` chip already specified in 8.4 |
+| The ghost meshes | Unchanged and still draggable. Ghosts show the raw model, not the dilated pocket, so a clearance change does not alter them |
+| The readout | The footprint row keeps its previous value until the new offset lands, since the authoritative footprint includes the dilation |
+
+The gizmo stays live throughout. A user can keep positioning models while one model's clearance
+recomputes, because the two do not contend: placement is applied at carve time and the
+recompute is a separate per model stage. The carve that eventually runs picks up both.
+
+#### When it fails
+
+Per rule 2, a failure is a user worded message and never a silent drop or a raw exception.
+
+The offset can fail on a model that parsed and welded successfully, since a Minkowski sum can
+exhaust memory or produce a bad status on a pathological input. When it does:
+
+- the previous cache entry is still valid, because it is under a different key,
+- so the field reverts to the last clearance that succeeded, and the bin keeps carving with it,
+- and the row shows `Applying a clearance of C mm to the model "NAME" failed (DETAIL). The
+  model is still using its previous clearance of P mm.`
+
+Reverting rather than blocking is the right behaviour: the user keeps a working bin and a clear
+statement of what did not happen, instead of a stuck field and a bin that will not generate.
+
+### 8.7 Worker instance
 
 **Recommendation: give the cutout preview its own worker instance.**
 
@@ -1085,7 +1295,7 @@ Note that the export paths must **not** participate in the cancel previous proto
 download must never be cancelled by a preview regenerating. Only `generateCutoutBinPreview`
 cancels its predecessor; `generateCutoutBin` and `generateCutoutBinUnion` do not.
 
-### 8.7 Worker interface
+### 8.8 Worker interface
 
 ```ts
 /** Ids the worker does not have cached, which the caller must send. */
@@ -1154,6 +1364,8 @@ user worded string, never a raw exception surfaced to the user.
 | Carve produced an invalid solid | `Cutout bin generation produced an invalid solid: STATUS` | error |
 | Preview superseded (status `Cancelled`) | not surfaced; treated as superseded and discarded | internal |
 | Negative clearance entered | `The clearance must be 0 mm or more.` | error, blocks the field |
+| Clearance above the bin's limit | `A clearance of C mm does not fit a bin GX by GY cells, which allows at most M mm.` | error, blocks the field |
+| Clearance offset failed | `Applying a clearance of C mm to the model "NAME" failed (DETAIL). The model is still using its previous clearance of P mm.` | error on the row; the field reverts and the bin keeps generating |
 
 The `Cancelled` status deserves a note: manifold documents cancellation as permanent for a
 `Manifold`, so a cancelled result must be discarded and never inspected further or shown. It
@@ -1201,6 +1413,11 @@ loaded through `tests/helpers/manifold.ts`, geometry assertions on `status()`, `
 | the carve keeps the floor plate solid under a pocket that stops above it | the pocket depth limit not being enforced against the floor |
 | simplify tolerance is one tenth of the clearance, and zero for zero clearance | the tolerance becoming a hardcoded literal, which rule 12 forbids |
 | the sphere segment count satisfies the faceting inequality for several clearances | the segment count being hardcoded rather than derived |
+| **two models in one bin with different clearances each get their own dilation, measured on each pocket separately** | a bin wide clearance surviving in the implementation, which would silently give one model the other's fit |
+| a bin mixing a 0 mm and a 0.4 mm clearance model carves both correctly, the first exactly and the second dilated | the zero clearance fast path being applied bin wide rather than per model |
+| `maxClearanceMm` equals half the narrowest interior dimension, and the validator message quotes that same figure | the ceiling in the message drifting from the ceiling actually enforced |
+| the cached offset key changes with clearance and not with placement | the cache being keyed by model alone, so a clearance change silently reuses the old dilation, which is a wrong printed part with no visible symptom |
+| recomputing one model's offset leaves the other models' cache entries intact | a clearance change invalidating the whole cache, turning a one model cost into an all model one |
 
 ### 10.3 Traced pocket bin regression
 
@@ -1215,6 +1432,8 @@ refactor was not behaviour preserving and the implementer stops and reports.
 | a version 6 plan with a cutout bin round trips through serialize and parse unchanged | any field dropped by `pickCutoutModels`, the classic silent data loss |
 | every validator message in 5.4 fires on its own malformed input | a validator branch that is unreachable because an earlier check subsumes it |
 | a cutout model with no `clearanceMm` loads with the 0.4 mm default | older plans failing to load after a later field is added |
+| two models in one bin with different clearances round trip with both values intact | a per bin clearance creeping back in through the loader, collapsing two values into one |
+| a clearance above `maxClearanceMm` is rejected with a message naming the bin size and the real limit | a clearance no model could ever fit being accepted and failing later in the worker instead |
 | a cutout bin carrying `walls` is rejected | the traced bin's walls exclusion not being mirrored |
 | a version 5 plan still loads unchanged | the version bump breaking existing stored plans, which would silently empty every user's queue |
 | a version 7 plan is rejected naming versions 1 to 6 | the ceiling message drifting from the constant |
@@ -1270,20 +1489,31 @@ Their verification is the owner browser checkpoints in the plan.
    Mitigation: the entire existing trace and pocket suite stays green with no test modified,
    and any test needing a change means the refactor was not behaviour preserving.
 
+Close behind, and worth naming because its failure mode is the same kind as the first: **the
+offset cache being keyed by model identity alone rather than by model and clearance together.**
+Changing a clearance would then silently reuse the previous dilation. Nothing looks wrong: the
+preview renders, the bin is watertight, the download succeeds, and the part is simply the wrong
+size when it comes off the printer. Mitigation is the explicit cache key test in 10.2 and the
+fact that clearance sits beside `placement` rather than inside it (5.1), which keeps the cheap
+change and the expensive one distinguishable in the data.
+
 ### Open questions for the owner
 
 1. **Gizmo handle sizing.** Rotate `setSize(1.6)` is derived from the handle radii (arrow
    tips at 0.5, arcs at 0.5 in gizmo units) but not confirmed on screen. Needs a visual check
    and possibly adjustment within roughly 1.4 to 1.8.
-2. **Translation snap of 1 mm.** A user interface choice, not a derived constant. Confirm, or
-   name a different increment.
-3. **A second worker instance for cutout previews (8.6).** Recommended, at the cost of a
+2. **Interface increments.** The gizmo's 1 mm translation snap and the clearance field's
+   0.05 mm step are both user interface choices, not derived constants. Confirm both, or name
+   different increments.
+3. **A second worker instance for cutout previews (8.7).** Recommended, at the cost of a
    second WASM instance in memory. Confirm or take the single worker with weaker isolation.
 4. **Read only position and rotation rows (7.7).** Recommended so there is one input path.
    Confirm, or ask for editable fields in the first version.
 5. **`Fit bin to models`.** Specified as an explicit button rather than continuous auto sizing,
    unlike the trace flow's `enableAutoSize`. Confirm that is the wanted behaviour.
-6. **Per model clearance versus one clearance per bin.** Specified per model. Confirm.
+
+**Resolved.** Clearance is per model, decided by the owner on 2026-07-20. The reasoning and
+the accepted costs are recorded in 5.2; the performance consequence is worked through in 8.6.
 
 ### Things I could not verify
 
