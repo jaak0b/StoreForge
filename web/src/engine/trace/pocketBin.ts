@@ -9,29 +9,20 @@ import type { CrossSection, Manifold, ManifoldToplevel, SimplePolygon } from 'ma
 import type { Font } from 'opentype.js';
 import type { FingerHole, MmPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
 import { fingerHoleOutline, resolvedToolOutline } from './edit';
-import {
-  binInteriorSizeMm,
-  binOuterSizeMm,
-  FLOOR_TOP,
-  HEIGHT_UNIT,
-  LIP_HEIGHT,
-  OUTER_CORNER_RADIUS,
-  WALL_THICKNESS,
-} from '../gridfinity/constants';
+import { FLOOR_TOP, HEIGHT_UNIT, LIP_HEIGHT } from '../gridfinity/constants';
 import {
   buildInsertInSlotSolids,
-  buildSlottedBinBody,
-  hasFusedShelf,
   labelSpecOf,
   manifoldToMeshData,
-  roundedRectPolygon,
 } from '../gridfinity/binGenerator';
 import {
-  applySlotToBody,
-  buildFusedLabel,
-  FUSED_SHELF_REACH_DEPTH,
-  SLOT_REACH_DEPTH,
-} from '../label/slot';
+  buildCarvedBinBody,
+  CARVE_OVERLAP_EPS,
+  interiorSection,
+  labelStructureStrip,
+  maxCarveDepthMm,
+} from '../gridfinity/carvedBin';
+import { buildFusedLabel } from '../label/slot';
 import type { BinParams, MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 
 /** A slotted bin plus the tools whose pockets are sunk into its interior. */
@@ -119,30 +110,11 @@ function placedCutSection(m: ManifoldToplevel, placed: PlacedPocket): CrossSecti
 }
 
 /**
- * Cross-section of the bin's interior cavity: the same inset rounded
- * rectangle the bin generator cuts the cavity with.
+ * The deepest pocket a bin of the given height allows, the shared carve
+ * stage's depth limit under this flow's own name; the depth validation message
+ * quotes it. Re-exported rather than restated so both flows keep one figure.
  */
-function interiorSection(m: ManifoldToplevel, gridX: number, gridY: number): CrossSection {
-  return new m.CrossSection(
-    [
-      roundedRectPolygon(
-        binInteriorSizeMm(gridX),
-        binInteriorSizeMm(gridY),
-        OUTER_CORNER_RADIUS - WALL_THICKNESS,
-      ),
-    ],
-    'NonZero',
-  );
-}
-
-/**
- * The deepest pocket a bin of the given height allows: from the nominal bin
- * top down to the top of the interior floor. The single home for this figure;
- * the depth validation message quotes it.
- */
-export function maxPocketDepthMm(heightUnits: number): number {
-  return heightUnits * HEIGHT_UNIT - FLOOR_TOP;
-}
+export const maxPocketDepthMm = maxCarveDepthMm;
 
 /** True when the two cross-sections share any area. */
 function sectionsOverlap(a: CrossSection, b: CrossSection): boolean {
@@ -184,34 +156,13 @@ export function validatePocketLayout(
   }
   const interior = interiorSection(m, params.gridX, params.gridY);
   const cutSections = placed.map((pocket) => placedCutSection(m, pocket));
-  // The insert seat and its support structure cannot be cut into (the slot
-  // floor must stay whole for the insert to rest on, and the shelf's plate
-  // chamfer and support ribs under it must stay solid), so pockets must stay
-  // clear of the slot structure's full plan reach: pockets are cut from the
-  // bin top down, and SLOT_REACH_DEPTH is the structure's widest plan extent
-  // at every depth. A fused label stands on the same shelf at its own plan
-  // reach and needs it whole for the same reason, blank label or not, because
-  // the shelf occupies that strip either way. A bin with neither has no
-  // such region to protect.
-  const fused = hasFusedShelf(params);
-  const structureName = fused ? 'fused label shelf' : 'label insert slot';
-  let slotStrip: CrossSection | null = null;
-  if (fused || params.labelSlot !== false) {
-    const outerWidth = binOuterSizeMm(params.gridX);
-    const outerDepth = binOuterSizeMm(params.gridY);
-    const stripDepth = fused ? FUSED_SHELF_REACH_DEPTH : SLOT_REACH_DEPTH;
-    slotStrip = new m.CrossSection(
-      [
-        [
-          [-outerWidth / 2, -outerDepth / 2],
-          [outerWidth / 2, -outerDepth / 2],
-          [outerWidth / 2, -outerDepth / 2 + stripDepth],
-          [-outerWidth / 2, -outerDepth / 2 + stripDepth],
-        ],
-      ],
-      'NonZero',
-    );
-  }
+  // The insert seat and its support structure cannot be cut into, so pockets
+  // must stay clear of the label structure's plan strip. The strip and the
+  // reasoning behind it belong to the shared carve stage, which every carve
+  // flow protects the same way; only the message is this flow's own.
+  const structure = labelStructureStrip(m, params);
+  const slotStrip = structure?.section ?? null;
+  const structureName = structure?.name ?? '';
   try {
     for (let i = 0; i < placed.length; i += 1) {
       const outside = cutSections[i].subtract(interior);
@@ -253,14 +204,15 @@ export function validatePocketLayout(
 }
 
 /**
- * Build the pocket-bin body as a manifold. The standard slotted bin body is
- * built first, its interior cavity is filled solid from the floor top up to
- * the nominal bin top so the pockets have material to sink into, and the
- * pockets are subtracted. Each pocket is cut from above the bin top down to
- * bodyTop minus its depth; finger holes are cut further, down to the top of
- * the interior floor. They are grab reliefs, not through-holes: the floor
- * plate under them stays intact. The interior fill closes the insert
- * channel, so the slot is applied again last.
+ * Build the pocket-bin body as a manifold: place the tools, validate the
+ * layout, build one cutter per pocket, and hand them to the shared carve
+ * stage, which fills the interior, subtracts them and restores the slot.
+ *
+ * Each pocket is cut from above the bin top down to bodyTop minus its depth;
+ * finger holes are cut further, down to the top of the interior floor. They
+ * are grab reliefs, not through-holes: the floor plate under them stays
+ * intact. The cutters reach past the solid top so a pocket is always open at
+ * the top, which is this flow's own property and not the shared stage's.
  */
 export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams): Manifold {
   const placed = placeTools(m, params.tools, params.placements);
@@ -268,62 +220,29 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
 
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const solidTop = bodyTop + LIP_HEIGHT;
-  // Overlap used to avoid coincident-face gaps in the CSG union/subtraction
-  // below. It only extends cuts past free surfaces or fill into material it
-  // unions with; it never alters a finished dimension, since the extra 0.01
-  // mm is always consumed inside a face that gets cut away or welded over.
-  const eps = 0.01;
 
   const cutters: Manifold[] = [];
   for (const pocket of placed) {
     const pocketBottom = bodyTop - pocket.pocketDepthMm;
     const section = outlineSection(m, pocket.outline);
     cutters.push(
-      section.extrude(solidTop + eps - pocketBottom).translate(0, 0, pocketBottom),
+      section
+        .extrude(solidTop + CARVE_OVERLAP_EPS - pocketBottom)
+        .translate(0, 0, pocketBottom),
     );
     section.delete();
     for (const hole of pocket.fingerHoles) {
       const circle = outlineSection(m, fingerHoleOutline(hole));
-      cutters.push(circle.extrude(solidTop + eps - FLOOR_TOP).translate(0, 0, FLOOR_TOP));
+      cutters.push(
+        circle
+          .extrude(solidTop + CARVE_OVERLAP_EPS - FLOOR_TOP)
+          .translate(0, 0, FLOOR_TOP),
+      );
       circle.delete();
     }
   }
 
-  // Pocket bins skip the scoop: the interior is filled solid for the tool
-  // pockets, so a scoop would fight the pocket layout, and the reference
-  // scoop is a loose-parts feature, not a shadow-board one.
-  const shelved = buildSlottedBinBody(m, { ...params, scoop: false });
-  // Fill the interior cavity solid between the floor top and the bin top,
-  // reaching eps into the floor plate so the fill welds to it.
-  const fillSection = interiorSection(m, params.gridX, params.gridY);
-  const fill = fillSection
-    .extrude(bodyTop - FLOOR_TOP + eps)
-    .translate(0, 0, FLOOR_TOP - eps);
-  fillSection.delete();
-  const filled = m.Manifold.union([shelved, fill]);
-  shelved.delete();
-  fill.delete();
-  let body: Manifold;
-  if (cutters.length > 0) {
-    const cutter = m.Manifold.union(cutters);
-    for (const c of cutters) c.delete();
-    body = m.Manifold.difference(filled, cutter);
-    filled.delete();
-    cutter.delete();
-  } else {
-    body = filled;
-  }
-  // The interior fill closed the insert channel; apply the slot again. A
-  // bin without the slot has no channel to restore.
-  if (params.labelSlot !== false) {
-    body = applySlotToBody(m, params, body);
-  }
-  const status = body.status();
-  if (status !== 'NoError') {
-    body.delete();
-    throw new Error(`Pocket bin generation produced an invalid solid: ${status}`);
-  }
-  return body;
+  return buildCarvedBinBody(m, params, cutters, 'Pocket bin');
 }
 
 /**
