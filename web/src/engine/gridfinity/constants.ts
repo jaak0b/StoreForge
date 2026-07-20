@@ -32,9 +32,9 @@ export const FOOT_HEIGHT =
 export const WALL_THICKNESS = 0.95;
 
 /**
- * Wall thickness of the hollowed foot's outer shell, plus the magnet boss
- * walls and the divider root strips. Measured from the Pred reference bin
- * (gridfinitybin_1x1x6_d1_l12_s10, printables.com/model/592545): its foot
+ * Wall thickness of the hollowed foot's outer shell, and of the magnet boss
+ * walls. Measured from the Pred reference bin (gridfinitybin_1x1x6_d1_l12_s10,
+ * printables.com/model/592545): its foot
  * outer wall is 3.05 to 3.14 mm at the first layer (a plan slice at the bed +
  * 0.1 mm shows the ring 3.14 mm across at a cell mid-edge), thickening as the
  * foot chamfer flares. Our previous value was a thinner 1.42 mm printability

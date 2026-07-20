@@ -9,7 +9,6 @@ import {
   validateParams,
 } from '../src/engine/gridfinity/binGenerator';
 import {
-  BASE_WALL_THICKNESS,
   binInteriorSizeMm,
   binTopOpeningMm,
   DIVIDER_THICKNESS,
@@ -17,7 +16,9 @@ import {
   FLOOR_TOP,
   FOOT_HEIGHT,
   HEIGHT_UNIT,
+  LIP_DEPTH,
   LIP_HEIGHT,
+  LIP_SUPPORT_HEIGHT,
   MAGNET_HOLE_DEPTH,
   MAGNET_HOLE_FROM_CELL_EDGE,
   OUTER_CORNER_RADIUS,
@@ -350,12 +351,15 @@ describe('buildBinManifold', () => {
 });
 
 /**
- * Volume in cubic mm of the default 2x2x3 bin with one even divider along X,
- * recorded from the evenly spaced geometry as it has always been built. A pin
- * on that case: only wall ends on the interior boundary are extended into the
- * perimeter, and this is what proves the even dividers still are.
+ * Volume in cubic mm of the default 2x2x3 bin with one even divider along X.
+ * A pin on that case: only wall ends on the interior boundary are extended
+ * into the perimeter, and this is what proves the even dividers still are.
+ * Re-recorded when dividers were confined to the container: the divider no
+ * longer keeps a root strip out of the base pocket, which cost the bin the
+ * 9.80 mm cubed of that root the surrounding foot shell and rib lattice did
+ * not already occupy.
  */
-const EVEN_DIVIDER_2X2_VOLUME_MM3 = 38002.874199748905;
+const EVEN_DIVIDER_2X2_VOLUME_MM3 = 37993.07879669753;
 
 describe('interior dividers', () => {
   it('keeps the solid watertight with dividers on both axes', () => {
@@ -373,29 +377,42 @@ describe('interior dividers', () => {
     zeroed.delete();
   });
 
-  it('adds the divider wall volume plus their solid roots in the base pocket', () => {
+  it('adds exactly the divider wall prisms standing on the floor', () => {
     const countX = 2;
     const countY = 1;
-    const plain = buildBinManifold(m, params());
-    const divided = buildBinManifold(m, params({ dividerCountX: countX, dividerCountY: countY }));
+    // Scoop off on both bins, so the dividers are plain prisms and the delta
+    // is not reduced where a wall would run into scoop material that is solid
+    // already.
+    const plain = buildBinManifold(m, params({ scoop: false }));
+    const divided = buildBinManifold(
+      m,
+      params({ dividerCountX: countX, dividerCountY: countY, scoop: false }),
+    );
     const inner = PITCH - 0.5 - 2 * WALL_THICKNESS;
-    const outer = PITCH - 0.5;
-    const visibleHeight = 3 * HEIGHT_UNIT - FLOOR_TOP;
-    const walls =
-      visibleHeight *
+    // Compared over the band where the interior is a plain vertical shaft: up
+    // from the floor the dividers now stand on, and stopping where the lip's
+    // 45 degree support taper starts narrowing the interior back from the tip
+    // (the tip reaches LIP_DEPTH - WALL_THICKNESS past the interior face, and
+    // the taper rises at 45 degrees, so it begins that far below the support
+    // band). Across that band the added material is exactly the wall prisms:
+    // each wall spans the clear interior, the extensions past it land inside
+    // perimeter material that is solid already and so add nothing, and each
+    // crossing is shared by the two walls that make it.
+    const bandBottom = FLOOR_TOP;
+    const bandTop = 3 * HEIGHT_UNIT - LIP_SUPPORT_HEIGHT - (LIP_DEPTH - WALL_THICKNESS);
+    const expected =
+      (bandTop - bandBottom) *
       DIVIDER_THICKNESS *
       (countX * inner + countY * inner - countX * countY * DIVIDER_THICKNESS);
-    const delta = divided.volume() - plain.volume();
-    // The dividers themselves, plus the solid strips kept out of the base
-    // pocket under each divider root (at most a full-height strip of
-    // DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS across the bin per divider).
-    const stripBound =
-      (DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS) *
-      outer *
-      (FLOOR_TOP - FLOOR_PLATE_THICKNESS) *
-      (countX + countY);
-    expect(delta).toBeGreaterThan(walls);
-    expect(delta).toBeLessThan(walls + stripBound);
+    const bandOf = (bin: Manifold): number => {
+      const top = bin.trimByPlane([0, 0, -1], -bandTop);
+      const band = top.trimByPlane([0, 0, 1], bandBottom);
+      const volume = band.volume();
+      band.delete();
+      top.delete();
+      return volume;
+    };
+    expect(bandOf(divided) - bandOf(plain)).toBeCloseTo(expected, 6);
     plain.delete();
     divided.delete();
   });
@@ -863,15 +880,11 @@ describe('divider walls are part of the bin, never a loose part', () => {
     bin.delete();
   });
 
-  it('reports negative genus only for sealed voids in the hollow base', () => {
-    // A corner-to-corner diagonal runs its root strip close alongside the foot
-    // shell and the base rib lattice, pinching slots of the base hollow shut.
-    // Those sealed cavities are what drives genus negative: the whole solid's
-    // genus is one minus its component count, so four sealed voids read as -4
-    // even though nothing has come loose. Sealed base cavities are an artifact
-    // of the hollow base, not a detached wall, so their number is not pinned
-    // here; what is pinned is that they are voids and that the plastic is
-    // still one piece.
+  it('seals no cavity into the hollow base, whatever the wall layout', () => {
+    // A corner-to-corner diagonal is the layout that crosses the most of the
+    // base lattice. Because a divider is confined to the container above the
+    // floor, it cannot pinch a slot of the base hollow shut, so the solid
+    // keeps a plain genus 0: one piece of plastic and no sealed void.
     const bin = buildBinManifold(
       m,
       params({
@@ -886,8 +899,57 @@ describe('divider walls are part of the bin, never a loose part', () => {
 
     expect(bin.status()).toBe('NoError');
     expect(solids).toHaveLength(1);
-    expect(voids.length).toBeGreaterThan(0);
-    expect(bin.genus()).toBeLessThan(0);
+    expect(voids).toHaveLength(0);
+    expect(bin.genus()).toBe(0);
+
+    bin.delete();
+  });
+});
+
+describe('divider walls stay above the container floor', () => {
+  it.each(WALL_LAYOUTS)('leaves the base untouched under $name', ({ grid, walls }) => {
+    // The defect this pins: walls that reached down through the floor printed
+    // as ribs across the bottom of the bin, a large X on the first layer for a
+    // diagonal. A divider belongs to the container above the floor, so the
+    // whole region at and below FLOOR_TOP (the feet, the hollow base pocket
+    // with its rib lattice, and the floor plate) must be indistinguishable
+    // from the same bin with no walls at all.
+    const plain = buildBinManifold(m, params({ ...grid }));
+    const divided = buildBinManifold(m, params({ ...grid, walls: [...walls] }));
+
+    const plainBase = plain.trimByPlane([0, 0, -1], -FLOOR_TOP);
+    const dividedBase = divided.trimByPlane([0, 0, -1], -FLOOR_TOP);
+    expect(dividedBase.volume()).toBeCloseTo(plainBase.volume(), 6);
+
+    // The first layer is where the owner saw the ribs, checked as its own plan
+    // slice so a change confined to the bed surface cannot hide in a volume.
+    const plainSlice = plain.slice(0.1);
+    const dividedSlice = divided.slice(0.1);
+    expect(dividedSlice.area()).toBeCloseTo(plainSlice.area(), 6);
+
+    for (const part of [plainSlice, dividedSlice]) part.delete();
+    for (const part of [plainBase, dividedBase, plain, divided]) part.delete();
+  });
+
+  it('stands a wall on the floor with no gap under it', () => {
+    // Scoop off, so the only material in the probed column is the wall itself.
+    const bin = buildBinManifold(
+      m,
+      params({ gridX: 2, gridY: 2, scoop: false, walls: [{ x1: 0, y1: -12, x2: 0, y2: 12 }] }),
+    );
+
+    // A thin slab in the first tenth of a millimetre above the floor, narrower
+    // than the wall and well clear of the perimeter: entirely plastic, so the
+    // wall really reaches the floor rather than starting above it.
+    const probe = m.Manifold.cube([DIVIDER_THICKNESS / 2, 4, 0.1], true).translate(
+      0,
+      0,
+      FLOOR_TOP + 0.05,
+    );
+    const hit = bin.intersect(probe);
+    expect(hit.volume()).toBeCloseTo(probe.volume(), 6);
+    hit.delete();
+    probe.delete();
 
     bin.delete();
   });
