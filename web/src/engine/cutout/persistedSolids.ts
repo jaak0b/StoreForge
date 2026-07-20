@@ -32,7 +32,7 @@ import type { PreparedCutoutModel, SweptSolid } from './cutoutBin';
  * current geometry. The manifold-3d version check below covers dependency
  * upgrades; this constant covers our own code.
  */
-export const CUTOUT_SOLID_SCHEMA_VERSION = 1;
+export const CUTOUT_SOLID_SCHEMA_VERSION = 2;
 
 /**
  * The manifold-3d version every record is stamped with, read at build time

@@ -305,6 +305,25 @@ export function simplifyToleranceMm(clearanceMm: number): number {
 }
 
 /**
+ * The geometric error budget the sweep stage of one model may spend, in mm:
+ * half of that model's own clearance. One coherent budget for the whole stage:
+ * the pre-sweep simplification of the rotated dilated cutter and the sweep
+ * cone's faceting both spend it, so the stage's approximation is stated once.
+ *
+ * Coarser than the clearance offset pipeline's quarter rule above, and
+ * deliberately so, because the Minkowski sweep's cost is near-linear in input
+ * triangles times cone facet count. Benchmarked 2026-07-20 on a real
+ * 25.6k-triangle cutter at draft angle 10: the sweep fell from 143 s to
+ * 13.7 s under this budget, with volume within -0.68 percent, the bounding
+ * box within 0.05 mm, status NoError and genus preserved. The approximation
+ * errs toward a tighter pocket, never a looser one, exactly as the simplify
+ * budget above does.
+ */
+export function sweepToleranceMm(clearanceMm: number): number {
+  return clearanceMm / 2;
+}
+
+/**
  * What a cached prepared solid is keyed by: the named fields of cutoutModelKey
  * below, as anything that carries them can supply them. A plan's CutoutModel
  * and the worker's carve requests both satisfy it structurally, which is what
@@ -613,13 +632,21 @@ export type SweptSolidMemo = (
  * positional resolution. The cone of the positive case starts from the same
  * base half-width so the two cases agree at angle 0, and its top radius adds
  * tan(draftAngleDeg) times the sweep length, which is what makes the wall
- * angle exact. The cone's facet count comes from the shared circleSegments
- * derivation: against the model's own simplify tolerance (clearance / 4) when
- * a clearance was applied, and against the same quarter rule evaluated on the
- * cone's own top radius when the clearance is 0 and there is no clearance
- * budget to spend, so no constant enters either way. The faceted cone is
- * inscribed in the true cone, exactly as the clearance sphere is, so the flare
- * dips slightly under nominal between facet vertices and never over it.
+ * angle exact.
+ *
+ * The whole sweep stage spends one approximation budget, sweepToleranceMm
+ * (clearance / 2), stated once there with its benchmark justification, and it
+ * is spent coherently in two places: the rotated dilated cutter is simplified
+ * to that tolerance immediately before the sum (the sum's cost is near-linear
+ * in input triangles times facet count, and the simplification errs toward a
+ * tighter pocket, never a looser one), and the cone's facet count comes from
+ * the shared circleSegments derivation against the same tolerance. When the
+ * clearance is 0 there is no budget to spend: the input is not simplified
+ * (the user asked for an exact subtraction) and the cone facets against the
+ * quarter rule evaluated on its own top radius, so no constant enters either
+ * way. The faceted cone is inscribed in the true cone, exactly as the
+ * clearance sphere is, so the flare dips slightly under nominal between facet
+ * vertices and never over it.
  *
  * Takes ownership of `solid` and returns the swept solid to the caller.
  */
@@ -630,8 +657,18 @@ export function sweepSolidUpward(
 ): Manifold {
   const { lengthMm, draftAngleDeg, clearanceMm } = spec;
   let operand: Manifold | null = null;
+  // Holds whichever input solid this function currently owns, so the finally
+  // releases exactly one whether the simplify ran, threw, or was skipped.
+  let input: Manifold = solid;
   try {
     validateDraftAngleDeg(draftAngleDeg);
+    if (clearanceMm > 0) {
+      // The stage's own simplification, against the sweep budget; see the doc
+      // comment above and sweepToleranceMm for the benchmark.
+      const simplified = input.simplify(sweepToleranceMm(clearanceMm));
+      input.delete();
+      input = simplified;
+    }
     const baseHalfWidthMm = CARVE_OVERLAP_EPS;
     if (draftAngleDeg === 0) {
       operand = m.Manifold.cube(
@@ -643,7 +680,7 @@ export function sweepSolidUpward(
         baseHalfWidthMm + Math.tan((draftAngleDeg * Math.PI) / 180) * lengthMm;
       const toleranceMm =
         clearanceMm > 0
-          ? simplifyToleranceMm(clearanceMm)
+          ? sweepToleranceMm(clearanceMm)
           : simplifyToleranceMm(radiusHighMm);
       operand = m.Manifold.cylinder(
         lengthMm,
@@ -652,7 +689,7 @@ export function sweepSolidUpward(
         circleSegments(radiusHighMm, toleranceMm),
       );
     }
-    const swept = solid.minkowskiSum(operand);
+    const swept = input.minkowskiSum(operand);
     const status = swept.status();
     if (status !== 'NoError') {
       swept.delete();
@@ -663,7 +700,7 @@ export function sweepSolidUpward(
     return swept;
   } finally {
     operand?.delete();
-    solid.delete();
+    input.delete();
   }
 }
 

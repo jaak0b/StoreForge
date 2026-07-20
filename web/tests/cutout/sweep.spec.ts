@@ -7,7 +7,10 @@ import {
   isDraftAngleDegValid,
   placeCutter,
   prepareCutoutModel,
+  simplifyToleranceMm,
   sweepCutterUpward,
+  sweepSolidUpward,
+  sweepToleranceMm,
   validateDraftAngleDeg,
   type CutoutBinParams,
   type CutoutModelSpec,
@@ -285,6 +288,35 @@ describe('the sweep is not rotation invariant', () => {
     for (const part of [extra, missing, sweptRotated, rotatedSwept]) part.delete();
     solidA.delete();
     solidB.delete();
+  });
+});
+
+describe('the sweep-stage approximation budget', () => {
+  it('is half the clearance, coarser than the offset pipeline quarter rule', () => {
+    expect(sweepToleranceMm(0.4)).toBeCloseTo(0.2, 12);
+    expect(sweepToleranceMm(1)).toBeCloseTo(0.5, 12);
+    expect(sweepToleranceMm(0.4)).toBeGreaterThan(simplifyToleranceMm(0.4));
+  });
+
+  it('simplifies the sweep input against that budget before the Minkowski sum', () => {
+    // Draft angle 0 uses the identical square-prism operand on both paths, so
+    // any triangle-count difference between the two sweeps below comes from
+    // the pre-sweep simplification alone. A clearance of 0 skips it (the user
+    // asked for an exact subtraction); a positive clearance must spend the
+    // budget, so the dense sphere loses triangles before it is swept.
+    const spec = { lengthMm: 30, draftAngleDeg: 0 };
+    const exact = sweepSolidUpward(m, m.Manifold.sphere(10, 96), {
+      ...spec,
+      clearanceMm: 0,
+    });
+    const budgeted = sweepSolidUpward(m, m.Manifold.sphere(10, 96), {
+      ...spec,
+      clearanceMm: 0.4,
+    });
+    expect(budgeted.numTri()).toBeLessThan(exact.numTri());
+    expect(budgeted.status()).toBe('NoError');
+    exact.delete();
+    budgeted.delete();
   });
 });
 

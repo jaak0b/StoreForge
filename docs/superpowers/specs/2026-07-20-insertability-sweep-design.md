@@ -167,6 +167,23 @@ Since the sweep never enters the prepared solid, `cutoutModelKey` stays
 angle, invalidates no cache entry and re runs no import. It triggers a re carve only, which is
 why its commit is cheaper than a clearance commit even though it shares the release pattern.
 
+### 3.4 The sweep-stage approximation budget, measured and resolved
+
+Even cached, the sweep itself was too slow: on a real 25.6k-triangle dilated cutter, the
+draft angle 10 sweep took 143 seconds, and the cost is near-linear in the input triangle
+count times the cone facet count. **Resolved by the owner (2026-07-20): the sweep stage gets
+one coherent approximation budget of half the model's clearance,** `sweepToleranceMm`
+(clearance / 2) in `cutoutBin.ts`, spent in two places: the rotated dilated cutter is
+simplified to that tolerance immediately before the Minkowski sum, and the cone's facet count
+comes from the shared `circleSegments` derivation against the same tolerance (previously the
+clearance / 4 simplify rule). Measured on that same cutter, the sweep fell to 13.7 seconds
+with volume within -0.68 percent, the bounding box within 0.05 mm, status NoError and genus
+preserved; the approximation errs toward a tighter pocket, never a looser one. Only the sweep
+path changed: the clearance offset pipeline keeps its clearance / 4 budget, a clearance of 0
+still sweeps the exact input, and footprints and warnings are still computed from the swept
+result. The geometry changed, so `CUTOUT_SOLID_SCHEMA_VERSION` was bumped to invalidate
+persisted swept records.
+
 ## 4. UI
 
 The model card in `components/cutout/ModelList.vue` gains, directly under the existing
