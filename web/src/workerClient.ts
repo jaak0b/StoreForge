@@ -21,6 +21,10 @@ import type {
   SlottedBinParams,
 } from './engine/gridfinity/types';
 import type { PocketBinParams } from './engine/trace/pocketBin';
+import type {
+  BaseplateParams,
+  ConnectionClipParams,
+} from './engine/baseplate/constants';
 
 export type {
   CutoutBinRequest,
@@ -77,6 +81,18 @@ export async function generatePocketBin(params: PocketBinParams): Promise<PartMe
 /** Generate a pocket bin as one unioned mesh for the STL download. */
 export async function generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
   return getWorker().generatePocketBinUnion(withResolvedBinInsert(params));
+}
+
+/** Generate a baseplate mesh in the geometry worker. */
+export async function generateBaseplate(params: BaseplateParams): Promise<MeshData> {
+  return getWorker().generateBaseplate(params);
+}
+
+/** Generate a connection clip mesh in the geometry worker. */
+export async function generateConnectionClip(
+  params: ConnectionClipParams,
+): Promise<MeshData> {
+  return getWorker().generateConnectionClip(params);
 }
 
 /** The three values a cached model solid is keyed by, from anything carrying them. */

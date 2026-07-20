@@ -11,7 +11,16 @@ import {
   generateInsertUnion,
   generateSlottedBin,
   generateSlottedBinUnion,
+  manifoldToMeshData,
 } from '../engine/gridfinity/binGenerator';
+import {
+  generateBaseplate as buildBaseplate,
+  generateConnectionClip as buildConnectionClip,
+} from '../engine/baseplate/generator';
+import type {
+  BaseplateParams,
+  ConnectionClipParams,
+} from '../engine/baseplate/constants';
 import { CarveCancelledError } from '../engine/gridfinity/carvedBin';
 import { generatePocketBin, generatePocketBinUnion } from '../engine/trace/pocketBin';
 import type { PocketBinParams } from '../engine/trace/pocketBin';
@@ -239,6 +248,31 @@ const api = {
   async generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
     return transferMesh(generatePocketBinUnion(m, font, params));
+  },
+
+  /**
+   * Generate a baseplate mesh. No font: a baseplate carries no text, so this
+   * deliberately does not touch the label pipeline.
+   */
+  async generateBaseplate(params: BaseplateParams): Promise<MeshData> {
+    const m = await loadManifold();
+    const solid = buildBaseplate(m, params);
+    try {
+      return transferMesh(manifoldToMeshData(solid));
+    } finally {
+      solid.delete();
+    }
+  },
+
+  /** Generate a connection clip mesh. No font, for the same reason as the baseplate. */
+  async generateConnectionClip(params: ConnectionClipParams): Promise<MeshData> {
+    const m = await loadManifold();
+    const solid = buildConnectionClip(m, params);
+    try {
+      return transferMesh(manifoldToMeshData(solid));
+    } finally {
+      solid.delete();
+    }
   },
 
   /**

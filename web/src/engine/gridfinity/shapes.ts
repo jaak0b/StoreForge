@@ -4,6 +4,9 @@ import { CORNER_SEGMENTS, OUTER_CORNER_RADIUS } from './constants';
 /**
  * Counter-clockwise polygon approximating a rectangle of the given outer size,
  * centred on the origin, with quarter-circle corner arcs of radius r.
+ * A radius of zero or below, or zero segments, yields the sharp-cornered
+ * rectangle (one vertex per corner); loftChain relies on this when a caller
+ * asks for sharp sections, where its `cornerRadius - inset` goes negative.
  */
 export function roundedRectPolygon(
   width: number,
@@ -13,7 +16,15 @@ export function roundedRectPolygon(
 ): SimplePolygon {
   const hx = width / 2;
   const hy = depth / 2;
-  const radius = Math.min(r, hx, hy);
+  const radius = Math.min(Math.max(r, 0), hx, hy);
+  if (radius <= 0 || segments <= 0) {
+    return [
+      [hx, hy],
+      [-hx, hy],
+      [-hx, -hy],
+      [hx, -hy],
+    ];
+  }
   const points: SimplePolygon = [];
   // Corner arc centres, in CCW order starting from the +X/+Y corner.
   const corners: Array<[number, number, number]> = [

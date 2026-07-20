@@ -168,6 +168,34 @@ export const MAGNET_HOLE_FROM_CELL_EDGE = 8.0;
 export const CORNER_SEGMENTS = 12;
 
 /**
+ * Baseplate socket profile, bottom to top: a 45 degree lower chamfer, a
+ * vertical band, and a 45 degree upper chamfer opening to the plate top.
+ * Measured from the reference baseplate (1x1-default.stl); the socket is the
+ * stacking lip seat opened out by the footprint clearance, so each band
+ * equals an existing bin constant rather than being a new number.
+ */
+/** Equals LIP_LOWER_TAPER (0.70); measured 0.7000 on the reference socket. */
+export const BASEPLATE_LOWER_CHAMFER = LIP_LOWER_TAPER;
+
+/** Equals LIP_SEAT_VERTICAL (1.80); measured 1.8000 on the reference socket. */
+export const BASEPLATE_VERTICAL = LIP_SEAT_VERTICAL;
+
+/** Equals FOOT_UPPER_CHAMFER (2.15); measured 2.1500 on the reference socket. */
+export const BASEPLATE_UPPER_CHAMFER = FOOT_UPPER_CHAMFER;
+
+/** Total socket depth, the height of a plate without magnets or screws (4.65). */
+export const BASEPLATE_HEIGHT =
+  BASEPLATE_LOWER_CHAMFER + BASEPLATE_VERTICAL + BASEPLATE_UPPER_CHAMFER;
+
+/**
+ * How far the socket opens beyond the bin's base footprint per side. Measured
+ * 0.25 (socket top 42.000 against BASE_TOP_SIZE 41.5, per side); equals
+ * (PITCH - BASE_TOP_SIZE) / 2 at the standard pitch, the Gridfinity footprint
+ * clearance the bin already keeps to the pitch.
+ */
+export const BASEPLATE_SOCKET_CLEARANCE = (PITCH - BASE_TOP_SIZE) / 2;
+
+/**
  * Thickness of an interior divider wall. Matches the 1.2 mm divider width
  * used by kennetek/gridfinity-rebuilt-openscad (d_div in src/core/standard.scad).
  */
