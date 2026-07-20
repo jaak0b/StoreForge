@@ -15,7 +15,6 @@ import {
   buildInsertSolids,
   insertPositionInBin,
 } from '../label/slot';
-import { specHasLabel } from '../label/placement';
 import {
   validateWalls,
   wallEndsOnInteriorBoundary,
@@ -782,16 +781,18 @@ export function labelSpecOf(content: InsertContentParams): LabelSpec {
 }
 
 /**
- * Whether the bin carries a fused label, and therefore the fused shelf in place
- * of the insert channel. A fused entry whose spec is blank raises nothing, so
- * it needs no shelf either. The single source deciding the fused case for the
- * body builders and for pocket validation, which must protect the shelf's plan
- * strip wherever the shelf is built.
+ * Whether the bin carries the fused shelf in place of the insert channel. The
+ * shelf belongs to the fused mode itself, not to the label content: an entry
+ * whose spec is blank still gets the shelf, simply with nothing standing on it.
+ * Whether a label solid comes out is a separate question, answered by
+ * buildFusedLabel. The single source deciding the fused case for the body
+ * builders and for pocket validation, which must protect the shelf's plan strip
+ * wherever the shelf is built.
  */
-export function hasFusedLabel(
+export function hasFusedShelf(
   params: Pick<SlottedBinParams, 'fusedLabel'>,
 ): boolean {
-  return params.fusedLabel != null && specHasLabel(labelSpecOf(params.fusedLabel));
+  return params.fusedLabel != null;
 }
 
 /**
@@ -808,7 +809,7 @@ export function buildSlottedBinBody(
   params: BinParams & { labelSlot?: boolean } & Pick<SlottedBinParams, 'fusedLabel'>,
 ): Manifold {
   const body = buildBinManifold(m, params);
-  if (hasFusedLabel(params)) {
+  if (hasFusedShelf(params)) {
     const shelf = buildFusedShelf(m, params);
     const fused = m.Manifold.union([body, shelf]);
     body.delete();

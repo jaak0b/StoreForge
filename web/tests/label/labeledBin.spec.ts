@@ -294,12 +294,38 @@ describe('fused label', () => {
     // label's own footprint lies wholly over the interior cavity, so the plate
     // covering it at its full thickness is material a plain bin does not have.
     const plain = generateBin(m, binParams());
-    const labelFootprint =
-      (insertLengthMm(1) - 2 * INSERT_TAB_LENGTH - 2 * LABEL_MARGIN) *
-      (INSERT_DEPTH - 2 * SHELF_DEPTH_MARGIN);
-    expect(meshVolume(fused.body) - meshVolume(plain)).toBeGreaterThan(
-      labelFootprint * FUSED_SHELF_THICKNESS,
-    );
+    expect(meshVolume(fused.body) - meshVolume(plain)).toBeGreaterThan(shelfPlateVolume);
+  });
+
+  /** The volume the shelf's plate adds over the interior cavity. */
+  const shelfPlateVolume =
+    (insertLengthMm(1) - 2 * INSERT_TAB_LENGTH - 2 * LABEL_MARGIN) *
+    (INSERT_DEPTH - 2 * SHELF_DEPTH_MARGIN) *
+    FUSED_SHELF_THICKNESS;
+
+  /** A fused bin whose label content is entirely blank. */
+  const blankFusedParams = () =>
+    params({ labelSlot: false, fusedLabel: { text: '', text2: '', icon: null } });
+
+  it('carries the shelf even when the label content is blank', () => {
+    // The shelf belongs to the fused mode, not to the label content: an entry
+    // with no text and no icon still prints a plate to write on later.
+    const blank = generateSlottedBin(m, font, blankFusedParams());
+    const plain = generateBin(m, binParams());
+    expect(meshVolume(blank.body) - meshVolume(plain)).toBeGreaterThan(shelfPlateVolume);
+  });
+
+  it('raises no label solid for a blank fused entry', () => {
+    const blank = generateSlottedBin(m, font, blankFusedParams());
+    expect(blank.label).toBeNull();
+  });
+
+  it('builds the blank fused body as a watertight solid', () => {
+    const body = buildSlottedBinBody(m, blankFusedParams());
+    expect(body.status()).toBe('NoError');
+    expect(body.isEmpty()).toBe(false);
+    expect(body.genus()).toBe(0);
+    body.delete();
   });
 
   it('builds the fused body as a watertight solid', () => {
