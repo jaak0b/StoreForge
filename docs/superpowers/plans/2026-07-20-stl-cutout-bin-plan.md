@@ -69,17 +69,34 @@ was asked for, why the worker cannot report it, what a shared memory second work
 to make it possible, and that the owner may revisit once the timings from stage 2 exist. Do
 not implement a fake percentage that advances on a timer. It affects stages 6 and 8.
 
-**[CHECKPOINT]** Answer the five remaining open questions in design section 11 before stage 1
-begins. Two of them change code written in the early stages and are cheap now, expensive later:
+**Also already decided by the owner on 2026-07-20: the per model transform rows are display
+only, not editable.** The gizmo is the sole input method for position and rotation, and the
+numbers beside it are a diagnostic readout in the sense of rule 8. The reasoning is that an
+editable row and a dragged handle would have to be kept in sync in both directions, and a
+single input path avoids that bookkeeping entirely. The clearance field is not affected: it
+stays an editable number box, because it is not a gizmo controlled value and there is no
+gestural way to express a fit. Design section 7.7 carries the record. It affects stage 8.
 
-| Question | Affects | Default if unanswered |
-| --- | --- | --- |
-| Read only versus editable transform rows | Stage 8 | read only |
-| Second worker instance for previews | Stage 6 | second instance |
+**Also already decided by the owner on 2026-07-20: one worker, not a second instance for
+previews.** While the user drags, nothing is carved at all, because the ghost tier is pure
+rendering on the main thread. So the second instance would only ever serve to abandon a carve
+the user had already superseded by moving a model again before it finished. The owner chose to
+measure first rather than build that upfront. The consequence to accept knowingly is that a
+superseded carve cannot be cancelled with a single worker, so a new request waits for it to
+finish. Design section 8.7 carries the record. It affects stage 6.
 
-The remaining three (gizmo handle size, the 1 mm translation snap and the 0.05 mm clearance
-step, `Fit bin to models` as a button) can be answered at their own stages and are marked
-there.
+**New requirement added by the owner on 2026-07-20: the carve pipeline logs its stage timings
+to the console.** The owner wants real numbers from normal use, both to settle the triangle
+ceiling and to decide later whether a second worker is justified. Design section 8.11
+specifies it in full: which stages are timed, what each line reports, how a cache hit is
+distinguished from a cache miss, and that the logging lives in one place in the worker rather
+than in the engine modules. It affects stages 2 and 6, and it is built once, in stage 6.
+
+**Owner decisions no longer block stage 1.** The two questions that would have changed code
+written in the early stages are settled above and their rows are gone from the open questions
+table. The three that remain (gizmo handle size, the 1 mm translation snap and the 0.05 mm
+clearance step, `Fit bin to models` as a button) are answered at their own stages and are
+marked there.
 
 ## Stage 1: extract the shared carve module
 
@@ -236,6 +253,14 @@ Method, from design section 8.8:
 - If simplification does not reduce counts enough to make large models tractable, **lower the
   ceiling**. Never loosen the simplify tolerance past its error budget. The tolerance is a fit
   guarantee; the ceiling is a convenience limit, and only one of them may be spent for speed.
+
+**Take these numbers from the console timing instrumentation, not from a throwaway harness.**
+The owner's stage 0 requirement (design 8.11) already logs the parse, the clearance offset and
+the carve per model in milliseconds, which is exactly the breakdown this measurement needs, so
+the two must not be built twice. The instrumentation lands in stage 6, where the worker
+methods it wraps first exist, and this checkpoint is therefore reported once stage 6 makes the
+worker path reachable in a browser. The mechanism of the wall clock ceiling still belongs to
+this stage; only its measured value waits.
 
 It is a legitimate outcome that 250000 turns out to be fine. It is not legitimate to keep
 asserting it without having looked. Report the table and the proposed ceiling; the owner
@@ -399,6 +424,11 @@ because Node cannot.
 **Goal.** The carve is reachable from the main thread, with the model cache, the transfer
 semantics and the preview cancellation in place.
 
+**Created.**
+- `web/src/worker/timing.ts`: the single home for the console timing instrumentation from
+  design 8.11. One `timed(stage, modelName, run)` helper plus the cache hit and miss lines.
+  Nothing under `web/src/engine/` gains a `console` call.
+
 **Modified.**
 - `web/src/worker/geometry.worker.ts`: `missingCutoutModels`, `putCutoutModel`,
   `releaseCutoutModels`, `generateCutoutBinPreview`, `generateCutoutBin`,
@@ -429,8 +459,20 @@ building, not by reading.
   fabricated percentage. `ExecutionContext.progress()` cannot be read while the worker thread
   is blocked inside the eager operation, which is the whole reason for the owner's stage 0
   decision. Design 8.5 has the record.
-- If the owner chose a second worker instance in stage 0, `workerClient.ts` holds two
-  `Comlink.Remote` handles and routes cutout previews to the second.
+- **There is one worker instance, settled in stage 0.** `workerClient.ts` keeps its single
+  `Comlink.Remote` handle and cutout previews go through it like every other request. Do not
+  add a second instance, and do not add a partial version of one such as a second WASM load
+  behind a flag. The accepted consequence is that a superseded carve cannot be cancelled, so a
+  new request waits for it to finish; the ghost tier is what keeps the drag itself responsive.
+  Design 8.7 has the record, and the console timings from 8.11 are what would reopen it.
+
+**Console timing instrumentation, per design 8.11.** Build it here and nowhere else. The
+worker wraps its own stages with the `timing.ts` helper: STL parse, the clearance offset (the
+Minkowski step) and the carve itself, each line naming the model and reporting milliseconds,
+with a cache hit on the clearance offset logged as its own line distinct from a miss. It ships
+enabled. The geometry functions under `web/src/engine/` stay free of logging: a `console` call
+inside them would both scatter the concern and put a side effect in a module that must remain
+framework agnostic and pure.
 
 **The cache key is the load bearing detail of this stage.** It is
 `${modelSourceId}:${unitScale}:${clearanceMm}`, and getting it wrong has no visible symptom. A
@@ -454,6 +496,9 @@ not made incremental.
   with placement, and recomputing one model's offset leaves the other models' entries intact.
 - `releaseCutoutModels` drops superseded clearance keys for a model still in the bin, so
   tuning a clearance through several values does not accumulate solids in the WASM heap.
+- Importing a model in the browser prints a timed console line per stage naming the model and
+  its milliseconds, and importing the same model again at the same clearance prints the cache
+  hit line instead of the offset line. `grep` finds no `console` call under `web/src/engine/`.
 - **[CHECKPOINT]** Owner confirms the cancellation refinement is worth keeping. If the `await`
   yield between models does not in fact let a queued cancel through (design section 11, last
   bullet), the honest response is to drop the cancellation and rely on the ghost tier and the
@@ -583,6 +628,18 @@ except one file the user probably still has.
   model previously stored as "OLD". Check the size readout if you expected a different model.`
 - A file that will not import at all produces the ordinary import rejection and the model stays
   missing, so the user can try another file.
+
+**The transform rows are display only, settled in stage 0 and recorded in design 7.7.**
+`ModelReadout.vue` renders position, rotation, size, footprint and resting height as labeled
+rows of raw values per rule 8, and none of them is an input. The gizmo is the sole input
+method for position and rotation, so no text field, no stepper and no editable cell appears on
+those rows, and there is no second path writing the placement into the store. The reason to
+hold this line is that an editable row would have to be pushed to the gizmo and pulled back
+from it on every drag, and keeping a typed value and a dragged handle agreeing in both
+directions is the bookkeeping this decision removes. Editable fields stay a reasonable later
+addition, and nothing here forecloses them: the store action the gizmo drives would simply
+gain a second caller. **The clearance field is the deliberate exception** and remains an
+editable number box, because it is not a gizmo controlled value.
 
 **The clearance control, per design section 7.10.** One per model row, and the only control in
 this tab that triggers slow work, so it gets its own handling:

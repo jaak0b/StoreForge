@@ -1282,14 +1282,22 @@ the user to infer it from the size. The size row is the row a user checks after 
 unit proposal (5.6) or after re-importing a missing model (6.4), which is why it is listed
 separately from the footprint.
 
-**Recommendation: the position and rotation rows are read only.** Reasons: the gizmo is the
-input method and the owner's requirement was free positioning, so the readout exists to let
-the user see exactly where a free drag landed, not to become a second input path that would
-then need its own validation, its own snap interaction and its own undo semantics. Clearance
-is a separate matter and **is** an editable numeric field, because it is a fit parameter the
-user reasons about numerically and there is no gestural way to express it.
+**Decided by the owner on 2026-07-20: the position and rotation rows are display only, not
+editable.** The gizmo is the sole input method for position and rotation, and these rows are a
+diagnostic readout in the sense of rule 8, so the readout exists to let the user see exactly
+where a free drag landed rather than to become a second input path with its own validation,
+its own snap interaction and its own undo semantics.
 
-The alternative, editable position and rotation fields, is a reasonable later addition and
+The reasoning the owner gave is worth recording, because it is the practical one rather than
+the purist one: an editable row and a dragged handle would have to be kept in sync **in both
+directions**, the field pushed into the gizmo on commit and the gizmo pulled back into the
+field on every frame of a drag, and one input path removes that bookkeeping entirely.
+
+**Clearance is the deliberate exception and remains an editable number box** (7.10), because
+it is not a gizmo controlled value: it is a fit parameter the user reasons about numerically
+and there is no gestural way to express it.
+
+The alternative, editable position and rotation fields, stays a reasonable later addition and
 nothing in this design forecloses it: the store action that the gizmo drives would simply
 gain a second caller. It is left out of the first version to keep one input path.
 
@@ -1591,7 +1599,7 @@ origin isolation headers it requires, on a site deployed to GitHub Pages. It is 
 and a substantial one, not a small refinement.
 
 **The owner has accepted an indeterminate indicator for now**, with the option to revisit if
-the wait proves annoying in practice once real timings exist (8.8). So the UI shows an
+the wait proves annoying in practice once real timings exist (8.8, logged by 8.11). So the UI shows an
 indeterminate progress bar on the affected model row, exactly as specified in 7.10 and 8.6,
 and it is honest about being indeterminate rather than showing a fake percentage that
 advances on a timer. A fabricated progress bar would be worse than none: it would claim
@@ -1703,20 +1711,33 @@ statement of what did not happen, instead of a stuck field and a bin that will n
 
 ### 8.7 Worker instance
 
-**Recommendation: give the cutout preview its own worker instance.**
+**Decided by the owner on 2026-07-20: one worker, not a second instance for previews.**
 
-The existing geometry worker serialises every request. A carve taking several seconds would
-sit in front of an unrelated STL download the user just clicked, making the whole app feel
-stuck for a reason the user cannot see. A second instance of the same worker module isolates
-long carves from short interactive work.
+This document originally recommended giving the cutout preview its own worker instance, on the
+argument that the existing geometry worker serialises every request, so a carve taking several
+seconds would sit in front of an unrelated STL download the user just clicked and make the app
+feel stuck for a reason the user cannot see. The cost would have been a second `manifold-3d`
+WASM instance in memory plus the cached model solids living in it, a few megabytes on a page
+that already loads an ONNX runtime and OpenCV for the trace flow.
 
-Cost: a second `manifold-3d` WASM instance in memory, plus the cached model solids living in
-it. That is a few megabytes, on a page that already loads an ONNX runtime and OpenCV for the
-trace flow.
+The owner's reasoning against building it now is the one that actually settles it, and it is
+recorded here so a later reader does not reopen the question from the recommendation alone:
+**while the user drags, nothing is carved at all.** The ghost tier (8.4) is pure rendering on
+the main thread, so the interactive path never reaches the worker. A carve only starts on drag
+end, after the debounce. The second instance would therefore not make dragging smoother; its
+whole value would be the ability to abandon a carve the user had already superseded by moving
+a model again before it finished, which is a narrower benefit than the original argument
+implies. The owner chose to measure first rather than build it upfront, and the console timings
+from 8.11 are the measurement that would justify it.
 
-Alternative: one worker. Simpler and uses less memory, but accepts that a long carve blocks
-every other geometry request behind it. If the owner prefers this, the mitigation is the
-model granularity cancellation from 8.5, which is weaker.
+**The accepted consequence, stated plainly: with a single worker a superseded carve cannot be
+cancelled, so a new request waits for the running one to finish.** The model granularity
+cancellation in 8.5 is the only mitigation available and it is genuinely weaker, since a single
+model carve is not cancellable once its eager operation has begun. A user who moves a model
+twice in quick succession therefore waits out the first carve before the second starts. This is
+accepted pending measurement, not asserted to be fine. If the logged carve times show the wait
+is long enough to be felt in normal use, the second instance is the answer and this section is
+where to come back to.
 
 Note that the export paths must **not** participate in the cancel previous protocol: a
 download must never be cancelled by a preview regenerating. Only `generateCutoutBinPreview`
@@ -1763,6 +1784,9 @@ simplify and Minkowski, with the sphere from 8.3 and the default 0.4 mm clearanc
   least two real world downloaded STLs** at different sizes. The distinction matters, since
   8.9 exists precisely because real meshes are not clean, and a ceiling calibrated only on
   generated geometry would repeat the mistake being corrected.
+- **How.** Through the console timing instrumentation specified in 8.11, which already reports
+  these exact stages per model in milliseconds and distinguishes a cached offset from a
+  computed one. It is not a separate harness and must not be built twice.
 - **Report the raw numbers as a table**, per rule 8, not as a prose conclusion.
 
 #### Setting the ceiling from the result
@@ -1879,6 +1903,98 @@ strip Vue proxies, which structured clone rejects, exactly as `plainPockets` doe
 Mesh buffers cross with `Comlink.transfer` in both directions. Note that transferring the
 upload buffer into the worker **moves** it, so the main thread must not hold a reference
 afterwards; the authoritative copy is the blob in IndexedDB.
+
+### 8.11 Console timing instrumentation
+
+**Required by the owner on 2026-07-20.** Every performance decision in this section rests on
+one benchmark taken on clean generated solids (8.9), and two open decisions wait on real
+numbers: where the triangle ceiling belongs (8.8) and whether the second worker rejected in 8.7
+is justified after all. So the carve pipeline reports its own timings from normal use rather
+than only from a one off measurement session, and the owner reads them in the browser console
+while using the app on real models.
+
+#### What is timed
+
+Per model, per operation, at minimum:
+
+| Stage | What it covers |
+| --- | --- |
+| STL parse | `parseStl` through the welded, validated `Manifold`: parse, mesh build, `merge()`, the status check, the unit scale and the centring. |
+| Simplify | `solid.simplify(toleranceMm)` alone, with the triangle count before and after, because the post simplify count is the number 8.8 needs. |
+| Clearance offset | `minkowskiSum` alone. The expensive stage, and the one the wall clock ceiling in 8.9 bounds. |
+| Carve | The edit stage of 3.3 as one figure: transform, union of cutters, difference, slot restoration and status check. |
+
+Splitting the carve further is not worth it: 8.1 already establishes that the difference
+dominates the rest of that stage, and a finer breakdown would report noise.
+
+#### What each line says
+
+Each line names the model and reports whole milliseconds, so the numbers can be read straight
+off the console and compared without arithmetic. The model name is the stored filename, which
+is what the model list, every warning in 9.2 and every error in 9.1 already use, so one name
+identifies a model everywhere the user can see it. A stage that carries a triangle count
+reports it beside the time.
+
+Nothing is aggregated, averaged or rounded to a coarser unit before it is printed. Per rule 8
+these are raw values.
+
+#### A cache hit is logged distinctly from a miss
+
+This is the one requirement not to compromise on. The entire performance argument of this
+design is that the clearance offset runs once per model per clearance and never again while
+the user drags (3.1), so the useful observation is not how long an offset took but **how often
+one had to run at all**. A hit and a miss therefore produce different lines: a miss reports the
+offset it just computed and the time it cost, a hit reports that the cached solid was reused
+and names the key parts that matched. Logging only the misses would make a working cache look
+like an idle pipeline, and logging both under one line would make the two indistinguishable in
+exactly the case that matters.
+
+The same distinction is what tells the owner whether a slow feeling session was slow because
+one model is pathological (8.9) or because something is invalidating the cache more often than
+it should, which is the failure mode section 11 names as silent.
+
+#### Where the logging lives
+
+**One place: `web/src/worker/timing.ts`, called from the worker methods in 8.10.** It exports a
+small helper that takes a stage name, a model name and the operation to run, times it and
+prints the line, plus the cache hit and miss lines. The worker wraps its own calls with it.
+
+`console.log` calls scattered through the geometry functions are prohibited, for two separate
+reasons that agree:
+
+- **Rule 10.** Timing the pipeline is one concern, so it has one home. A `console` call at each
+  measurement site would spread the format, the naming and the eventual decision about whether
+  to keep the logging across every geometry module that happens to be slow.
+- **Rule 3.** `web/src/engine/` must stay framework agnostic and free of environment side
+  effects. Its functions take their dependencies as parameters and return values; a module that
+  writes to the console does neither, and it would also make the engine tests print noise. The
+  worker is the correct layer, because it is already the boundary that owns the WASM instance,
+  the model cache and the lifetime of each operation, so it is the only place that can see a
+  cache hit and a cache miss as different events in the first place.
+
+The engine keeps returning values and stays silent. If a future stage needs timing inside the
+engine, the answer is for the engine function to return the figure, not to print it.
+
+#### It ships enabled
+
+**Recommendation: ship the logging enabled, with no flag.** The owner explicitly wants to
+observe these numbers in real use, and a flag defaulting to off would mean the one session that
+mattered was the one where nobody remembered to turn it on. The output is a handful of lines
+per import and one per carve, which is not enough to obscure anything else in the console.
+
+**This is recorded as something to revisit before the feature is considered finished**, not as
+a permanent decision. Once the ceiling in 8.8 is set and the second worker question in 8.7 is
+answered, the logging has served its purpose, and the choice then is to keep it, put it behind
+a debug flag, or remove it. Leaving that decision unmade is how console noise becomes
+permanent by default.
+
+#### It is also the 8.8 measurement
+
+The breakdown above is exactly what 8.8 asks for: wall clock per stage, the Minkowski stage
+alone, and the triangle count before and after simplify, measured in the worker in a browser.
+So the triangle ceiling measurement is carried out **with this instrumentation** rather than
+with a separate harness, and the two must not be built twice. The instrumentation is the
+mechanism; 8.8 is the method and the sweep of inputs run through it.
 
 ## 9. Error handling
 
@@ -2191,11 +2307,7 @@ change and the expensive one distinguishable in the data.
 2. **Interface increments.** The gizmo's 1 mm translation snap and the clearance field's
    0.05 mm step are both user interface choices, not derived constants. Confirm both, or name
    different increments.
-3. **A second worker instance for cutout previews (8.7).** Recommended, at the cost of a
-   second WASM instance in memory. Confirm or take the single worker with weaker isolation.
-4. **Read only position and rotation rows (7.7).** Recommended so there is one input path.
-   Confirm, or ask for editable fields in the first version.
-5. **`Fit bin to models`.** Specified as an explicit button rather than continuous auto sizing,
+3. **`Fit bin to models`.** Specified as an explicit button rather than continuous auto sizing,
    unlike the trace flow's `enableAutoSize`. Confirm that is the wanted behaviour.
 
 **Resolved.** Clearance is per model, decided by the owner on 2026-07-20. The reasoning and
@@ -2206,6 +2318,22 @@ decided by the owner on 2026-07-20 after being shown that the percentage bar he 
 asked for is not achievable with the current single worker structure. The full record,
 including what would achieve it and at what cost, is in 8.5. The owner may revisit it once
 the timings from 8.8 show how long the wait actually is.
+
+**Resolved.** The position and rotation rows are **display only**, decided by the owner on
+2026-07-20. The gizmo is the sole input method for those values and the rows are a diagnostic
+readout, which avoids keeping a typed value and a dragged handle in sync in both directions.
+The clearance field is unaffected and stays editable. The record is in 7.7.
+
+**Resolved.** There is **one worker instance**, decided by the owner on 2026-07-20 against this
+document's original recommendation. Nothing is carved while the user drags, so a second
+instance would only serve to abandon a superseded carve, and the owner chose to measure before
+building it. The accepted cost is that a superseded carve cannot be cancelled and a new request
+waits for it to finish. The record is in 8.7, and the timings from 8.11 are what would reopen
+it.
+
+**Added, not resolved.** The console timing instrumentation (8.11) is a new requirement the
+owner added on 2026-07-20 rather than a question that was answered. It ships enabled, and
+whether it stays enabled is itself something to settle before the feature is called finished.
 
 **Not an open question, deliberately.** The stacking lip interaction (10.2) is unverified but
 is not put to the owner, because it is a question about what the geometry does rather than
