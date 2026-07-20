@@ -10,6 +10,9 @@ import type { PartMeshes } from '../engine/gridfinity/types';
 import type { BaseplateParams } from '../engine/baseplate/constants';
 import {
   BASEPLATE_UNITS_MAX,
+  CLIP_TOLERANCE_DEFAULT,
+  CLIP_TOLERANCE_MAX,
+  CLIP_TOLERANCE_MIN,
   CUSTOM_SPAN_MIN,
   MAGNET_DIAMETER_MAX,
   MAGNET_DIAMETER_MIN,
@@ -48,6 +51,11 @@ const LIVE_PREVIEW_MAX_CELLS = 25;
 
 const quantity = ref(1);
 const widthField = ref<{ focus: () => void } | null>(null);
+
+// The connection clip's two fields. Component-local because neither is part
+// of any baseplate design and neither needs to survive a tab switch.
+const clipToleranceMm = ref(CLIP_TOLERANCE_DEFAULT);
+const clipQuantity = ref(1);
 
 /** Whether the current plate is small enough to regenerate on every change. */
 const livePreview = computed(() => store.unitsX * store.unitsY <= LIVE_PREVIEW_MAX_CELLS);
@@ -104,10 +112,24 @@ function loadEditingEntry(entryId: string | null): void {
 
 // The watch source is null unless the Baseplate tab owns the edit, so this
 // tab never loads another tab's entry by construction. A clip row also routes
-// to this tab; its edit mode arrives with the connection clip card.
+// to this tab but has its own parallel watcher below.
 watch(
   () => (app.editingKind === 'baseplate' || app.editingKind === null ? app.editingEntryId : null),
   loadEditingEntry,
+  { immediate: true },
+);
+
+// The parallel guard for a clip row: prefill the clip card from the stored
+// product when a clip edit routes here.
+watch(
+  () => (app.editingKind === 'clip' ? app.editingEntryId : null),
+  (entryId) => {
+    if (entryId === null) return;
+    const entry = queue.entryById(entryId);
+    if (entry === null || entry.product.kind !== 'clip') return;
+    clipToleranceMm.value = entry.product.toleranceMm;
+    clipQuantity.value = entry.quantity;
+  },
   { immediate: true },
 );
 
@@ -147,6 +169,36 @@ function cancelEdit(): void {
   resetForm();
 }
 
+/**
+ * The clip entry being edited, when the app store routes a clip edit here. In
+ * that mode the tab collapses to just the clip card.
+ */
+const clipEditingEntry = computed<QueueEntry | null>(() => {
+  if (app.editingKind !== 'clip' || app.editingEntryId === null) return null;
+  const entry = queue.entryById(app.editingEntryId);
+  return entry !== null && entry.product.kind === 'clip' ? entry : null;
+});
+
+/**
+ * Queues clip rows, or saves the clip row being edited. Leaves the baseplate
+ * form untouched, so clips can be added before or after the plate itself.
+ */
+function addClips(): void {
+  const product = { kind: 'clip', toleranceMm: clipToleranceMm.value } as const;
+  if (clipEditingEntry.value !== null) {
+    queue.update(clipEditingEntry.value.id, { product, quantity: clipQuantity.value });
+    app.stopEditing();
+  } else {
+    queue.add(product, clipQuantity.value);
+  }
+}
+
+function cancelClipEdit(): void {
+  app.stopEditing();
+  clipToleranceMm.value = CLIP_TOLERANCE_DEFAULT;
+  clipQuantity.value = 1;
+}
+
 function editingTitle(entry: QueueEntry): string {
   return describeProduct(entry.product).title;
 }
@@ -155,6 +207,7 @@ function editingTitle(entry: QueueEntry): string {
 <template>
   <v-row>
     <v-col cols="12" md="6">
+      <template v-if="clipEditingEntry === null">
       <div class="text-caption text-medium-emphasis mb-1">
         Baseplate size (grid units of 42 mm)
       </div>
@@ -340,9 +393,67 @@ function editingTitle(entry: QueueEntry): string {
       >
         Editing "{{ editingTitle(editingEntry) }}"; saving updates the queue row.
       </v-alert>
+      </template>
+
+      <v-card variant="tonal" class="mt-4" density="compact">
+        <v-card-item>
+          <v-card-title>Connection clips</v-card-title>
+        </v-card-item>
+        <v-card-text>
+          <p class="text-body-2 text-medium-emphasis mb-4">
+            A connection clip bridges two connectable baseplates. It prints as
+            its own part, so it is queued as a separate row.<template
+              v-if="!store.connectable"
+            >
+              Turn on Connectable so the plates have edges for the clip to grip.</template>
+          </p>
+          <v-slider
+            v-model="clipToleranceMm"
+            :min="CLIP_TOLERANCE_MIN"
+            :max="CLIP_TOLERANCE_MAX"
+            step="0.05"
+            thumb-label="always"
+            label="Clip tolerance (mm)"
+            hint="The clearance is added to the clip only, so a clip printed with a larger tolerance still fits a plate you have already printed. Raise it when the clip is too tight to push into the joint."
+            persistent-hint
+            class="mt-4"
+          >
+            <template #append>
+              <v-text-field
+                v-model.number="clipToleranceMm"
+                type="number"
+                :min="CLIP_TOLERANCE_MIN"
+                :max="CLIP_TOLERANCE_MAX"
+                step="0.05"
+                density="compact"
+                hide-details
+                style="width: 90px"
+              />
+            </template>
+          </v-slider>
+          <div class="d-flex align-center ga-2 mt-4">
+            <v-text-field
+              v-model.number="clipQuantity"
+              type="number"
+              min="1"
+              step="1"
+              label="Quantity"
+              density="comfortable"
+              hide-details
+              style="max-width: 140px"
+            />
+            <v-btn variant="outlined" @click="addClips">
+              {{ clipEditingEntry !== null ? 'Save changes' : 'Add clips to queue' }}
+            </v-btn>
+            <v-btn v-if="clipEditingEntry !== null" variant="outlined" @click="cancelClipEdit">
+              Cancel edit
+            </v-btn>
+          </div>
+        </v-card-text>
+      </v-card>
     </v-col>
 
-    <v-col cols="12" md="6">
+    <v-col v-if="clipEditingEntry === null" cols="12" md="6">
       <v-card variant="outlined" class="preview-card">
         <template v-if="!previewLoaded">
           <div class="d-flex flex-column align-center justify-center text-center fill-height pa-8">
