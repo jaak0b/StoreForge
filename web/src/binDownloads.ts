@@ -1,4 +1,6 @@
 import {
+  generateCutoutBin,
+  generateCutoutBinUnion,
   generateInsert,
   generateInsertUnion,
   generatePocketBin,
@@ -10,7 +12,7 @@ import { meshToStlBlob } from './engine/gridfinity/stlExport';
 import { binOuterSizeMm } from './engine/gridfinity/constants';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
 import type { MeshData, PartMeshes } from './engine/gridfinity/types';
-import type { BinPockets, Product } from './engine/plan/types';
+import { assertNever, type BinPockets, type CutoutModel, type Product } from './engine/plan/types';
 import { partsOf, type PrintablePart } from './engine/plan/geometry';
 import { arrangeAutoPlate, type FootprintItem, type Placement } from './engine/plate/arranger';
 import { mergePlacedMeshes, type PlacedMesh } from './engine/plate/placement';
@@ -37,18 +39,73 @@ function plainPockets(pockets: BinPockets): BinPockets {
   return JSON.parse(JSON.stringify(pockets)) as BinPockets;
 }
 
+// Cutout model records cross the same boundary and are deep-copied for the
+// same reason. Only the record travels: the model's triangles stay in the
+// model store and reach the worker as bytes exactly once.
+function plainModels(models: CutoutModel[]): CutoutModel[] {
+  return JSON.parse(JSON.stringify(models)) as CutoutModel[];
+}
+
+/**
+ * Where a generated part's placement warnings go. A cutout bin can be laid
+ * out in ways that are legal but probably not what the user meant, and the
+ * carve returns those as sentences rather than throwing them. They are not
+ * dropped on the way to a download: the caller collects them and shows them.
+ */
+export type WarningSink = (message: string) => void;
+
 /** Generates one part's separate body and label meshes. */
-function generatePartMeshes(part: PrintablePart): Promise<PartMeshes> {
-  if (part.part === 'insert') return generateInsert(part.insert);
-  if (part.pockets === undefined) return generateSlottedBin(part.bin);
-  return generatePocketBin({ ...part.bin, ...plainPockets(part.pockets) });
+async function generatePartMeshes(
+  part: PrintablePart,
+  warn: WarningSink,
+): Promise<PartMeshes> {
+  switch (part.part) {
+    case 'insert':
+      return generateInsert(part.insert);
+    case 'bin': {
+      if (part.models !== undefined) {
+        const carve = await generateCutoutBin({
+          ...part.bin,
+          models: plainModels(part.models),
+        });
+        carve.warnings.forEach(warn);
+        return carve.meshes;
+      }
+      if (part.pockets !== undefined) {
+        return generatePocketBin({ ...part.bin, ...plainPockets(part.pockets) });
+      }
+      return generateSlottedBin(part.bin);
+    }
+    default:
+      return assertNever(part);
+  }
 }
 
 /** Generates one part as a single unioned mesh. */
-function generatePartUnion(part: PrintablePart): Promise<MeshData> {
-  if (part.part === 'insert') return generateInsertUnion(part.insert);
-  if (part.pockets === undefined) return generateSlottedBinUnion(part.bin);
-  return generatePocketBinUnion({ ...part.bin, ...plainPockets(part.pockets) });
+async function generatePartUnion(
+  part: PrintablePart,
+  warn: WarningSink,
+): Promise<MeshData> {
+  switch (part.part) {
+    case 'insert':
+      return generateInsertUnion(part.insert);
+    case 'bin': {
+      if (part.models !== undefined) {
+        const carve = await generateCutoutBinUnion({
+          ...part.bin,
+          models: plainModels(part.models),
+        });
+        carve.warnings.forEach(warn);
+        return carve.mesh;
+      }
+      if (part.pockets !== undefined) {
+        return generatePocketBinUnion({ ...part.bin, ...plainPockets(part.pockets) });
+      }
+      return generateSlottedBinUnion(part.bin);
+    }
+    default:
+      return assertNever(part);
+  }
 }
 
 /** The part's plate footprint in millimetres. */
@@ -133,30 +190,55 @@ function arrangeUniqueParts(products: DownloadProduct[]): ArrangedPart[] {
   }));
 }
 
-/** Downloads one product as a single STL mesh (all its parts arranged side by side). */
-export async function downloadProductStl(product: Product): Promise<void> {
+/**
+ * Collects the warnings one download produced, in order and without repeats.
+ * A part is generated once and placed many times, so the same sentence would
+ * otherwise arrive once per copy.
+ */
+function collectWarnings(): { warn: WarningSink; warnings: string[] } {
+  const seen = new Set<string>();
+  const warnings: string[] = [];
+  return {
+    warnings,
+    warn: (message) => {
+      if (seen.has(message)) return;
+      seen.add(message);
+      warnings.push(message);
+    },
+  };
+}
+
+/**
+ * Downloads one product as a single STL mesh (all its parts arranged side by
+ * side) and returns whatever the generation warned about, for the caller to
+ * show. Only a cutout bin produces any.
+ */
+export async function downloadProductStl(product: Product): Promise<string[]> {
   const arranged = arrangeUniqueParts([{ product, count: 1 }]);
+  const { warn, warnings } = collectWarnings();
   if (arranged.length === 1) {
-    const mesh = await generatePartUnion(arranged[0].part);
+    const mesh = await generatePartUnion(arranged[0].part, warn);
     triggerDownload(meshToStlBlob(mesh), `${fileStem(product)}.stl`);
-    return;
+    return warnings;
   }
   const placed: PlacedMesh[] = [];
   for (const { part, placements } of arranged) {
-    const mesh = await generatePartUnion(part);
+    const mesh = await generatePartUnion(part, warn);
     for (const placement of placements) {
       placed.push({ mesh, xMm: placement.xMm, yMm: placement.yMm });
     }
   }
   triggerDownload(meshToStlBlob(mergePlacedMeshes(placed)), `${fileStem(product)}.stl`);
+  return warnings;
 }
 
 /** Downloads one product as a two-filament 3MF (body slot 1, label slot 2). */
-export async function downloadProduct3mf(product: Product): Promise<void> {
+export async function downloadProduct3mf(product: Product): Promise<string[]> {
   const arranged = arrangeUniqueParts([{ product, count: 1 }]);
+  const { warn, warnings } = collectWarnings();
   const items: PlateItem[] = [];
   for (const { part, placements } of arranged) {
-    const meshes = await generatePartMeshes(part);
+    const meshes = await generatePartMeshes(part, warn);
     items.push({
       body: meshes.body,
       label: meshes.label,
@@ -169,6 +251,7 @@ export async function downloadProduct3mf(product: Product): Promise<void> {
     new Blob([bytes.buffer as ArrayBuffer], { type: 'model/3mf' }),
     `${fileStem(product)}.3mf`,
   );
+  return warnings;
 }
 
 /** The three formats a batch can be downloaded as. */
@@ -178,27 +261,29 @@ export type BatchFormat = 'stl' | '3mf-single' | '3mf-two';
  * Downloads a whole batch in the given format: one merged STL, a
  * single-color 3MF (inserts as plain single-color parts) or a two-filament
  * 3MF (bodies on slot 1, insert labels on slot 2). Progress is reported per
- * unique part.
+ * unique part, and whatever the generation warned about comes back for the
+ * caller to show.
  */
 export async function downloadBatch(
   products: DownloadProduct[],
   format: BatchFormat,
   batchName: string,
   onProgress: (text: string) => void,
-): Promise<void> {
+): Promise<string[]> {
   const unique = arrangeUniqueParts(products);
+  const { warn, warnings } = collectWarnings();
   const stem = batchName.trim() === '' ? 'gridfinity_batch' : sanitizeFileName(batchName);
   if (format === 'stl') {
     const placed: PlacedMesh[] = [];
     for (let i = 0; i < unique.length; i++) {
       onProgress(`Generating part ${i + 1} of ${unique.length}`);
-      const mesh = await generatePartUnion(unique[i].part);
+      const mesh = await generatePartUnion(unique[i].part, warn);
       for (const placement of unique[i].placements) {
         placed.push({ mesh, xMm: placement.xMm, yMm: placement.yMm });
       }
     }
     triggerDownload(meshToStlBlob(mergePlacedMeshes(placed)), `${stem}.stl`);
-    return;
+    return warnings;
   }
   const items: PlateItem[] = [];
   for (let i = 0; i < unique.length; i++) {
@@ -206,11 +291,11 @@ export async function downloadBatch(
     let body;
     let label = null;
     if (format === '3mf-two') {
-      const meshes = await generatePartMeshes(unique[i].part);
+      const meshes = await generatePartMeshes(unique[i].part, warn);
       body = meshes.body;
       label = meshes.label;
     } else {
-      body = await generatePartUnion(unique[i].part);
+      body = await generatePartUnion(unique[i].part, warn);
     }
     items.push({
       body,
@@ -225,6 +310,7 @@ export async function downloadBatch(
     new Blob([bytes.buffer as ArrayBuffer], { type: 'model/3mf' }),
     `${stem}${suffix}.3mf`,
   );
+  return warnings;
 }
 
 function sanitizeFileName(name: string): string {

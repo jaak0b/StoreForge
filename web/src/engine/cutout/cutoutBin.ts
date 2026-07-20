@@ -15,7 +15,7 @@
 //
 // Framework-agnostic; the ManifoldToplevel and Font are injected as everywhere
 // else in the engine.
-import type { Manifold, ManifoldToplevel } from 'manifold-3d';
+import type { ExecutionContext, Manifold, ManifoldToplevel } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import {
   buildInsertInSlotSolids,
@@ -101,6 +101,26 @@ export interface CutoutBinParams extends SlottedBinParams {
   models: CutoutModelSpec[];
 }
 
+/**
+ * What the two expensive import-stage operations cost on one model, returned
+ * rather than logged. Timing the pipeline is the worker's concern, and this
+ * module has to stay framework agnostic and free of environment side effects,
+ * so the figures come back as values and the worker prints them.
+ *
+ * The post-simplify triangle count is here because it is the number that
+ * decides where the imported triangle ceiling belongs: the clearance offset's
+ * cost is driven by what simplify leaves behind, not by what the file
+ * contained.
+ */
+export interface CutoutPrepareTimings {
+  /** Wall clock spent in simplify, or 0 when the clearance skipped it. */
+  simplifyMs: number;
+  /** Wall clock spent in the Minkowski sum, or 0 when the clearance skipped it. */
+  offsetMs: number;
+  /** Triangle count after simplify, equal to triangleCount when it was skipped. */
+  simplifiedTriangleCount: number;
+}
+
 /** A model's finished import-stage product, ready to be cached. */
 export interface PreparedCutoutModel {
   /** Scaled, centred, simplified and dilated. The caller owns and caches it. */
@@ -109,6 +129,8 @@ export interface PreparedCutoutModel {
   sizeMm: SizeMm;
   /** Triangle count as imported, before any simplification. */
   triangleCount: number;
+  /** What this import cost, for the caller's timing instrumentation. */
+  timings: CutoutPrepareTimings;
 }
 
 /** A placed cutter and the model name any warning about it must quote. */
@@ -132,6 +154,29 @@ export interface CutoutCarve {
    * bounding box, which would overestimate every non-box shape.
    */
   footprints: { name: string; sizeMm: SizeMm }[];
+}
+
+/**
+ * A carved cutout bin as its two-mesh consumers take it: the preview, which
+ * colors the insert separately, and the two-filament 3MF export.
+ *
+ * The warnings and the footprints travel with the meshes rather than being
+ * dropped at the boundary. A placement warning is information the caller has
+ * to be able to act on, and the footprints are the authoritative post-dilation
+ * sizes the readout shows, which nothing downstream can recompute without
+ * redoing the carve.
+ */
+export interface CutoutCarveResult {
+  meshes: PartMeshes;
+  warnings: string[];
+  footprints: CutoutCarve['footprints'];
+}
+
+/** The same, for the single-mesh STL export. */
+export interface CutoutUnionResult {
+  mesh: MeshData;
+  warnings: string[];
+  footprints: CutoutCarve['footprints'];
 }
 
 /**
@@ -262,6 +307,8 @@ export function prepareCutoutModel(
   const { name, unitScale, clearanceMm } = spec;
   const ceilingMs = spec.ceilingMs ?? CLEARANCE_OFFSET_CEILING_MS;
   requireNonNegativeClearance(clearanceMm);
+  let simplifyMs = 0;
+  let offsetMs = 0;
   // Holds whichever solid this function currently owns, so a throw at any
   // stage releases exactly one solid and a success releases none.
   let current: Manifold | null = solid;
@@ -284,10 +331,18 @@ export function prepareCutoutModel(
       ]),
     );
     const sizeMm = sizeOf(current);
+    // Equal to the imported count until a simplify runs, which a zero
+    // clearance skips entirely.
+    let simplifiedTriangleCount = triangleCount;
 
     if (clearanceMm > 0) {
       const toleranceMm = simplifyToleranceMm(clearanceMm);
+      const simplifyStartedAt = Date.now();
       advance(current.simplify(toleranceMm));
+      // Reading the count is what forces the simplify to be evaluated, so it
+      // belongs inside the measured span rather than after it.
+      simplifiedTriangleCount = current.numTri();
+      simplifyMs = Date.now() - simplifyStartedAt;
       // The offset sphere's faceting error obeys the same sagitta bound as a
       // flattened circle, so its resolution comes from the shared derivation
       // spent against the same budget the simplification spends.
@@ -307,6 +362,7 @@ export function prepareCutoutModel(
       const startedAt = Date.now();
       const dilated = current.minkowskiSum(sphere);
       const elapsedMs = Date.now() - startedAt;
+      offsetMs = elapsedMs;
       sphere.delete();
       advance(dilated);
 
@@ -330,7 +386,12 @@ export function prepareCutoutModel(
       }
     }
 
-    const prepared = { solid: current, sizeMm, triangleCount };
+    const prepared = {
+      solid: current,
+      sizeMm,
+      triangleCount,
+      timings: { simplifyMs, offsetMs, simplifiedTriangleCount },
+    };
     // Ownership passes to the caller, which caches it.
     current = null;
     return prepared;
@@ -442,10 +503,15 @@ export function validateCutoutPlacement(
  * Unlike the traced pocket flow, the cutters are not extended past the bin
  * top. A cutter is the model wherever the user put it, so a model raised
  * through the rim opens its pocket at the top and a fully sunk one does not.
+ *
+ * `ctx` is handed straight to the shared carve stage, which attaches it to the
+ * one eager operation of the carve. A preview passes the context it can cancel
+ * when the user supersedes it; an export passes nothing.
  */
 export function buildCutoutBinBody(
   m: ManifoldToplevel,
   params: CutoutBinParams,
+  ctx?: ExecutionContext,
 ): CutoutCarve {
   const placed: PlacedCutout[] = params.models.map((model) => ({
     name: model.name,
@@ -467,6 +533,7 @@ export function buildCutoutBinBody(
     params,
     placed.map(({ cutter }) => cutter),
     'Cutout bin',
+    ctx,
   );
   return { body, warnings, footprints };
 }
@@ -482,8 +549,9 @@ export function generateCutoutBin(
   m: ManifoldToplevel,
   font: Font,
   params: CutoutBinParams,
-): { meshes: PartMeshes; warnings: string[]; footprints: CutoutCarve['footprints'] } {
-  const carve = buildCutoutBinBody(m, params);
+  ctx?: ExecutionContext,
+): CutoutCarveResult {
+  const carve = buildCutoutBinBody(m, params, ctx);
   let body = carve.body;
   let label: Manifold | null = null;
   try {
@@ -520,8 +588,9 @@ export function generateCutoutBinUnion(
   m: ManifoldToplevel,
   font: Font,
   params: CutoutBinParams,
-): { mesh: MeshData; warnings: string[]; footprints: CutoutCarve['footprints'] } {
-  const carve = buildCutoutBinBody(m, params);
+  ctx?: ExecutionContext,
+): CutoutUnionResult {
+  const carve = buildCutoutBinBody(m, params, ctx);
   let body = carve.body;
   try {
     if (params.fusedLabel != null) {

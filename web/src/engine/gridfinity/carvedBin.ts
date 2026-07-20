@@ -5,7 +5,12 @@
 // cutout bin differ only in how they build their cutters, so everything either
 // side of that step lives here. Framework-agnostic; the ManifoldToplevel is
 // injected as everywhere else in the engine.
-import type { CrossSection, Manifold, ManifoldToplevel } from 'manifold-3d';
+import type {
+  CrossSection,
+  ExecutionContext,
+  Manifold,
+  ManifoldToplevel,
+} from 'manifold-3d';
 import {
   binInteriorSizeMm,
   binOuterSizeMm,
@@ -33,6 +38,27 @@ export type CarvedBinParams = BinParams & { labelSlot?: boolean } & Pick<
  * it from here.
  */
 export const CARVE_OVERLAP_EPS = 0.01;
+
+/**
+ * Thrown when an ExecutionContext attached to a carve cancelled it before it
+ * finished. Not a failure, and never shown to the user: the only thing that
+ * cancels a carve is a newer request from the same caller, which produces the
+ * result the user actually waits for.
+ *
+ * It carries its own class so a caller can tell supersession apart from the
+ * generic invalid-solid failure. Without it a superseded carve would reach the
+ * user as `... produced an invalid solid: Cancelled`, which reads as a defect
+ * in a bin that is perfectly fine.
+ *
+ * Manifold documents cancellation as permanent for a Manifold, so a cancelled
+ * solid is deleted where it is detected and never inspected further.
+ */
+export class CarveCancelledError extends Error {
+  constructor(subject: string) {
+    super(`${subject} generation was superseded by a newer request and was cancelled.`);
+    this.name = 'CarveCancelledError';
+  }
+}
 
 /**
  * Cross-section of the bin's interior cavity: the same inset rounded rectangle
@@ -132,6 +158,18 @@ export function labelStructureStrip(
  * check. `subject` names the flow in the invalid-solid message, for example
  * 'Pocket bin'.
  *
+ * `ctx` makes the carve observable and cancellable by the caller that started
+ * it. Where it attaches is not a free choice. Booleans are deferred in
+ * manifold, so the subtraction is not computed when it is written but when
+ * something first asks about the result, and an ExecutionContext is consumed
+ * by that one eager operation. Restoring the label slot asks first, on a bin
+ * that has a slot, so attaching after that point would attach to a tree with
+ * no work left in it and a cancellation would observe nothing. The context is
+ * therefore attached to the subtraction and evaluated immediately, which is
+ * also where the time actually goes. A caller that never supersedes its own
+ * requests, such as an export, passes nothing and the carve stays lazy exactly
+ * as it was before.
+ *
  * Takes ownership of `cutters`: every element is deleted before returning, on
  * the success and the failure path alike.
  */
@@ -140,6 +178,7 @@ export function buildCarvedBinBody(
   params: CarvedBinParams,
   cutters: Manifold[],
   subject: string,
+  ctx?: ExecutionContext,
 ): Manifold {
   try {
     const shelved = buildSlottedBinBody(m, { ...params, scoop: false });
@@ -157,10 +196,27 @@ export function buildCarvedBinBody(
     } else {
       body = filled;
     }
+    if (ctx !== undefined) {
+      // withContext returns a copy carrying the attachment, which the status
+      // check on the next line consumes by evaluating the subtraction.
+      const observed = body.withContext(ctx);
+      body.delete();
+      body = observed;
+      if (body.status() === 'Cancelled') {
+        // Cancellation is permanent for a Manifold, so the solid is released
+        // here and never inspected further.
+        body.delete();
+        throw new CarveCancelledError(subject);
+      }
+    }
     if (params.labelSlot !== false) {
       body = applySlotToBody(m, params, body);
     }
     const status = body.status();
+    if (status === 'Cancelled') {
+      body.delete();
+      throw new CarveCancelledError(subject);
+    }
     if (status !== 'NoError') {
       body.delete();
       throw new Error(`${subject} generation produced an invalid solid: ${status}`);

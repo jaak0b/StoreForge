@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { Manifold, ManifoldToplevel } from 'manifold-3d';
+import type { ExecutionContext, Manifold, ManifoldToplevel } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import { loadManifold } from '../helpers/manifold';
 import { loadLabelFont } from '../helpers/font';
@@ -22,6 +22,7 @@ import type {
   CutoutModelSpec,
   ModelPlacement,
 } from '../../src/engine/cutout/cutoutBin';
+import { CarveCancelledError } from '../../src/engine/gridfinity/carvedBin';
 import { circleSegments } from '../../src/engine/geometry/circleSegments';
 import {
   binInteriorSizeMm,
@@ -1018,6 +1019,56 @@ describe('generateCutoutBinUnion', () => {
     expect(result.mesh.vertices.length).toBeGreaterThan(0);
     expect(result.warnings).toEqual([]);
 
+    for (const model of models) model.solid.delete();
+  });
+});
+
+describe('a superseded carve', () => {
+  /**
+   * The ExecutionContext constructor is on the loaded module but not on the
+   * ManifoldToplevel type, exactly as the worker reaches it.
+   */
+  function newContext(): ExecutionContext {
+    const factory = m as unknown as { ExecutionContext: new () => ExecutionContext };
+    return new factory.ExecutionContext();
+  }
+
+  it('reports supersession rather than an invalid solid', () => {
+    // Manifold reports a cancelled evaluation as a status like any other, so
+    // without an explicit check a preview the user superseded himself would
+    // reach him as "Cutout bin generation produced an invalid solid:
+    // Cancelled", which reads as a defect in a bin that is perfectly fine.
+    const models = [cubeModel(10, 0, at(0, 5, INTERIOR_MID_Z))];
+    const ctx = newContext();
+    ctx.cancel();
+
+    let thrown: unknown;
+    try {
+      generateCutoutBin(m, font, params({ models }), ctx);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(CarveCancelledError);
+    expect((thrown as Error).message).not.toContain('invalid solid');
+
+    ctx.delete();
+    for (const model of models) model.solid.delete();
+  });
+
+  it('carves normally under a context that was never cancelled', () => {
+    // The context must not change the result of the carve it observes, or
+    // every preview would differ from the download of the same bin.
+    const models = [cubeModel(10, 0, at(0, 5, INTERIOR_MID_Z))];
+    const ctx = newContext();
+
+    const observed = generateCutoutBin(m, font, params({ models }), ctx);
+    const plain = generateCutoutBin(m, font, params({ models }));
+
+    expect(observed.meshes.body.vertices.length).toBe(plain.meshes.body.vertices.length);
+    expect(observed.warnings).toEqual(plain.warnings);
+
+    ctx.delete();
     for (const model of models) model.solid.delete();
   });
 });

@@ -70,8 +70,12 @@ export function describeMissingModels(models: CutoutModel[]): string {
 /**
  * Why a bin whose model bytes are absent cannot be generated. This blocks
  * generation, which is the point: the alternative is a solid block of plastic.
+ *
+ * Takes only the name, so the same sentence covers both places the absence
+ * shows up: the plan layer, which finds no record on this device, and the
+ * geometry worker, which finds no prepared solid for a model a carve names.
  */
-export function modelNotStoredMessage(model: CutoutModel): string {
+export function modelNotStoredMessage(model: Pick<CutoutModel, 'name'>): string {
   return (
     `The model "${model.name}" is not stored on this device, so this bin cannot be ` +
     'generated. Upload the model again, or remove it from the bin.'

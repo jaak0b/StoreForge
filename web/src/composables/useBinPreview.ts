@@ -9,18 +9,24 @@ import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
  * overwrites a newer one. Generic over the parameter shape so the tabs can
  * preview slotted bins, pocket bins or standalone inserts with one
  * composable.
+ *
+ * Generic over the result shape too, defaulting to the two meshes. A cutout
+ * carve returns its placement warnings and its post-dilation footprints
+ * alongside the meshes, because neither can be recomputed downstream without
+ * redoing the carve, and the result type flows through rather than being
+ * flattened here. The default keeps every existing call site unchanged.
  */
-export function useBinPreview<P = SlottedBinParams>(
+export function useBinPreview<P = SlottedBinParams, R = PartMeshes>(
   params: () => P,
-  generate: (params: P) => Promise<PartMeshes> = generateSlottedBin as (
+  generate: (params: P) => Promise<R> = generateSlottedBin as unknown as (
     params: P,
-  ) => Promise<PartMeshes>,
+  ) => Promise<R>,
 ): {
-  meshes: Ref<PartMeshes | null>;
+  meshes: Ref<R | null>;
   generating: Ref<boolean>;
   errorMessage: Ref<string | null>;
 } {
-  const meshes = ref<PartMeshes | null>(null);
+  const meshes = ref<R | null>(null) as Ref<R | null>;
   const generating = ref(false);
   const errorMessage = ref<string | null>(null);
 
