@@ -17,8 +17,11 @@ const DB_NAME = 'storeforge';
  * every missing store, so any upgrade path ends with all stores present.
  * This number is a minimum, not an exact target: parallel branches of the
  * app share the origin database, so the on-disk version can already be
- * newer while still missing stores. openDatabase detects that case and
- * self-heals by reopening at the on-disk version plus one.
+ * newer while still missing stores. openDatabase therefore opens without
+ * naming a version, accepts whatever exists on disk (a fresh install gets
+ * an empty version 1 database), and when any store is missing it reopens
+ * at the larger of the on-disk version plus one and this minimum so the
+ * upgrade handler can create the missing stores.
  */
 const DB_VERSION = 3;
 
@@ -57,15 +60,17 @@ export async function openDatabase(binding: StoreBinding): Promise<IDBDatabase> 
   if (typeof indexedDB === 'undefined') {
     throw new Error('This browser does not offer IndexedDB storage.');
   }
-  let db = await openAtVersion(binding, DB_VERSION);
+  // Open without naming a version: this accepts whatever version is on disk
+  // (parallel branches sharing the origin may have raised it past ours), and
+  // on a fresh install it creates an empty version 1 database whose missing
+  // stores the second step then creates.
+  let db = await openAtVersion(binding);
   if (hasAllStores(db)) {
     return db;
   }
-  // The on-disk database was created at this version or newer by another
-  // branch of the app sharing the origin, so onupgradeneeded never fired
-  // and some stores are missing. Force an upgrade one version above the
-  // on-disk version; the per-store guards create only what is missing.
-  const forcedVersion = db.version + 1;
+  // Some stores are missing, so force an upgrade above the on-disk version
+  // (and at least to our own); the per-store guards create only what is missing.
+  const forcedVersion = Math.max(db.version + 1, DB_VERSION);
   db.close();
   db = await openAtVersion(binding, forcedVersion);
   if (hasAllStores(db)) {
@@ -83,10 +88,14 @@ function hasAllStores(db: IDBDatabase): boolean {
   );
 }
 
-/** Opens the database at one specific version, wiring the shared upgrade handler. */
-function openAtVersion(binding: StoreBinding, version: number): Promise<IDBDatabase> {
+/**
+ * Opens the database, wiring the shared upgrade handler. With a version it
+ * requests that exact version; without one it accepts whatever exists on disk.
+ */
+function openAtVersion(binding: StoreBinding, version?: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, version);
+    const request =
+      version === undefined ? indexedDB.open(DB_NAME) : indexedDB.open(DB_NAME, version);
     request.onupgradeneeded = () => {
       const db = request.result;
       // Guarded per store rather than per version, so any upgrade path
