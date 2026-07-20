@@ -3,6 +3,9 @@
 Date: 2026-07-20. Companion to `docs/superpowers/specs/2026-07-20-stl-cutout-bin-design.md`.
 Read the design first; this document does not restate its reasoning.
 
+An earlier plan at `.claude/plans/cutout-bin-plan.md` (commit `3b18a6b`) is superseded by
+these two documents. The design's provenance section lists the ten items absorbed from it.
+
 ## What is being built
 
 A fourth way to make a bin: **upload a 3D model and let the bin close around it.**
@@ -58,6 +61,14 @@ uploaded model carries its own value, defaulting to 0.4 mm. This is settled and 
 reopened; design sections 5.2, 7.10 and 8.6 carry the reasoning and the consequences. It
 affects stages 2, 3, 4, 6 and 8, and each of those stages says how.
 
+**Also already decided by the owner on 2026-07-20: the clearance step shows an indeterminate
+progress indicator, not a percentage.** The owner originally asked for a real percentage
+progress bar and has accepted an indeterminate one after being shown why it is not achievable
+with the current single worker structure. Design section 8.5 carries the full record: what
+was asked for, why the worker cannot report it, what a shared memory second worker would cost
+to make it possible, and that the owner may revisit once the timings from stage 2 exist. Do
+not implement a fake percentage that advances on a timer. It affects stages 6 and 8.
+
 **[CHECKPOINT]** Answer the five remaining open questions in design section 11 before stage 1
 begins. Two of them change code written in the early stages and are cheap now, expensive later:
 
@@ -110,20 +121,36 @@ ownership of the cutters and deletes them on both the success and the failure pa
 engine, no worker, no UI, no persistence.
 
 **Created.**
+- `web/src/engine/geometry/circleSegments.ts`: `circleSegments(radiusMm, toleranceMm)`,
+  moved out of `engine/trace/edit.ts` with the tolerance made a parameter. See below.
 - `web/src/engine/cutout/cutoutBin.ts`: `CutoutModelSpec`, `CutoutBinParams`,
   `DEFAULT_CUTOUT_CLEARANCE_MM`, `maxClearanceMm(gridX, gridY)`,
-  `simplifyToleranceMm(clearanceMm)`,
-  `offsetSphereSegments(clearanceMm, toleranceMm)`, `prepareCutoutModel` (the import stage:
+  `simplifyToleranceMm(clearanceMm)`, `prepareCutoutModel` (the import stage: scale to mm,
   centre, simplify, offset), `placeCutter` (rotate then translate),
   `validateCutoutPlacement` returning warnings as an array, `buildCutoutBinBody`,
   `generateCutoutBin`, `generateCutoutBinUnion`.
 - `web/tests/cutout/cutoutBin.spec.ts`
+- `web/tests/geometry/circleSegments.spec.ts`
 - Fixture models under `web/tests/cutout/fixtures/` if the existing tetrahedron, cube and
   sphere fixtures are not enough. An asymmetric solid is required for the rotation order
   test; a right triangular prism is sufficient and can be generated in the test rather than
   stored as a file, matching how the existing cutout tests build their fixtures.
 
-**Modified.** Nothing outside `engine/cutout/`.
+**Modified.**
+- `web/src/engine/trace/edit.ts`: its private `circleSegments` is removed and the shared one
+  imported, called with `CHORDAL_TOLERANCE_MM`. `CHORDAL_TOLERANCE_MM` and
+  `MIN_CIRCLE_SEGMENTS` policy: the tolerance constant stays in `edit.ts` because it is the
+  trace flow's own accuracy policy; the floor moves with the derivation. **No behaviour
+  change**, proven by `web/tests/trace/edit.spec.ts` passing unmodified.
+
+**There is no `offsetSphereSegments` function.** An earlier draft of the design derived a
+fresh formula for the offset sphere's facet count. It does not exist and must not be written.
+The codebase already derives a facet count from the identical sagitta error model, and design
+section 8.3 shows the two derivations are the same formula differing only in which tolerance
+is passed in. The cutout flow calls
+`circleSegments(clearanceMm, simplifyToleranceMm(clearanceMm))`. Writing a second derivation
+of this is a rule 10 defect, and it would also drop the multiple of four rounding that makes
+the pocket dimension test pass honestly.
 
 **Depends on.** Stage 1.
 
@@ -147,14 +174,89 @@ takes one model's clearance and nothing else knows about any other model's. Spec
 - The zero clearance fast path that skips simplify and Minkowski is per model, so a bin can
   mix an exact model and a dilated one.
 
+**Assertion policy, which is not the obvious one.** Read design section 10.0 before writing a
+single geometry assertion. **Do not assert `genus() === 0` on a carved bin.** A cutter can
+seal a void in the hollow base, `decompose()` reports a sealed void as a negative volume
+component, and a sealed void makes the whole solid's genus legitimately negative. The
+assertion would then fail on correct geometry, and the natural response to that (weakening
+the assertion, or changing the geometry until the number comes back) is a defect either way.
+Use the pattern the divider work established and shipped in `web/tests/binGenerator.spec.ts`:
+`status() === 'NoError'` for validity, the local `componentVolumes` helper with `solids`
+having length 1 for connectedness, `voids` having length 0 where no sealed void is intended,
+and `genus()` only on the positive volume component from `decompose()` when a spurious handle
+is the specific thing being ruled out. Reuse `componentVolumes` rather than writing a second
+one.
+
+**Nothing below the container floor.** The divider feature shipped wall roots that printed
+through the base as ribs on the first layer, and every test in the suite passed throughout,
+because they all asked whether the solid was valid and none asked whether material had
+appeared where it had no business being. A cutout pocket has the same failure mode. Assert it
+**differentially**, against the same bin with no cutters, following
+`web/tests/binGenerator.spec.ts`: `trimByPlane([0, 0, -1], -FLOOR_TOP)` volumes compared with
+`toBeCloseTo(..., 6)`, and `slice(0.1)` plan areas compared the same way. Run both **with
+magnet holes enabled**, because magnet and screw holes legitimately sit below the floor and
+the differential form is exactly what tolerates them without hardcoding a second derivation
+of the base geometry. This must be asserted by test, not argued in a comment.
+
+**The wall clock ceiling on the offset (design 8.9).** `prepareCutoutModel` records a start
+time before the Minkowski sum and, on return, discards and reports rather than caching if the
+elapsed time exceeds the ceiling. Implement the mechanism in this stage. Its **value** comes
+from the measurement below and is not to be guessed; until that measurement exists, take the
+value from a named constant with a comment saying it is provisional, and set it for real as
+part of the checkpoint. Be honest in the comment that the check bounds what is accepted, not
+what is attempted: a blocked synchronous WASM call cannot be interrupted from outside. The
+message is the one in design 9.2, including the zero clearance escape route, which is a real
+escape because zero clearance skips both simplify and Minkowski.
+
+**[CHECKPOINT] Measure the triangle ceiling and set `MAX_TRIANGLES` from the numbers.**
+`MAX_TRIANGLES = 250000` is already shipped in `web/src/engine/cutout/stlReader.ts` and
+already quoted in a user facing message, and it was picked without measurement. Rule 12 makes
+replacing it with a measured figure mandatory, not optional, and **the owner has been told he
+will get real timings rather than another estimate**, so this is a blocking checkpoint and
+its output is a table of raw numbers per rule 8, not a prose conclusion.
+
+Method, from design section 8.8:
+
+- Measure end to end in the **worker, in a browser**, not in the Node suite: from handing
+  bytes to the import stage to the cached solid being ready, covering parse, weld, validate,
+  scale, centre, simplify and Minkowski at the default 0.4 mm clearance.
+- Record per input: wall clock total, wall clock for the Minkowski stage alone, triangle count
+  before and after simplify, and peak memory if it can be read. The **post simplify count** is
+  the number that matters most, because it is what tests the plateau hypothesis.
+- Sweep roughly 1000, 5000, 20000, 50000, 150000 and 250000 triangles.
+- Use both clean generated solids (a subdivided sphere is the worst realistic case for
+  simplification) **and at least two real world downloaded STLs**. A ceiling calibrated only
+  on generated geometry repeats the mistake being corrected.
+- Set the ceiling from where the measured curve crosses an acceptable wait, and comment the
+  constant with the measurement and its date. If memory or parse time binds before Minkowski
+  time does, set it from whichever actually binds.
+- **Do not treat the circulated "roughly five minutes at 250000 triangles" figure as data.**
+  It applied the raw per triangle cost without accounting for simplify running first and is
+  probably wrong.
+- If simplification does not reduce counts enough to make large models tractable, **lower the
+  ceiling**. Never loosen the simplify tolerance past its error budget. The tolerance is a fit
+  guarantee; the ceiling is a convenience limit, and only one of them may be spent for speed.
+
+It is a legitimate outcome that 250000 turns out to be fine. It is not legitimate to keep
+asserting it without having looked. Report the table and the proposed ceiling; the owner
+confirms before the constant changes.
+
 **Definition of done.**
 - `npm run build` and `npm test` green.
 - Every warning in design section 9.2 that belongs to the carve is **returned** in the result
   array, never thrown. A test asserts that a model fully outside the bin still yields a
   watertight solid.
-- The simplify tolerance, the sphere segment count and the clearance ceiling are computed from
-  their formulas. A literal `0.04`, `7` or a hardcoded millimetre cap anywhere in the module
-  fails this stage.
+- The simplify tolerance and the clearance ceiling are computed from their formulas, and the
+  sphere segment count comes from the shared `circleSegments`. A literal `0.04`, a literal
+  segment count, or a hardcoded millimetre cap anywhere in the module fails this stage.
+- `web/tests/trace/edit.spec.ts` passes **unmodified** after the `circleSegments` move. If it
+  does not, the move was not behaviour preserving. Stop and report; do not adjust the test.
+- The below floor differential tests pass with magnet holes enabled.
+- The two stacking lip tests from design 10.2 are written and pass: a fully buried model
+  leaves the lip intact, and a model raised through the rim cuts the lip only where it passes
+  through. This interaction is **unverified** rather than known, so if the second test fails,
+  that is a finding to report, not a test to relax.
+- No assertion anywhere in the new tests uses `genus()` on a whole carved bin.
 - The two mixed clearance tests from design section 10.2 pass: two models with different
   clearances each get their own dilation, and a bin mixing 0 mm with 0.4 mm carves both
   correctly. These are what prove per model actually reached the geometry.
@@ -165,8 +267,9 @@ takes one model's clearance and nothing else knows about any other model's. Spec
 over `ProductOrigin` compiles again.
 
 **Modified.**
-- `web/src/engine/plan/types.ts`: `ModelPlacement`, `CutoutModel`, `CutoutBin`, widened `Bin`
-  and `ProductOrigin`, widened `BinProduct.bin`, `PLAN_FILE_VERSION = 6`.
+- `web/src/engine/plan/types.ts`: `ModelPlacement`, `CutoutModel` (including `unitScale`,
+  design 5.6), `CutoutBin`, widened `Bin` and `ProductOrigin`, widened `BinProduct.bin`,
+  `PLAN_FILE_VERSION = 6`.
 - `web/src/engine/plan/geometry.ts`: walls guard, `partsOf`, `previewBinParams`,
   `PrintablePart.models`.
 - `web/src/engine/plan/rowDescriptor.ts`: explicit `cutout` branches in `detailToken` and
@@ -214,6 +317,19 @@ the existing pocket depth message, which names the depth the bin actually allows
 Do not restate 0.4 or the ceiling formula in this module. Both are imported from
 `engine/cutout/cutoutBin.ts`, which is their single home.
 
+**Unit scale.** `unitScale` validates as a finite number greater than 0 and defaults to 1 on
+pick when absent, which is exactly what a plan written before the field existed meant, since
+such a plan described a model already treated as millimetres. Design 5.4 has the message and
+5.6 the reasoning.
+
+**Forward compatibility, and the one thing it forbids.** A later export of the plan zipped
+with its model STLs must be purely additive: a container around the same version 6 JSON, with
+no version bump, no field changes and no migration. Design 5.3 works through what that
+constrains. The practical rule for this stage is that `modelSourceId` stays an **opaque key
+and never encodes a path or any device local storage detail**, and that model metadata stays
+complete without the bytes, so a reader holding only the JSON can still list, describe and
+validate the bin. Do not add model bytes to the plan JSON in any encoding.
+
 **Tests from the design.** Section 10.4, the round trip, defaulting, walls exclusion, version
 5 compatibility and version 7 rejection rows.
 
@@ -255,6 +371,14 @@ what any existing trace photo assertion asserts: each of the six existing cases 
 imported names differing. If a trace assertion's expected value has to change, stop and
 report.
 
+**Store the original file, not the processed solid.** `putModel` stores the uploaded STL
+bytes exactly as they arrived. Never the simplified solid, never the dilated cutter, never a
+re-exported mesh. Design 6.1 has the reasoning; the short version is that simplification
+error would otherwise compound across every later clearance change, so a user tuning a fit
+from 0.4 to 0.6 to 0.8 would silently degrade the model each time, and re-parsing costs
+milliseconds against a Minkowski sum measured in seconds. The stored bytes are also what a
+re-import must reproduce and what a zipped export would carry.
+
 **Watch for.** The `onupgradeneeded` handler must create every missing store, using the
 existing `if (!db.objectStoreNames.contains(...))` guard for each. A user upgrading from
 version 1 gets `models` created; a fresh user gets both. Test this by hand at least once,
@@ -279,7 +403,7 @@ semantics and the preview cancellation in place.
 - `web/src/worker/geometry.worker.ts`: `missingCutoutModels`, `putCutoutModel`,
   `releaseCutoutModels`, `generateCutoutBinPreview`, `generateCutoutBin`,
   `generateCutoutBinUnion`, plus the module level model cache keyed by
-  `${modelSourceId}:${clearanceMm}` and the active preview `ExecutionContext`.
+  `${modelSourceId}:${unitScale}:${clearanceMm}` and the active preview `ExecutionContext`.
 - `web/src/workerClient.ts`: mirroring wrappers.
 - `web/src/binDownloads.ts`: cutout branches in `generatePartMeshes` and `generatePartUnion`,
   with a `plainModels` deep clone mirroring `plainPockets`.
@@ -298,16 +422,28 @@ building, not by reading.
   `generateCutoutBinPreview` cancels its predecessor.
 - A `Cancelled` status is not an error and must not surface to the user. The carve stage
   distinguishes it from a genuine failure.
+- The import stage's wall clock ceiling from stage 2 reports through this layer as a user
+  worded message like any other offset failure, and the affected row reverts to its previous
+  clearance rather than blocking.
+- **The progress indicator is indeterminate.** Do not add a progress channel that reports a
+  fabricated percentage. `ExecutionContext.progress()` cannot be read while the worker thread
+  is blocked inside the eager operation, which is the whole reason for the owner's stage 0
+  decision. Design 8.5 has the record.
 - If the owner chose a second worker instance in stage 0, `workerClient.ts` holds two
   `Comlink.Remote` handles and routes cutout previews to the second.
 
 **The cache key is the load bearing detail of this stage.** It is
-`${modelSourceId}:${clearanceMm}`, model identity and clearance together, and getting it wrong
-has no visible symptom. A cache keyed by model alone would silently reuse the previous dilation
-after a clearance change: the preview renders, the solid is watertight, the download succeeds,
-and the printed part is simply the wrong size. Design section 8.6 has the full treatment,
-including that only the changed model's offset is recomputed while the bin is then re-carved
-whole, and why the carve is deliberately not made incremental.
+`${modelSourceId}:${unitScale}:${clearanceMm}`, and getting it wrong has no visible symptom. A
+cache missing either the clearance or the unit scale would silently reuse the previous
+dilation after that value changed: the preview renders, the solid is watertight, the download
+succeeds, and the printed part is simply the wrong size. **The unit scale is in the key for
+exactly the same reason the clearance is**: a scale correction (design 5.6) rescales the model
+before it is simplified and dilated, so it invalidates the entry just as a clearance change
+does, and `releaseCutoutModels` must evict superseded scale keys as well as superseded
+clearance keys so accepting a rescale does not leave the pre correction solid in the WASM
+heap. Design section 8.6 has the full treatment, including that only the changed model's
+offset is recomputed while the bin is then re-carved whole, and why the carve is deliberately
+not made incremental.
 
 **Definition of done.**
 - `npm run build` and `npm test` green.
@@ -402,6 +538,52 @@ existing scene scaffolding.
   the rest.
 - Deep clone everything crossing into the worker to strip Vue proxies.
 
+**Unit mismatch handling, per design 5.6.** STL carries no unit information and inch authored
+models are common, so a model imported at the wrong size carves a pocket that fits nothing
+while nothing about the file or the app looks wrong. On import, after parsing and before the
+worker round trip, compare the model's largest raw dimension against the two thresholds: under
+3 mm proposes metres (`unitScale` 1000), over 500 mm proposes inches (`unitScale` 25.4).
+
+- The proposal is **non blocking**. The model imports, places and carves at `unitScale` 1
+  while it stands, so a user whose file really is that size ignores it and carries on.
+- Two buttons, `Rescale as metres` or `Rescale as inches`, and `Keep as millimetres`.
+  Accepting sets `unitScale`, re-runs the import stage for that model (the cache key changed),
+  and updates `sizeMm` and the readout. Rejecting leaves it at 1. Either answer is stored in
+  the plan, so the question is not asked again for that model or on a later load.
+- **Offer whole units only, never a free scale factor field.** A free scale lets the user
+  resize the part the pocket must hold, which is the inspiration tool's mistake and the thing
+  clearance exists to do properly. Rescaling by 25.4 is not resizing the part, it is stating
+  what the part always measured.
+- The thresholds are heuristics and are commented as such. Rule 12 is satisfied because they
+  decide only **whether to ask the user a question**; nothing is derived from them and the
+  user's answer is what changes the geometry. A heuristic that silently rescaled a model would
+  be exactly the fudge rule 12 forbids, so never apply the correction automatically.
+
+**Missing model recovery, per design 6.4.** A plan opened on another machine has the metadata
+and not the bytes. Per the photo store precedent this is a normal condition, not an error, and
+an error message alone is not enough when everything needed to make the bin whole is present
+except one file the user probably still has.
+
+- The queue row states that the bin needs its models and names them by stored filename. The
+  bin keeps its place, its title and its editability.
+- Preview and download refuse with the existing message naming the file. Never generate a bin
+  with an empty `models` list, which exports as a solid block and wastes a real print.
+- The model list shows a missing model in its own state with a `Locate file` button. Everything
+  else in the tab stays editable: resize, label, move the models that resolved, delete the one
+  that did not.
+- Choosing a file stores it under the **same `modelSourceId`** and preserves `placement`,
+  `unitScale` and `clearanceMm` exactly. Nothing has to be re-placed. Several missing models
+  are recovered one at a time, each by its own button.
+- **If the user picks a different file from the original**, accept it and make the substitution
+  visible rather than guarding against it, because STL carries no identity and a stored hash
+  could only ever say no, never yes. Update `name` to the new file's name, recompute
+  `triangleCount` and `sizeMm` and show them, preserve the placement (a wrong model then sits
+  wrong *visibly*, through the ghost and the bounds warnings), re-run the unit check on the new
+  file, and state the rename once as a non blocking note: `The file "NEW" was linked to the
+  model previously stored as "OLD". Check the size readout if you expected a different model.`
+- A file that will not import at all produces the ordinary import rejection and the model stays
+  missing, so the user can try another file.
+
 **The clearance control, per design section 7.10.** One per model row, and the only control in
 this tab that triggers slow work, so it gets its own handling:
 
@@ -433,6 +615,14 @@ clearance step) and whether `Fit bin to models` is a button rather than continuo
   to clearly different clearances, for example 0.2 mm and 1.0 mm, and confirm the two pockets
   differ accordingly and that changing one does not alter the other. Confirm the recomputing
   row stays responsive and that the rest of the tab keeps working while it runs.
+- **[CHECKPOINT]** Owner confirms the missing model recovery on a clean profile: export a plan
+  with a cutout bin, load it in a browser profile with no IndexedDB data, and confirm the queue
+  row names the missing file, the download refuses rather than producing a solid block, and
+  `Locate file` re-links the model with its placement, rotation and clearance intact. This is
+  the path no test can cover, and the "solid block" failure is the one that wastes a print.
+- An inch authored STL, or any model deliberately exported at 1/25.4 scale, raises the unit
+  proposal on import; accepting it corrects the size rows and re-carves, and rejecting it
+  leaves the model at `unitScale` 1. Both answers survive a reload.
 
 ## Stage 9: downloads and batches
 
