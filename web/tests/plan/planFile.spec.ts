@@ -6,10 +6,13 @@ import {
   serializePlanFile,
   validateBatch,
   validateEntry,
+  type PlanParseResult,
 } from '../../src/engine/plan/planFile';
 import type {
   BatchItem,
   BinPockets,
+  CutoutBin,
+  CutoutModel,
   ManualBin,
   ManualInsertProduct,
   PrintBatch,
@@ -127,7 +130,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     const entries = [entry(), entry({ id: 'b2', notes: 'reprint in PETG' })];
     const batches = [batch()];
     const result = parsePlanFile(serializePlanFile(entries, batches));
-    expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches }, warnings: [] });
   });
 
   it('rejects text that is not JSON', () => {
@@ -142,10 +145,10 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects an envelope version newer than this build reads', () => {
-    const result = parsePlanFile('{"version":6,"entries":[],"batches":[]}');
+    const result = parsePlanFile('{"version":8,"entries":[],"batches":[]}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('version 6');
-    if (!result.ok) expect(result.error).toContain('versions 1 to 5');
+    if (!result.ok) expect(result.error).toContain('version 8');
+    if (!result.ok) expect(result.error).toContain('versions 1 to 7');
   });
 
   it('rejects a missing entries list', () => {
@@ -168,7 +171,8 @@ describe('serializePlanFile / parsePlanFile', () => {
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: entry b2: gridX must be an integer of at least 1.',
+      error:
+        'The plan is invalid: entry b2: The bin width must be a whole number of at least 1 grid unit.',
     });
   });
 
@@ -196,7 +200,8 @@ describe('serializePlanFile / parsePlanFile', () => {
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: batch batch1: item i1: count must be an integer of at least 1.',
+      error:
+        'The plan is invalid: batch batch1: item i1: The count must be a whole number of at least 1.',
     });
   });
 
@@ -207,7 +212,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [entry()], batches: [] },
+      plan: { version: 7, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -246,7 +251,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 7, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -261,7 +266,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [queued, printed] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 7, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -274,7 +279,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 7, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -297,7 +302,7 @@ describe('version-3 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 3, entries: [raw], batches: [] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [entry()], batches: [] },
+      plan: { version: 7, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -314,7 +319,7 @@ describe('version-3 migration', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [], batches: [batch()] },
+      plan: { version: 7, entries: [], batches: [batch()] },
       warnings: [],
     });
   });
@@ -344,7 +349,7 @@ describe('divider walls migration', () => {
     const result = parsePlanFile(serializePlanFile([withWalls], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [withWalls], batches: [] },
+      plan: { version: 7, entries: [withWalls], batches: [] },
       warnings: [],
     });
   });
@@ -356,12 +361,16 @@ describe('validateEntry', () => {
   });
 
   it.each([
-    ['gridX', 0, 'gridX must be an integer of at least 1'],
-    ['gridY', 1.5, 'gridY must be an integer of at least 1'],
-    ['heightUnits', 1, 'heightUnits must be an integer of at least 2'],
-    ['magnetHoles', 1, 'magnetHoles must be true or false'],
-    ['walls', 'nope', 'walls must be a list'],
-    ['walls', [{ x1: 0, y1: 0, x2: 1 }], 'a divider wall needs finite x1, y1, x2 and y2'],
+    ['gridX', 0, 'The bin width must be a whole number of at least 1 grid unit.'],
+    ['gridY', 1.5, 'The bin depth must be a whole number of at least 1 grid unit.'],
+    ['heightUnits', 1, 'The bin height must be a whole number of at least 2 height units.'],
+    ['magnetHoles', 1, 'The magnet holes setting must be true or false.'],
+    ['walls', 'nope', 'The divider walls must be a list.'],
+    [
+      'walls',
+      [{ x1: 0, y1: 0, x2: 1 }],
+      'A divider wall needs finite x1, y1, x2 and y2 coordinates.',
+    ],
   ])('rejects a bad bin %s field', (field, value, message) => {
     const raw = entry({
       product: { kind: 'bin', labelSlot: true, bin: { ...manualBin(), [field]: value } },
@@ -370,9 +379,9 @@ describe('validateEntry', () => {
   });
 
   it.each([
-    ['quantity', 0, 'quantity must be an integer of at least 1'],
-    ['createdAt', 'yesterday', 'createdAt must be an ISO 8601 timestamp'],
-    ['notes', 5, 'notes must be a string'],
+    ['quantity', 0, 'The quantity must be a whole number of at least 1.'],
+    ['createdAt', 'yesterday', 'The creation time must be an ISO 8601 timestamp.'],
+    ['notes', 5, 'The notes must be text.'],
   ])('rejects a bad entry %s field', (field, value, message) => {
     const raw = { ...entry(), [field]: value };
     expect(validateEntry(raw)).toBe(`entry a1: ${message}`);
@@ -381,17 +390,17 @@ describe('validateEntry', () => {
   it('rejects an entry with a missing field', () => {
     const raw: Record<string, unknown> = { ...entry() };
     delete raw.quantity;
-    expect(validateEntry(raw)).toBe('entry a1: quantity must be an integer of at least 1');
+    expect(validateEntry(raw)).toBe('entry a1: The quantity must be a whole number of at least 1.');
   });
 
   it('rejects a non-object', () => {
-    expect(validateEntry('hello')).toBe('an entry is not an object');
+    expect(validateEntry('hello')).toBe('An entry is not an object.');
   });
 
   it('rejects a missing id', () => {
     const raw: Record<string, unknown> = { ...entry() };
     delete raw.id;
-    expect(validateEntry(raw)).toBe('an entry is missing its id');
+    expect(validateEntry(raw)).toBe('An entry is missing its id.');
   });
 });
 
@@ -409,7 +418,7 @@ describe('validateBatch', () => {
   it('rejects a missing id', () => {
     const raw: Record<string, unknown> = { ...batch() };
     delete raw.id;
-    expect(validateBatch(raw)).toBe('a batch is missing its id');
+    expect(validateBatch(raw)).toBe('A batch is missing its id.');
   });
 
   it('rejects a bad item product field', () => {
@@ -419,14 +428,14 @@ describe('validateBatch', () => {
       product: { kind: 'bin', labelSlot: true, bin: { ...manualBin(), gridX: 'two' } },
     };
     expect(validateBatch(batch({ items: [badItem as unknown as BatchItem] }))).toBe(
-      'batch batch1: item i1: gridX must be an integer of at least 1',
+      'batch batch1: item i1: The bin width must be a whole number of at least 1 grid unit.',
     );
   });
 
   it('rejects a missing items list', () => {
     const raw: Record<string, unknown> = { ...batch() };
     delete raw.items;
-    expect(validateBatch(raw)).toBe('batch batch1: items must be a list');
+    expect(validateBatch(raw)).toBe('batch batch1: The items must be a list.');
   });
 });
 
@@ -483,7 +492,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [imperial, lengthless], batches: [] },
+      plan: { version: 7, entries: [imperial, lengthless], batches: [] },
       warnings: [],
     });
   });
@@ -493,7 +502,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -515,14 +524,14 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [], batches: [withSnapshots] },
+      plan: { version: 7, entries: [], batches: [withSnapshots] },
       warnings: [],
     });
   });
 
   it('rejects an unknown product kind', () => {
     expect(validateEntry({ ...entry(), product: { kind: 'mystery' } })).toBe(
-      'entry a1: product kind must be bin, binWithInsert or insert',
+      'entry a1: The product kind must be bin, binWithInsert or insert.',
     );
   });
 
@@ -540,7 +549,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([fused], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [fused], batches: [] },
+      plan: { version: 7, entries: [fused], batches: [] },
       warnings: [],
     });
   });
@@ -553,7 +562,7 @@ describe('bin entry kinds in plan files', () => {
       fused: 'yes' as never,
     };
     expect(validateEntry(entry({ id: 'f1', product: bad }))).toBe(
-      'entry f1: fused must be true or false',
+      'entry f1: The fused setting must be true or false.',
     );
   });
 
@@ -561,21 +570,21 @@ describe('bin entry kinds in plan files', () => {
     const bad: Product = { kind: 'bin', bin: { ...tracedBin() } };
     delete (bad.bin as Record<string, unknown>).pockets;
     expect(validateEntry(entry({ id: 't1', product: bad }))).toBe(
-      'entry t1: pockets must be an object',
+      'entry t1: The tool pockets must be an object.',
     );
   });
 
   it('rejects a traced bin with divider fields', () => {
     const bad: Product = { kind: 'bin', bin: { ...tracedBin(), dividerCountX: 1 } as never };
     expect(validateEntry(entry({ id: 't1', product: bad }))).toBe(
-      'entry t1: a traced bin cannot have divider walls',
+      'entry t1: A traced bin cannot have divider walls.',
     );
   });
 
-  it('rejects a bin origin that is not manual, screw or traced', () => {
+  it('rejects a bin origin that is not manual, screw, traced or cutout', () => {
     const bad: Product = { kind: 'bin', bin: { ...manualBin(), origin: 'mystery' as never } };
     expect(validateEntry(entry({ product: bad }))).toBe(
-      'entry a1: bin origin must be manual, screw or traced',
+      'entry a1: The bin origin must be manual, screw, traced or cutout.',
     );
   });
 
@@ -587,7 +596,7 @@ describe('bin entry kinds in plan files', () => {
       }),
     };
     delete (bad.product as { bin: Record<string, unknown> }).bin.screw;
-    expect(validateEntry(bad)).toBe('entry s1: screw must be an object');
+    expect(validateEntry(bad)).toBe('entry s1: The screw must be an object.');
   });
 
   it('rejects a screw bin with an unknown head type', () => {
@@ -599,7 +608,7 @@ describe('bin entry kinds in plan files', () => {
         bin: screwBin({ screw: { ...screwSpec(), head: 'mushroom' as never } }),
       } as unknown as Product,
     });
-    expect(validateEntry(bad)).toBe('entry s1: screw head must be a known head type or null');
+    expect(validateEntry(bad)).toBe('entry s1: The screw head must be a known head type, or null.');
   });
 });
 
@@ -624,7 +633,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -670,7 +679,7 @@ describe('trace sources in plan files', () => {
     (bad.tools[0] as Record<string, unknown>).minHoleWidthMm = 'wide';
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: minHoleWidthMm must be a number of at least 0');
+    ).toBe('entry t1: pocket tool t1: The minimum hole width must be a number of at least 0 mm.');
   });
 
   it('rejects a negative minimum hole width', () => {
@@ -678,7 +687,7 @@ describe('trace sources in plan files', () => {
     bad.tools[0].minHoleWidthMm = -1;
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: minHoleWidthMm must be a number of at least 0');
+    ).toBe('entry t1: pocket tool t1: The minimum hole width must be a number of at least 0 mm.');
   });
 
   it('rejects a filled hole index outside the outline holes', () => {
@@ -688,7 +697,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      "entry t1: pocket tool t1: filledHoleIndices must be whole numbers referring to the tool's holes",
+      "entry t1: pocket tool t1: The filled hole list must contain whole numbers referring to the tool's own holes.",
     );
   });
 
@@ -697,7 +706,7 @@ describe('trace sources in plan files', () => {
     bad.tools[0].clicks = [{ x: 1, y: 2, label: 3 as never }];
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: a click needs x, y and a label of 0 or 1');
+    ).toBe('entry t1: pocket tool t1: A click needs an x, a y and a label of 0 or 1.');
   });
 
   it('round-trips a tool carrying mixed add and erase brush strokes', () => {
@@ -713,7 +722,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -730,7 +739,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -763,7 +772,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.',
     );
   });
 
@@ -775,7 +784,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.',
     );
   });
 
@@ -787,7 +796,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.',
     );
   });
 
@@ -798,7 +807,7 @@ describe('trace sources in plan files', () => {
     ];
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: a brush stroke point needs x and y');
+    ).toBe('entry t1: pocket tool t1: A brush stroke point needs an x and a y.');
   });
 
   it('rejects a brushStrokes field that is not a list', () => {
@@ -806,7 +815,7 @@ describe('trace sources in plan files', () => {
     (bad.tools[0] as Record<string, unknown>).brushStrokes = { mode: 'add' };
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: brushStrokes must be a list');
+    ).toBe('entry t1: pocket tool t1: The brush strokes must be a list.');
   });
 
   it('rejects an empty traceSourceId', () => {
@@ -814,7 +823,7 @@ describe('trace sources in plan files', () => {
       id: 't1',
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ traceSourceId: '' }) },
     });
-    expect(validateEntry(bad)).toBe('entry t1: traceSourceId must be a non-empty string');
+    expect(validateEntry(bad)).toBe('entry t1: The trace source id must be text that is not empty.');
   });
 
   it('rejects an unknown paper kind', () => {
@@ -823,7 +832,7 @@ describe('trace sources in plan files', () => {
       id: 't1',
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ paper: paper as never }) },
     });
-    expect(validateEntry(bad)).toBe('entry t1: paper kind must be a4 or letter');
+    expect(validateEntry(bad)).toBe('entry t1: The paper kind must be a4 or letter.');
   });
 
   it('rejects a paper corner without coordinates', () => {
@@ -833,7 +842,7 @@ describe('trace sources in plan files', () => {
       id: 't1',
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ paper: paper as never }) },
     });
-    expect(validateEntry(bad)).toBe('entry t1: paper corner br needs x and y coordinates');
+    expect(validateEntry(bad)).toBe('entry t1: The paper corner br needs an x and a y coordinate.');
   });
 
   it('round-trips a batch item carrying the trace source snapshot', () => {
@@ -847,7 +856,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSource]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [], batches: [withSource] },
+      plan: { version: 7, entries: [], batches: [withSource] },
       warnings: [],
     });
   });
@@ -863,7 +872,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [bad]));
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: batch batch1: item i1: paper must be an object.',
+      error: 'The plan is invalid: batch batch1: item i1: The paper must be an object.',
     });
   });
 });
@@ -877,7 +886,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: a pocket placement refers to a tool that is not in the pockets',
+      'entry t1: A pocket placement refers to a tool that is not in the pockets.',
     );
   });
 
@@ -892,7 +901,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: pocket tool t1: outline needs at least 3 outer points',
+      'entry t1: pocket tool t1: The outline needs at least 3 outer points.',
     );
   });
 
@@ -904,7 +913,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: a pocket placement needs xMm, yMm and a pocketDepthMm above 0',
+      'entry t1: A pocket placement needs an x, a y and a pocket depth above 0 mm.',
     );
   });
 
@@ -918,7 +927,7 @@ describe('pockets in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -935,7 +944,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: pocket tool t1: an elongated finger hole needs both x2 and y2 as numbers',
+      'entry t1: pocket tool t1: An elongated finger hole needs its second point, so x2 and y2 must both be numbers.',
     );
   });
 });
@@ -1132,7 +1141,7 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
     );
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: entry a1: kind must be manual, screw or traced.',
+      error: 'The plan is invalid: entry a1: The entry kind must be manual, screw or traced.',
     });
   });
 
@@ -1142,7 +1151,7 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('labelMode must be embossed, slot, slot-insert or insert');
+      expect(result.error).toContain('The label mode must be embossed, slot, slot-insert or insert.');
     }
   });
 });
@@ -1302,7 +1311,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1323,7 +1332,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1342,6 +1351,353 @@ describe('divider walls survive a save and reload', () => {
 
     const result = parsePlanFile(serializePlanFile([], batches));
 
-    expect(result).toEqual({ ok: true, plan: { version: 5, entries: [], batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries: [], batches }, warnings: [] });
+  });
+});
+
+describe('cutout bins in plan files', () => {
+  /** One carved model, complete in every field a version-7 plan stores. */
+  function cutoutModel(overrides: Partial<CutoutModel> = {}): CutoutModel {
+    return {
+      id: 'm1',
+      name: 'socket-19.stl',
+      modelSourceId: 'model-a',
+      triangleCount: 14842,
+      unitScale: 1,
+      sizeMm: { x: 24.5, y: 24.5, z: 40 },
+      placement: { xMm: 12.4, yMm: -3.1, zMm: 21.75, rotXDeg: 0, rotYDeg: 90, rotZDeg: 15 },
+      clearanceMm: 0.4,
+      sweepEnabled: true,
+      draftAngleDeg: 5,
+      ...overrides,
+    };
+  }
+
+  function cutoutBin(overrides: Partial<CutoutBin> = {}): CutoutBin {
+    return {
+      origin: 'cutout',
+      gridX: 3,
+      gridY: 2,
+      heightUnits: 6,
+      magnetHoles: true,
+      models: [cutoutModel()],
+      ...overrides,
+    };
+  }
+
+  /** An entry ordering a cutout bin. */
+  function cutoutEntry(bin: CutoutBin = cutoutBin()): QueueEntry {
+    return entry({ id: 'c1', product: { kind: 'bin', labelSlot: true, bin } });
+  }
+
+  /** A cutout product whose bin fields are deliberately malformed. */
+  function badProduct(bin: Record<string, unknown>): Product {
+    return { kind: 'bin', labelSlot: true, bin } as unknown as Product;
+  }
+
+  /**
+   * Serializes one cutout entry, drops the named field from its single model,
+   * and parses the result: the shape a plan written before that field existed
+   * has on disk.
+   */
+  function withoutModelField(field: string): PlanParseResult {
+    const raw = JSON.parse(serializePlanFile([cutoutEntry()], [])) as {
+      entries: Array<{ product: { bin: { models: Record<string, unknown>[] } } }>;
+    };
+    delete raw.entries[0].product.bin.models[0][field];
+    return parsePlanFile(JSON.stringify(raw));
+  }
+
+  /** The cutout bin of a parsed plan's single entry. */
+  function loadedBin(result: PlanParseResult): CutoutBin {
+    if (!result.ok) throw new Error(`expected the plan to load: ${result.error}`);
+    return (result.plan.entries[0].product as { bin: CutoutBin }).bin;
+  }
+
+  it('round-trips a cutout bin with every model field intact', () => {
+    const entries = [cutoutEntry()];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches: [] }, warnings: [] });
+  });
+
+  it('round-trips a cutout bin inside a print batch', () => {
+    // A batch carries its own copy of the product, so it is a second place a
+    // model list can be lost between sessions.
+    const batches = [
+      batch({ items: [batchItem({ product: { kind: 'bin', labelSlot: true, bin: cutoutBin() } })] }),
+    ];
+
+    const result = parsePlanFile(serializePlanFile([], batches));
+
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries: [], batches }, warnings: [] });
+  });
+
+  it('keeps two models in one bin on their own clearances', () => {
+    // A bin-wide clearance creeping back into the loader would collapse these
+    // two values into one, giving one model the other's fit with no symptom
+    // until the part is printed.
+    const entries = [
+      cutoutEntry(
+        cutoutBin({
+          models: [
+            cutoutModel({ id: 'm1', clearanceMm: 0 }),
+            cutoutModel({ id: 'm2', modelSourceId: 'model-b', clearanceMm: 0.6 }),
+          ],
+        }),
+      ),
+    ];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(loadedBin(result).models.map((model) => model.clearanceMm)).toEqual([0, 0.6]);
+  });
+
+  it('defaults a model saved without a clearance to one nozzle width', () => {
+    const result = withoutModelField('clearanceMm');
+
+    expect(loadedBin(result).models[0].clearanceMm).toBe(0.4);
+  });
+
+  it('keeps a unit scale of 25.4, the value an inch-authored model needs', () => {
+    const entries = [cutoutEntry(cutoutBin({ models: [cutoutModel({ unitScale: 25.4 })] }))];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(loadedBin(result).models[0].unitScale).toBe(25.4);
+  });
+
+  it('defaults a model saved without a unit scale to millimetres', () => {
+    // A plan written before the field existed described a model that was
+    // already being treated as millimetres, so 1 reproduces what it meant.
+    const result = withoutModelField('unitScale');
+
+    expect(loadedBin(result).models[0].unitScale).toBe(1);
+    expect(result.ok && result.warnings).toEqual([]);
+  });
+
+  it('defaults an absent model size to zeroes, which the next generation recomputes', () => {
+    const result = withoutModelField('sizeMm');
+
+    expect(loadedBin(result).models[0].sizeMm).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('loads a model saved before the sweep existed with the sweep off', () => {
+    // A pre-version-7 plan described bins with exact pockets; loading it with
+    // the sweep on would silently enlarge every pocket it described.
+    const result = withoutModelField('sweepEnabled');
+
+    expect(loadedBin(result).models[0].sweepEnabled).toBe(false);
+  });
+
+  it('defaults an absent draft angle to 0 degrees', () => {
+    const result = withoutModelField('draftAngleDeg');
+
+    expect(loadedBin(result).models[0].draftAngleDeg).toBe(0);
+  });
+
+  it('keeps a committed sweep and draft angle through a round trip', () => {
+    const entries = [
+      cutoutEntry(
+        cutoutBin({ models: [cutoutModel({ sweepEnabled: true, draftAngleDeg: 12.5 })] }),
+      ),
+    ];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(loadedBin(result).models[0].sweepEnabled).toBe(true);
+    expect(loadedBin(result).models[0].draftAngleDeg).toBe(12.5);
+  });
+
+  it('accepts a draft angle just under the 90 degree bound', () => {
+    const nearLimit = badProduct({
+      ...cutoutBin(),
+      models: [cutoutModel({ draftAngleDeg: 89.9 })],
+    });
+
+    expect(validateEntry(entry({ id: 'c1', product: nearLimit }))).toBeNull();
+  });
+
+  it('drops an unknown extra model field rather than carrying it into storage', () => {
+    const raw = JSON.parse(serializePlanFile([cutoutEntry()], [])) as {
+      entries: Array<{ product: { bin: { models: Record<string, unknown>[] } } }>;
+    };
+    raw.entries[0].product.bin.models[0].stlBase64 = 'AAAA';
+
+    const result = parsePlanFile(JSON.stringify(raw));
+
+    expect(loadedBin(result).models[0]).toEqual(cutoutModel());
+  });
+
+  it('rejects a cutout bin carrying divider walls', () => {
+    const bad = badProduct({ ...cutoutBin(), walls: [{ x1: 0, y1: 0, x2: 10, y2: 0 }] });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: A cutout bin cannot have divider walls.',
+    );
+  });
+
+  it('rejects a cutout bin carrying legacy divider counts', () => {
+    const bad = badProduct({ ...cutoutBin(), dividerCountX: 2 });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: A cutout bin cannot have divider walls.',
+    );
+  });
+
+  it('rejects a models field that is not a list', () => {
+    const bad = badProduct({ ...cutoutBin(), models: 'nope' });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: The models must be a list.',
+    );
+  });
+
+  it.each([
+    ['a non-object model', 'nope', 'A cutout model is not an object.'],
+    ['a model with an empty id', { ...cutoutModel(), id: '' }, 'A cutout model is missing its id.'],
+    ['a non-string name', { ...cutoutModel(), name: 7 }, 'cutout model m1: The model name must be text.'],
+    [
+      'an empty modelSourceId',
+      { ...cutoutModel(), modelSourceId: '' },
+      'cutout model m1: The model source id must be text that is not empty.',
+    ],
+    [
+      'a fractional triangle count',
+      { ...cutoutModel(), triangleCount: 12.5 },
+      'cutout model m1: The triangle count must be a whole number of at least 1.',
+    ],
+    [
+      'a triangle count over the import ceiling',
+      { ...cutoutModel(), triangleCount: 250001 },
+      'cutout model m1: The triangle count must not exceed 250000.',
+    ],
+    [
+      'a unit scale of zero',
+      { ...cutoutModel(), unitScale: 0 },
+      'cutout model m1: The unit scale must be a number greater than 0.',
+    ],
+    [
+      'a size missing its z',
+      { ...cutoutModel(), sizeMm: { x: 10, y: 10 } },
+      'cutout model m1: The model size needs a finite x, y and z in mm.',
+    ],
+    [
+      'a placement that is not an object',
+      { ...cutoutModel(), placement: 'centre' },
+      'cutout model m1: The placement must be an object.',
+    ],
+    [
+      'a placement with a non-numeric position',
+      { ...cutoutModel(), placement: { ...cutoutModel().placement, yMm: 'front' } },
+      'cutout model m1: The placement value yMm must be a number.',
+    ],
+    [
+      'a placement with a non-numeric rotation',
+      { ...cutoutModel(), placement: { ...cutoutModel().placement, rotZDeg: null } },
+      'cutout model m1: The placement value rotZDeg must be a number.',
+    ],
+    [
+      'a negative clearance',
+      { ...cutoutModel(), clearanceMm: -0.1 },
+      'cutout model m1: The clearance must be a number of at least 0 mm.',
+    ],
+    [
+      'a sweep flag that is not a boolean',
+      { ...cutoutModel(), sweepEnabled: 'yes' },
+      'cutout model m1: The sweep option must be true or false.',
+    ],
+    [
+      'a draft angle of 90 degrees, whose cone would be infinite',
+      { ...cutoutModel(), draftAngleDeg: 90 },
+      'cutout model m1: The draft angle must be a number from 0 up to but not including 90 degrees.',
+    ],
+    [
+      'a negative draft angle',
+      { ...cutoutModel(), draftAngleDeg: -1 },
+      'cutout model m1: The draft angle must be a number from 0 up to but not including 90 degrees.',
+    ],
+    [
+      'a draft angle that is not a number',
+      { ...cutoutModel(), draftAngleDeg: 'steep' },
+      'cutout model m1: The draft angle must be a number from 0 up to but not including 90 degrees.',
+    ],
+  ])('rejects %s', (_name, model, message) => {
+    const bad = badProduct({ ...cutoutBin(), models: [model] });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(`entry c1: ${message}`);
+  });
+
+  it('rejects two models sharing one id', () => {
+    const bad = badProduct({ ...cutoutBin(), models: [cutoutModel(), cutoutModel()] });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: The cutout model id m1 appears twice.',
+    );
+  });
+
+  it('rejects a clearance wider than the bin allows, naming the limit that bin has', () => {
+    // A 1 by 1 bin has a 39.6 mm interior, and a clearance dilates the model in
+    // every direction, so half of that is the most any model in it can carry.
+    const bad = badProduct({
+      ...cutoutBin(),
+      gridX: 1,
+      gridY: 1,
+      models: [cutoutModel({ clearanceMm: 25 })],
+    });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: cutout model m1: The clearance is 25 mm, but a bin of 1 by 1 grid units allows at most 19.8 mm.',
+    );
+  });
+
+  it('accepts a clearance exactly at the bin limit', () => {
+    const atLimit = badProduct({
+      ...cutoutBin(),
+      gridX: 1,
+      gridY: 1,
+      models: [cutoutModel({ clearanceMm: 19.8 })],
+    });
+
+    expect(validateEntry(entry({ id: 'c1', product: atLimit }))).toBeNull();
+  });
+
+  it('accepts a cutout bin with no models at all', () => {
+    expect(validateEntry(cutoutEntry(cutoutBin({ models: [] })))).toBeNull();
+  });
+});
+
+describe('a plan written by the previous build', () => {
+  it('loads a version-5 plan unchanged, with no warnings', () => {
+    // The regression that matters most: binQueue.loadPlan degrades a parse
+    // failure to an empty plan and only logs, so a break here would silently
+    // empty every existing user's queue on their next visit.
+    const stored = {
+      id: 'a1',
+      quantity: 2,
+      createdAt: '2026-07-01T10:00:00.000Z',
+      notes: 'reprint in PETG',
+      product: {
+        kind: 'binWithInsert',
+        bin: {
+          origin: 'manual',
+          gridX: 2,
+          gridY: 1,
+          heightUnits: 3,
+          magnetHoles: false,
+          walls: [{ x1: 0, y1: -20, x2: 0, y2: 20 }],
+        },
+        insert: { text: 'M3 x 20', text2: 'drawer 2', icon: 'countersunk screw' },
+      },
+    };
+
+    const result = parsePlanFile(JSON.stringify({ version: 5, entries: [stored], batches: [] }));
+
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 7, entries: [stored], batches: [] },
+      warnings: [],
+    });
   });
 });

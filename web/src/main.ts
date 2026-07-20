@@ -8,17 +8,21 @@ import '@mdi/font/css/materialdesignicons.css';
 import './styles.css';
 import App from './App.vue';
 import { useBinQueue } from './stores/binQueue';
-
-// The surface ladder, darkest to lightest: page, card, control. Every grey in
-// the app resolves to one of these three, and the muted neutral is also the
-// hairline border colour, so none of them is written down twice.
-const PAGE = '#101010';
-const CARD = '#1a1a1a';
-const CONTROL = '#2f2f2f';
-const MUTED_NEUTRAL = '#444444';
-// Warm off-white body text. The second text level is this colour at the
-// medium-emphasis opacity below, and there is no third level.
-const TEXT = '#ece7df';
+// Every colour the theme names lives in one module, because the 3D viewports
+// need the same figures and no CSS variable reaches a WebGL material.
+import {
+  CARD,
+  CONTROL,
+  ERROR,
+  INFO,
+  MUTED_NEUTRAL,
+  ON_PRIMARY,
+  PAGE,
+  PRIMARY,
+  SUCCESS,
+  TEXT,
+  WARNING,
+} from './themeColors';
 
 const vuetify = createVuetify({
   components,
@@ -39,15 +43,13 @@ const vuetify = createVuetify({
           // Vuetify's own lighter-surface token, kept on the control level so
           // components that reach for it land on the same step.
           'surface-bright': CONTROL,
-          primary: '#b8752a',
-          // White label text on the amber accent, as reviewed and approved on
-          // the mockup.
-          'on-primary': '#ffffff',
+          primary: PRIMARY,
+          'on-primary': ON_PRIMARY,
           secondary: MUTED_NEUTRAL,
-          success: '#23a55a',
-          warning: '#f0b232',
-          error: '#da373c',
-          info: '#00a8fc',
+          success: SUCCESS,
+          warning: WARNING,
+          error: ERROR,
+          info: INFO,
           'on-background': TEXT,
           'on-surface': TEXT,
           'on-surface-variant': TEXT,
@@ -76,6 +78,7 @@ const vuetify = createVuetify({
 const pinia = createPinia();
 createApp(App).use(pinia).use(vuetify).mount('#app');
 
-// Stored trace photos orphaned by an interrupted session (photo stored, plan
-// mutation never persisted) are cleaned up once at startup.
-void useBinQueue(pinia).sweepStoredPhotos();
+// Stored blobs orphaned by an interrupted session (photo or model stored, plan
+// mutation never persisted) are cleaned up once at startup. The same pass reads
+// which cutout models this device holds, so rows can name the ones it does not.
+void useBinQueue(pinia).sweepStoredAssets();

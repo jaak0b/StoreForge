@@ -5,23 +5,26 @@ import type { ProductOrigin } from '../engine/plan/types';
 import ManualBinTab from './ManualBinTab.vue';
 import ScrewEntryTab from './ScrewEntryTab.vue';
 import TraceTab from './trace/TraceTab.vue';
+import CutoutTab from './cutout/CutoutTab.vue';
 
 /**
  * The add-bin card at the top of the page: a Manual bin tab (the full bin
  * designer with live preview), a Screw entry tab (screw pickers plus the
- * quick-input shorthand line), and a Tool trace tab (photo-traced tool
- * pockets). Editing a queue row opens it in the tab that owns the entry's
- * kind; the other two tabs are disabled until the edit ends.
+ * quick-input shorthand line), a Tool trace tab (photo-traced tool pockets)
+ * and a Cutout bin tab (pockets carved from imported STL models). Editing a
+ * queue row opens it in the tab that owns the entry's kind; the other tabs
+ * are disabled until the edit ends.
  */
 
 const app = useApp();
-type TabName = 'manual' | 'screw' | 'trace';
+type TabName = 'manual' | 'screw' | 'trace' | 'cutout';
 const tab = ref<TabName>('manual');
 
 const TAB_OF_KIND: Record<ProductOrigin, TabName> = {
   manual: 'manual',
   screw: 'screw',
   traced: 'trace',
+  cutout: 'cutout',
 };
 
 // Editing a queue entry lands on its owning tab; Ctrl+N lands on Manual.
@@ -44,6 +47,7 @@ function tabDisabled(name: TabName): boolean {
       <v-tab value="manual" :disabled="tabDisabled('manual')">Manual bin</v-tab>
       <v-tab value="screw" :disabled="tabDisabled('screw')">Screw entry</v-tab>
       <v-tab value="trace" :disabled="tabDisabled('trace')">Tool bin</v-tab>
+      <v-tab value="cutout" :disabled="tabDisabled('cutout')">Cutout bin</v-tab>
     </v-tabs>
     <v-divider />
     <v-card-text>
@@ -60,6 +64,9 @@ function tabDisabled(name: TabName): boolean {
         </v-window-item>
         <v-window-item value="trace" :transition="false" :reverse-transition="false">
           <TraceTab />
+        </v-window-item>
+        <v-window-item value="cutout" :transition="false" :reverse-transition="false">
+          <CutoutTab />
         </v-window-item>
       </v-window>
     </v-card-text>

@@ -4,7 +4,9 @@ import {
   type Bin,
   type BinPockets,
   type BinWithInsertProduct,
+  type CutoutModel,
   type LabelContent,
+  type ModelPlacement,
   type PlanFile,
   type PrintBatch,
   type Product,
@@ -15,6 +17,13 @@ import {
   type DividerWall,
 } from './types';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
+import {
+  DEFAULT_CUTOUT_CLEARANCE_MM,
+  DEFAULT_DRAFT_ANGLE_DEG,
+  isDraftAngleDegValid,
+  maxClearanceMm,
+} from '../cutout/cutoutBin';
+import { MAX_TRIANGLES } from '../cutout/stlReader';
 import {
   composeLabelText,
   HEAD_ICON_NAME,
@@ -32,6 +41,17 @@ import type {
   ToolPlacement,
 } from '../trace/types';
 import { DEFAULT_MIN_HOLE_WIDTH_MM } from '../trace/layoutModel';
+
+/*
+ * Validation message convention. Every validator returns null when the value
+ * is valid, otherwise a message made of an optional lowercase subject prefix
+ * naming the offending row (`entry a1: `, `batch b1: item i1: `, and nested
+ * `pocket tool t1: ` / `cutout model m1: `) followed by exactly one complete
+ * sentence: it starts with a capital letter, names the field in the words the
+ * app shows the user rather than the JSON identifier, states what is expected,
+ * and ends with a full stop. Callers that wrap the message therefore add no
+ * punctuation of their own.
+ */
 
 /** Result of parsing a plan file: either the plan or a user-worded error. */
 export type PlanParseResult =
@@ -70,56 +90,56 @@ function isMmPointList(value: unknown): value is MmPoint[] {
  */
 export function validatePockets(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return `${subject}: pockets must be an object`;
+    return `${subject}: The tool pockets must be an object.`;
   }
   const pockets = raw as Record<string, unknown>;
   if (!Array.isArray(pockets.tools)) {
-    return `${subject}: pockets is missing its tools list`;
+    return `${subject}: The tool pockets are missing their list of tools.`;
   }
   const toolIds = new Set<string>();
   for (const rawTool of pockets.tools) {
     if (typeof rawTool !== 'object' || rawTool === null || Array.isArray(rawTool)) {
-      return `${subject}: a pocket tool is not an object`;
+      return `${subject}: A pocket tool is not an object.`;
     }
     const tool = rawTool as Record<string, unknown>;
     if (typeof tool.id !== 'string' || tool.id.length === 0) {
-      return `${subject}: a pocket tool is missing its id`;
+      return `${subject}: A pocket tool is missing its id.`;
     }
     if (toolIds.has(tool.id)) {
-      return `${subject}: pocket tool id ${tool.id} appears twice`;
+      return `${subject}: The pocket tool id ${tool.id} appears twice.`;
     }
     toolIds.add(tool.id);
     if (typeof tool.name !== 'string') {
-      return `${subject}: pocket tool ${tool.id}: name must be a string`;
+      return `${subject}: pocket tool ${tool.id}: The tool name must be text.`;
     }
     const outline = tool.outline as Record<string, unknown> | null | undefined;
     if (typeof outline !== 'object' || outline === null || Array.isArray(outline)) {
-      return `${subject}: pocket tool ${tool.id}: outline must be an object`;
+      return `${subject}: pocket tool ${tool.id}: The outline must be an object.`;
     }
     if (!isMmPointList(outline.outer) || (outline.outer as MmPoint[]).length < 3) {
-      return `${subject}: pocket tool ${tool.id}: outline needs at least 3 outer points`;
+      return `${subject}: pocket tool ${tool.id}: The outline needs at least 3 outer points.`;
     }
     if (
       !Array.isArray(outline.holes) ||
       !outline.holes.every((loop) => isMmPointList(loop) && loop.length >= 3)
     ) {
-      return `${subject}: pocket tool ${tool.id}: outline holes must be lists of points`;
+      return `${subject}: pocket tool ${tool.id}: Each outline hole must be a list of points.`;
     }
     if (!isFiniteNumber(tool.rotationDeg)) {
-      return `${subject}: pocket tool ${tool.id}: rotationDeg must be a number`;
+      return `${subject}: pocket tool ${tool.id}: The rotation angle must be a number.`;
     }
     if (!isFiniteNumber(tool.offsetMm) || tool.offsetMm < 0) {
-      return `${subject}: pocket tool ${tool.id}: offsetMm must be a number of at least 0`;
+      return `${subject}: pocket tool ${tool.id}: The outline offset must be a number of at least 0 mm.`;
     }
     if (typeof tool.mirrored !== 'boolean') {
-      return `${subject}: pocket tool ${tool.id}: mirrored must be true or false`;
+      return `${subject}: pocket tool ${tool.id}: The mirrored setting must be true or false.`;
     }
     // minHoleWidthMm and filledHoleIndices were added after the first traced
     // entries shipped; older plans omit them, so undefined is accepted and
     // defaulted (the default width, no filled holes) on load.
     if (tool.minHoleWidthMm !== undefined) {
       if (!isFiniteNumber(tool.minHoleWidthMm) || tool.minHoleWidthMm < 0) {
-        return `${subject}: pocket tool ${tool.id}: minHoleWidthMm must be a number of at least 0`;
+        return `${subject}: pocket tool ${tool.id}: The minimum hole width must be a number of at least 0 mm.`;
       }
     }
     if (tool.filledHoleIndices !== undefined) {
@@ -130,14 +150,14 @@ export function validatePockets(raw: unknown, subject: string): string | null {
           (i) => Number.isInteger(i) && (i as number) >= 0 && (i as number) < holeCount,
         )
       ) {
-        return `${subject}: pocket tool ${tool.id}: filledHoleIndices must be whole numbers referring to the tool's holes`;
+        return `${subject}: pocket tool ${tool.id}: The filled hole list must contain whole numbers referring to the tool's own holes.`;
       }
     }
     // clicks were added after the first traced entries shipped; older plans
     // simply omit them, so undefined is accepted and defaulted to an empty list.
     if (tool.clicks !== undefined) {
       if (!Array.isArray(tool.clicks)) {
-        return `${subject}: pocket tool ${tool.id}: clicks must be a list`;
+        return `${subject}: pocket tool ${tool.id}: The clicks must be a list.`;
       }
       for (const rawClick of tool.clicks) {
         const click = rawClick as Record<string, unknown> | null;
@@ -148,7 +168,7 @@ export function validatePockets(raw: unknown, subject: string): string | null {
           !isFiniteNumber(click.y) ||
           (click.label !== 0 && click.label !== 1)
         ) {
-          return `${subject}: pocket tool ${tool.id}: a click needs x, y and a label of 0 or 1`;
+          return `${subject}: pocket tool ${tool.id}: A click needs an x, a y and a label of 0 or 1.`;
         }
       }
     }
@@ -156,7 +176,7 @@ export function validatePockets(raw: unknown, subject: string): string | null {
     // traced entries shipped; older plans omit them, so undefined is accepted.
     if (tool.brushStrokes !== undefined) {
       if (!Array.isArray(tool.brushStrokes)) {
-        return `${subject}: pocket tool ${tool.id}: brushStrokes must be a list`;
+        return `${subject}: pocket tool ${tool.id}: The brush strokes must be a list.`;
       }
       for (const rawStroke of tool.brushStrokes) {
         const stroke = rawStroke as Record<string, unknown> | null;
@@ -168,18 +188,18 @@ export function validatePockets(raw: unknown, subject: string): string | null {
           (stroke.radiusMm as number) <= 0 ||
           !Array.isArray(stroke.points)
         ) {
-          return `${subject}: pocket tool ${tool.id}: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list`;
+          return `${subject}: pocket tool ${tool.id}: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.`;
         }
         for (const rawPt of stroke.points as unknown[]) {
           const pt = rawPt as Record<string, unknown> | null;
           if (typeof pt !== 'object' || pt === null || !isFiniteNumber(pt.x) || !isFiniteNumber(pt.y)) {
-            return `${subject}: pocket tool ${tool.id}: a brush stroke point needs x and y`;
+            return `${subject}: pocket tool ${tool.id}: A brush stroke point needs an x and a y.`;
           }
         }
       }
     }
     if (!Array.isArray(tool.fingerHoles)) {
-      return `${subject}: pocket tool ${tool.id}: fingerHoles must be a list`;
+      return `${subject}: pocket tool ${tool.id}: The finger holes must be a list.`;
     }
     for (const rawHole of tool.fingerHoles) {
       const hole = rawHole as Record<string, unknown> | null;
@@ -191,26 +211,26 @@ export function validatePockets(raw: unknown, subject: string): string | null {
         !isFiniteNumber(hole.diameterMm) ||
         hole.diameterMm <= 0
       ) {
-        return `${subject}: pocket tool ${tool.id}: a finger hole needs x, y and a diameterMm above 0`;
+        return `${subject}: pocket tool ${tool.id}: A finger hole needs an x, a y and a diameter above 0 mm.`;
       }
       if (
         (hole.x2 !== undefined || hole.y2 !== undefined) &&
         (!isFiniteNumber(hole.x2) || !isFiniteNumber(hole.y2))
       ) {
-        return `${subject}: pocket tool ${tool.id}: an elongated finger hole needs both x2 and y2 as numbers`;
+        return `${subject}: pocket tool ${tool.id}: An elongated finger hole needs its second point, so x2 and y2 must both be numbers.`;
       }
     }
   }
   if (!Array.isArray(pockets.placements)) {
-    return `${subject}: pockets is missing its placements list`;
+    return `${subject}: The tool pockets are missing their list of placements.`;
   }
   for (const rawPlacement of pockets.placements) {
     const placement = rawPlacement as Record<string, unknown> | null;
     if (typeof placement !== 'object' || placement === null) {
-      return `${subject}: a pocket placement is not an object`;
+      return `${subject}: A pocket placement is not an object.`;
     }
     if (typeof placement.toolId !== 'string' || !toolIds.has(placement.toolId)) {
-      return `${subject}: a pocket placement refers to a tool that is not in the pockets`;
+      return `${subject}: A pocket placement refers to a tool that is not in the pockets.`;
     }
     if (
       !isFiniteNumber(placement.xMm) ||
@@ -218,7 +238,7 @@ export function validatePockets(raw: unknown, subject: string): string | null {
       !isFiniteNumber(placement.pocketDepthMm) ||
       placement.pocketDepthMm <= 0
     ) {
-      return `${subject}: a pocket placement needs xMm, yMm and a pocketDepthMm above 0`;
+      return `${subject}: A pocket placement needs an x, a y and a pocket depth above 0 mm.`;
     }
   }
   return null;
@@ -275,6 +295,158 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
   return { tools, placements };
 }
 
+/** The six placement fields, in the order the validator reports them. */
+const PLACEMENT_KEYS = ['xMm', 'yMm', 'zMm', 'rotXDeg', 'rotYDeg', 'rotZDeg'] as const;
+
+/**
+ * Validates a raw value as a cutout bin's list of carved models. Returns null
+ * when it is valid, otherwise a message naming the first offending field.
+ *
+ * The bin's own gridX and gridY are taken because the clearance ceiling
+ * depends on them: a clearance dilates the model in every direction, so the
+ * largest one a bin can hold is half its narrowest interior dimension. The
+ * message then names the limit this bin actually allows rather than saying the
+ * value is merely wrong, as the pocket depth message does.
+ *
+ * The model's triangles are deliberately not part of the plan: only the
+ * metadata is, so a reader holding the JSON without the bytes can still list,
+ * describe and validate the bin.
+ */
+export function validateCutoutModels(
+  raw: unknown,
+  subject: string,
+  gridX: number,
+  gridY: number,
+): string | null {
+  if (!Array.isArray(raw)) {
+    return `${subject}: The models must be a list.`;
+  }
+  const modelIds = new Set<string>();
+  for (const rawModel of raw) {
+    if (typeof rawModel !== 'object' || rawModel === null || Array.isArray(rawModel)) {
+      return `${subject}: A cutout model is not an object.`;
+    }
+    const model = rawModel as Record<string, unknown>;
+    if (typeof model.id !== 'string' || model.id.length === 0) {
+      return `${subject}: A cutout model is missing its id.`;
+    }
+    const id = model.id;
+    if (modelIds.has(id)) {
+      return `${subject}: The cutout model id ${id} appears twice.`;
+    }
+    modelIds.add(id);
+    if (typeof model.name !== 'string') {
+      return `${subject}: cutout model ${id}: The model name must be text.`;
+    }
+    if (typeof model.modelSourceId !== 'string' || model.modelSourceId.length === 0) {
+      return `${subject}: cutout model ${id}: The model source id must be text that is not empty.`;
+    }
+    if (!isPositiveInteger(model.triangleCount, 1)) {
+      return `${subject}: cutout model ${id}: The triangle count must be a whole number of at least 1.`;
+    }
+    if (model.triangleCount > MAX_TRIANGLES) {
+      return `${subject}: cutout model ${id}: The triangle count must not exceed ${MAX_TRIANGLES}.`;
+    }
+    // unitScale, sizeMm, clearanceMm, sweepEnabled and draftAngleDeg are
+    // accepted as absent and defaulted on pick, so a plan written before each
+    // of them existed still loads.
+    if (model.unitScale !== undefined) {
+      if (!isFiniteNumber(model.unitScale) || model.unitScale <= 0) {
+        return `${subject}: cutout model ${id}: The unit scale must be a number greater than 0.`;
+      }
+    }
+    if (model.sizeMm !== undefined) {
+      const size = model.sizeMm as Record<string, unknown> | null;
+      if (
+        typeof size !== 'object' ||
+        size === null ||
+        !isFiniteNumber(size.x) ||
+        !isFiniteNumber(size.y) ||
+        !isFiniteNumber(size.z)
+      ) {
+        return `${subject}: cutout model ${id}: The model size needs a finite x, y and z in mm.`;
+      }
+    }
+    const placement = model.placement as Record<string, unknown> | null | undefined;
+    if (typeof placement !== 'object' || placement === null || Array.isArray(placement)) {
+      return `${subject}: cutout model ${id}: The placement must be an object.`;
+    }
+    for (const key of PLACEMENT_KEYS) {
+      if (!isFiniteNumber(placement[key])) {
+        return `${subject}: cutout model ${id}: The placement value ${key} must be a number.`;
+      }
+    }
+    if (model.clearanceMm !== undefined) {
+      if (!isFiniteNumber(model.clearanceMm) || model.clearanceMm < 0) {
+        return `${subject}: cutout model ${id}: The clearance must be a number of at least 0 mm.`;
+      }
+      const limit = maxClearanceMm(gridX, gridY);
+      if (model.clearanceMm > limit) {
+        return (
+          `${subject}: cutout model ${id}: The clearance is ${model.clearanceMm} mm, but a bin of ` +
+          `${gridX} by ${gridY} grid units allows at most ${limit} mm.`
+        );
+      }
+    }
+    if (model.sweepEnabled !== undefined && typeof model.sweepEnabled !== 'boolean') {
+      return `${subject}: cutout model ${id}: The sweep option must be true or false.`;
+    }
+    if (
+      model.draftAngleDeg !== undefined &&
+      (typeof model.draftAngleDeg !== 'number' ||
+        !isDraftAngleDegValid(model.draftAngleDeg))
+    ) {
+      return (
+        `${subject}: cutout model ${id}: The draft angle must be a number from 0 ` +
+        'up to but not including 90 degrees.'
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Copies only the known CutoutModel fields from a validated raw bin. The
+ * fields that were added after the first cutout bins could be written default
+ * here: the clearance to the shared default, the unit scale to 1 (which is
+ * exactly what a plan written before the field existed meant, since it
+ * described a model already treated as millimetres), the size to zeroes,
+ * which the next generation recomputes from the model itself, and the sweep
+ * to off with a 0 degree draft, which reproduces the exact pockets an older
+ * plan described.
+ */
+export function pickCutoutModels(raw: Record<string, unknown>): CutoutModel[] {
+  return (raw.models as Record<string, unknown>[]).map((model): CutoutModel => {
+    const placement = model.placement as Record<string, number>;
+    const size = model.sizeMm as { x: number; y: number; z: number } | undefined;
+    const picked: ModelPlacement = {
+      xMm: placement.xMm,
+      yMm: placement.yMm,
+      zMm: placement.zMm,
+      rotXDeg: placement.rotXDeg,
+      rotYDeg: placement.rotYDeg,
+      rotZDeg: placement.rotZDeg,
+    };
+    return {
+      id: model.id as string,
+      name: model.name as string,
+      modelSourceId: model.modelSourceId as string,
+      triangleCount: model.triangleCount as number,
+      unitScale: (model.unitScale as number | undefined) ?? 1,
+      sizeMm:
+        size !== undefined ? { x: size.x, y: size.y, z: size.z } : { x: 0, y: 0, z: 0 },
+      placement: picked,
+      clearanceMm: (model.clearanceMm as number | undefined) ?? DEFAULT_CUTOUT_CLEARANCE_MM,
+      // Absent means the plan predates the sweep, and its bins were designed
+      // with exact pockets: off reproduces exactly the bins it described. A
+      // freshly imported model defaults to on instead, but that decision
+      // belongs to the import flow, not to the loader.
+      sweepEnabled: (model.sweepEnabled as boolean | undefined) ?? false,
+      draftAngleDeg: (model.draftAngleDeg as number | undefined) ?? DEFAULT_DRAFT_ANGLE_DEG,
+    };
+  });
+}
+
 const CORNER_KEYS = ['tl', 'tr', 'br', 'bl'] as const;
 
 /**
@@ -286,20 +458,20 @@ const CORNER_KEYS = ['tl', 'tr', 'br', 'bl'] as const;
 export function validateTraceSource(raw: Record<string, unknown>, subject: string): string | null {
   if (raw.traceSourceId !== undefined) {
     if (typeof raw.traceSourceId !== 'string' || raw.traceSourceId.length === 0) {
-      return `${subject}: traceSourceId must be a non-empty string`;
+      return `${subject}: The trace source id must be text that is not empty.`;
     }
   }
   if (raw.paper !== undefined) {
     if (typeof raw.paper !== 'object' || raw.paper === null || Array.isArray(raw.paper)) {
-      return `${subject}: paper must be an object`;
+      return `${subject}: The paper must be an object.`;
     }
     const paper = raw.paper as Record<string, unknown>;
     if (paper.kind !== 'a4' && paper.kind !== 'letter') {
-      return `${subject}: paper kind must be a4 or letter`;
+      return `${subject}: The paper kind must be a4 or letter.`;
     }
     const corners = paper.corners as Record<string, unknown> | null | undefined;
     if (typeof corners !== 'object' || corners === null || Array.isArray(corners)) {
-      return `${subject}: paper corners must be an object`;
+      return `${subject}: The paper corners must be an object.`;
     }
     for (const key of CORNER_KEYS) {
       const corner = corners[key] as Record<string, unknown> | null | undefined;
@@ -309,7 +481,7 @@ export function validateTraceSource(raw: Record<string, unknown>, subject: strin
         !isFiniteNumber(corner.x) ||
         !isFiniteNumber(corner.y)
       ) {
-        return `${subject}: paper corner ${key} needs x and y coordinates`;
+        return `${subject}: The paper corner ${key} needs an x and a y coordinate.`;
       }
     }
   }
@@ -343,24 +515,24 @@ const HEAD_TYPE_SET: ReadonlySet<string> = new Set<string>(HEAD_TYPES);
  */
 export function validateScrew(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return `${subject}: screw must be an object`;
+    return `${subject}: The screw must be an object.`;
   }
   const screw = raw as Record<string, unknown>;
   if (typeof screw.thread !== 'string' || screw.thread.length === 0) {
-    return `${subject}: screw thread must be a non-empty string`;
+    return `${subject}: The screw thread must be text that is not empty.`;
   }
   if (screw.lengthMm !== null && !isPositiveInteger(screw.lengthMm, 1)) {
-    return `${subject}: screw lengthMm must be an integer of at least 1 or null`;
+    return `${subject}: The screw length must be a whole number of at least 1 mm, or null.`;
   }
   if (screw.head !== null && (typeof screw.head !== 'string' || !HEAD_TYPE_SET.has(screw.head))) {
-    return `${subject}: screw head must be a known head type or null`;
+    return `${subject}: The screw head must be a known head type, or null.`;
   }
   if (
     screw.enteredLengthText !== null &&
     screw.enteredLengthText !== undefined &&
     typeof screw.enteredLengthText !== 'string'
   ) {
-    return `${subject}: screw enteredLengthText must be a string or null`;
+    return `${subject}: The screw length as it was typed must be text, or null.`;
   }
   return null;
 }
@@ -382,17 +554,17 @@ function pickScrew(raw: Record<string, unknown>): ScrewSpec {
 /** Validates the LabelContent fields on a raw object. */
 function validateContent(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return `${subject}: label content must be an object`;
+    return `${subject}: The label content must be an object.`;
   }
   const content = raw as Record<string, unknown>;
   if (typeof content.text !== 'string') {
-    return `${subject}: label text must be a string`;
+    return `${subject}: The first label line must be text.`;
   }
   if (typeof content.text2 !== 'string') {
-    return `${subject}: label text2 must be a string`;
+    return `${subject}: The second label line must be text.`;
   }
   if (content.icon !== null && typeof content.icon !== 'string') {
-    return `${subject}: label icon must be a string or null`;
+    return `${subject}: The label icon must be text, or null.`;
   }
   return null;
 }
@@ -415,7 +587,7 @@ function pickContent(raw: Record<string, unknown>): LabelContent {
  */
 function validateWallList(raw: unknown, subject: string): string | null {
   if (!Array.isArray(raw)) {
-    return `${subject}: walls must be a list`;
+    return `${subject}: The divider walls must be a list.`;
   }
   for (const rawWall of raw) {
     const wall = rawWall as Record<string, unknown> | null;
@@ -427,7 +599,7 @@ function validateWallList(raw: unknown, subject: string): string | null {
       !isFiniteNumber(wall.x2) ||
       !isFiniteNumber(wall.y2)
     ) {
-      return `${subject}: a divider wall needs finite x1, y1, x2 and y2`;
+      return `${subject}: A divider wall needs finite x1, y1, x2 and y2 coordinates.`;
     }
   }
   return null;
@@ -456,20 +628,20 @@ function pickWalls(raw: Record<string, unknown>): DividerWall[] {
 /** Validates the BinEnvelope fields plus the origin-specific bin fields. */
 function validateBin(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return `${subject}: bin must be an object`;
+    return `${subject}: The bin must be an object.`;
   }
   const bin = raw as Record<string, unknown>;
   if (!isPositiveInteger(bin.gridX, 1)) {
-    return `${subject}: gridX must be an integer of at least 1`;
+    return `${subject}: The bin width must be a whole number of at least 1 grid unit.`;
   }
   if (!isPositiveInteger(bin.gridY, 1)) {
-    return `${subject}: gridY must be an integer of at least 1`;
+    return `${subject}: The bin depth must be a whole number of at least 1 grid unit.`;
   }
   if (!isPositiveInteger(bin.heightUnits, 2)) {
-    return `${subject}: heightUnits must be an integer of at least 2`;
+    return `${subject}: The bin height must be a whole number of at least 2 height units.`;
   }
   if (typeof bin.magnetHoles !== 'boolean') {
-    return `${subject}: magnetHoles must be true or false`;
+    return `${subject}: The magnet holes setting must be true or false.`;
   }
   if (bin.origin === 'manual' || bin.origin === 'screw') {
     // Version 5 carries walls; versions 1 to 4 carry dividerCountX/Y. Accept
@@ -479,10 +651,10 @@ function validateBin(raw: unknown, subject: string): string | null {
       if (wallProblem !== null) return wallProblem;
     } else {
       if (bin.dividerCountX !== undefined && !isPositiveInteger(bin.dividerCountX, 0)) {
-        return `${subject}: dividerCountX must be an integer of at least 0`;
+        return `${subject}: The number of dividers across the bin width must be a whole number of at least 0.`;
       }
       if (bin.dividerCountY !== undefined && !isPositiveInteger(bin.dividerCountY, 0)) {
-        return `${subject}: dividerCountY must be an integer of at least 0`;
+        return `${subject}: The number of dividers across the bin depth must be a whole number of at least 0.`;
       }
     }
     if (bin.origin === 'screw') {
@@ -496,13 +668,23 @@ function validateBin(raw: unknown, subject: string): string | null {
       bin.dividerCountX !== undefined ||
       bin.dividerCountY !== undefined
     ) {
-      return `${subject}: a traced bin cannot have divider walls`;
+      return `${subject}: A traced bin cannot have divider walls.`;
     }
     const pocketsProblem = validatePockets(bin.pockets, subject);
     if (pocketsProblem !== null) return pocketsProblem;
     return validateTraceSource(bin, subject);
   }
-  return `${subject}: bin origin must be manual, screw or traced`;
+  if (bin.origin === 'cutout') {
+    if (
+      bin.walls !== undefined ||
+      bin.dividerCountX !== undefined ||
+      bin.dividerCountY !== undefined
+    ) {
+      return `${subject}: A cutout bin cannot have divider walls.`;
+    }
+    return validateCutoutModels(bin.models, subject, bin.gridX, bin.gridY);
+  }
+  return `${subject}: The bin origin must be manual, screw, traced or cutout.`;
 }
 
 /** Copies only the known Bin fields from a validated raw object. */
@@ -521,6 +703,9 @@ function pickBin(raw: Record<string, unknown>): Bin {
     };
     assignTraceSource(bin, raw);
     return bin;
+  }
+  if (raw.origin === 'cutout') {
+    return { ...envelope, origin: 'cutout', models: pickCutoutModels(raw) };
   }
   const walls = pickWalls(raw);
   if (raw.origin === 'screw') {
@@ -581,14 +766,14 @@ function binAloneProduct(
 /** Validates a raw value as a Product. */
 export function validateProduct(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return `${subject}: product must be an object`;
+    return `${subject}: The product must be an object.`;
   }
   const product = raw as Record<string, unknown>;
   if (product.kind === 'bin') {
     // labelSlot was added after the first version-3 plans shipped; older
     // files simply omit it, so undefined is accepted and means slotted.
     if (product.labelSlot !== undefined && typeof product.labelSlot !== 'boolean') {
-      return `${subject}: labelSlot must be true or false`;
+      return `${subject}: The label slot setting must be true or false.`;
     }
     return validateBin(product.bin, subject);
   }
@@ -598,16 +783,16 @@ export function validateProduct(raw: unknown, subject: string): string | null {
     // fused was added after the first binWithInsert plans shipped; older files
     // omit it, so undefined is accepted and means the swappable insert.
     if (product.fused !== undefined && typeof product.fused !== 'boolean') {
-      return `${subject}: fused must be true or false`;
+      return `${subject}: The fused setting must be true or false.`;
     }
     return validateContent(product.insert, subject);
   }
   if (product.kind === 'insert') {
     if (product.origin !== 'manual' && product.origin !== 'screw') {
-      return `${subject}: an insert product's origin must be manual or screw`;
+      return `${subject}: An insert product's origin must be manual or screw.`;
     }
     if (!isPositiveInteger(product.cells, 1)) {
-      return `${subject}: cells must be an integer of at least 1`;
+      return `${subject}: The insert width must be a whole number of at least 1 grid unit.`;
     }
     const contentProblem = validateContent(product.content, subject);
     if (contentProblem !== null) return contentProblem;
@@ -616,7 +801,7 @@ export function validateProduct(raw: unknown, subject: string): string | null {
     }
     return null;
   }
-  return `${subject}: product kind must be bin, binWithInsert or insert`;
+  return `${subject}: The product kind must be bin, binWithInsert or insert.`;
 }
 
 /**
@@ -662,21 +847,21 @@ export function pickProduct(
  */
 export function validateEntry(raw: unknown): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return 'an entry is not an object';
+    return 'An entry is not an object.';
   }
   const entry = raw as Record<string, unknown>;
   if (typeof entry.id !== 'string' || entry.id.length === 0) {
-    return 'an entry is missing its id';
+    return 'An entry is missing its id.';
   }
   const id = entry.id;
   if (!isPositiveInteger(entry.quantity, 1)) {
-    return `entry ${id}: quantity must be an integer of at least 1`;
+    return `entry ${id}: The quantity must be a whole number of at least 1.`;
   }
   if (!isIsoTimestamp(entry.createdAt)) {
-    return `entry ${id}: createdAt must be an ISO 8601 timestamp`;
+    return `entry ${id}: The creation time must be an ISO 8601 timestamp.`;
   }
   if (entry.notes !== undefined && typeof entry.notes !== 'string') {
-    return `entry ${id}: notes must be a string`;
+    return `entry ${id}: The notes must be text.`;
   }
   return validateProduct(entry.product, `entry ${id}`);
 }
@@ -703,37 +888,37 @@ function pickEntry(raw: Record<string, unknown>, warnings: string[]): QueueEntry
  */
 export function validateBatch(raw: unknown): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return 'a batch is not an object';
+    return 'A batch is not an object.';
   }
   const batch = raw as Record<string, unknown>;
   if (typeof batch.id !== 'string' || batch.id.length === 0) {
-    return 'a batch is missing its id';
+    return 'A batch is missing its id.';
   }
   const id = batch.id;
   if (typeof batch.name !== 'string') {
-    return `batch ${id}: name must be a string`;
+    return `batch ${id}: The batch name must be text.`;
   }
   if (!isIsoTimestamp(batch.createdAt)) {
-    return `batch ${id}: createdAt must be an ISO 8601 timestamp`;
+    return `batch ${id}: The creation time must be an ISO 8601 timestamp.`;
   }
   if (!Array.isArray(batch.items)) {
-    return `batch ${id}: items must be a list`;
+    return `batch ${id}: The items must be a list.`;
   }
   for (const rawItem of batch.items) {
     if (typeof rawItem !== 'object' || rawItem === null || Array.isArray(rawItem)) {
-      return `batch ${id}: an item is not an object`;
+      return `batch ${id}: An item is not an object.`;
     }
     const item = rawItem as Record<string, unknown>;
     if (typeof item.id !== 'string' || item.id.length === 0) {
-      return `batch ${id}: an item is missing its id`;
+      return `batch ${id}: An item is missing its id.`;
     }
     const productProblem = validateProduct(item.product, `batch ${id}: item ${item.id}`);
     if (productProblem !== null) return productProblem;
     if (!isPositiveInteger(item.count, 1)) {
-      return `batch ${id}: item ${item.id}: count must be an integer of at least 1`;
+      return `batch ${id}: item ${item.id}: The count must be a whole number of at least 1.`;
     }
     if (item.sourceEntryId !== undefined && typeof item.sourceEntryId !== 'string') {
-      return `batch ${id}: item ${item.id}: sourceEntryId must be a string`;
+      return `batch ${id}: item ${item.id}: The source entry id must be text.`;
     }
   }
   return null;
@@ -772,31 +957,31 @@ function pickBatch(raw: Record<string, unknown>, warnings: string[]): PrintBatch
 /** Validates the flat design-parameter fields of a version-1/2 entry. */
 function validateLegacyParams(entry: Record<string, unknown>, subject: string): string | null {
   if (!isPositiveInteger(entry.gridX, 1)) {
-    return `${subject}: gridX must be an integer of at least 1`;
+    return `${subject}: The bin width must be a whole number of at least 1 grid unit.`;
   }
   if (!isPositiveInteger(entry.gridY, 1)) {
-    return `${subject}: gridY must be an integer of at least 1`;
+    return `${subject}: The bin depth must be a whole number of at least 1 grid unit.`;
   }
   if (!isPositiveInteger(entry.heightUnits, 2)) {
-    return `${subject}: heightUnits must be an integer of at least 2`;
+    return `${subject}: The bin height must be a whole number of at least 2 height units.`;
   }
   if (typeof entry.magnetHoles !== 'boolean') {
-    return `${subject}: magnetHoles must be true or false`;
+    return `${subject}: The magnet holes setting must be true or false.`;
   }
   if (entry.dividerCountX !== undefined && !isPositiveInteger(entry.dividerCountX, 0)) {
-    return `${subject}: dividerCountX must be an integer of at least 0`;
+    return `${subject}: The number of dividers across the bin width must be a whole number of at least 0.`;
   }
   if (entry.dividerCountY !== undefined && !isPositiveInteger(entry.dividerCountY, 0)) {
-    return `${subject}: dividerCountY must be an integer of at least 0`;
+    return `${subject}: The number of dividers across the bin depth must be a whole number of at least 0.`;
   }
   if (typeof entry.labelText !== 'string') {
-    return `${subject}: labelText must be a string`;
+    return `${subject}: The first label line must be text.`;
   }
   if (entry.labelText2 !== undefined && typeof entry.labelText2 !== 'string') {
-    return `${subject}: labelText2 must be a string`;
+    return `${subject}: The second label line must be text.`;
   }
   if (entry.labelIcon !== null && typeof entry.labelIcon !== 'string') {
-    return `${subject}: labelIcon must be a string or null`;
+    return `${subject}: The label icon must be text, or null.`;
   }
   if (
     entry.labelMode !== undefined &&
@@ -805,7 +990,7 @@ function validateLegacyParams(entry: Record<string, unknown>, subject: string): 
     entry.labelMode !== 'slot-insert' &&
     entry.labelMode !== 'insert'
   ) {
-    return `${subject}: labelMode must be embossed, slot, slot-insert or insert`;
+    return `${subject}: The label mode must be embossed, slot, slot-insert or insert.`;
   }
   return null;
 }
@@ -825,11 +1010,11 @@ function resolveLegacyKind(entry: Record<string, unknown>): 'manual' | 'screw' |
 /** Validates one raw object as a version-1/2 flat entry. */
 function validateLegacyEntry(raw: unknown): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return 'an entry is not an object';
+    return 'An entry is not an object.';
   }
   const entry = raw as Record<string, unknown>;
   if (typeof entry.id !== 'string' || entry.id.length === 0) {
-    return 'an entry is missing its id';
+    return 'An entry is missing its id.';
   }
   const id = entry.id;
   if (
@@ -838,30 +1023,30 @@ function validateLegacyEntry(raw: unknown): string | null {
     entry.kind !== 'screw' &&
     entry.kind !== 'traced'
   ) {
-    return `entry ${id}: kind must be manual, screw or traced`;
+    return `entry ${id}: The entry kind must be manual, screw or traced.`;
   }
   const paramsProblem = validateLegacyParams(entry, `entry ${id}`);
   if (paramsProblem !== null) return paramsProblem;
   if (!isPositiveInteger(entry.quantity, 1)) {
-    return `entry ${id}: quantity must be an integer of at least 1`;
+    return `entry ${id}: The quantity must be a whole number of at least 1.`;
   }
   if (!isIsoTimestamp(entry.createdAt)) {
-    return `entry ${id}: createdAt must be an ISO 8601 timestamp`;
+    return `entry ${id}: The creation time must be an ISO 8601 timestamp.`;
   }
   if (entry.notes !== undefined && typeof entry.notes !== 'string') {
-    return `entry ${id}: notes must be a string`;
+    return `entry ${id}: The notes must be text.`;
   }
   const kind = resolveLegacyKind(entry);
   if (kind === 'traced') {
     if (entry.pockets === undefined) {
-      return `entry ${id}: a traced entry must have pockets`;
+      return `entry ${id}: A traced entry must have tool pockets.`;
     }
     const pocketsProblem = validatePockets(entry.pockets, `entry ${id}`);
     if (pocketsProblem !== null) return pocketsProblem;
     return validateTraceSource(entry, `entry ${id}`);
   }
   if (entry.pockets !== undefined) {
-    return `entry ${id}: only a traced entry can have pockets`;
+    return `entry ${id}: Only a traced entry can have tool pockets.`;
   }
   if (kind === 'screw') {
     return validateScrew(entry.screw, `entry ${id}`);
@@ -964,32 +1149,32 @@ function pickLegacyEntry(raw: Record<string, unknown>, warnings: string[]): Queu
 /** Validates one raw object as a version-2 PrintBatch with flat item params. */
 function validateLegacyBatch(raw: unknown): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return 'a batch is not an object';
+    return 'A batch is not an object.';
   }
   const batch = raw as Record<string, unknown>;
   if (typeof batch.id !== 'string' || batch.id.length === 0) {
-    return 'a batch is missing its id';
+    return 'A batch is missing its id.';
   }
   const id = batch.id;
   if (typeof batch.name !== 'string') {
-    return `batch ${id}: name must be a string`;
+    return `batch ${id}: The batch name must be text.`;
   }
   if (!isIsoTimestamp(batch.createdAt)) {
-    return `batch ${id}: createdAt must be an ISO 8601 timestamp`;
+    return `batch ${id}: The creation time must be an ISO 8601 timestamp.`;
   }
   if (!Array.isArray(batch.items)) {
-    return `batch ${id}: items must be a list`;
+    return `batch ${id}: The items must be a list.`;
   }
   for (const rawItem of batch.items) {
     if (typeof rawItem !== 'object' || rawItem === null || Array.isArray(rawItem)) {
-      return `batch ${id}: an item is not an object`;
+      return `batch ${id}: An item is not an object.`;
     }
     const item = rawItem as Record<string, unknown>;
     if (typeof item.id !== 'string' || item.id.length === 0) {
-      return `batch ${id}: an item is missing its id`;
+      return `batch ${id}: An item is missing its id.`;
     }
     if (typeof item.params !== 'object' || item.params === null || Array.isArray(item.params)) {
-      return `batch ${id}: item ${item.id}: params must be an object`;
+      return `batch ${id}: item ${item.id}: The bin parameters must be an object.`;
     }
     const paramsProblem = validateLegacyParams(
       item.params as Record<string, unknown>,
@@ -997,10 +1182,10 @@ function validateLegacyBatch(raw: unknown): string | null {
     );
     if (paramsProblem !== null) return paramsProblem;
     if (!isPositiveInteger(item.count, 1)) {
-      return `batch ${id}: item ${item.id}: count must be an integer of at least 1`;
+      return `batch ${id}: item ${item.id}: The count must be a whole number of at least 1.`;
     }
     if (item.sourceEntryId !== undefined && typeof item.sourceEntryId !== 'string') {
-      return `batch ${id}: item ${item.id}: sourceEntryId must be a string`;
+      return `batch ${id}: item ${item.id}: The source entry id must be text.`;
     }
     if (item.pockets !== undefined) {
       const pocketsProblem = validatePockets(item.pockets, `batch ${id}: item ${item.id}`);
@@ -1100,10 +1285,13 @@ export function parsePlanFile(text: string): PlanParseResult {
     return { ok: false, error: 'The plan is missing its entries list.' };
   }
   // Versions 1 and 2 carry flat design fields per entry and convert through
-  // the legacy path. Versions 3, 4 and 5 already have the current product/bin
+  // the legacy path. Versions 3 to 7 already have the current product/bin
   // shape and read through the current path; versions 3 and 4 carry divider
-  // counts (converted to walls on pick) where version 5 carries walls, and
-  // the validators and pickers accept either.
+  // counts (converted to walls on pick) where versions 5 and up carry walls,
+  // and the validators and pickers accept either. Version 6 adds cutout-origin
+  // bins, which no earlier version can contain, and version 7 adds the
+  // per-model sweep fields, absent in earlier versions and defaulted to off on
+  // pick, so nothing else changes.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];
@@ -1111,7 +1299,7 @@ export function parsePlanFile(text: string): PlanParseResult {
   for (const item of envelope.entries) {
     const problem = legacy ? validateLegacyEntry(item) : validateEntry(item);
     if (problem !== null) {
-      return { ok: false, error: `The plan is invalid: ${problem}.` };
+      return { ok: false, error: `The plan is invalid: ${problem}` };
     }
     const rawEntry = item as Record<string, unknown>;
     if (version === 1 && rawEntry.status === 'printed') continue;
@@ -1131,7 +1319,7 @@ export function parsePlanFile(text: string): PlanParseResult {
     for (const item of envelope.batches) {
       const problem = legacy ? validateLegacyBatch(item) : validateBatch(item);
       if (problem !== null) {
-        return { ok: false, error: `The plan is invalid: ${problem}.` };
+        return { ok: false, error: `The plan is invalid: ${problem}` };
       }
       const batch = legacy
         ? pickLegacyBatch(item as Record<string, unknown>, warnings)

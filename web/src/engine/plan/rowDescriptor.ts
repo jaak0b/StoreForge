@@ -1,7 +1,10 @@
+import { describeMissingModels, missingCutoutModels } from './missingModels';
 import {
   assertNever,
+  binOf,
   type Bin,
   type BinEnvelope,
+  type CutoutBin,
   type ManualBin,
   type Product,
   type TracedBin,
@@ -27,6 +30,13 @@ export interface RowDescriptor {
   iconName: string | null;
   /** The physical description: kind, size, origin and one detail. */
   caption: string;
+  /**
+   * A sentence naming the model files this device does not have, so a bin
+   * imported from another machine states what it needs without being opened.
+   * Empty when nothing is missing, and empty whenever the caller did not say
+   * which models are stored (an unread model store must not read as missing).
+   */
+  missingModels: string;
 }
 
 /** Title of a row whose insert carries no text to name it by. */
@@ -48,31 +58,57 @@ function sizeToken(bin: BinEnvelope): string {
   return `${bin.gridX}×${bin.gridY}×${bin.heightUnits}`;
 }
 
-/** The one interior detail a bin's caption carries, or an empty token. */
+/**
+ * The one interior detail a bin's caption carries, or an empty token. Switched
+ * over every origin rather than tested for one: an origin whose interior is
+ * described by something other than divider walls must be named here, or it
+ * would read another origin's field.
+ */
 function detailToken(bin: Bin): string {
-  if (bin.origin === 'traced') {
-    const pockets = bin.pockets.placements.length;
-    return pockets === 0 ? '' : countPhrase(pockets, 'pocket');
+  switch (bin.origin) {
+    case 'traced': {
+      const pockets = bin.pockets.placements.length;
+      return pockets === 0 ? '' : countPhrase(pockets, 'pocket');
+    }
+    case 'cutout': {
+      const cutouts = bin.models.length;
+      return cutouts === 0 ? '' : countPhrase(cutouts, 'cutout');
+    }
+    case 'manual':
+    case 'screw': {
+      const dividers = bin.walls.length;
+      return dividers === 0 ? '' : countPhrase(dividers, 'divider');
+    }
+    default:
+      return assertNever(bin);
   }
-  const dividers = bin.walls.length;
-  return dividers === 0 ? '' : countPhrase(dividers, 'divider');
 }
 
 /**
  * The title of a bin ordered without an insert, synthesized from the bin's own
  * fields. There is no label to name the row by, so the row is named by what it
- * actually is.
+ * actually is. Exhaustive over the origin for the same reason detailToken is.
  */
-function synthesizedTitle(bin: ManualBin | TracedBin): string {
-  if (bin.origin === 'traced') {
-    const pockets = bin.pockets.placements.length;
-    return pockets === 0 ? 'Traced bin' : `Traced bin, ${countPhrase(pockets, 'pocket')}`;
+function synthesizedTitle(bin: ManualBin | TracedBin | CutoutBin): string {
+  switch (bin.origin) {
+    case 'traced': {
+      const pockets = bin.pockets.placements.length;
+      return pockets === 0 ? 'Traced bin' : `Traced bin, ${countPhrase(pockets, 'pocket')}`;
+    }
+    case 'cutout': {
+      const cutouts = bin.models.length;
+      return cutouts === 0 ? 'Cutout bin' : `Cutout bin, ${countPhrase(cutouts, 'cutout')}`;
+    }
+    case 'manual': {
+      const parts = ['Bin'];
+      const dividers = bin.walls.length;
+      if (dividers > 0) parts.push(countPhrase(dividers, 'divider'));
+      if (bin.magnetHoles) parts.push('magnet holes');
+      return parts.join(', ');
+    }
+    default:
+      return assertNever(bin);
   }
-  const parts = ['Bin'];
-  const dividers = bin.walls.length;
-  if (dividers > 0) parts.push(countPhrase(dividers, 'divider'));
-  if (bin.magnetHoles) parts.push('magnet holes');
-  return parts.join(', ');
 }
 
 /** Joins the caption tokens in their fixed order, dropping the empty ones. */
@@ -97,9 +133,39 @@ function captionOf(product: Product): string {
   }
 }
 
-/** Describes one plan row's product as a title line and a caption line. */
-export function describeProduct(product: Product): RowDescriptor {
+/**
+ * What the row says about model files this device does not have. Exhaustive
+ * over the origin for the same reason detailToken is: an origin that comes to
+ * depend on stored blobs has to answer this question for itself.
+ */
+function missingModelsOf(bin: Bin, storedModelIds: ReadonlySet<string>): string {
+  switch (bin.origin) {
+    case 'cutout':
+      return describeMissingModels(missingCutoutModels(bin, storedModelIds));
+    case 'traced':
+    case 'manual':
+    case 'screw':
+      return '';
+    default:
+      return assertNever(bin);
+  }
+}
+
+/**
+ * Describes one plan row's product as a title line and a caption line.
+ *
+ * `storedModelIds` is the set of cutout model ids this device actually holds,
+ * which only a caller that has read the model store can know. Leaving it out
+ * means the question was never asked, and no row then claims a missing model.
+ */
+export function describeProduct(
+  product: Product,
+  storedModelIds?: ReadonlySet<string>,
+): RowDescriptor {
   const caption = captionOf(product);
+  const bin = binOf(product);
+  const missingModels =
+    storedModelIds === undefined || bin === null ? '' : missingModelsOf(bin, storedModelIds);
   if (product.kind === 'bin') {
     return {
       title: synthesizedTitle(product.bin),
@@ -107,6 +173,7 @@ export function describeProduct(product: Product): RowDescriptor {
       titlePlaceholder: false,
       iconName: null,
       caption,
+      missingModels,
     };
   }
   const content = product.kind === 'binWithInsert' ? product.insert : product.content;
@@ -117,5 +184,6 @@ export function describeProduct(product: Product): RowDescriptor {
     titlePlaceholder: !hasText,
     iconName: content.icon,
     caption,
+    missingModels,
   };
 }

@@ -21,7 +21,7 @@ const queue = useBinQueue();
 
 /** The item's title, caption and icon, from the shared row descriptor. */
 function rowOf(item: BatchItem): RowDescriptor {
-  return describeProduct(item.product);
+  return describeProduct(item.product, queue.storedModelIdSet);
 }
 
 /** The item's label icon, resolved from the descriptor's icon name. */
@@ -59,9 +59,14 @@ function commitConfirm(item: BatchItem): void {
 }
 
 // Downloads.
+// A generated bin can come back with placement warnings (a cutout model
+// sitting clear of the interior, for one). The batch file is still written,
+// so they are shown rather than dropped. The sentences name the model they are
+// about, which is what makes them readable here, where there is no model list.
 const downloading = ref(false);
 const progressText = ref('');
 const errorMessage = ref<string | null>(null);
+const downloadWarnings = ref<string[]>([]);
 
 const formats: { format: BatchFormat; title: string; detail: string }[] = [
   {
@@ -84,8 +89,9 @@ const formats: { format: BatchFormat; title: string; detail: string }[] = [
 async function download(format: BatchFormat): Promise<void> {
   downloading.value = true;
   errorMessage.value = null;
+  downloadWarnings.value = [];
   try {
-    await downloadBatch(
+    downloadWarnings.value = await downloadBatch(
       // Custom icon paths are resolved inside the worker client.
       props.batch.items.map((item) => ({
         product: item.product,
@@ -164,6 +170,17 @@ async function download(format: BatchFormat): Promise<void> {
       <v-alert v-if="errorMessage" type="error" density="compact" class="ma-2">
         {{ errorMessage }}
       </v-alert>
+      <v-alert
+        v-if="downloadWarnings.length > 0"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="ma-2"
+      >
+        <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">
+          {{ warning }}
+        </p>
+      </v-alert>
       <div
         v-for="item in batch.items"
         :key="item.id"
@@ -193,6 +210,13 @@ async function download(format: BatchFormat): Promise<void> {
           </span>
           <span class="row-caption" :title="rowOf(item).caption">
             {{ rowOf(item).caption }}
+          </span>
+          <span
+            v-if="rowOf(item).missingModels !== ''"
+            class="row-caption text-warning"
+            :title="rowOf(item).missingModels"
+          >
+            {{ rowOf(item).missingModels }}
           </span>
         </span>
         <span class="qty-badge">×{{ item.count }}</span>

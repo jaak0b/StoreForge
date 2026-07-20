@@ -1,8 +1,9 @@
 import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trace/types';
 import type { DividerWall } from '../gridfinity/dividerModel';
+import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
 
-export type { DividerWall };
+export type { DividerWall, ModelPlacement, SizeMm };
 
 /**
  * Tool pockets sunk into a bin's interior, as designed on the Tool trace tab.
@@ -131,8 +132,81 @@ export interface TracedBin extends BinEnvelope {
   paper?: TracePaper;
 }
 
+/**
+ * One imported model carved out of a cutout bin's interior. The model's
+ * triangles are not stored here: they live in this device's model store under
+ * modelSourceId, because a single 10000-triangle STL is about 665 KB as base64
+ * and the whole localStorage plan has 5 MB to work with.
+ */
+export interface CutoutModel {
+  /** Stable unique identifier within the bin. */
+  id: string;
+  /** The uploaded file's name, shown in the model list. */
+  name: string;
+  /**
+   * Key of the model's STL bytes in this device's model store. An opaque key,
+   * never a path: a plan imported from another device has the id but not the
+   * bytes, and the bin is then listed but cannot be generated until the model
+   * is uploaded again.
+   */
+  modelSourceId: string;
+  /** Triangle count as imported, for the diagnostic readout. */
+  triangleCount: number;
+  /**
+   * Multiplier taking the file's own coordinates to millimetres. STL carries
+   * no unit declaration at all, so this is the user's answer to a question the
+   * file cannot answer: 1 for a file already in mm, 25.4 for one authored in
+   * inches, 1000 for one in metres. Stored so the choice round-trips in the
+   * plan rather than having to be made again on every load.
+   */
+  unitScale: number;
+  /**
+   * Size of the model's own bounding box in mm after unitScale is applied,
+   * before any rotation.
+   */
+  sizeMm: SizeMm;
+  /** Where the model sits in the bin. */
+  placement: ModelPlacement;
+  /**
+   * How far this model's pocket is dilated beyond the model surface, in mm, as
+   * a true 3D offset. Per model, not per bin: a socket set and a wrench in one
+   * tray do not want the same fit.
+   *
+   * Deliberately a sibling of placement rather than a field inside it. A
+   * placement change is cheap (a lazy transform of a cached solid); a clearance
+   * change is expensive (it invalidates that cache and re-runs the Minkowski
+   * sum). Keeping them apart lets the difference between two model records
+   * answer whether a change was cheap or expensive with no extra bookkeeping.
+   */
+  clearanceMm: number;
+  /**
+   * Whether this model's pocket is swept straight up and out of the bin instead
+   * of carved to the exact dilated shape, so a model with an undercut can still
+   * drop in. Applied after placement rotation, so it is not part of the cached
+   * import and does not key the prepared solid.
+   */
+  sweepEnabled: boolean;
+  /**
+   * How far the swept pocket walls lean outward toward the top, in degrees. 0 is
+   * a straight vertical sweep; larger angles flare the walls for easier insertion
+   * and removal. Ignored when sweepEnabled is false.
+   */
+  draftAngleDeg: number;
+}
+
+/**
+ * A bin whose interior is carved by imported models, as designed on the Cutout
+ * bin tab. Like a traced bin it carries no divider walls: the interior is
+ * filled solid for the carve, so walls have nothing to divide.
+ */
+export interface CutoutBin extends BinEnvelope {
+  origin: 'cutout';
+  /** The models carved out of the interior. Empty means an uncarved solid interior. */
+  models: CutoutModel[];
+}
+
 /** A bin body of any origin. Discriminated by origin, naming the tab that owns its interior features. */
-export type Bin = ManualBin | ScrewBin | TracedBin;
+export type Bin = ManualBin | ScrewBin | TracedBin | CutoutBin;
 
 // ---------------------------------------------------------------------------
 // Products: what a queue row orders
@@ -152,7 +226,7 @@ export type Bin = ManualBin | ScrewBin | TracedBin;
 export interface BinProduct {
   kind: 'bin';
   /** The bin body's design parameters. */
-  bin: ManualBin | TracedBin;
+  bin: ManualBin | TracedBin | CutoutBin;
   /** Whether the body carries the empty label insert slot. */
   labelSlot: boolean;
 }
@@ -174,7 +248,7 @@ export interface BinWithInsertProduct {
    * is cut into the bin and no separate insert part is printed; instead the
    * label content is raised directly on the bin's top face at the position the
    * insert label would occupy. Absent or false keeps the swappable-insert
-   * packaging. Applies to bins of every origin (manual, screw, traced), since
+   * packaging. Applies to bins of every origin (manual, screw, traced, cutout), since
    * they all order the label through this product kind.
    */
   fused?: boolean;
@@ -219,7 +293,7 @@ export type InsertProduct = ManualInsertProduct | ScrewInsertProduct;
  * Two orthogonal axes are folded into this single discriminated union: the
  * product kind ('bin' vs 'binWithInsert' vs 'insert') and, independently,
  * the origin tab that designed the bin or sized the insert ('manual',
- * 'screw' or 'traced', carried on Bin.origin for the first two kinds and on
+ * 'screw', 'traced' or 'cutout', carried on Bin.origin for the first two kinds and on
  * the insert product itself for the third).
  */
 export type Product = BinProduct | BinWithInsertProduct | InsertProduct;
@@ -256,7 +330,7 @@ export function binOf(product: Product): Bin | null {
 }
 
 /** The origin tab of a product: the tab that created it and owns its edit. */
-export type ProductOrigin = 'manual' | 'screw' | 'traced';
+export type ProductOrigin = 'manual' | 'screw' | 'traced' | 'cutout';
 
 /**
  * Returns the origin tab of any product, for routing an edit to the tab that
@@ -345,8 +419,13 @@ export interface PrintBatch {
 
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
-  /** Envelope format version. Currently 5. */
-  version: 5;
+  /**
+   * Envelope format version. Currently 7, which is version 6 plus the per-model
+   * sweepEnabled and draftAngleDeg fields on cutout models. The change is
+   * purely additive: no field of an earlier version changes meaning, so
+   * versions 1 to 6 are read exactly as they were before, with the sweep off.
+   */
+  version: 7;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -354,4 +433,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 5;
+export const PLAN_FILE_VERSION = 7;

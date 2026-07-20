@@ -6,6 +6,7 @@ import { useApp } from '../stores/app';
 import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
 import { describeProduct } from '../engine/plan/rowDescriptor';
+import { previewBinParams } from '../engine/plan/geometry';
 import {
   originOf,
   type LabelContent,
@@ -459,20 +460,10 @@ function generatePreview(product: Product): Promise<PartMeshes> {
   if (product.kind === 'insert') {
     return generateInsert({ cells: product.cells, content: product.content });
   }
-  const bin = product.bin;
-  const fusedContent =
-    product.kind === 'binWithInsert' && product.fused ? product.insert : null;
-  return generateSlottedBin({
-    gridX: bin.gridX,
-    gridY: bin.gridY,
-    heightUnits: bin.heightUnits,
-    magnetHoles: bin.magnetHoles,
-    walls: bin.origin === 'traced' ? [] : bin.walls,
-    labelSlot: fusedContent === null && (product.kind === 'bin' ? product.labelSlot : true),
-    insert:
-      product.kind === 'binWithInsert' && !product.fused ? product.insert : null,
-    fusedLabel: fusedContent,
-  });
+  // The plan layer already derives a product's preview parameters, including
+  // which origins carry divider walls; deriving them a second time here is how
+  // the two would drift apart.
+  return generateSlottedBin(previewBinParams(product)!);
 }
 
 const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, generatePreview);

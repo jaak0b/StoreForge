@@ -5,27 +5,36 @@ import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 /**
  * Debounced live 3D preview generation for a reactive set of part
  * parameters. Regenerates in the geometry worker whenever the parameters
- * change; stale results are discarded by ticket so a slow generation never
- * overwrites a newer one. Generic over the parameter shape so the tabs can
+ * change; results display progressively by ticket: a superseded carve's
+ * meshes still display if nothing newer has displayed yet, so long waits
+ * show each completed step instead of freezing, while an older result can
+ * never overwrite a newer one. Generic over the parameter shape so the tabs can
  * preview slotted bins, pocket bins or standalone inserts with one
  * composable.
+ *
+ * Generic over the result shape too, defaulting to the two meshes. A cutout
+ * carve returns its placement warnings and its post-dilation footprints
+ * alongside the meshes, because neither can be recomputed downstream without
+ * redoing the carve, and the result type flows through rather than being
+ * flattened here. The default keeps every existing call site unchanged.
  */
-export function useBinPreview<P = SlottedBinParams>(
+export function useBinPreview<P = SlottedBinParams, R = PartMeshes>(
   params: () => P,
-  generate: (params: P) => Promise<PartMeshes> = generateSlottedBin as (
+  generate: (params: P) => Promise<R> = generateSlottedBin as unknown as (
     params: P,
-  ) => Promise<PartMeshes>,
+  ) => Promise<R>,
 ): {
-  meshes: Ref<PartMeshes | null>;
+  meshes: Ref<R | null>;
   generating: Ref<boolean>;
   errorMessage: Ref<string | null>;
 } {
-  const meshes = ref<PartMeshes | null>(null);
+  const meshes = ref<R | null>(null) as Ref<R | null>;
   const generating = ref(false);
   const errorMessage = ref<string | null>(null);
 
   let debounceHandle: ReturnType<typeof setTimeout> | null = null;
   let generationCounter = 0;
+  let displayedTicket = 0;
 
   async function regenerate(): Promise<void> {
     const ticket = ++generationCounter;
@@ -33,7 +42,10 @@ export function useBinPreview<P = SlottedBinParams>(
     errorMessage.value = null;
     try {
       const result = await generate(params());
-      if (ticket === generationCounter) meshes.value = result;
+      if (ticket > displayedTicket) {
+        displayedTicket = ticket;
+        meshes.value = result;
+      }
     } catch (error) {
       if (ticket === generationCounter) {
         errorMessage.value =

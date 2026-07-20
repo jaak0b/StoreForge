@@ -24,7 +24,7 @@ const queue = useBinQueue();
 
 /** The row's title, caption and icon, from the shared row descriptor. */
 function rowOf(entry: QueueEntry): RowDescriptor {
-  return describeProduct(entry.product);
+  return describeProduct(entry.product, queue.storedModelIdSet);
 }
 
 /** The row's label icon, resolved from the descriptor's icon name. */
@@ -93,17 +93,25 @@ function editRow(entry: QueueEntry): void {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// Per-row single-bin downloads.
+// Per-row single-bin downloads. A generated bin can come back with placement
+// warnings (a cutout model sitting clear of the interior, for one); the file
+// is still written, so they are shown rather than dropped. The sentences name
+// the model they are about, which is what makes them readable here, where
+// there is no model list beside them.
 const downloadingId = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
+const downloadWarnings = ref<string[]>([]);
 
 async function downloadRow(entry: QueueEntry, format: 'stl' | '3mf'): Promise<void> {
   downloadingId.value = entry.id;
   errorMessage.value = null;
+  downloadWarnings.value = [];
   try {
     const product = snapshotProduct(entry.product);
-    if (format === 'stl') await downloadProductStl(product);
-    else await downloadProduct3mf(product);
+    downloadWarnings.value =
+      format === 'stl'
+        ? await downloadProductStl(product)
+        : await downloadProduct3mf(product);
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : 'The download failed.';
@@ -142,6 +150,18 @@ function removeRow(entry: QueueEntry): void {
 
     <v-alert v-if="errorMessage" type="error" density="compact" class="mb-3">
       {{ errorMessage }}
+    </v-alert>
+
+    <v-alert
+      v-if="downloadWarnings.length > 0"
+      type="warning"
+      variant="tonal"
+      density="compact"
+      class="mb-3"
+    >
+      <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">
+        {{ warning }}
+      </p>
     </v-alert>
 
     <v-empty-state
@@ -190,6 +210,13 @@ function removeRow(entry: QueueEntry): void {
           </span>
           <span class="row-caption" :title="rowOf(entry).caption">
             {{ rowOf(entry).caption }}
+          </span>
+          <span
+            v-if="rowOf(entry).missingModels !== ''"
+            class="row-caption text-warning"
+            :title="rowOf(entry).missingModels"
+          >
+            {{ rowOf(entry).missingModels }}
           </span>
         </span>
         <span class="qty-badge">×{{ entry.quantity }}</span>

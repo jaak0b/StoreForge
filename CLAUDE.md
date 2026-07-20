@@ -123,6 +123,12 @@ Numbered for unambiguous reference; do not cite rule numbers in shipped source o
     empirical offset, axis "nudge", or bias correction fitted to make one particular scan's numbers look
     right: that overfits the sample and lies on the next one.
 
+13. **Exhaustive switches over union types.** Any branch on a discriminated union (`Product.kind`,
+    `Bin.origin`, `PrintablePart.part`) must handle every member explicitly and end in `assertNever`.
+    Never write an `else`, or a trailing `if`, that assumes whatever is left: it silently absorbs
+    union members added later, turning a compile error into a runtime crash or, worse, into a wrong
+    but plausible result. This binds in components exactly as it does in the engine.
+
 **Verification bar.** `npm run build` plus `npm test` green inside `web/` (CI runs the same on push).
 Manual browser checks only when the owner asks; exported 3MF must be verified in Orca Slicer by the owner
 before the export format is considered proven.

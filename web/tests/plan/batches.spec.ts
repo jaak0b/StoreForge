@@ -8,6 +8,8 @@ import {
 } from '../../src/engine/plan/batches';
 import type {
   BinPockets,
+  CutoutBin,
+  CutoutModel,
   ManualBin,
   Product,
   PrintBatch,
@@ -367,6 +369,87 @@ describe('pockets in batches', () => {
     expect(failed.entries[0].quantity).toBe(5);
     const bin = (failed.entries[1].product as { bin: TracedBin }).bin;
     expect(bin.pockets).toEqual(pockets());
+  });
+});
+
+describe('cutout models in batches', () => {
+  function model(overrides: Partial<CutoutModel> = {}): CutoutModel {
+    return {
+      id: 'm1',
+      name: 'socket-19.stl',
+      modelSourceId: 'src-1',
+      triangleCount: 14842,
+      unitScale: 1,
+      sizeMm: { x: 24, y: 24, z: 40 },
+      placement: { xMm: 3, yMm: -2, zMm: 21.75, rotXDeg: 0, rotYDeg: 90, rotZDeg: 15 },
+      clearanceMm: 0.4,
+      sweepEnabled: false,
+      draftAngleDeg: 0,
+      ...overrides,
+    };
+  }
+
+  function cutoutBin(): CutoutBin {
+    const { walls, origin, ...base } = manualBin();
+    void walls;
+    void origin;
+    return {
+      ...base,
+      origin: 'cutout',
+      models: [model(), model({ id: 'm2', name: 'socket-22.stl', modelSourceId: 'src-2', clearanceMm: 0.8 })],
+    };
+  }
+
+  function cutoutEntry(): QueueEntry {
+    return entry({ id: 'a1', product: { kind: 'bin', bin: cutoutBin(), labelSlot: true } });
+  }
+
+  function binOfItemProduct(product: Product): CutoutBin | null {
+    return product.kind === 'bin' ? (product.bin as CutoutBin) : null;
+  }
+
+  it('snapshots every model into the batch item without aliasing the entry', () => {
+    const source = cutoutEntry();
+    const result = makeBatch([source], [{ entryId: 'a1', count: 2 }]);
+    const bin = binOfItemProduct(result.batch!.items[0].product);
+    expect(bin!.origin).toBe('cutout');
+    expect(bin!.models).toEqual(cutoutBin().models);
+    bin!.models[0].placement.xMm = 99;
+    expect((source.product as { bin: CutoutBin }).bin.models[0].placement.xMm).toBe(3);
+  });
+
+  it('keeps the per-model clearances distinct through the snapshot', () => {
+    const result = makeBatch([cutoutEntry()], [{ entryId: 'a1', count: 1 }]);
+    const bin = binOfItemProduct(result.batch!.items[0].product);
+    expect(bin!.models.map((m) => m.clearanceMm)).toEqual([0.4, 0.8]);
+  });
+
+  it('recreates a failed item as a cutout entry that keeps its models', () => {
+    const made = makeBatch([cutoutEntry()], [{ entryId: 'a1', count: 5 }]);
+    const failed = failBatchItem([], made.batch!, 'item1', idFactory('new'));
+    expect(failed.entries).toHaveLength(1);
+    const bin = binOfItemProduct(failed.entries[0].product);
+    expect(bin!.origin).toBe('cutout');
+    // The whole record survives, including the model store keys the bytes are
+    // found under: losing those would export the bin as an uncarved solid.
+    expect(bin!.models).toEqual(cutoutBin().models);
+  });
+
+  it('does not merge a failed cutout item into a modelless entry with equal envelope', () => {
+    const plain = entry({ id: 'other', product: { kind: 'bin', bin: manualBin(), labelSlot: true } });
+    const made = makeBatch([cutoutEntry()], [{ entryId: 'a1', count: 5 }]);
+    const failed = failBatchItem([plain], made.batch!, 'item1', idFactory('new'));
+    expect(failed.entries).toHaveLength(2);
+    expect(failed.entries[0].quantity).toBe(5);
+    expect(binOfItemProduct(failed.entries[1].product)!.models).toEqual(cutoutBin().models);
+  });
+
+  it('two bins differing only in a model placement are different design keys', () => {
+    const moved = cutoutBin();
+    moved.models[0].placement.xMm = 12;
+    expect(productKey({ kind: 'bin', bin: cutoutBin(), labelSlot: true })).not.toBe(
+      productKey({ kind: 'bin', bin: moved, labelSlot: true }),
+    );
   });
 });
 
