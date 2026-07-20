@@ -79,6 +79,8 @@ export interface TopDownCanvas {
   currentView: () => ViewTransform;
   /** Client (pointer event) coordinates to mm in the consumer's frame. */
   clientToMm: (clientX: number, clientY: number) => MmPoint;
+  /** A screen distance in css pixels as a distance in the consumer's mm frame. */
+  cssPxToMm: (px: number) => number;
   /**
    * Pins the mapping for the duration of a drag, so the mm point under the
    * pointer never shifts while the bin resizes underneath it.
@@ -180,6 +182,23 @@ export function useTopDownCanvas(options: TopDownCanvasOptions): TopDownCanvas {
     };
   }
 
+  /**
+   * A distance on screen, in css pixels, as a distance in the consumer's mm
+   * frame. The backing store is laid out at its own pixel size and then scaled
+   * to fit the element, so the view scale alone is not the figure a css pixel
+   * is worth; this folds in that element-to-backing-store ratio, the same one
+   * clientToMm applies to a pointer position. Consumers expressing a
+   * screen-space affordance (a grab radius, a snap pull) convert it here
+   * rather than reaching for view.s and getting the ratio wrong.
+   */
+  function cssPxToMm(px: number): number {
+    const el = canvas.value;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0) return 0;
+    return (px * (el.width / rect.width)) / currentView().s;
+  }
+
   function freezeView(): void {
     frozenView = fitView();
   }
@@ -218,6 +237,7 @@ export function useTopDownCanvas(options: TopDownCanvasOptions): TopDownCanvas {
     scheduleDraw,
     currentView,
     clientToMm,
+    cssPxToMm,
     freezeView,
     releaseView,
   };

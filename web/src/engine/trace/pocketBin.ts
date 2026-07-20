@@ -21,7 +21,7 @@ import {
 import {
   buildInsertInSlotSolids,
   buildSlottedBinBody,
-  hasFusedLabel,
+  hasFusedShelf,
   labelSpecOf,
   manifoldToMeshData,
   roundedRectPolygon,
@@ -190,9 +190,10 @@ export function validatePocketLayout(
   // clear of the slot structure's full plan reach: pockets are cut from the
   // bin top down, and SLOT_REACH_DEPTH is the structure's widest plan extent
   // at every depth. A fused label stands on the same shelf at its own plan
-  // reach and needs it whole for the same reason. A bin with neither has no
+  // reach and needs it whole for the same reason, blank label or not, because
+  // the shelf occupies that strip either way. A bin with neither has no
   // such region to protect.
-  const fused = hasFusedLabel(params);
+  const fused = hasFusedShelf(params);
   const structureName = fused ? 'fused label shelf' : 'label insert slot';
   let slotStrip: CrossSection | null = null;
   if (fused || params.labelSlot !== false) {

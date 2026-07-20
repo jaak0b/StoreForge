@@ -7,6 +7,7 @@ import {
   moveWall,
   moveWallEndpoint,
   nextDefaultWall,
+  pointSegmentDistance,
   snapPoint,
   snapWall,
   segmentSegmentDistance,
@@ -215,18 +216,47 @@ describe('divider editor mutations', () => {
   });
 });
 
+/**
+ * The pull radius every snapping expectation below is read against, in mm. A
+ * real editor derives it from a fixed pixel radius and its own view scale: the
+ * divider canvas converts 8 css px into roughly 2.2 mm on a one by one bin and
+ * 4.9 mm on a three by three one, so 2 mm sits just under the range it
+ * produces. Stated once, because a magnetic assist has no meaning without the
+ * radius it acts over.
+ */
+const TOLERANCE_MM = 2;
+
 // The snapping lattice is a quarter of the 42 mm Gridfinity pitch, so a
 // snapped coordinate is a multiple of 10.5 mm, and a snapped direction is a
-// multiple of 15 degrees. Every expectation below is that hand-computed
-// ground truth written out, never rederived from the production constants.
+// multiple of 15 degrees. Snapping is magnetic: those targets attract only
+// from within TOLERANCE_MM and everything else is left exactly where it was
+// dragged. Every expectation below is hand-computed ground truth written out,
+// never rederived from the production constants.
 describe('snapping', () => {
-  const on = { enabled: true };
-  const off = { enabled: false };
+  const on = { enabled: true, toleranceMm: TOLERANCE_MM };
+  const off = { enabled: false, toleranceMm: TOLERANCE_MM };
 
-  it('rounds a point to the nearest quarter of the grid pitch', () => {
-    const p = snapPoint(11.9, -2.0, on);
+  it('attracts a point that is within reach of the quarter pitch lattice', () => {
+    const p = snapPoint(11.9, -1.7, on);
     expect(p.x).toBeCloseTo(10.5, 9);
     expect(p.y).toBeCloseTo(0, 9);
+  });
+
+  it('leaves a point between lattice lines exactly where it is', () => {
+    // 5.25 mm is the midpoint between two lattice lines, 5.25 mm from each and
+    // so far outside the 2 mm pull of either. A quantizing snap would drag it
+    // onto a line regardless and make every value in between unreachable.
+    const p = snapPoint(5.25, 16.1, on);
+    expect(p.x).toBe(5.25);
+    expect(p.y).toBe(16.1);
+  });
+
+  it('attracts each axis of a point independently', () => {
+    // X is in reach of a lattice line and Y is not, so the point is pulled
+    // onto the line and stays free along the other axis.
+    const p = snapPoint(20.4, 16.1, on);
+    expect(p.x).toBeCloseTo(21, 9);
+    expect(p.y).toBe(16.1);
   });
 
   it('rounds a near horizontal wall to exactly zero degrees', () => {
@@ -238,12 +268,16 @@ describe('snapping', () => {
     expect(snapped.y2).toBeCloseTo(0, 9);
   });
 
-  it('rounds a wall near thirty degrees to exactly thirty degrees', () => {
-    // A 21 mm wall at 28 degrees from the origin.
+  it('lets a position target outrank the angle lock', () => {
+    // A 21 mm wall at 28 degrees from the origin. Its end is 0.64 mm below the
+    // 10.5 lattice line and 2.46 mm from the 21 line, so Y is captured and X
+    // is left free. Locking to 30 degrees was also within reach here, and the
+    // two would have disagreed about where the end goes; the position target
+    // wins outright and the angle simply falls out of it, which is the rule
+    // that keeps the assists from fighting.
     const snapped = snapWall({ x1: 0, y1: 0, x2: 18.5419, y2: 9.8589 }, 2, on);
-    // 21 mm at exactly 30 degrees: 21 * cos 30 and 21 * sin 30.
-    expect(snapped.x2).toBeCloseTo(18.186533479, 6);
-    expect(snapped.y2).toBeCloseTo(10.5, 6);
+    expect(snapped.x2).toBe(18.5419);
+    expect(snapped.y2).toBeCloseTo(10.5, 9);
   });
 
   it('pivots about the endpoint that is not being dragged', () => {
@@ -251,36 +285,55 @@ describe('snapping', () => {
     // The fixed end keeps its exact coordinates, however untidy they are.
     expect(snapped.x1).toBe(-7.3);
     expect(snapped.y1).toBe(4.1);
+    // Nothing is within 2 mm of the dragged end (the nearest lattice column is
+    // 10.5, which is 3.1 mm away), but the direction is 3.01 degrees off
+    // horizontal and a 20.93 mm wall pivots only 1.10 mm to reach 0, so the
+    // angle locks and the length is left exactly as it was dragged.
     expect(snapped.y2).toBeCloseTo(4.1, 9);
-    // The dragged end lands on the lattice itself: it is the position that
-    // snaps, not the length. The drag reached 13.6, and 10.5 is the nearest
-    // lattice column to it along the snapped direction.
-    expect(snapped.x2).toBeCloseTo(10.5, 9);
+    expect(snapped.x2).toBeCloseTo(-7.3 + 20.928927, 6);
   });
 
-  it('spans the whole interior of a one wide bin when dragged to the edge', () => {
+  it('spans the whole interior of a one wide bin when dragged just short of it', () => {
     // A one wide bin's interior is 39.6 mm deep, which is not a multiple of
-    // the 10.5 mm lattice step. Quantizing the length would stop the wall at
-    // 31.5 mm and never reach the bin wall, so the most common divider of all,
-    // a full span one, would be impossible to draw with snapping on.
+    // the 10.5 mm lattice step. Stopping 1.2 mm short of the bin wall is the
+    // gesture that discriminates: an overshooting drag comes back to the
+    // boundary whatever snapping does, so it proves nothing, and so does a
+    // drag that stops a whisker short, because the lattice line 1.2 mm outside
+    // the bin wall catches it and it is brought back in. From 18.6 the
+    // boundary at 19.8 is the only target in reach: 21 is 2.4 mm away and 10.5
+    // is 8.1 mm away, both outside the 2 mm pull.
     const s = state(1, 1, [{ x1: 0, y1: -19.8, x2: 0, y2: 0 }]);
-    moveWallEndpoint(s, 0, 2, 0, 500, on);
+    moveWallEndpoint(s, 0, 2, 0, 18.6, on);
     expect(s.walls[0].x2).toBeCloseTo(0, 9);
     expect(s.walls[0].y2).toBeCloseTo(19.8, 9);
     expect(wallLength(s.walls[0])).toBeCloseTo(39.6, 9);
     expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
   });
 
-  it('spans the whole interior of a three wide bin when dragged to the edge', () => {
+  it('spans the whole interior of a one wide bin when the drag overshoots it', () => {
+    const s = state(1, 1, [{ x1: 0, y1: -19.8, x2: 0, y2: 0 }]);
+    moveWallEndpoint(s, 0, 2, 0, 500, on);
+    expect(s.walls[0].y2).toBeCloseTo(19.8, 9);
+    expect(wallLength(s.walls[0])).toBeCloseTo(39.6, 9);
+  });
+
+  it('spans the whole interior of a three wide bin when dragged just short of it', () => {
     // A three wide bin's interior is 123.6 mm across, again not a whole
-    // number of 10.5 mm steps: the last lattice crossing before the wall is
-    // at 53.7 mm and the boundary is at 61.8 mm.
+    // number of 10.5 mm steps. From 60.6 the boundary at 61.8 is 1.2 mm away
+    // and the nearest lattice lines, 63 and 52.5, are 2.4 mm and 8.1 mm away.
     const s = state(3, 2, [{ x1: -61.8, y1: 0, x2: 0, y2: 0 }]);
-    moveWallEndpoint(s, 0, 2, 500, 0, on);
+    moveWallEndpoint(s, 0, 2, 60.6, 0, on);
     expect(s.walls[0].y2).toBeCloseTo(0, 9);
     expect(s.walls[0].x2).toBeCloseTo(61.8, 9);
     expect(wallLength(s.walls[0])).toBeCloseTo(123.6, 9);
     expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
+  });
+
+  it('spans the whole interior of a three wide bin when the drag overshoots it', () => {
+    const s = state(3, 2, [{ x1: -61.8, y1: 0, x2: 0, y2: 0 }]);
+    moveWallEndpoint(s, 0, 2, 500, 0, on);
+    expect(s.walls[0].x2).toBeCloseTo(61.8, 9);
+    expect(wallLength(s.walls[0])).toBeCloseTo(123.6, 9);
   });
 
   it('takes the lattice crossing when the drag stops short of the bin wall', () => {
@@ -293,11 +346,25 @@ describe('snapping', () => {
 
   it('keeps the angle of a wall that is only being translated', () => {
     const snapped = snapWall({ x1: 3.2, y1: 1.1, x2: 9.7, y2: 25.4 }, 'translate', on);
-    expect(snapped.x1).toBeCloseTo(0, 9);
+    // Both ends probe the targets and each axis takes the smaller correction
+    // either of them asks for. Along X the second end is 0.8 mm from 10.5 and
+    // the first is 3.2 mm from 0, out of reach, so the wall shifts +0.8; along
+    // Y the first end is 1.1 mm from 0 and the second is 4.4 mm from 21, so it
+    // shifts -1.1.
+    expect(snapped.x1).toBeCloseTo(4.0, 9);
     expect(snapped.y1).toBeCloseTo(0, 9);
     // Both endpoints shifted by the same offset, so the free angle survives.
-    expect(snapped.x2).toBeCloseTo(6.5, 9);
+    expect(snapped.x2).toBeCloseTo(10.5, 9);
     expect(snapped.y2).toBeCloseTo(24.3, 9);
+    expect(snapped.x2 - snapped.x1).toBeCloseTo(6.5, 9);
+    expect(snapped.y2 - snapped.y1).toBeCloseTo(24.3, 9);
+  });
+
+  it('leaves a translated wall exactly where it was dragged when nothing is near', () => {
+    // Both ends sit mid-cell on both axes, far outside the 2 mm pull of any
+    // lattice line, so the wall must not be nudged at all.
+    const wall = { x1: 5.25, y1: 5.25, x2: 5.25, y2: 15.75 };
+    expect(snapWall(wall, 'translate', on)).toEqual(wall);
   });
 
   it('leaves a wall untouched when snapping is disabled', () => {
@@ -309,10 +376,11 @@ describe('snapping', () => {
 
   it('lands a dragged wall on the lattice without deforming it', () => {
     const s = state(3, 2, [{ x1: 0, y1: -10, x2: 0, y2: 10 }]);
-    // Short of half a lattice step along X, so the wall holds its column; the
-    // first snapped move does pull its off lattice Y onto the lattice.
+    // 4.2 mm is out of reach of every lattice line, so the wall goes exactly
+    // where it was dragged along X; its 0.5 mm off lattice Y is within reach
+    // and is pulled on.
     moveWall(s, 0, 4.2, 0, on);
-    expect(s.walls[0].x1).toBeCloseTo(0, 9);
+    expect(s.walls[0].x1).toBeCloseTo(4.2, 9);
     expect(s.walls[0].y1).toBeCloseTo(-10.5, 9);
     // Past half a step, so it lands on the next lattice position.
     moveWall(s, 0, 6, 0, on);
@@ -346,7 +414,9 @@ describe('snapping', () => {
 
   it('snaps a freshly drawn wall at both ends', () => {
     const s = state(3, 2);
-    addWall(s, { x1: 1.0, y1: -9.6, x2: 1.3, y2: 9.4 }, on);
+    // Drawn a little off true: the rigid pass shifts it by -0.8 on both axes,
+    // the reshape pass then pulls the second end onto the lattice as well.
+    addWall(s, { x1: 0.8, y1: -9.7, x2: 1.3, y2: 9.5 }, on);
     expect(s.walls[0].x1).toBeCloseTo(0, 9);
     expect(s.walls[0].y1).toBeCloseTo(-10.5, 9);
     expect(s.walls[0].x2).toBeCloseTo(0, 9);
@@ -395,8 +465,8 @@ const FOOTPRINTS = [
   { gridX: 3, gridY: 3, halfX: 61.8, halfY: 61.8 },
 ] as const;
 
-const SNAP_ON = { enabled: true };
-const SNAP_DISABLED = { enabled: false };
+const SNAP_ON = { enabled: true, toleranceMm: TOLERANCE_MM };
+const SNAP_DISABLED = { enabled: false, toleranceMm: TOLERANCE_MM };
 
 describe('interior half-extents the snapping matrix rests on', () => {
   it.each(FOOTPRINTS)(
@@ -421,14 +491,22 @@ describe('interior half-extents the snapping matrix rests on', () => {
 });
 
 /**
- * How far short of the bin wall the discriminating drags stop. A drag that
- * overshoots the interior is clamped back to the boundary whatever snapping
- * does, so it cannot tell a working snap from a broken one. Stopping just
- * inside is the gesture that separates them: the boundary is 0.4 mm away and
- * the nearest lattice crossing is at least 8 mm away on every footprint here,
- * so only a build that treats the boundary as a stop lands on the bin wall.
+ * How far short of the bin wall the discriminating drags stop.
+ *
+ * A drag that overshoots the interior comes back to the boundary whatever
+ * snapping does, so it cannot tell a working snap from a broken one. Stopping
+ * just inside is the gesture that separates them, but only at the right
+ * distance. An interior half-extent is always 21n - 1.2 mm, so the first
+ * lattice line past the bin wall sits 1.2 mm outside it: a drag that stops a
+ * whisker short is captured by that outside line and then pulled back to the
+ * boundary anyway, and still proves nothing.
+ *
+ * Stopping 1.2 mm short puts the boundary 1.2 mm away, inside the 2 mm pull,
+ * and every lattice line at least 2.4 mm away, outside it. Only a build that
+ * treats the interior boundary as a target in its own right reaches the bin
+ * wall from here.
  */
-const SHORT_OF_WALL_MM = 0.4;
+const SHORT_OF_WALL_MM = 1.2;
 
 describe('snapped drags reach a full span on every footprint', () => {
   it.each(FOOTPRINTS)(
@@ -513,21 +591,70 @@ describe('snapping invariants', () => {
   );
 
   it.each(FOOTPRINTS)(
-    'a snapped reshape always lands on a 15 degree multiple on a $gridX by $gridY bin',
-    ({ gridX, gridY }) => {
+    'a snapped reshape never moves an endpoint further than the tolerance on a $gridX by $gridY bin',
+    ({ gridX, gridY, halfX, halfY }) => {
+      // The one invariant a magnetic assist owes: it may correct a drag, but
+      // only by up to the pull radius. Anything further would be the old
+      // quantizing behaviour, which could move an endpoint half a lattice step
+      // (5.25 mm) whether or not a target was anywhere near. Drags landing
+      // outside the interior are excluded: those are bounded by the interior,
+      // not by the assist.
       for (const [x, y] of DRAG_TARGETS) {
-        const snapped = snapWall(
-          { x1: 0, y1: 0, x2: x, y2: y },
-          2,
-          SNAP_ON,
-          { gridX, gridY },
-        );
+        if (Math.abs(x) > halfX || Math.abs(y) > halfY) continue;
 
-        const remainder = Math.abs(wallAngleDeg(snapped) / 15) % 1;
-        expect(Math.min(remainder, 1 - remainder)).toBeLessThan(1e-9);
+        const snapped = snapWall({ x1: 0, y1: 0, x2: x, y2: y }, 2, SNAP_ON, { gridX, gridY });
+
+        expect(Math.hypot(snapped.x2 - x, snapped.y2 - y)).toBeLessThanOrEqual(
+          TOLERANCE_MM + 1e-9,
+        );
       }
     },
   );
+
+  /** A drag of `length` at `angleDeg` from `fixed`, as a reshape of endpoint 2. */
+  function reshapeAt(
+    fixed: { x: number; y: number },
+    angleDeg: number,
+    length: number,
+  ): DividerState['walls'][number] {
+    const radians = (angleDeg * Math.PI) / 180;
+    return {
+      x1: fixed.x,
+      y1: fixed.y,
+      x2: fixed.x + length * Math.cos(radians),
+      y2: fixed.y + length * Math.sin(radians),
+    };
+  }
+
+  it.each(FOOTPRINTS)(
+    'a reshape landing near a 15 degree multiple locks onto it on a $gridX by $gridY bin',
+    ({ gridX, gridY }) => {
+      // A 17 mm wall one degree off 15 degrees: the lock displaces its end by
+      // 2 * 17 * sin(0.5 degrees) = 0.30 mm, well inside the pull radius. The
+      // drag lands at (16.34, 4.69), over 3 mm clear of every lattice line and
+      // of the bin wall, so only the angle can account for the correction.
+      const snapped = snapWall(reshapeAt({ x: 0, y: 0 }, 16, 17), 2, SNAP_ON, { gridX, gridY });
+
+      expect(wallAngleDeg(snapped)).toBeCloseTo(15, 9);
+      expect(wallLength(snapped)).toBeCloseTo(17, 9);
+    },
+  );
+
+  it('draws a wall at a free 20 degree angle with snapping still on', () => {
+    // 20 degrees is 5 degrees off the nearest multiple, so locking a 30 mm
+    // wall would move its end by 2 * 30 * sin(2.5 degrees) = 2.62 mm, more
+    // than the pull radius, and the angle is left alone. A three by three bin
+    // has the room for a wall that long. The drag lands at (28.19, 15.51),
+    // more than 3 mm clear of every lattice line, so no position target can
+    // account for a correction either: the wall must come out untouched.
+    const snapped = snapWall(reshapeAt({ x: 0, y: 5.25 }, 20, 30), 2, SNAP_ON, {
+      gridX: 3,
+      gridY: 3,
+    });
+
+    expect(wallAngleDeg(snapped)).toBeCloseTo(20, 9);
+    expect(wallLength(snapped)).toBeCloseTo(30, 9);
+  });
 
   it.each(FOOTPRINTS)(
     'snapping off leaves the wall exactly as drawn on a $gridX by $gridY bin',
@@ -541,6 +668,129 @@ describe('snapping invariants', () => {
       }
     },
   );
+});
+
+/**
+ * The other walls as snap targets. Every coordinate here is deliberately
+ * mid-cell (5.25 mm is exactly halfway between two lattice lines), so nothing
+ * below can pass because the lattice happened to sit in the same place.
+ */
+describe('other walls are snap targets', () => {
+  /** A vertical wall well clear of every lattice line, on a 3 by 3 bin. */
+  const NEIGHBOUR = { x1: 5.25, y1: 5.25, x2: 5.25, y2: 35.25 };
+
+  it('closes an exact corner on another wall endpoint', () => {
+    const s = state(3, 3, [NEIGHBOUR, { x1: 30, y1: 5.25, x2: 20, y2: 5.25 }]);
+
+    // 0.83 mm from the neighbour's lower endpoint, and 0.75 mm from its
+    // segment: the endpoint is the more specific target and must win, so the
+    // two walls share a corner exactly rather than meeting just above it.
+    moveWallEndpoint(s, 1, 2, 6.0, 5.6, SNAP_ON);
+
+    expect(s.walls[1].x2).toBeCloseTo(5.25, 9);
+    expect(s.walls[1].y2).toBeCloseTo(5.25, 9);
+    expect(segmentSegmentDistance(s.walls[0], s.walls[1])).toBeCloseTo(0, 9);
+    expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
+  });
+
+  it('lands an endpoint flush on another wall midspan as a clean T junction', () => {
+    const s = state(3, 3, [NEIGHBOUR, { x1: 30, y1: 20, x2: 20, y2: 20 }]);
+
+    // 1.05 mm from the neighbour's segment and nearly 15 mm from either of its
+    // endpoints. The nearest lattice line is 1.0 mm away in Y, so this also
+    // pins the precedence: another wall outranks the lattice.
+    moveWallEndpoint(s, 1, 2, 6.3, 20.0, SNAP_ON);
+
+    expect(s.walls[1].x2).toBeCloseTo(5.25, 9);
+    expect(s.walls[1].y2).toBeCloseTo(20.0, 9);
+    // Flush, not merely close: the junction has to weld when it is generated.
+    expect(segmentSegmentDistance(s.walls[0], s.walls[1])).toBeCloseTo(0, 9);
+    expect(validateWalls(s.walls, s.gridX, s.gridY)).toBeNull();
+  });
+
+  it('ignores a wall that is further away than the tolerance', () => {
+    const dragged = { x1: 30, y1: 20, x2: 7.9, y2: 16.1 };
+    const footprint = { gridX: 3, gridY: 3 };
+
+    // 2.65 mm clear of the neighbour, just outside the 2 mm pull.
+    const reach = pointSegmentDistance(
+      dragged.x2,
+      dragged.y2,
+      NEIGHBOUR.x1,
+      NEIGHBOUR.y1,
+      NEIGHBOUR.x2,
+      NEIGHBOUR.y2,
+    );
+    expect(reach).toBeGreaterThan(TOLERANCE_MM);
+
+    // Whatever the other assists then do, the neighbour must have contributed
+    // nothing: the result has to be the one a bin with no other wall gives.
+    expect(snapWall(dragged, 2, SNAP_ON, { ...footprint, walls: [NEIGHBOUR] })).toEqual(
+      snapWall(dragged, 2, SNAP_ON, footprint),
+    );
+  });
+
+  it('never snaps a wall to itself', () => {
+    // Endpoint 2 dragged back towards the wall's own first endpoint. Were the
+    // wall its own target, that endpoint would be 1.25 mm away and would
+    // capture the drag, collapsing the wall to nothing.
+    const s = state(3, 3, [{ x1: 5.25, y1: 5.25, x2: 5.25, y2: 35.25 }]);
+
+    moveWallEndpoint(s, 0, 2, 5.25, 6.5, SNAP_ON);
+
+    expect(s.walls[0].y2).toBeCloseTo(6.5, 9);
+    expect(wallLength(s.walls[0])).toBeCloseTo(1.25, 9);
+  });
+
+  it('catches a translated wall on another wall', () => {
+    const origin = { x1: 30, y1: 5.25, x2: 30, y2: 35.25 };
+    const s = state(3, 3, [NEIGHBOUR, origin]);
+
+    // Dragged to within 1.1 mm of sitting on the neighbour: the whole wall
+    // shifts the last 1.1 mm so the two coincide, without deforming.
+    moveWall(s, 1, -23.65, 0, SNAP_ON, origin);
+
+    expect(s.walls[1].x1).toBeCloseTo(5.25, 9);
+    expect(s.walls[1].x2).toBeCloseTo(5.25, 9);
+    expect(wallLength(s.walls[1])).toBeCloseTo(30, 9);
+  });
+
+  it('leaves a translated wall alone when nothing is within the tolerance', () => {
+    const origin = { x1: 30, y1: 5.25, x2: 30, y2: 35.25 };
+    const s = state(3, 3, [NEIGHBOUR, origin]);
+
+    // Stopping 3 mm short of the neighbour, and mid-cell on both axes.
+    moveWall(s, 1, -21.75, 0, SNAP_ON, origin);
+
+    expect(s.walls[1].x1).toBeCloseTo(8.25, 9);
+    expect(s.walls[1].x2).toBeCloseTo(8.25, 9);
+  });
+});
+
+describe('a drag lands exactly where it is dragged when nothing is near', () => {
+  it('leaves a reshaped endpoint untouched through the whole editor path', () => {
+    // The drag from the free 20 degree case above, run through the mutation
+    // the canvas actually calls rather than snapWall directly.
+    const s = state(3, 3, [{ x1: 0, y1: 5.25, x2: 5, y2: 5.25 }]);
+    const free = { x: 28.19077862, y: 15.51060243 };
+
+    moveWallEndpoint(s, 0, 2, free.x, free.y, SNAP_ON);
+
+    expect(s.walls[0].x2).toBeCloseTo(free.x, 9);
+    expect(s.walls[0].y2).toBeCloseTo(free.y, 9);
+  });
+
+  it('reaches a length that is not a multiple of the lattice step', () => {
+    const s = state(3, 3, [{ x1: 0, y1: 5.25, x2: 5, y2: 5.25 }]);
+
+    // 26.25 mm along a locked horizontal is two and a half lattice steps: a
+    // length the old quantizing snap could never produce, because it could
+    // only stop on a lattice line or the bin wall.
+    moveWallEndpoint(s, 0, 2, 26.25, 5.25, SNAP_ON);
+
+    expect(wallLength(s.walls[0])).toBeCloseTo(26.25, 9);
+    expect(s.walls[0].x2).toBeCloseTo(26.25, 9);
+  });
 });
 
 describe('a drag is the same however finely it is delivered', () => {
