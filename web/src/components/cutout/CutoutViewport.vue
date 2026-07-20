@@ -304,9 +304,14 @@ function syncGhosts(ctx: ThreeSceneContext): void {
     if (wanted.has(id)) continue;
     disposeGhost(ctx, entry);
     ghostEntries.delete(id);
-    // A gizmo left attached to a deleted model would keep drawing and keep
-    // driving an object that is no longer in the scene.
-    if (id === attachedId) attachedId = null;
+    // A gizmo left attached to a deleted model would keep driving an object
+    // that is no longer in the scene, and its helper would warn about it on
+    // every frame, so it is detached here at the moment the mesh leaves.
+    if (id === attachedId) {
+      translateControls?.detach();
+      rotateControls?.detach();
+      attachedId = null;
+    }
   }
   for (const ghost of props.ghosts) {
     const existing = ghostEntries.get(ghost.id);
@@ -351,9 +356,14 @@ function syncGhosts(ctx: ThreeSceneContext): void {
       placement: placementOf(mesh),
       bounds: entry.bounds,
     });
-    // A newly drawn ghost is a new object, so the gizmo has to be pointed at
-    // it again if it is the selected one.
-    if (ghost.id === attachedId) attachedId = null;
+    // A newly drawn ghost is a new object, so the gizmo is detached from the
+    // mesh that just left the scene and pointed at the new one by the
+    // selection sync that follows.
+    if (ghost.id === attachedId) {
+      translateControls?.detach();
+      rotateControls?.detach();
+      attachedId = null;
+    }
   }
   paintGhosts();
 }
