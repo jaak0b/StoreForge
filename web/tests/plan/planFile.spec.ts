@@ -1237,3 +1237,111 @@ describe('screw bins stored without their label insert', () => {
     expect(result.warnings).toHaveLength(1);
   });
 });
+
+/**
+ * Wall sets a user can draw and the editor accepts, on footprints whose
+ * interior is not a whole multiple of the snap step. Interior half-extents are
+ * hand-calculated from the Gridfinity standard: n cells span n * 42 mm of pitch
+ * less the 0.5 mm shared footprint clearance and a 0.95 mm wall per side, so a
+ * 1-cell interior is 39.6 mm across and a 2-cell interior 81.6 mm.
+ */
+const ROUND_TRIP_WALLS = [
+  { name: 'no walls', gridX: 2, gridY: 1, walls: [] },
+  {
+    name: 'a full-span wall',
+    gridX: 1,
+    gridY: 1,
+    walls: [{ x1: 0, y1: -19.8, x2: 0, y2: 19.8 }],
+  },
+  {
+    name: 'a wall ending in open interior',
+    gridX: 2,
+    gridY: 2,
+    walls: [{ x1: 0, y1: -12, x2: 0, y2: 12 }],
+  },
+  {
+    name: 'an angled wall with fractional coordinates',
+    gridX: 2,
+    gridY: 2,
+    walls: [{ x1: -18.375, y1: -9.125, x2: 18.375, y2: 9.125 }],
+  },
+  {
+    name: 'a T junction',
+    gridX: 2,
+    gridY: 2,
+    walls: [
+      { x1: -40.8, y1: 0, x2: 40.8, y2: 0 },
+      { x1: 0, y1: 0, x2: 0, y2: 22 },
+    ],
+  },
+  {
+    name: 'four walls at once',
+    gridX: 3,
+    gridY: 2,
+    walls: [
+      { x1: -20, y1: -40.8, x2: -20, y2: 40.8 },
+      { x1: 20, y1: -40.8, x2: 20, y2: 40.8 },
+      { x1: -61.8, y1: 0, x2: -20, y2: 0 },
+      { x1: 20, y1: 0, x2: 61.8, y2: 0 },
+    ],
+  },
+];
+
+describe('divider walls survive a save and reload', () => {
+  it.each(ROUND_TRIP_WALLS)(
+    'reloads $name on a manual bin exactly as saved',
+    ({ gridX, gridY, walls }) => {
+      // A wall configuration the editor accepted must come back byte for byte.
+      // Silently dropping or rewriting one on save is invisible in the app
+      // until the user reopens the bin and finds their layout changed.
+      const entries = [
+        entry({
+          product: { kind: 'bin', labelSlot: true, bin: manualBin({ gridX, gridY, walls }) },
+        }),
+      ];
+
+      const result = parsePlanFile(serializePlanFile(entries, []));
+
+      expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches: [] }, warnings: [] });
+    },
+  );
+
+  it.each(ROUND_TRIP_WALLS)(
+    'reloads $name on a screw bin exactly as saved',
+    ({ gridX, gridY, walls }) => {
+      // A screw bin derives its footprint from the screw, so its walls travel a
+      // different load path than a manual bin's. They must survive it intact.
+      const entries = [
+        entry({
+          product: {
+            kind: 'binWithInsert',
+            bin: screwBin({ gridX, gridY, walls }),
+            insert: { text: 'M3 x 20', text2: '', icon: 'countersunk screw' },
+          },
+        }),
+      ];
+
+      const result = parsePlanFile(serializePlanFile(entries, []));
+
+      expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches: [] }, warnings: [] });
+    },
+  );
+
+  it.each(ROUND_TRIP_WALLS)('reloads $name inside a print batch', ({ gridX, gridY, walls }) => {
+    // A batch carries its own copy of the product, so it is a second place a
+    // wall list can be lost between sessions.
+    const batches = [
+      batch({
+        items: [
+          batchItem({
+            product: { kind: 'bin', labelSlot: true, bin: manualBin({ gridX, gridY, walls }) },
+          }),
+        ],
+      }),
+    ];
+
+    const result = parsePlanFile(serializePlanFile([], batches));
+
+    expect(result).toEqual({ ok: true, plan: { version: 5, entries: [], batches }, warnings: [] });
+  });
+});

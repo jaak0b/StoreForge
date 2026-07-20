@@ -12,6 +12,7 @@ import {
   segmentSegmentDistance,
   setWall,
   validateWalls,
+  wallAngleDeg,
   wallLength,
   type DividerState,
 } from '../../src/engine/gridfinity/dividerModel';
@@ -372,4 +373,205 @@ describe('snapping', () => {
     moveWallEndpoint(s, 0, 2, 11.3, 2.7, off);
     expect(s.walls[0]).toEqual({ x1: -10, y1: 0, x2: 11.3, y2: 2.7 });
   });
+});
+
+/**
+ * The interior half-extents of the footprints the property tests sweep, in
+ * bin-local mm. Hand-calculated once from the Gridfinity standard, not from
+ * the production helper: a bin spanning n cells is n * 42 mm of pitch less the
+ * 0.5 mm shared footprint clearance, less a 0.95 mm wall on each side, so the
+ * clear interior is n * 42 - 2.4 mm and the half-extent is half of that.
+ *
+ * Every one of these half-extents is deliberately NOT a whole multiple of the
+ * 10.5 mm snap step. That is the point of the matrix: a defect that quantized
+ * a wall's length to the lattice instead of its endpoint's position survived
+ * review because every footprint tried happened to make a full span reachable.
+ */
+const FOOTPRINTS = [
+  { gridX: 1, gridY: 1, halfX: 19.8, halfY: 19.8 },
+  { gridX: 1, gridY: 2, halfX: 19.8, halfY: 40.8 },
+  { gridX: 2, gridY: 2, halfX: 40.8, halfY: 40.8 },
+  { gridX: 3, gridY: 2, halfX: 61.8, halfY: 40.8 },
+  { gridX: 3, gridY: 3, halfX: 61.8, halfY: 61.8 },
+] as const;
+
+const SNAP_ON = { enabled: true };
+const SNAP_DISABLED = { enabled: false };
+
+describe('interior half-extents the snapping matrix rests on', () => {
+  it.each(FOOTPRINTS)(
+    'a $gridX by $gridY bin has the hand-calculated interior half-extents',
+    ({ gridX, gridY, halfX, halfY }) => {
+      expect(binInteriorSizeMm(gridX) / 2).toBeCloseTo(halfX, 9);
+      expect(binInteriorSizeMm(gridY) / 2).toBeCloseTo(halfY, 9);
+    },
+  );
+
+  it.each(FOOTPRINTS)(
+    'the interior boundary of a $gridX by $gridY bin is off the snap lattice',
+    ({ halfX, halfY }) => {
+      // Rounding the boundary to the lattice moves it, so the boundary is only
+      // reachable because snapping treats it as a stop in its own right. If
+      // this ever became a lattice multiple the full-span tests below would
+      // pass for the wrong reason.
+      expect(snapPoint(halfX, halfY, SNAP_ON).x).not.toBeCloseTo(halfX, 6);
+      expect(snapPoint(halfX, halfY, SNAP_ON).y).not.toBeCloseTo(halfY, 6);
+    },
+  );
+});
+
+/**
+ * How far short of the bin wall the discriminating drags stop. A drag that
+ * overshoots the interior is clamped back to the boundary whatever snapping
+ * does, so it cannot tell a working snap from a broken one. Stopping just
+ * inside is the gesture that separates them: the boundary is 0.4 mm away and
+ * the nearest lattice crossing is at least 8 mm away on every footprint here,
+ * so only a build that treats the boundary as a stop lands on the bin wall.
+ */
+const SHORT_OF_WALL_MM = 0.4;
+
+describe('snapped drags reach a full span on every footprint', () => {
+  it.each(FOOTPRINTS)(
+    'drags a wall across the full depth of a $gridX by $gridY bin',
+    ({ gridX, gridY, halfY }) => {
+      const s = state(gridX, gridY, [{ x1: 0, y1: -halfY, x2: 0, y2: 0 }]);
+
+      moveWallEndpoint(s, 0, 2, 0, halfY - SHORT_OF_WALL_MM, SNAP_ON);
+
+      expect(s.walls[0].y2).toBeCloseTo(halfY, 9);
+      expect(s.walls[0].x2).toBeCloseTo(0, 9);
+    },
+  );
+
+  it.each(FOOTPRINTS)(
+    'drags a wall across the full width of a $gridX by $gridY bin',
+    ({ gridX, gridY, halfX }) => {
+      const s = state(gridX, gridY, [{ x1: -halfX, y1: 0, x2: 0, y2: 0 }]);
+
+      moveWallEndpoint(s, 0, 2, halfX - SHORT_OF_WALL_MM, 0, SNAP_ON);
+
+      expect(s.walls[0].x2).toBeCloseTo(halfX, 9);
+      expect(s.walls[0].y2).toBeCloseTo(0, 9);
+    },
+  );
+
+  it.each(FOOTPRINTS)(
+    'a drag that overshoots the bin wall still ends on it on a $gridX by $gridY bin',
+    ({ gridX, gridY, halfY }) => {
+      const s = state(gridX, gridY, [{ x1: 0, y1: -halfY, x2: 0, y2: 0 }]);
+
+      moveWallEndpoint(s, 0, 2, 0, halfY + 30, SNAP_ON);
+
+      expect(s.walls[0].y2).toBeCloseTo(halfY, 9);
+    },
+  );
+
+  it.each(FOOTPRINTS)(
+    'the editor and the even-dividers quick entry agree on a $gridX by $gridY bin',
+    ({ gridX, gridY, halfY }) => {
+      // The quick entry emits one wall spanning the interior; a snapped drag
+      // to the same place must land on the same segment. Two independent
+      // producers of the same figure, so neither can drift alone.
+      const s = state(gridX, gridY, [{ x1: 0, y1: -halfY, x2: 0, y2: 0 }]);
+      moveWallEndpoint(s, 0, 2, 0, halfY - SHORT_OF_WALL_MM, SNAP_ON);
+
+      const generated = evenDividerWalls(gridX, gridY, 1, 0)[0];
+
+      expect(s.walls[0].x1).toBeCloseTo(generated.x1, 9);
+      expect(s.walls[0].y1).toBeCloseTo(generated.y1, 9);
+      expect(s.walls[0].x2).toBeCloseTo(generated.x2, 9);
+      expect(s.walls[0].y2).toBeCloseTo(generated.y2, 9);
+    },
+  );
+});
+
+/** Drag targets swept by the snapping invariants: inside, on and far outside. */
+const DRAG_TARGETS = [
+  [3.2, 1.1],
+  [7.7, -13.4],
+  [-16.9, 24.25],
+  [31.5, 0.4],
+  [-48.3, -52.6],
+  [120, 95],
+  [-140, 33],
+  [0.6, -180],
+] as const;
+
+describe('snapping invariants', () => {
+  it.each(FOOTPRINTS)(
+    'a snapped endpoint always lands inside a $gridX by $gridY interior',
+    ({ gridX, gridY, halfX, halfY }) => {
+      for (const [x, y] of DRAG_TARGETS) {
+        const s = state(gridX, gridY, [{ x1: 0, y1: 0, x2: 5, y2: 0 }]);
+
+        moveWallEndpoint(s, 0, 2, x, y, SNAP_ON);
+
+        expect(Math.abs(s.walls[0].x2)).toBeLessThanOrEqual(halfX + 1e-9);
+        expect(Math.abs(s.walls[0].y2)).toBeLessThanOrEqual(halfY + 1e-9);
+      }
+    },
+  );
+
+  it.each(FOOTPRINTS)(
+    'a snapped reshape always lands on a 15 degree multiple on a $gridX by $gridY bin',
+    ({ gridX, gridY }) => {
+      for (const [x, y] of DRAG_TARGETS) {
+        const snapped = snapWall(
+          { x1: 0, y1: 0, x2: x, y2: y },
+          2,
+          SNAP_ON,
+          { gridX, gridY },
+        );
+
+        const remainder = Math.abs(wallAngleDeg(snapped) / 15) % 1;
+        expect(Math.min(remainder, 1 - remainder)).toBeLessThan(1e-9);
+      }
+    },
+  );
+
+  it.each(FOOTPRINTS)(
+    'snapping off leaves the wall exactly as drawn on a $gridX by $gridY bin',
+    ({ gridX, gridY }) => {
+      for (const [x, y] of DRAG_TARGETS) {
+        const drawn = { x1: -1.37, y1: 2.61, x2: x, y2: y };
+
+        for (const anchor of ['translate', 1, 2] as const) {
+          expect(snapWall(drawn, anchor, SNAP_DISABLED, { gridX, gridY })).toEqual(drawn);
+        }
+      }
+    },
+  );
+});
+
+describe('a drag is the same however finely it is delivered', () => {
+  it.each(FOOTPRINTS)(
+    'many small increments equal one increment on a $gridX by $gridY bin',
+    ({ gridX, gridY }) => {
+      // A real pointer arrives as a stream of tiny deltas. Snapping quantizes
+      // the result, so a translation that re-snapped from the already snapped
+      // position would round every increment back to zero and never move.
+      for (const snap of [SNAP_ON, SNAP_DISABLED]) {
+        for (const [dx, dy] of [
+          [13.7, -8.2],
+          [-24.1, 19.6],
+          [0.9, 0.4],
+        ] as const) {
+          const drawn = { x1: -6, y1: -4, x2: 6, y2: 4 };
+
+          const oneStep = state(gridX, gridY, [drawn]);
+          moveWall(oneStep, 0, dx, dy, snap, drawn);
+
+          const manySteps = state(gridX, gridY, [drawn]);
+          for (let i = 1; i <= 40; i++) {
+            moveWall(manySteps, 0, (dx * i) / 40, (dy * i) / 40, snap, drawn);
+          }
+
+          expect(manySteps.walls[0].x1).toBeCloseTo(oneStep.walls[0].x1, 9);
+          expect(manySteps.walls[0].y1).toBeCloseTo(oneStep.walls[0].y1, 9);
+          expect(manySteps.walls[0].x2).toBeCloseTo(oneStep.walls[0].x2, 9);
+          expect(manySteps.walls[0].y2).toBeCloseTo(oneStep.walls[0].y2, 9);
+        }
+      }
+    },
+  );
 });
