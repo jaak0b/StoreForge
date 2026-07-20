@@ -15,6 +15,10 @@ const DB_NAME = 'storeforge';
  * Version 1 held only the trace photos. Version 2 adds the cutout models.
  * Version 3 adds the persisted cutout solids. The upgrade handler creates
  * every missing store, so any upgrade path ends with all stores present.
+ * This number is a minimum, not an exact target: parallel branches of the
+ * app share the origin database, so the on-disk version can already be
+ * newer while still missing stores. openDatabase detects that case and
+ * self-heals by reopening at the on-disk version plus one.
  */
 const DB_VERSION = 3;
 
@@ -49,17 +53,44 @@ function requestError(request: IDBRequest | IDBOpenDBRequest): string {
  * Opens the shared database, creating every store the current version needs.
  * The failure wording comes from the calling store's binding.
  */
-export function openDatabase(binding: StoreBinding): Promise<IDBDatabase> {
+export async function openDatabase(binding: StoreBinding): Promise<IDBDatabase> {
+  if (typeof indexedDB === 'undefined') {
+    throw new Error('This browser does not offer IndexedDB storage.');
+  }
+  let db = await openAtVersion(binding, DB_VERSION);
+  if (hasAllStores(db)) {
+    return db;
+  }
+  // The on-disk database was created at this version or newer by another
+  // branch of the app sharing the origin, so onupgradeneeded never fired
+  // and some stores are missing. Force an upgrade one version above the
+  // on-disk version; the per-store guards create only what is missing.
+  const forcedVersion = db.version + 1;
+  db.close();
+  db = await openAtVersion(binding, forcedVersion);
+  if (hasAllStores(db)) {
+    return db;
+  }
+  db.close();
+  throw new Error(
+    `${binding.openFailure} (the database is missing an object store even after a forced upgrade).`,
+  );
+}
+
+function hasAllStores(db: IDBDatabase): boolean {
+  return [PHOTO_STORE, MODEL_STORE, SOLID_STORE].every((name) =>
+    db.objectStoreNames.contains(name),
+  );
+}
+
+/** Opens the database at one specific version, wiring the shared upgrade handler. */
+function openAtVersion(binding: StoreBinding, version: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      reject(new Error('This browser does not offer IndexedDB storage.'));
-      return;
-    }
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = indexedDB.open(DB_NAME, version);
     request.onupgradeneeded = () => {
       const db = request.result;
       // Guarded per store rather than per version, so any upgrade path
-      // (fresh install, version 1 to 2) ends with both stores present.
+      // (fresh install, version 1 to 2) ends with all stores present.
       if (!db.objectStoreNames.contains(PHOTO_STORE)) {
         db.createObjectStore(PHOTO_STORE, { keyPath: 'id' });
       }
