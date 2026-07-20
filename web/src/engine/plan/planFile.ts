@@ -948,15 +948,18 @@ export function pickProduct(
   if (raw.kind === 'clip') {
     return pickClip(raw);
   }
-  const base = {
-    kind: 'insert' as const,
-    cells: raw.cells as number,
-    content: pickContent(raw.content as Record<string, unknown>),
-  };
-  if (raw.origin === 'screw') {
-    return { ...base, origin: 'screw', screw: pickScrew(raw.screw as Record<string, unknown>) };
+  if (raw.kind === 'insert') {
+    const base = {
+      kind: 'insert' as const,
+      cells: raw.cells as number,
+      content: pickContent(raw.content as Record<string, unknown>),
+    };
+    if (raw.origin === 'screw') {
+      return { ...base, origin: 'screw', screw: pickScrew(raw.screw as Record<string, unknown>) };
+    }
+    return { ...base, origin: 'manual' };
   }
-  return { ...base, origin: 'manual' };
+  throw new Error(`${subject}: unreachable product kind after validation`);
 }
 
 /**
