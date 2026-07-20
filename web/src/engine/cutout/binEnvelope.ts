@@ -29,6 +29,10 @@ export interface PlacedModelExtent {
   bounds: MeshBounds;
   /** The model's clearance, which grows its pocket by that much on every side. */
   clearanceMm: number;
+  /** Whether the model's pocket is swept open upward, which flares it by the draft. */
+  sweepEnabled: boolean;
+  /** How far the swept walls lean outward toward the top, in degrees. */
+  draftAngleDeg: number;
 }
 
 /**
@@ -80,21 +84,42 @@ export function interiorBoundsMm(
  * not fitted: the floor sits at a fixed height above the bed, so no bin size
  * can contain a model placed under it, and the carve's warning is what covers
  * that case.
+ *
+ * A swept model with a positive draft angle flares its pocket outward as it
+ * rises, so its widest footprint is at the interior top, wider than the model
+ * plus clearance by tan(draftAngleDeg) times the height the sweep climbs. The
+ * fit adds that expansion so it never under-sizes a swept bin. The height is
+ * fitted first, because the flare's width depends on where the interior top
+ * ends up and the sweep itself asks for no extra height: it opens the pocket
+ * up to whatever top the bin has. The expansion is taken from the pocket's
+ * lowest point, which is where the longest sweep column starts, so it is an
+ * upper bound on the flare rather than an exact per-point figure; the carve's
+ * footprint stays the authority on the exact size.
  */
 export function fitBinToModels(extents: PlacedModelExtent[]): BinEnvelopeSize | null {
   if (extents.length === 0) return null;
-  let halfX = 0;
-  let halfY = 0;
   let topZ = 0;
   for (const { bounds, clearanceMm } of extents) {
-    halfX = Math.max(halfX, Math.abs(bounds.minX) + clearanceMm, bounds.maxX + clearanceMm);
-    halfY = Math.max(halfY, Math.abs(bounds.minY) + clearanceMm, bounds.maxY + clearanceMm);
     topZ = Math.max(topZ, bounds.maxZ + clearanceMm);
+  }
+  const heightUnits = Math.max(MIN_HEIGHT_UNITS, Math.ceil(topZ / HEIGHT_UNIT));
+  const interiorTopZ = heightUnits * HEIGHT_UNIT;
+  let halfX = 0;
+  let halfY = 0;
+  for (const { bounds, clearanceMm, sweepEnabled, draftAngleDeg } of extents) {
+    const flareMm =
+      sweepEnabled && draftAngleDeg > 0
+        ? Math.tan((draftAngleDeg * Math.PI) / 180) *
+          Math.max(0, interiorTopZ - (bounds.minZ - clearanceMm))
+        : 0;
+    const grow = clearanceMm + flareMm;
+    halfX = Math.max(halfX, Math.abs(bounds.minX) + grow, bounds.maxX + grow);
+    halfY = Math.max(halfY, Math.abs(bounds.minY) + grow, bounds.maxY + grow);
   }
   return {
     gridX: cellsForInteriorMm(halfX * 2),
     gridY: cellsForInteriorMm(halfY * 2),
-    heightUnits: Math.max(MIN_HEIGHT_UNITS, Math.ceil(topZ / HEIGHT_UNIT)),
+    heightUnits,
   };
 }
 

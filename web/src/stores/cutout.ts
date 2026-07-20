@@ -62,9 +62,15 @@ export interface ModelEditorState {
    * decisions the user made.
    */
   clearanceDraft: number;
+  /**
+   * The draft angle the field currently shows, committed on blur or Enter for
+   * the same reason as the clearance: only a committed value re-carves, so the
+   * values typed on the way to the intended angle cost nothing.
+   */
+  draftAngleDraft: number;
 }
 
-function freshState(clearanceMm: number): ModelEditorState {
+function freshState(clearanceMm: number, draftAngleDeg: number): ModelEditorState {
   return {
     mesh: null,
     missing: false,
@@ -74,6 +80,7 @@ function freshState(clearanceMm: number): ModelEditorState {
     note: null,
     proposal: null,
     clearanceDraft: clearanceMm,
+    draftAngleDraft: draftAngleDeg,
   };
 }
 
@@ -107,7 +114,7 @@ export const useCutout = defineStore('cutout', {
      * its state together.
      */
     stateOf: (state) => (id: string): ModelEditorState =>
-      state.editorState[id] ?? freshState(0),
+      state.editorState[id] ?? freshState(0, 0),
     /**
      * The models that can be carved right now: the ones the worker holds a
      * prepared solid for at their committed clearance and scale. A model still
@@ -144,7 +151,7 @@ export const useCutout = defineStore('cutout', {
      */
     addModel(model: CutoutModel, mesh: MeshData | null) {
       this.models.push(model);
-      this.editorState[model.id] = freshState(model.clearanceMm);
+      this.editorState[model.id] = freshState(model.clearanceMm, model.draftAngleDeg);
       if (mesh !== null) this.editorState[model.id].mesh = markRaw(mesh);
       this.selectedModelId = model.id;
     },
@@ -168,6 +175,22 @@ export const useCutout = defineStore('cutout', {
     setClearanceDraft(id: string, clearanceMm: number) {
       const editor = this.editorState[id];
       if (editor !== undefined) editor.clearanceDraft = clearanceMm;
+    },
+    /** Turns the upward sweep of one model's pocket on or off. */
+    setSweepEnabled(id: string, sweepEnabled: boolean) {
+      const model = this.modelById(id);
+      if (model !== null) model.sweepEnabled = sweepEnabled;
+    },
+    /** Writes a committed draft angle, keeping the field in step with it. */
+    setDraftAngle(id: string, draftAngleDeg: number) {
+      const model = this.modelById(id);
+      if (model === null) return;
+      model.draftAngleDeg = draftAngleDeg;
+      this.setDraftAngleDraft(id, draftAngleDeg);
+    },
+    setDraftAngleDraft(id: string, draftAngleDeg: number) {
+      const editor = this.editorState[id];
+      if (editor !== undefined) editor.draftAngleDraft = draftAngleDeg;
     },
     setUnitScale(id: string, unitScale: number) {
       const model = this.modelById(id);
@@ -223,7 +246,7 @@ export const useCutout = defineStore('cutout', {
     },
     /** Rebuilds the editor state of a model loaded back from a plan. */
     trackLoadedModel(model: CutoutModel) {
-      this.editorState[model.id] = freshState(model.clearanceMm);
+      this.editorState[model.id] = freshState(model.clearanceMm, model.draftAngleDeg);
     },
   },
 });

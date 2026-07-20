@@ -3,16 +3,24 @@ import type { ManifoldToplevel } from 'manifold-3d';
 import { loadManifold } from '../helpers/manifold';
 import {
   CutoutModelCache,
+  CutoutSweptCache,
   importCutoutModel,
   resolveCutoutModels,
+  sweptKeyOf,
+  sweptMemoFor,
+  type SweptMemoEvent,
   type CutoutModelKeySpec,
   type CutoutModelRequest,
 } from '../../src/worker/cutoutModels';
 import {
   DEFAULT_CUTOUT_CLEARANCE_MM,
+  buildCutoutBinBody,
+  cutoutModelKey,
   prepareCutoutModel,
+  type CutoutBinParams,
   type ModelPlacement,
   type PreparedCutoutModel,
+  type SweptSolidMemo,
 } from '../../src/engine/cutout/cutoutBin';
 
 let m: ManifoldToplevel;
@@ -199,7 +207,14 @@ describe('releasing cached solids', () => {
 
 describe('resolving a carve request against the cache', () => {
   function request(overrides: Partial<CutoutModelRequest> = {}): CutoutModelRequest {
-    return { ...spec(), name: 'part.stl', placement: AT_ORIGIN, ...overrides };
+    return {
+      ...spec(),
+      name: 'part.stl',
+      placement: AT_ORIGIN,
+      sweepEnabled: false,
+      draftAngleDeg: 0,
+      ...overrides,
+    };
   }
 
   it('hands the carve the cached solid without taking ownership of it', () => {
@@ -217,6 +232,26 @@ describe('resolving a carve request against the cache', () => {
     cache.release([]);
   });
 
+  it('resolves the same cached solid whatever the sweep fields say', () => {
+    // The sweep is applied at carve time on the placed cutter, so turning it
+    // on or changing the draft angle must hit the same cache entry: no new
+    // key, no import miss, only a re-carve. The fields ride through to the
+    // carve spec, which is where the sweep actually reads them.
+    const cache = cacheOf([spec()]);
+    const cached = cache.get(spec())!;
+
+    const resolved = resolveCutoutModels(cache, [
+      request({ sweepEnabled: true, draftAngleDeg: 10 }),
+    ]);
+
+    expect(resolved[0].solid).toBe(cached.solid);
+    expect(resolved[0].sweepEnabled).toBe(true);
+    expect(resolved[0].draftAngleDeg).toBe(10);
+    expect(cache.missing([spec()])).toEqual([]);
+
+    cache.release([]);
+  });
+
   it('refuses a model whose solid is not loaded, in the words the user gets', () => {
     // Generating with a model silently missing would export a solid block of
     // plastic and waste a real print, so this blocks rather than warns.
@@ -226,5 +261,257 @@ describe('resolving a carve request against the cache', () => {
       'The model "bracket.stl" is not stored on this device, so this bin cannot be ' +
         'generated. Upload the model again, or remove it from the bin.',
     );
+  });
+});
+
+describe('the swept solid key', () => {
+  function sweptRequest(overrides: Partial<CutoutModelRequest> = {}): CutoutModelRequest {
+    return {
+      ...spec(),
+      name: 'part.stl',
+      placement: { ...AT_ORIGIN, rotXDeg: 30 },
+      sweepEnabled: true,
+      draftAngleDeg: 5,
+      ...overrides,
+    };
+  }
+
+  it('is null for an unswept model, which never consults the cache', () => {
+    expect(sweptKeyOf(sweptRequest({ sweepEnabled: false }))).toBeNull();
+  });
+
+  it('changes with the rotation, because the sweep is not rotation invariant', () => {
+    const base = sweptKeyOf(sweptRequest())!;
+    const turned = sweptKeyOf(
+      sweptRequest({ placement: { ...AT_ORIGIN, rotXDeg: 30, rotZDeg: 90 } }),
+    )!;
+    expect(turned).not.toBe(base);
+  });
+
+  it('changes with the draft angle and the model identity, not with the position', () => {
+    const base = sweptKeyOf(sweptRequest())!;
+    expect(sweptKeyOf(sweptRequest({ draftAngleDeg: 10 }))).not.toBe(base);
+    expect(sweptKeyOf(sweptRequest({ clearanceMm: 0.8 }))).not.toBe(base);
+    // A pure translation keys identically: that is what makes a drag end a
+    // cache hit rather than a fresh Minkowski sum.
+    expect(
+      sweptKeyOf(
+        sweptRequest({
+          placement: { ...AT_ORIGIN, rotXDeg: 30, xMm: 12, yMm: -4, zMm: 20 },
+        }),
+      ),
+    ).toBe(base);
+  });
+});
+
+describe('the swept solid cache', () => {
+  /** A memo over a fresh cache, recording every consultation. */
+  function memoWithLog(): {
+    cache: CutoutSweptCache;
+    memo: SweptSolidMemo;
+    events: SweptMemoEvent[];
+  } {
+    const cache = new CutoutSweptCache();
+    const events: SweptMemoEvent[] = [];
+    const memo = sweptMemoFor(cache, (event) => events.push(event));
+    return { cache, memo, events };
+  }
+
+  it('computes once and answers a second consultation of the same key from the cache', () => {
+    const { cache, memo, events } = memoWithLog();
+    const compute = vi.fn((lengthMm: number) =>
+      m.Manifold.cube([2, 2, lengthMm], true),
+    );
+
+    memo('key-a', { minLengthMm: 10, standardLengthMm: 40 }, compute);
+    // A shorter minimum, as a model dragged upward asks for: still covered.
+    memo('key-a', { minLengthMm: 5, standardLengthMm: 40 }, compute);
+
+    expect(compute).toHaveBeenCalledTimes(1);
+    // The miss computed at the standard length, which is what covers later
+    // placements down to the bed.
+    expect(compute).toHaveBeenCalledWith(40);
+    expect(events.map((event) => event.outcome)).toEqual(['miss', 'hit']);
+
+    cache.release([]);
+  });
+
+  it('recomputes when the cached length no longer covers the placement', () => {
+    // A model dragged below the bed needs a longer sweep than the standard
+    // bed-anchored length; serving the short solid would leave its pocket
+    // stopping short of the bin top.
+    const { cache, memo } = memoWithLog();
+    const compute = vi.fn((lengthMm: number) =>
+      m.Manifold.cube([2, 2, lengthMm], true),
+    );
+
+    memo('key-a', { minLengthMm: 10, standardLengthMm: 40 }, compute);
+    memo('key-a', { minLengthMm: 55, standardLengthMm: 40 }, compute);
+
+    expect(compute).toHaveBeenCalledTimes(2);
+    expect(compute).toHaveBeenLastCalledWith(55);
+
+    cache.release([]);
+  });
+
+  it('computes separately for separate keys, which is a rotation or angle change', () => {
+    const { cache, memo, events } = memoWithLog();
+    const compute = vi.fn((lengthMm: number) =>
+      m.Manifold.cube([2, 2, lengthMm], true),
+    );
+
+    memo('key-a', { minLengthMm: 10, standardLengthMm: 40 }, compute);
+    memo('key-b', { minLengthMm: 10, standardLengthMm: 40 }, compute);
+
+    expect(compute).toHaveBeenCalledTimes(2);
+    expect(events.map((event) => event.outcome)).toEqual(['miss', 'miss']);
+    expect(cache.size).toBe(2);
+
+    cache.release([]);
+  });
+
+  it('releases everything the current carve does not name', () => {
+    // The same explicit eviction the prepared-model cache uses: a model
+    // rotated through many angles must not accumulate one swept solid per
+    // angle it passed through.
+    const { cache, memo } = memoWithLog();
+    const compute = (lengthMm: number): ReturnType<typeof m.Manifold.cube> =>
+      m.Manifold.cube([2, 2, lengthMm], true);
+
+    memo('key-a', { minLengthMm: 10, standardLengthMm: 40 }, compute);
+    memo('key-b', { minLengthMm: 10, standardLengthMm: 40 }, compute);
+    cache.release(['key-b']);
+
+    expect(cache.size).toBe(1);
+    expect(cache.get('key-a')).toBeUndefined();
+    expect(cache.get('key-b')).toBeDefined();
+
+    cache.release([]);
+    expect(cache.size).toBe(0);
+  });
+
+  it('drops the swept solids of a released prepared model, and keeps the rest', () => {
+    const { cache, memo } = memoWithLog();
+    const compute = (lengthMm: number): ReturnType<typeof m.Manifold.cube> =>
+      m.Manifold.cube([2, 2, lengthMm], true);
+    const keptModel = cutoutModelKey('model-a', 1, 0.4);
+    const droppedModel = cutoutModelKey('model-b', 1, 0.4);
+
+    memo(`${keptModel}:0:0:0:0`, { minLengthMm: 10, standardLengthMm: 40 }, compute);
+    memo(`${droppedModel}:0:0:0:0`, { minLengthMm: 10, standardLengthMm: 40 }, compute);
+    cache.retainForModelKeys([keptModel]);
+
+    expect(cache.size).toBe(1);
+    expect(cache.get(`${keptModel}:0:0:0:0`)).toBeDefined();
+
+    cache.release([]);
+  });
+});
+
+describe('a carve through the swept cache', () => {
+  /** A 2x2x6 bin around the given models. */
+  function params(models: CutoutBinParams['models'], memo?: SweptSolidMemo): CutoutBinParams {
+    return {
+      gridX: 2,
+      gridY: 2,
+      heightUnits: 6,
+      magnetHoles: true,
+      walls: [],
+      labelSlot: true,
+      insert: null,
+      models,
+      sweptMemo: memo,
+    };
+  }
+
+  it('produces exactly the direct-path bin, cold and warm, on a rotated translated model', () => {
+    // The equality the whole cache design rests on: the cached solid is built
+    // in the rotated frame at a longer sweep length, translated and trimmed,
+    // and that must be the same bin the uncached path carves. Volume and
+    // bounds together pin it; a length-dependent cutter would move both.
+    const cache = new CutoutSweptCache();
+    const memo = sweptMemoFor(cache, () => {});
+    const prepared = prepareCutoutModel(
+      m,
+      m.Manifold.cube([10, 20, 30], true),
+      { name: 'part.stl', unitScale: 1, clearanceMm: 0 },
+    ).solid;
+    const model = {
+      name: 'part.stl',
+      solid: prepared,
+      placement: { xMm: 6, yMm: -3, zMm: 21, rotXDeg: 90, rotYDeg: 0, rotZDeg: 30 },
+      clearanceMm: 0,
+      sweepEnabled: true,
+      draftAngleDeg: 5,
+    };
+
+    const direct = buildCutoutBinBody(m, params([model]));
+    const cold = buildCutoutBinBody(m, params([{ ...model, sweptKey: 'k' }], memo));
+    const warm = buildCutoutBinBody(m, params([{ ...model, sweptKey: 'k' }], memo));
+
+    for (const carve of [cold, warm]) {
+      expect(carve.body.volume()).toBeCloseTo(direct.body.volume(), 6);
+      const expected = direct.body.boundingBox();
+      const box = carve.body.boundingBox();
+      for (let axis = 0; axis < 3; axis += 1) {
+        expect(box.min[axis]).toBeCloseTo(expected.min[axis], 6);
+        expect(box.max[axis]).toBeCloseTo(expected.max[axis], 6);
+      }
+      // Same pocket, so same reported size; closeTo rather than exact because
+      // the trim-plane intersection is computed against different sweep
+      // lengths on the two paths and the last floating-point bit can differ.
+      expect(carve.footprints[0].sizeMm.x).toBeCloseTo(direct.footprints[0].sizeMm.x, 9);
+      expect(carve.footprints[0].sizeMm.y).toBeCloseTo(direct.footprints[0].sizeMm.y, 9);
+      expect(carve.footprints[0].sizeMm.z).toBeCloseTo(direct.footprints[0].sizeMm.z, 9);
+    }
+
+    direct.body.delete();
+    cold.body.delete();
+    warm.body.delete();
+    cache.release([]);
+    prepared.delete();
+  });
+
+  it('answers a pure drag from the cache and a rotation change with a fresh sweep', () => {
+    const cache = new CutoutSweptCache();
+    const events: SweptMemoEvent[] = [];
+    const memo = sweptMemoFor(cache, (event) => events.push(event));
+    const prepared = prepareCutoutModel(
+      m,
+      m.Manifold.cube([10, 20, 30], true),
+      { name: 'part.stl', unitScale: 1, clearanceMm: 0 },
+    ).solid;
+    const modelAt = (placement: ModelPlacement): CutoutBinParams['models'][number] => ({
+      name: 'part.stl',
+      solid: prepared,
+      placement,
+      clearanceMm: 0,
+      sweepEnabled: true,
+      draftAngleDeg: 0,
+      sweptKey: `part:${placement.rotXDeg}`,
+    });
+
+    const first = buildCutoutBinBody(
+      m,
+      params([modelAt({ ...AT_ORIGIN, zMm: 21 })], memo),
+    );
+    // A drag: same rotation, different position, including downward.
+    const dragged = buildCutoutBinBody(
+      m,
+      params([modelAt({ ...AT_ORIGIN, xMm: 10, zMm: 16 })], memo),
+    );
+    // A rotation: a different key, so a fresh sweep.
+    const rotated = buildCutoutBinBody(
+      m,
+      params([modelAt({ ...AT_ORIGIN, rotXDeg: 90, zMm: 21 })], memo),
+    );
+
+    expect(events.map((event) => event.outcome)).toEqual(['miss', 'hit', 'miss']);
+
+    first.body.delete();
+    dragged.body.delete();
+    rotated.body.delete();
+    cache.release([]);
+    prepared.delete();
   });
 });

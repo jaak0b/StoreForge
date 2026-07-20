@@ -26,9 +26,10 @@ import {
 import {
   buildCarvedBinBody,
   buildInteriorFill,
+  CARVE_OVERLAP_EPS,
   labelStructureStrip,
 } from '../gridfinity/carvedBin';
-import { binInteriorSizeMm } from '../gridfinity/constants';
+import { binInteriorSizeMm, HEIGHT_UNIT, LIP_HEIGHT } from '../gridfinity/constants';
 import { circleSegments } from '../geometry/circleSegments';
 import { buildFusedLabel } from '../label/slot';
 import type { MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
@@ -41,6 +42,44 @@ import type { MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types
  * both read it from here.
  */
 export const DEFAULT_CUTOUT_CLEARANCE_MM = 0.4;
+
+/**
+ * Whether a freshly imported model's pocket is swept open upward by default.
+ * On, so every new pocket can physically receive the object it was carved for
+ * even when the model has an undercut; a plan written before the sweep existed
+ * loads with the sweep off instead, reproducing its exact pockets (the plan
+ * loader owns that default). The single home for the figure; the import flow
+ * reads it from here.
+ */
+export const DEFAULT_CUTOUT_SWEEP_ENABLED = true;
+
+/**
+ * Default draft angle of a swept pocket, in degrees: a straight vertical sweep
+ * with no flare. The single home for the figure; the import flow and the plan
+ * loader default both read it from here.
+ */
+export const DEFAULT_DRAFT_ANGLE_DEG = 0;
+
+/**
+ * Whether a draft angle is one the sweep can build: a finite number from 0 up
+ * to but not including 90 degrees. The upper bound is exclusive because
+ * tan(90 degrees) is unbounded, so the cone radius, and with it the pocket,
+ * would be infinite; the bound is a property of the geometry, not a tuned
+ * figure. The single home for the question: the plan validator and the editor
+ * commit both ask it here.
+ */
+export function isDraftAngleDegValid(draftAngleDeg: number): boolean {
+  return Number.isFinite(draftAngleDeg) && draftAngleDeg >= 0 && draftAngleDeg < 90;
+}
+
+/** The draft angle bound as a thrown, user-worded message, for the editor commit. */
+export function validateDraftAngleDeg(draftAngleDeg: number): void {
+  if (!isDraftAngleDegValid(draftAngleDeg)) {
+    throw new Error(
+      'The draft angle must be a number from 0 up to but not including 90 degrees.',
+    );
+  }
+}
 
 /**
  * Wall-clock ceiling on one model's clearance offset, in milliseconds.
@@ -94,11 +133,44 @@ export interface CutoutModelSpec {
    */
   solid: Manifold;
   placement: ModelPlacement;
+  /**
+   * The clearance the solid was dilated by, in mm. Carried here not to redo
+   * the dilation (the solid already has it) but because the sweep cone's facet
+   * tolerance is derived from it, the same budget the rest of this model's fit
+   * already spends.
+   */
+  clearanceMm: number;
+  /**
+   * Whether this model's pocket is swept straight up and out of the bin
+   * instead of carved to the exact dilated shape, so a model with an undercut
+   * can still drop in. Applied after the placement rotation, so it is no part
+   * of the cached solid.
+   */
+  sweepEnabled: boolean;
+  /**
+   * How far the swept pocket walls lean outward toward the top, in degrees.
+   * 0 is a straight vertical sweep. Ignored when sweepEnabled is false.
+   */
+  draftAngleDeg: number;
+  /**
+   * Identity of this model's swept solid for the carve's optional sweep memo
+   * (cutoutSweptKey). Absent means the sweep is computed on every carve, which
+   * is what direct engine callers and the tests do; the worker supplies it so
+   * its cache can answer.
+   */
+  sweptKey?: string;
 }
 
 /** A slotted bin plus the models carved out of its interior. */
 export interface CutoutBinParams extends SlottedBinParams {
   models: CutoutModelSpec[];
+  /**
+   * Memo for the sweep step, supplied by the worker so its swept-solid cache
+   * answers repeated carves of the same rotated model. Absent for direct
+   * callers, which compute every sweep; the carved result is identical either
+   * way by construction (see SweptSolidMemo).
+   */
+  sweptMemo?: SweptSolidMemo;
 }
 
 /**
@@ -249,6 +321,29 @@ export function cutoutModelKey(
   clearanceMm: number,
 ): string {
   return `${modelSourceId}:${unitScale}:${clearanceMm}`;
+}
+
+/**
+ * Cache key for a model's swept, rotated solid: the prepared solid's own key
+ * plus everything else the swept solid depends on. The rotation is part of the
+ * key because the sweep is not rotation invariant; the draft angle because it
+ * shapes the sweep operand. The translation is deliberately absent, which is
+ * the point of the cache: a Minkowski sum commutes with translation, so one
+ * swept solid serves every drag of the same rotated model. The sweep length is
+ * not part of the key either; it is stored beside the cached solid and checked
+ * for sufficiency, since any sufficient length yields the identical trimmed
+ * cutter.
+ *
+ * The single home for the key; the worker's swept cache derives it from here.
+ */
+export function cutoutSweptKey(
+  modelKey: string,
+  rotXDeg: number,
+  rotYDeg: number,
+  rotZDeg: number,
+  draftAngleDeg: number,
+): string {
+  return `${modelKey}:${rotXDeg}:${rotYDeg}:${rotZDeg}:${draftAngleDeg}`;
 }
 
 /** Size of a solid's axis-aligned bounding box. */
@@ -447,6 +542,170 @@ export function placeCutter(solid: Manifold, placement: ModelPlacement): Manifol
 }
 
 /**
+ * Where a swept pocket must reach, in bin-local mm: past the lip crest, which
+ * is the bin's physical top, plus the same weld overlap the interior fill
+ * uses, so the pocket provably opens through everything the bin has above it
+ * rather than leaving lip material overhanging the pocket mouth. Derived from
+ * the same envelope figures the rest of the geometry uses (the nominal top is
+ * heightUnits * HEIGHT_UNIT, the lip stands LIP_HEIGHT above it); no constant
+ * of its own.
+ */
+export function sweptReachZ(heightUnits: number): number {
+  return heightUnits * HEIGHT_UNIT + LIP_HEIGHT + CARVE_OVERLAP_EPS;
+}
+
+/** A swept solid and the sweep length it was built with, as a memo holds it. */
+export interface SweptSolid {
+  solid: Manifold;
+  lengthMm: number;
+}
+
+/**
+ * Memoization hook for the expensive sweep step, provided by the worker's
+ * cache and injected through CutoutBinParams. The engine calls it with the
+ * identity of the swept solid it needs, the shortest sweep length that serves
+ * the current placement and the bed-anchored standard length worth caching,
+ * and a compute function that builds the solid at a chosen length (at least
+ * the minimum). The memo returns a BORROWED solid: the engine transforms it
+ * and never deletes it, so the same solid serves the next carve.
+ *
+ * The trim in buildCutoutBinBody is what makes the memo sound: any sweep
+ * length at or above the minimum produces the identical trimmed cutter, so a
+ * cached solid built for one placement serves every translation of it.
+ */
+export type SweptSolidMemo = (
+  key: string,
+  lengths: { minLengthMm: number; standardLengthMm: number },
+  compute: (lengthMm: number) => Manifold,
+) => SweptSolid;
+
+/**
+ * The expensive sweep step: the Minkowski sum of a dilated cutter with a
+ * vertical segment (draft angle 0) or a vertical cone widening upward (draft
+ * angle greater than 0), over the given length. The result has no overhang
+ * along Z, so the printed pocket can receive an object with an undercut, and
+ * a positive draft angle leans the walls outward by exactly that angle.
+ *
+ * The sweep is world vertical and therefore not rotation invariant: sweeping
+ * then rotating is not the same solid as rotating then sweeping. It must run
+ * on the ROTATED solid, after the placement rotation. It IS translation
+ * invariant (a Minkowski sum commutes with translation), which is what lets
+ * the worker cache the swept solid in the rotated frame and merely translate
+ * it for every drag.
+ *
+ * The segment of the draft angle 0 case is modelled as a square prism of
+ * half-width CARVE_OVERLAP_EPS, because a true zero width segment is not a
+ * manifold; the operand must have volume. The half-width is the shared weld
+ * overlap figure, so the horizontal over-carve it adds is bounded by the same
+ * 0.01 mm every welded joint in the bin already absorbs, far below FDM
+ * positional resolution. The cone of the positive case starts from the same
+ * base half-width so the two cases agree at angle 0, and its top radius adds
+ * tan(draftAngleDeg) times the sweep length, which is what makes the wall
+ * angle exact. The cone's facet count comes from the shared circleSegments
+ * derivation: against the model's own simplify tolerance (clearance / 4) when
+ * a clearance was applied, and against the same quarter rule evaluated on the
+ * cone's own top radius when the clearance is 0 and there is no clearance
+ * budget to spend, so no constant enters either way. The faceted cone is
+ * inscribed in the true cone, exactly as the clearance sphere is, so the flare
+ * dips slightly under nominal between facet vertices and never over it.
+ *
+ * Takes ownership of `solid` and returns the swept solid to the caller.
+ */
+export function sweepSolidUpward(
+  m: ManifoldToplevel,
+  solid: Manifold,
+  spec: { lengthMm: number; draftAngleDeg: number; clearanceMm: number },
+): Manifold {
+  const { lengthMm, draftAngleDeg, clearanceMm } = spec;
+  let operand: Manifold | null = null;
+  try {
+    validateDraftAngleDeg(draftAngleDeg);
+    const baseHalfWidthMm = CARVE_OVERLAP_EPS;
+    if (draftAngleDeg === 0) {
+      operand = m.Manifold.cube(
+        [2 * baseHalfWidthMm, 2 * baseHalfWidthMm, lengthMm],
+        true,
+      ).translate([0, 0, lengthMm / 2]);
+    } else {
+      const radiusHighMm =
+        baseHalfWidthMm + Math.tan((draftAngleDeg * Math.PI) / 180) * lengthMm;
+      const toleranceMm =
+        clearanceMm > 0
+          ? simplifyToleranceMm(clearanceMm)
+          : simplifyToleranceMm(radiusHighMm);
+      operand = m.Manifold.cylinder(
+        lengthMm,
+        baseHalfWidthMm,
+        radiusHighMm,
+        circleSegments(radiusHighMm, toleranceMm),
+      );
+    }
+    const swept = solid.minkowskiSum(operand);
+    const status = swept.status();
+    if (status !== 'NoError') {
+      swept.delete();
+      throw new Error(
+        `Sweeping a pocket open upward produced an invalid solid: ${status}.`,
+      );
+    }
+    return swept;
+  } finally {
+    operand?.delete();
+    solid.delete();
+  }
+}
+
+/**
+ * The shortest sweep length that carries the lowest point of a solid up to the
+ * swept reach, floored at the weld overlap so a solid already above the reach
+ * still sweeps a degenerate sliver rather than a negative length. Derived from
+ * the same figures on both the direct and the memoized path, which is what
+ * keeps the two paths identical.
+ */
+function minSweepLengthMm(reachZ: number, lowestPointZ: number): number {
+  return Math.max(CARVE_OVERLAP_EPS, reachZ - lowestPointZ);
+}
+
+/**
+ * Finish a swept solid into the cutter the carve subtracts: trim everything
+ * above the swept reach. The trim serves two masters at once. It makes the
+ * cutter, and with it the footprints and the warnings, independent of the
+ * sweep length the solid happened to be built with: every column at or above
+ * the minimum length reaches the plane, so any sufficient length yields this
+ * identical flat-topped cutter, which is the equality the worker's cache
+ * rests on. And it bounds the reported pocket to what the bin can actually
+ * contain, instead of a column whose height depends on an internal figure.
+ *
+ * Takes ownership of `swept`.
+ */
+function trimSweptCutter(swept: Manifold, reachZ: number): Manifold {
+  const cutter = swept.trimByPlane([0, 0, -1], -reachZ);
+  swept.delete();
+  return cutter;
+}
+
+/**
+ * Sweep an already placed cutter straight up and out of the bin, as one call:
+ * the sweep step over the derived minimum length, then the trim. The direct,
+ * uncached form of what buildCutoutBinBody assembles from the same parts; the
+ * tests hold the two equal. Takes ownership of `placed`.
+ */
+export function sweepCutterUpward(
+  m: ManifoldToplevel,
+  placed: Manifold,
+  spec: { heightUnits: number; draftAngleDeg: number; clearanceMm: number },
+): Manifold {
+  const reachZ = sweptReachZ(spec.heightUnits);
+  const lengthMm = minSweepLengthMm(reachZ, placed.boundingBox().min[2]);
+  const swept = sweepSolidUpward(m, placed, {
+    lengthMm,
+    draftAngleDeg: spec.draftAngleDeg,
+    clearanceMm: spec.clearanceMm,
+  });
+  return trimSweptCutter(swept, reachZ);
+}
+
+/**
  * Validate a cutout layout. Divider walls are an error, because the interior
  * is filled solid for the carve and walls have nothing to divide. Everything
  * else is returned as a user-worded warning rather than thrown: free placement
@@ -538,13 +797,70 @@ export function buildCutoutBinBody(
   params: CutoutBinParams,
   ctx?: ExecutionContext,
 ): CutoutCarve {
-  const placed: PlacedCutout[] = params.models.map((model) => ({
-    name: model.name,
-    cutter: placeCutter(model.solid, model.placement),
-  }));
+  const placed: PlacedCutout[] = [];
   let warnings: CutoutPlacementWarning[];
   let footprints: { name: string; sizeMm: SizeMm }[];
   try {
+    for (const model of params.models) {
+      // The sweep runs here, before the validation and the footprints below,
+      // so every judgement the carve makes and every size it reports is about
+      // the swept solid that is actually subtracted. The order within is load
+      // bearing: rotate, sweep, translate, trim. The sweep must follow the
+      // rotation (it is not rotation invariant) and may precede the
+      // translation (a Minkowski sum commutes with it), which is exactly what
+      // lets the memo cache the swept solid in the rotated frame and serve
+      // every drag of it.
+      let cutter: Manifold;
+      if (model.sweepEnabled) {
+        const { placement } = model;
+        const reachZ = sweptReachZ(params.heightUnits);
+        const rotated = model.solid.rotate([
+          placement.rotXDeg,
+          placement.rotYDeg,
+          placement.rotZDeg,
+        ]);
+        const rotatedMinZ = rotated.boundingBox().min[2];
+        // The shortest length that serves this placement, and the bed-anchored
+        // standard length worth caching: long enough for any placement whose
+        // centre sits at or above the bed, so a drag downward within the bin
+        // never invalidates the cached solid.
+        const minLengthMm = minSweepLengthMm(reachZ, rotatedMinZ + placement.zMm);
+        const standardLengthMm = Math.max(minLengthMm, reachZ - rotatedMinZ);
+        let rotatedConsumed = false;
+        const compute = (lengthMm: number): Manifold => {
+          rotatedConsumed = true;
+          return sweepSolidUpward(m, rotated, {
+            lengthMm,
+            draftAngleDeg: model.draftAngleDeg,
+            clearanceMm: model.clearanceMm,
+          });
+        };
+        let sweptRotated: Manifold;
+        let ownsSweptRotated: boolean;
+        if (params.sweptMemo !== undefined && model.sweptKey !== undefined) {
+          sweptRotated = params.sweptMemo(
+            model.sweptKey,
+            { minLengthMm, standardLengthMm },
+            compute,
+          ).solid;
+          ownsSweptRotated = false;
+        } else {
+          sweptRotated = compute(minLengthMm);
+          ownsSweptRotated = true;
+        }
+        if (!rotatedConsumed) rotated.delete();
+        const translated = sweptRotated.translate([
+          placement.xMm,
+          placement.yMm,
+          placement.zMm,
+        ]);
+        if (ownsSweptRotated) sweptRotated.delete();
+        cutter = trimSweptCutter(translated, reachZ);
+      } else {
+        cutter = placeCutter(model.solid, model.placement);
+      }
+      placed.push({ name: model.name, cutter });
+    }
     warnings = validateCutoutPlacement(m, params, placed);
     footprints = placed.map(({ name, cutter }) => ({ name, sizeMm: sizeOf(cutter) }));
   } catch (error) {

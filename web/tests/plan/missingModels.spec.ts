@@ -18,6 +18,8 @@ function model(overrides: Partial<CutoutModel> = {}): CutoutModel {
     sizeMm: { x: 20, y: 10, z: 5 },
     placement: { xMm: 3, yMm: -4, zMm: 6, rotXDeg: 90, rotYDeg: 0, rotZDeg: 45 },
     clearanceMm: 0.6,
+    sweepEnabled: true,
+    draftAngleDeg: 3,
     ...overrides,
   };
 }

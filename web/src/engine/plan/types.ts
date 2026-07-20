@@ -179,6 +179,19 @@ export interface CutoutModel {
    * answer whether a change was cheap or expensive with no extra bookkeeping.
    */
   clearanceMm: number;
+  /**
+   * Whether this model's pocket is swept straight up and out of the bin instead
+   * of carved to the exact dilated shape, so a model with an undercut can still
+   * drop in. Applied after placement rotation, so it is not part of the cached
+   * import and does not key the prepared solid.
+   */
+  sweepEnabled: boolean;
+  /**
+   * How far the swept pocket walls lean outward toward the top, in degrees. 0 is
+   * a straight vertical sweep; larger angles flare the walls for easier insertion
+   * and removal. Ignored when sweepEnabled is false.
+   */
+  draftAngleDeg: number;
 }
 
 /**
@@ -407,11 +420,12 @@ export interface PrintBatch {
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 6, which is version 5 plus cutout-origin
-   * bins. The change is purely additive: no field of an earlier version changes
-   * meaning, so versions 1 to 5 are read exactly as they were before.
+   * Envelope format version. Currently 7, which is version 6 plus the per-model
+   * sweepEnabled and draftAngleDeg fields on cutout models. The change is
+   * purely additive: no field of an earlier version changes meaning, so
+   * versions 1 to 6 are read exactly as they were before, with the sweep off.
    */
-  version: 6;
+  version: 7;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -419,4 +433,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 6;
+export const PLAN_FILE_VERSION = 7;

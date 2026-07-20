@@ -96,6 +96,8 @@ function cutoutModels(count: number): CutoutModel[] {
     sizeMm: { x: 20, y: 10, z: 8 },
     placement: { xMm: 0, yMm: 0, zMm: 12, rotXDeg: 0, rotYDeg: 0, rotZDeg: 0 },
     clearanceMm: 0.4,
+    sweepEnabled: false,
+    draftAngleDeg: 0,
   }));
 }
 

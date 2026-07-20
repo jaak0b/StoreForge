@@ -19,8 +19,11 @@ import { parseStl } from '../../engine/cutout/stlReader';
 import { centredModelMesh, meshBounds, type MeshBounds } from '../../engine/cutout/cutoutMesh';
 import {
   DEFAULT_CUTOUT_CLEARANCE_MM,
+  DEFAULT_CUTOUT_SWEEP_ENABLED,
+  DEFAULT_DRAFT_ANGLE_DEG,
   maxClearanceMm,
   validateClearanceMm,
+  validateDraftAngleDeg,
   type SizeMm,
 } from '../../engine/cutout/cutoutBin';
 import {
@@ -153,6 +156,8 @@ const carveRequest = computed<CutoutBinRequest>(() => ({
     clearanceMm: model.clearanceMm,
     name: model.name,
     placement: { ...model.placement },
+    sweepEnabled: model.sweepEnabled,
+    draftAngleDeg: model.draftAngleDeg,
   })),
 }));
 
@@ -390,6 +395,8 @@ async function importFile(file: File): Promise<void> {
     sizeMm: { x: rawBounds.sizeX, y: rawBounds.sizeY, z: rawBounds.sizeZ },
     placement: restingPlacementMm(rawBounds.sizeZ),
     clearanceMm: DEFAULT_CUTOUT_CLEARANCE_MM,
+    sweepEnabled: DEFAULT_CUTOUT_SWEEP_ENABLED,
+    draftAngleDeg: DEFAULT_DRAFT_ANGLE_DEG,
   };
   cutout.addModel(model, mesh);
 
@@ -484,6 +491,39 @@ async function onCommitClearance(id: string, clearanceMm: number): Promise<void>
   } finally {
     cutout.setBusy(id, false);
   }
+}
+
+// ---------------------------------------------------------------------------
+// The sweep, which only re-carves
+// ---------------------------------------------------------------------------
+
+/**
+ * Both sweep controls write plan data and nothing else: the sweep runs at
+ * carve time on the placed cutter, so no cached solid is invalidated and no
+ * import re-runs. The carve request is computed from the models, so writing
+ * the field is what triggers the re-carve.
+ */
+function onSetSweep(id: string, sweepEnabled: boolean): void {
+  cutout.setSweepEnabled(id, sweepEnabled);
+}
+
+function onCommitDraftAngle(id: string, draftAngleDeg: number): void {
+  const model = cutout.modelById(id);
+  if (model === null) return;
+  const previous = model.draftAngleDeg;
+  if (!Number.isFinite(draftAngleDeg) || draftAngleDeg === previous) {
+    cutout.setDraftAngleDraft(id, previous);
+    return;
+  }
+  try {
+    validateDraftAngleDeg(draftAngleDeg);
+  } catch (error) {
+    cutout.setError(id, detailOf(error));
+    cutout.setDraftAngleDraft(id, previous);
+    return;
+  }
+  cutout.setError(id, null);
+  cutout.setDraftAngle(id, draftAngleDeg);
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +641,14 @@ const fittable = computed(() =>
     const bounds = boundsById.value[model.id];
     return bounds === undefined
       ? []
-      : [{ bounds, clearanceMm: model.clearanceMm }];
+      : [
+          {
+            bounds,
+            clearanceMm: model.clearanceMm,
+            sweepEnabled: model.sweepEnabled,
+            draftAngleDeg: model.draftAngleDeg,
+          },
+        ];
   }),
 );
 
@@ -964,6 +1011,8 @@ function editingTitle(entry: QueueEntry): string {
         @locate="onLocateFile"
         @remove="onRemoveModel"
         @commit-clearance="onCommitClearance"
+        @set-sweep="onSetSweep"
+        @commit-draft-angle="onCommitDraftAngle"
         @accept-units="onAcceptUnits"
         @keep-units="onKeepUnits"
       />

@@ -20,12 +20,15 @@
  */
 import {
   cutoutModelKey,
+  cutoutSweptKey,
   type CutoutModelSpec,
   type CutoutPlacementWarning,
   type CutoutPrepareTimings,
   type ModelPlacement,
   type PreparedCutoutModel,
   type SizeMm,
+  type SweptSolid,
+  type SweptSolidMemo,
 } from '../engine/cutout/cutoutBin';
 import { modelNotStoredMessage } from '../engine/plan/missingModels';
 import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
@@ -54,6 +57,14 @@ export interface CutoutModelIdentity extends CutoutModelKeySpec {
 /** One model as a carve request names it: which cached solid, and where it goes. */
 export interface CutoutModelRequest extends CutoutModelIdentity {
   placement: ModelPlacement;
+  /**
+   * Whether the placed cutter is swept open upward at carve time, and by what
+   * draft angle. Deliberately no part of the cache key: the sweep runs after
+   * the placement rotation on every carve, so toggling it or changing the
+   * angle invalidates nothing and re-runs no import.
+   */
+  sweepEnabled: boolean;
+  draftAngleDeg: number;
 }
 
 /**
@@ -166,6 +177,127 @@ export class CutoutModelCache {
 }
 
 /**
+ * The worker's cache of swept, rotated cutter solids, the second tier beside
+ * the prepared-model cache above. In memory only, exactly like that cache: a
+ * swept solid is WASM heap memory, nothing is persisted anywhere, and a reload
+ * starts empty.
+ *
+ * The entries this holds are what make a drag of a swept model affordable. The
+ * sweep is a Minkowski sum over the placed cutter and costs seconds to tens of
+ * seconds on a real non-convex model, but it commutes with translation, so the
+ * carve caches it under the model's rotated identity (cutoutSweptKey) and
+ * merely translates and trims it per placement. Only rotating the model,
+ * changing its draft angle, or changing the model identity itself computes a
+ * new sweep.
+ *
+ * Each entry stores the sweep length it was built with, because a cached solid
+ * only serves a placement whose required length it covers; the carve trims the
+ * excess, so any sufficient length yields the identical cutter (the engine
+ * owns that argument, in SweptSolidMemo).
+ *
+ * Eviction is explicit, exactly as the prepared-model cache's is: the carve
+ * keeps only the keys it currently names, and releasing prepared models drops
+ * the swept solids derived from them. Rotating a model through many angles
+ * therefore never accumulates more than the current carve's entries.
+ */
+export class CutoutSweptCache {
+  private readonly entries = new Map<string, SweptSolid>();
+
+  /** The swept solid under this key, or undefined when it is not cached. */
+  get(key: string): SweptSolid | undefined {
+    return this.entries.get(key);
+  }
+
+  /**
+   * Take ownership of a swept solid. Replacing an entry deletes the solid it
+   * supersedes, so recomputing under a held key cannot leak.
+   */
+  put(key: string, entry: SweptSolid): void {
+    this.entries.get(key)?.solid.delete();
+    this.entries.set(key, entry);
+  }
+
+  /** Delete every cached solid whose key is not among the ones to keep. */
+  release(keep: string[]): void {
+    const kept = new Set(keep);
+    for (const [key, entry] of this.entries) {
+      if (kept.has(key)) continue;
+      entry.solid.delete();
+      this.entries.delete(key);
+    }
+  }
+
+  /**
+   * Delete every swept solid whose prepared model is no longer held, so
+   * releasing a model from the cache above releases what was derived from it.
+   * A swept key is the model key plus its own suffix, which is what the
+   * prefix asks about.
+   */
+  retainForModelKeys(modelKeys: string[]): void {
+    const prefixes = modelKeys.map((key) => `${key}:`);
+    for (const [key, entry] of this.entries) {
+      if (prefixes.some((prefix) => key.startsWith(prefix))) continue;
+      entry.solid.delete();
+      this.entries.delete(key);
+    }
+  }
+
+  /** How many solids are held. For the eviction tests and for diagnostics. */
+  get size(): number {
+    return this.entries.size;
+  }
+}
+
+/** What one memo consultation did, for the timing line the worker prints. */
+export type SweptMemoEvent =
+  | { outcome: 'hit'; key: string }
+  | { outcome: 'miss'; key: string; elapsedMs: number };
+
+/**
+ * The memo the carve consults for each swept model, backed by the cache. A
+ * hit requires the key to match AND the cached sweep length to cover the
+ * placement's required minimum: a model dragged below where the cached length
+ * reaches from is recomputed at the standard length, which covers every
+ * placement at or above the bed, so it does not happen again on the way down.
+ *
+ * `report` is a parameter for the same reason prepare is one on
+ * importCutoutModel: the decision is testable without a console, and the
+ * worker is the one place a hit and a miss are printed as different events.
+ */
+export function sweptMemoFor(
+  cache: CutoutSweptCache,
+  report: (event: SweptMemoEvent) => void,
+): SweptSolidMemo {
+  return (key, lengths, compute) => {
+    const cached = cache.get(key);
+    if (cached !== undefined && cached.lengthMm >= lengths.minLengthMm) {
+      report({ outcome: 'hit', key });
+      return cached;
+    }
+    const lengthMm = Math.max(lengths.standardLengthMm, lengths.minLengthMm);
+    const startedAt = Date.now();
+    const solid = compute(lengthMm);
+    const elapsedMs = Date.now() - startedAt;
+    const entry: SweptSolid = { solid, lengthMm };
+    cache.put(key, entry);
+    report({ outcome: 'miss', key, elapsedMs });
+    return entry;
+  };
+}
+
+/** The swept-solid key of one carve request's model, or null when unswept. */
+export function sweptKeyOf(request: CutoutModelRequest): string | null {
+  if (!request.sweepEnabled) return null;
+  return cutoutSweptKey(
+    cutoutModelKey(request.modelSourceId, request.unitScale, request.clearanceMm),
+    request.placement.rotXDeg,
+    request.placement.rotYDeg,
+    request.placement.rotZDeg,
+    request.draftAngleDeg,
+  );
+}
+
+/**
  * Import one model, or recognise that its prepared solid is already cached.
  *
  * The single home for that decision, and the reason the feature is usable at
@@ -215,7 +347,15 @@ export function resolveCutoutModels(
   return requests.map((request) => {
     const cached = cache.get(request);
     if (cached === undefined) throw new Error(modelNotStoredMessage(request));
-    return { name: request.name, solid: cached.solid, placement: request.placement };
+    return {
+      name: request.name,
+      solid: cached.solid,
+      placement: request.placement,
+      clearanceMm: request.clearanceMm,
+      sweepEnabled: request.sweepEnabled,
+      draftAngleDeg: request.draftAngleDeg,
+      sweptKey: sweptKeyOf(request) ?? undefined,
+    };
   });
 }
 

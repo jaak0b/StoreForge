@@ -300,6 +300,9 @@ function cubeModel(
     name,
     solid: prepared(m.Manifold.cube([sizeMm, sizeMm, sizeMm], true), clearanceMm, 1, name),
     placement,
+    clearanceMm,
+    sweepEnabled: false,
+    draftAngleDeg: 0,
   };
 }
 
@@ -396,6 +399,9 @@ describe('buildCutoutBinBody', () => {
         name: 'box.stl',
         solid,
         placement: { ...at(0, 0, INTERIOR_MID_Z), rotXDeg: 90 },
+        clearanceMm: 0,
+        sweepEnabled: false,
+        draftAngleDeg: 0,
       },
     ];
     const result = buildCutoutBinBody(m, params({ models }));
@@ -748,7 +754,14 @@ describe('unit scale', () => {
     const clearanceMm = DEFAULT_CUTOUT_CLEARANCE_MM;
     const solid = prepared(m.Manifold.cube([1, 1, 1], true), clearanceMm, 25.4);
     const models: CutoutModelSpec[] = [
-      { name: 'inch.stl', solid, placement: at(0, 5, INTERIOR_MID_Z) },
+      {
+        name: 'inch.stl',
+        solid,
+        placement: at(0, 5, INTERIOR_MID_Z),
+        clearanceMm,
+        sweepEnabled: false,
+        draftAngleDeg: 0,
+      },
     ];
     const pocket = pocketOf(models);
 

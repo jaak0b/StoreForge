@@ -130,3 +130,19 @@ export function reportCutoutModelCacheHit(model: TimedModel): void {
     ]),
   );
 }
+
+/**
+ * Report a sweep that had to be computed at carve time: the Minkowski sum of
+ * the rotated cutter with the sweep operand, which is the per-rotation cost
+ * the swept-solid cache exists to avoid repeating. Printed per carve like the
+ * offset lines, for the same reason: the useful figure is how often a sweep
+ * had to run, not only how long one took.
+ */
+export function reportSweptCacheMiss(name: string, elapsedMs: number): void {
+  console.log(row(['sweep cache miss', models([name]), ms(elapsedMs)]));
+}
+
+/** Report a carve whose sweep a cached swept solid answered. */
+export function reportSweptCacheHit(name: string): void {
+  console.log(row(['sweep cache hit', models([name]), 'reused the swept solid']));
+}

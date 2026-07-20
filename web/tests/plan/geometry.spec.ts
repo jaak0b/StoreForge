@@ -38,6 +38,8 @@ function cutoutModel(): CutoutModel {
     sizeMm: { x: 24, y: 24, z: 40 },
     placement: { xMm: 3, yMm: -2, zMm: 21.75, rotXDeg: 0, rotYDeg: 90, rotZDeg: 15 },
     clearanceMm: 0.4,
+    sweepEnabled: false,
+    draftAngleDeg: 0,
   };
 }
 

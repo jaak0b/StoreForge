@@ -10,7 +10,10 @@ import type { CutoutModel } from '../../engine/plan/types';
  *
  * Three things happen on a row and nowhere else. A clearance is committed here,
  * on blur or on Enter, because every committed value costs a fresh offset of
- * the whole model. A model whose file this device does not have is located
+ * the whole model. The sweep checkbox and its draft angle live beside it: the
+ * checkbox commits immediately (a boolean has no mid-edit state) and the angle
+ * commits like the clearance does, though both only re-carve rather than
+ * re-running the import. A model whose file this device does not have is located
  * here, which re-links the chosen file to the record and keeps the placement
  * the user already did. And the question about a model's units, when its size
  * makes one worth asking, is answered here.
@@ -45,6 +48,10 @@ const emit = defineEmits<{
   remove: [id: string];
   /** A clearance the user committed by leaving the field or pressing Enter. */
   commitClearance: [id: string, clearanceMm: number];
+  /** The sweep checkbox was toggled; a boolean has no mid-edit state to commit. */
+  setSweep: [id: string, sweepEnabled: boolean];
+  /** A draft angle the user committed by leaving the field or pressing Enter. */
+  commitDraftAngle: [id: string, draftAngleDeg: number];
   /** The unit proposal on a model was accepted. */
   acceptUnits: [id: string];
   /** The unit proposal on a model was declined; the model stays in millimetres. */
@@ -85,6 +92,14 @@ function commitClearance(model: CutoutModel): void {
 
 function onClearanceInput(model: CutoutModel, value: unknown): void {
   cutout.setClearanceDraft(model.id, Number(value));
+}
+
+function commitDraftAngle(model: CutoutModel): void {
+  emit('commitDraftAngle', model.id, cutout.stateOf(model.id).draftAngleDraft);
+}
+
+function onDraftAngleInput(model: CutoutModel, value: unknown): void {
+  cutout.setDraftAngleDraft(model.id, Number(value));
 }
 
 function warningsFor(id: string): string[] {
@@ -184,6 +199,32 @@ function warningsFor(id: string): string[] {
               @update:model-value="onClearanceInput(model, $event)"
               @blur="commitClearance(model)"
               @keyup.enter="commitClearance(model)"
+            />
+          </div>
+          <v-checkbox
+            :model-value="model.sweepEnabled"
+            label="Sweep the pocket open upward"
+            density="compact"
+            hide-details
+            :disabled="cutout.stateOf(model.id).busy"
+            @click.stop
+            @update:model-value="emit('setSweep', model.id, $event === true)"
+          />
+          <div v-if="model.sweepEnabled" class="d-flex align-center ga-2">
+            <v-text-field
+              :model-value="cutout.stateOf(model.id).draftAngleDraft"
+              type="number"
+              min="0"
+              max="89"
+              step="1"
+              label="Draft angle (degrees)"
+              density="compact"
+              hide-details
+              :disabled="cutout.stateOf(model.id).busy"
+              @click.stop
+              @update:model-value="onDraftAngleInput(model, $event)"
+              @blur="commitDraftAngle(model)"
+              @keyup.enter="commitDraftAngle(model)"
             />
           </div>
         </template>

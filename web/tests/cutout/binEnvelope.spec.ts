@@ -38,7 +38,7 @@ function bounds(
 }
 
 function extent(b: MeshBounds, clearanceMm = 0): PlacedModelExtent {
-  return { bounds: b, clearanceMm };
+  return { bounds: b, clearanceMm, sweepEnabled: false, draftAngleDeg: 0 };
 }
 
 describe('interiorBoundsMm', () => {
@@ -113,6 +113,31 @@ describe('fitBinToModels', () => {
   it('never proposes a bin with no interior at all', () => {
     const flat = bounds(-2, 2, -2, 2, 0, 1);
     expect(fitBinToModels([extent(flat)])!.heightUnits).toBe(MIN_HEIGHT_UNITS);
+  });
+
+  it('adds the draft flare of a swept model, which is widest at the interior top', () => {
+    // The same bounds swept at 45 degrees flare outward by the height the
+    // sweep climbs, so the fit must grow the footprint while an unswept model
+    // of those bounds does not.
+    const b = bounds(-8, 8, -8, 8, FLOOR_TOP, 20);
+    const plain = fitBinToModels([extent(b)])!;
+    const swept = fitBinToModels([
+      { bounds: b, clearanceMm: 0, sweepEnabled: true, draftAngleDeg: 45 },
+    ])!;
+    expect(swept.gridX).toBeGreaterThan(plain.gridX);
+    expect(swept.gridY).toBeGreaterThan(plain.gridY);
+    // The sweep opens the pocket up to whatever top the bin has; it asks for
+    // no extra height of its own.
+    expect(swept.heightUnits).toBe(plain.heightUnits);
+  });
+
+  it('adds no flare when the sweep is on at 0 degrees', () => {
+    const b = bounds(-8, 8, -8, 8, FLOOR_TOP, 20);
+    const plain = fitBinToModels([extent(b)])!;
+    const swept = fitBinToModels([
+      { bounds: b, clearanceMm: 0, sweepEnabled: true, draftAngleDeg: 0 },
+    ])!;
+    expect(swept).toEqual(plain);
   });
 
   it('fits every model at once, not just the first', () => {

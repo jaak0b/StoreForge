@@ -130,7 +130,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     const entries = [entry(), entry({ id: 'b2', notes: 'reprint in PETG' })];
     const batches = [batch()];
     const result = parsePlanFile(serializePlanFile(entries, batches));
-    expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches }, warnings: [] });
   });
 
   it('rejects text that is not JSON', () => {
@@ -145,10 +145,10 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects an envelope version newer than this build reads', () => {
-    const result = parsePlanFile('{"version":7,"entries":[],"batches":[]}');
+    const result = parsePlanFile('{"version":8,"entries":[],"batches":[]}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('version 7');
-    if (!result.ok) expect(result.error).toContain('versions 1 to 6');
+    if (!result.ok) expect(result.error).toContain('version 8');
+    if (!result.ok) expect(result.error).toContain('versions 1 to 7');
   });
 
   it('rejects a missing entries list', () => {
@@ -212,7 +212,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [entry()], batches: [] },
+      plan: { version: 7, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -251,7 +251,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 7, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -266,7 +266,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [queued, printed] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 7, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -279,7 +279,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 7, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -302,7 +302,7 @@ describe('version-3 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 3, entries: [raw], batches: [] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [entry()], batches: [] },
+      plan: { version: 7, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -319,7 +319,7 @@ describe('version-3 migration', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [], batches: [batch()] },
+      plan: { version: 7, entries: [], batches: [batch()] },
       warnings: [],
     });
   });
@@ -349,7 +349,7 @@ describe('divider walls migration', () => {
     const result = parsePlanFile(serializePlanFile([withWalls], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [withWalls], batches: [] },
+      plan: { version: 7, entries: [withWalls], batches: [] },
       warnings: [],
     });
   });
@@ -492,7 +492,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [imperial, lengthless], batches: [] },
+      plan: { version: 7, entries: [imperial, lengthless], batches: [] },
       warnings: [],
     });
   });
@@ -502,7 +502,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -524,7 +524,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [], batches: [withSnapshots] },
+      plan: { version: 7, entries: [], batches: [withSnapshots] },
       warnings: [],
     });
   });
@@ -549,7 +549,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([fused], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [fused], batches: [] },
+      plan: { version: 7, entries: [fused], batches: [] },
       warnings: [],
     });
   });
@@ -633,7 +633,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -722,7 +722,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -739,7 +739,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -856,7 +856,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSource]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [], batches: [withSource] },
+      plan: { version: 7, entries: [], batches: [withSource] },
       warnings: [],
     });
   });
@@ -927,7 +927,7 @@ describe('pockets in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [traced], batches: [] },
+      plan: { version: 7, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -1311,7 +1311,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1332,7 +1332,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1351,12 +1351,12 @@ describe('divider walls survive a save and reload', () => {
 
     const result = parsePlanFile(serializePlanFile([], batches));
 
-    expect(result).toEqual({ ok: true, plan: { version: 6, entries: [], batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries: [], batches }, warnings: [] });
   });
 });
 
 describe('cutout bins in plan files', () => {
-  /** One carved model, complete in every field a version-6 plan stores. */
+  /** One carved model, complete in every field a version-7 plan stores. */
   function cutoutModel(overrides: Partial<CutoutModel> = {}): CutoutModel {
     return {
       id: 'm1',
@@ -1367,6 +1367,8 @@ describe('cutout bins in plan files', () => {
       sizeMm: { x: 24.5, y: 24.5, z: 40 },
       placement: { xMm: 12.4, yMm: -3.1, zMm: 21.75, rotXDeg: 0, rotYDeg: 90, rotZDeg: 15 },
       clearanceMm: 0.4,
+      sweepEnabled: true,
+      draftAngleDeg: 5,
       ...overrides,
     };
   }
@@ -1417,7 +1419,7 @@ describe('cutout bins in plan files', () => {
 
     const result = parsePlanFile(serializePlanFile(entries, []));
 
-    expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches: [] }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries, batches: [] }, warnings: [] });
   });
 
   it('round-trips a cutout bin inside a print batch', () => {
@@ -1429,7 +1431,7 @@ describe('cutout bins in plan files', () => {
 
     const result = parsePlanFile(serializePlanFile([], batches));
 
-    expect(result).toEqual({ ok: true, plan: { version: 6, entries: [], batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 7, entries: [], batches }, warnings: [] });
   });
 
   it('keeps two models in one bin on their own clearances', () => {
@@ -1479,6 +1481,42 @@ describe('cutout bins in plan files', () => {
     const result = withoutModelField('sizeMm');
 
     expect(loadedBin(result).models[0].sizeMm).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('loads a model saved before the sweep existed with the sweep off', () => {
+    // A pre-version-7 plan described bins with exact pockets; loading it with
+    // the sweep on would silently enlarge every pocket it described.
+    const result = withoutModelField('sweepEnabled');
+
+    expect(loadedBin(result).models[0].sweepEnabled).toBe(false);
+  });
+
+  it('defaults an absent draft angle to 0 degrees', () => {
+    const result = withoutModelField('draftAngleDeg');
+
+    expect(loadedBin(result).models[0].draftAngleDeg).toBe(0);
+  });
+
+  it('keeps a committed sweep and draft angle through a round trip', () => {
+    const entries = [
+      cutoutEntry(
+        cutoutBin({ models: [cutoutModel({ sweepEnabled: true, draftAngleDeg: 12.5 })] }),
+      ),
+    ];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(loadedBin(result).models[0].sweepEnabled).toBe(true);
+    expect(loadedBin(result).models[0].draftAngleDeg).toBe(12.5);
+  });
+
+  it('accepts a draft angle just under the 90 degree bound', () => {
+    const nearLimit = badProduct({
+      ...cutoutBin(),
+      models: [cutoutModel({ draftAngleDeg: 89.9 })],
+    });
+
+    expect(validateEntry(entry({ id: 'c1', product: nearLimit }))).toBeNull();
   });
 
   it('drops an unknown extra model field rather than carrying it into storage', () => {
@@ -1565,6 +1603,26 @@ describe('cutout bins in plan files', () => {
       { ...cutoutModel(), clearanceMm: -0.1 },
       'cutout model m1: The clearance must be a number of at least 0 mm.',
     ],
+    [
+      'a sweep flag that is not a boolean',
+      { ...cutoutModel(), sweepEnabled: 'yes' },
+      'cutout model m1: The sweep option must be true or false.',
+    ],
+    [
+      'a draft angle of 90 degrees, whose cone would be infinite',
+      { ...cutoutModel(), draftAngleDeg: 90 },
+      'cutout model m1: The draft angle must be a number from 0 up to but not including 90 degrees.',
+    ],
+    [
+      'a negative draft angle',
+      { ...cutoutModel(), draftAngleDeg: -1 },
+      'cutout model m1: The draft angle must be a number from 0 up to but not including 90 degrees.',
+    ],
+    [
+      'a draft angle that is not a number',
+      { ...cutoutModel(), draftAngleDeg: 'steep' },
+      'cutout model m1: The draft angle must be a number from 0 up to but not including 90 degrees.',
+    ],
   ])('rejects %s', (_name, model, message) => {
     const bad = badProduct({ ...cutoutBin(), models: [model] });
 
@@ -1638,7 +1696,7 @@ describe('a plan written by the previous build', () => {
 
     expect(result).toEqual({
       ok: true,
-      plan: { version: 6, entries: [stored], batches: [] },
+      plan: { version: 7, entries: [stored], batches: [] },
       warnings: [],
     });
   });

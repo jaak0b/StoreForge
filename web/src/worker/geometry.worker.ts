@@ -27,18 +27,23 @@ import { meshToManifold } from '../engine/cutout/cutoutMesh';
 import { assertNever } from '../engine/plan/types';
 import {
   CutoutModelCache,
+  CutoutSweptCache,
   carveModelNames,
   importCutoutModel,
   resolveCutoutModels,
+  sweptMemoFor,
   type CutoutBinRequest,
   type CutoutModelFacts,
   type CutoutModelIdentity,
   type CutoutModelKeySpec,
   type CutoutPreviewResult,
 } from './cutoutModels';
+import { cutoutModelKey, type CutoutBinParams } from '../engine/cutout/cutoutBin';
 import {
   reportCutoutModelCacheHit,
   reportCutoutModelPrepared,
+  reportSweptCacheHit,
+  reportSweptCacheMiss,
   timed,
 } from './timing';
 import type {
@@ -102,6 +107,47 @@ function transferMeshes(meshes: PartMeshes): PartMeshes {
  * prepared solid outlives any one request: that is the entire point of it.
  */
 const cutoutModels = new CutoutModelCache();
+
+/**
+ * The cache of swept, rotated cutter solids, beside the prepared-model cache
+ * for the same reason: a swept solid outlives any one carve, and reusing it is
+ * what keeps a drag end of a swept model at re-carve cost rather than
+ * Minkowski cost. In memory only; a reload starts empty.
+ */
+const cutoutSwept = new CutoutSweptCache();
+
+/**
+ * Resolve a carve request into engine params wired to the swept-solid cache.
+ * The single place every cutout carve endpoint goes through, so none of them
+ * can forget the eviction: the cache keeps exactly the swept solids the
+ * current carve names, which is what stops a model rotated through many
+ * angles from accumulating one solid per angle.
+ */
+function cutoutCarveParams(request: CutoutBinRequest): CutoutBinParams {
+  const models = resolveCutoutModels(cutoutModels, request.models);
+  const keptKeys: string[] = [];
+  const nameByKey = new Map<string, string>();
+  for (const model of models) {
+    if (model.sweptKey === undefined) continue;
+    keptKeys.push(model.sweptKey);
+    nameByKey.set(model.sweptKey, model.name);
+  }
+  cutoutSwept.release(keptKeys);
+  const sweptMemo = sweptMemoFor(cutoutSwept, (event) => {
+    const name = nameByKey.get(event.key) ?? event.key;
+    switch (event.outcome) {
+      case 'hit':
+        reportSweptCacheHit(name);
+        return;
+      case 'miss':
+        reportSweptCacheMiss(name, event.elapsedMs);
+        return;
+      default:
+        return assertNever(event);
+    }
+  });
+  return { ...request, models, sweptMemo };
+}
 
 /**
  * The ExecutionContext of the preview carve currently in flight, so a newer
@@ -214,6 +260,14 @@ const api = {
    */
   async releaseCutoutModels(keep: CutoutModelKeySpec[]): Promise<void> {
     cutoutModels.release(keep);
+    // A swept solid is derived from a prepared one, so it goes when its
+    // source goes: keeping it would hold WASM memory for a solid nothing can
+    // name anymore.
+    cutoutSwept.retainForModelKeys(
+      keep.map((spec) =>
+        cutoutModelKey(spec.modelSourceId, spec.unitScale, spec.clearanceMm),
+      ),
+    );
   },
 
   /**
@@ -229,10 +283,7 @@ const api = {
     const ctx = newExecutionContext(m);
     activePreviewContext = ctx;
     try {
-      const params = {
-        ...request,
-        models: resolveCutoutModels(cutoutModels, request.models),
-      };
+      const params = cutoutCarveParams(request);
       const carve = timed('carve', carveModelNames(request.models), () =>
         carveCutoutBin(m, font, params, ctx),
       );
@@ -261,7 +312,7 @@ const api = {
    */
   async generateCutoutBin(request: CutoutBinRequest): Promise<CutoutCarveResult> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const params = { ...request, models: resolveCutoutModels(cutoutModels, request.models) };
+    const params = cutoutCarveParams(request);
     const carve = timed('carve', carveModelNames(request.models), () =>
       carveCutoutBin(m, font, params),
     );
@@ -271,7 +322,7 @@ const api = {
   /** The same, as one unioned mesh for the single-mesh STL export. */
   async generateCutoutBinUnion(request: CutoutBinRequest): Promise<CutoutUnionResult> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const params = { ...request, models: resolveCutoutModels(cutoutModels, request.models) };
+    const params = cutoutCarveParams(request);
     const carve = timed('carve', carveModelNames(request.models), () =>
       carveCutoutBinUnion(m, font, params),
     );

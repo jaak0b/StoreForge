@@ -17,7 +17,12 @@ import {
   type DividerWall,
 } from './types';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
-import { DEFAULT_CUTOUT_CLEARANCE_MM, maxClearanceMm } from '../cutout/cutoutBin';
+import {
+  DEFAULT_CUTOUT_CLEARANCE_MM,
+  DEFAULT_DRAFT_ANGLE_DEG,
+  isDraftAngleDegValid,
+  maxClearanceMm,
+} from '../cutout/cutoutBin';
 import { MAX_TRIANGLES } from '../cutout/stlReader';
 import {
   composeLabelText,
@@ -342,8 +347,9 @@ export function validateCutoutModels(
     if (model.triangleCount > MAX_TRIANGLES) {
       return `${subject}: cutout model ${id}: The triangle count must not exceed ${MAX_TRIANGLES}.`;
     }
-    // unitScale, sizeMm and clearanceMm are accepted as absent and defaulted on
-    // pick, so a plan written before each of them existed still loads.
+    // unitScale, sizeMm, clearanceMm, sweepEnabled and draftAngleDeg are
+    // accepted as absent and defaulted on pick, so a plan written before each
+    // of them existed still loads.
     if (model.unitScale !== undefined) {
       if (!isFiniteNumber(model.unitScale) || model.unitScale <= 0) {
         return `${subject}: cutout model ${id}: The unit scale must be a number greater than 0.`;
@@ -382,17 +388,32 @@ export function validateCutoutModels(
         );
       }
     }
+    if (model.sweepEnabled !== undefined && typeof model.sweepEnabled !== 'boolean') {
+      return `${subject}: cutout model ${id}: The sweep option must be true or false.`;
+    }
+    if (
+      model.draftAngleDeg !== undefined &&
+      (typeof model.draftAngleDeg !== 'number' ||
+        !isDraftAngleDegValid(model.draftAngleDeg))
+    ) {
+      return (
+        `${subject}: cutout model ${id}: The draft angle must be a number from 0 ` +
+        'up to but not including 90 degrees.'
+      );
+    }
   }
   return null;
 }
 
 /**
- * Copies only the known CutoutModel fields from a validated raw bin. The three
+ * Copies only the known CutoutModel fields from a validated raw bin. The
  * fields that were added after the first cutout bins could be written default
  * here: the clearance to the shared default, the unit scale to 1 (which is
  * exactly what a plan written before the field existed meant, since it
- * described a model already treated as millimetres), and the size to zeroes,
- * which the next generation recomputes from the model itself.
+ * described a model already treated as millimetres), the size to zeroes,
+ * which the next generation recomputes from the model itself, and the sweep
+ * to off with a 0 degree draft, which reproduces the exact pockets an older
+ * plan described.
  */
 export function pickCutoutModels(raw: Record<string, unknown>): CutoutModel[] {
   return (raw.models as Record<string, unknown>[]).map((model): CutoutModel => {
@@ -416,6 +437,12 @@ export function pickCutoutModels(raw: Record<string, unknown>): CutoutModel[] {
         size !== undefined ? { x: size.x, y: size.y, z: size.z } : { x: 0, y: 0, z: 0 },
       placement: picked,
       clearanceMm: (model.clearanceMm as number | undefined) ?? DEFAULT_CUTOUT_CLEARANCE_MM,
+      // Absent means the plan predates the sweep, and its bins were designed
+      // with exact pockets: off reproduces exactly the bins it described. A
+      // freshly imported model defaults to on instead, but that decision
+      // belongs to the import flow, not to the loader.
+      sweepEnabled: (model.sweepEnabled as boolean | undefined) ?? false,
+      draftAngleDeg: (model.draftAngleDeg as number | undefined) ?? DEFAULT_DRAFT_ANGLE_DEG,
     };
   });
 }
@@ -1258,11 +1285,13 @@ export function parsePlanFile(text: string): PlanParseResult {
     return { ok: false, error: 'The plan is missing its entries list.' };
   }
   // Versions 1 and 2 carry flat design fields per entry and convert through
-  // the legacy path. Versions 3 to 6 already have the current product/bin
+  // the legacy path. Versions 3 to 7 already have the current product/bin
   // shape and read through the current path; versions 3 and 4 carry divider
-  // counts (converted to walls on pick) where versions 5 and 6 carry walls, and
-  // the validators and pickers accept either. Version 6 adds cutout-origin
-  // bins, which no earlier version can contain, so nothing else changes.
+  // counts (converted to walls on pick) where versions 5 and up carry walls,
+  // and the validators and pickers accept either. Version 6 adds cutout-origin
+  // bins, which no earlier version can contain, and version 7 adds the
+  // per-model sweep fields, absent in earlier versions and defaulted to off on
+  // pick, so nothing else changes.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];
