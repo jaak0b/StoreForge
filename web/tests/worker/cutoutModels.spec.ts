@@ -22,6 +22,8 @@ import {
   type PreparedCutoutModel,
   type SweptSolidMemo,
 } from '../../src/engine/cutout/cutoutBin';
+import { referencedCutoutModelKeySpecs } from '../../src/engine/plan/storedAssets';
+import type { QueueEntry } from '../../src/engine/plan/types';
 
 let m: ManifoldToplevel;
 
@@ -190,6 +192,55 @@ describe('releasing cached solids', () => {
     expect(cache.get(asMillimetres)).toBeUndefined();
 
     cache.release([]);
+  });
+
+  it('keeps a queued model cached when the editor closes, and frees it with the last reference', () => {
+    // The owner decision this encodes: a prepared solid stays alive while ANY
+    // reference to its model exists on the page, the open editor OR a queue
+    // row. Releasing with only the editor's own models after queueing a bin
+    // wiped the cache and cost the 18 second offset again on re-opening.
+    const editorOnly = spec({ modelSourceId: 'model-editor' });
+    const queued = spec({ modelSourceId: 'model-queued' });
+    const cache = cacheOf([editorOnly, queued]);
+    const queuedEntry: QueueEntry = {
+      id: 'c1',
+      quantity: 1,
+      createdAt: '2026-07-20T10:00:00.000Z',
+      product: {
+        kind: 'bin',
+        bin: {
+          origin: 'cutout',
+          gridX: 1,
+          gridY: 1,
+          heightUnits: 3,
+          magnetHoles: false,
+          models: [
+            {
+              id: 'record-queued',
+              name: 'part.stl',
+              modelSourceId: 'model-queued',
+              triangleCount: 12,
+              unitScale: 1,
+              sizeMm: { x: 10, y: 10, z: 10 },
+              placement: AT_ORIGIN,
+              clearanceMm: DEFAULT_CUTOUT_CLEARANCE_MM,
+              sweepEnabled: false,
+              draftAngleDeg: 0,
+            },
+          ],
+        },
+      },
+    };
+
+    // The editor resets after queueing: its own models are gone, the queue row remains.
+    cache.release(referencedCutoutModelKeySpecs([queuedEntry], [], []));
+
+    expect(cache.get(queued)).toBeDefined();
+    expect(cache.get(editorOnly)).toBeUndefined();
+
+    // The queue row is deleted: the last reference goes, and so does the solid.
+    cache.release(referencedCutoutModelKeySpecs([], [], []));
+    expect(cache.size).toBe(0);
   });
 
   it('frees the solid an entry replaces rather than leaking it', () => {

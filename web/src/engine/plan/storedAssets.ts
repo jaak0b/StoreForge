@@ -1,4 +1,5 @@
 import { assertNever, binOf, type PrintBatch, type Product, type QueueEntry } from './types';
+import { cutoutModelKey, type CutoutModelKeySpec } from '../cutout/cutoutBin';
 
 /**
  * Garbage collection of the blobs a plan references but does not contain. Two
@@ -32,6 +33,18 @@ export interface ReferencedAssetIds {
 export interface SweptAssetIds {
   tracePhotos: string[];
   cutoutModels: string[];
+}
+
+/** Visits every product a plan row orders: each queue entry's and each batch item's. */
+function forEachProduct(
+  entries: QueueEntry[],
+  batches: PrintBatch[],
+  visit: (product: Product) => void,
+): void {
+  for (const entry of entries) visit(entry.product);
+  for (const batch of batches) {
+    for (const item of batch.items) visit(item.product);
+  }
 }
 
 /**
@@ -70,11 +83,56 @@ export function referencedAssetIds(
         return assertNever(bin);
     }
   };
-  for (const entry of entries) addProduct(entry.product);
-  for (const batch of batches) {
-    for (const item of batch.items) addProduct(item.product);
-  }
+  forEachProduct(entries, batches, addProduct);
   return { tracePhotos, cutoutModels };
+}
+
+/**
+ * Every prepared-solid key spec the page currently references: the models the
+ * open cutout editor holds plus the models of every cutout bin in a queue
+ * entry or a batch item, deduplicated by their cache key.
+ *
+ * This is the keep-list the geometry worker's model cache retains: a cached
+ * solid must stay alive while ANY reference to its model exists on the page,
+ * and it goes only when the last reference does. The same membership argument
+ * as the asset sweep above applies: duplicated rows share ids, so only the
+ * union over every reference is a correct keep-list, never one caller's own
+ * models. The swept-solid cache retains by these same keys as a prefix, so
+ * nothing beyond the three key fields is needed here.
+ */
+export function referencedCutoutModelKeySpecs(
+  entries: QueueEntry[],
+  batches: PrintBatch[],
+  editorModels: readonly CutoutModelKeySpec[],
+): CutoutModelKeySpec[] {
+  const byKey = new Map<string, CutoutModelKeySpec>();
+  const add = (model: CutoutModelKeySpec): void => {
+    byKey.set(cutoutModelKey(model.modelSourceId, model.unitScale, model.clearanceMm), {
+      modelSourceId: model.modelSourceId,
+      unitScale: model.unitScale,
+      clearanceMm: model.clearanceMm,
+    });
+  };
+  for (const model of editorModels) add(model);
+  forEachProduct(entries, batches, (product) => {
+    const bin = binOf(product);
+    if (bin === null) return;
+    // Switched over every origin, exactly as the sweep above is: an origin
+    // added later that carves cached models has to be named here, or its
+    // solids would be evicted while its bins still sit in the queue.
+    switch (bin.origin) {
+      case 'cutout':
+        for (const model of bin.models) add(model);
+        return;
+      case 'manual':
+      case 'screw':
+      case 'traced':
+        return;
+      default:
+        return assertNever(bin);
+    }
+  });
+  return [...byKey.values()];
 }
 
 async function sweepStore(

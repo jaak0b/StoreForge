@@ -21,6 +21,7 @@
 import {
   cutoutModelKey,
   cutoutSweptKey,
+  type CutoutModelKeySpec,
   type CutoutModelSpec,
   type CutoutPlacementWarning,
   type CutoutPrepareTimings,
@@ -36,18 +37,12 @@ import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 /**
  * What a cached prepared solid is keyed by. All three parts are load bearing
  * and each is here for the same reason: it changes the solid that gets cached.
- * The unit scale rescales the model before it is simplified and dilated, so it
- * invalidates an entry exactly as a clearance change does.
- *
- * Omitting either has the same silent failure mode, and it is the worst kind:
- * the preview renders, the solid is watertight, the download succeeds, and the
- * printed part is simply the wrong size, with nothing anywhere looking wrong.
+ * Omitting either has the worst kind of silent failure: the preview renders,
+ * the download succeeds, and the printed part is simply the wrong size. The
+ * type lives beside cutoutModelKey in the engine, so the plan's reference
+ * computation and the worker name cache entries by the same fields.
  */
-export interface CutoutModelKeySpec {
-  modelSourceId: string;
-  unitScale: number;
-  clearanceMm: number;
-}
+export type { CutoutModelKeySpec };
 
 /** A key spec plus the file name every message and timing line about it quotes. */
 export interface CutoutModelIdentity extends CutoutModelKeySpec {

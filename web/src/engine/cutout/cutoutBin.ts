@@ -305,6 +305,18 @@ export function simplifyToleranceMm(clearanceMm: number): number {
 }
 
 /**
+ * What a cached prepared solid is keyed by: the named fields of cutoutModelKey
+ * below, as anything that carries them can supply them. A plan's CutoutModel
+ * and the worker's carve requests both satisfy it structurally, which is what
+ * lets the editor and the queue name the same cache entries.
+ */
+export interface CutoutModelKeySpec {
+  modelSourceId: string;
+  unitScale: number;
+  clearanceMm: number;
+}
+
+/**
  * Cache key for a model's finished import-stage solid. All three parts are
  * load bearing and each is here for the same reason: it changes the cached
  * solid. The unit scale rescales the model before it is simplified and

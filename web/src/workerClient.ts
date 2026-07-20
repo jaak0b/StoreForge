@@ -164,10 +164,16 @@ async function ensureCutoutModels(models: CutoutModelRequest[]): Promise<void> {
 
 /**
  * Drop every prepared model solid the worker holds that is not among these,
- * releasing its WASM memory. Called when a cutout bin is closed or edited, so
- * clearances tried and abandoned do not accumulate.
+ * releasing its WASM memory. Called with the full set of key specs the page
+ * still references, so clearances tried and abandoned do not accumulate while
+ * a queued bin's solids survive its editor closing.
+ *
+ * A no-op while no worker exists: a worker never started holds nothing to
+ * release, and every plan mutation runs through here, so releasing must not be
+ * what boots the WASM for a user who never carved anything.
  */
 export async function releaseCutoutModels(keep: CutoutModelKeySpec[]): Promise<void> {
+  if (remote === null) return;
   return getWorker().releaseCutoutModels(keep.map(keySpecOf));
 }
 

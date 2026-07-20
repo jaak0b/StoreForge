@@ -17,9 +17,14 @@ import {
   failBatchItem,
   type BatchSelection,
 } from '../engine/plan/batches';
-import { sweepOrphanAssets } from '../engine/plan/storedAssets';
+import {
+  referencedCutoutModelKeySpecs,
+  sweepOrphanAssets,
+} from '../engine/plan/storedAssets';
 import { deletePhoto, listPhotoIds } from '../photoStore';
 import { deleteModel, listModelIds } from '../modelStore';
+import { releaseCutoutModels } from '../workerClient';
+import { useCutout } from './cutout';
 
 const STORAGE_KEY = 'storeforge.plan';
 
@@ -84,6 +89,23 @@ export const useBinQueue = defineStore('binQueue', {
       // where stored blobs that no plan row references anymore are cleaned up
       // (fire and forget; a failed sweep only leaves blobs behind).
       void this.sweepStoredAssets();
+      // The worker's prepared cutout solids follow the same lifecycle as the
+      // blobs: a mutation that removed the last reference to a model is what
+      // releases its solid.
+      this.retainCutoutWorkerCache();
+    },
+    /**
+     * Keeps the geometry worker's cached cutout solids in step with what the
+     * page still references. A prepared solid stays alive while the open
+     * cutout editor holds its model OR any queue entry or batch item still
+     * orders a bin carved by it; only losing the last reference releases it,
+     * so re-opening a queued bin never repeats its import. Runs on every plan
+     * mutation (through persist) and whenever the editor's held models change.
+     */
+    retainCutoutWorkerCache() {
+      void releaseCutoutModels(
+        referencedCutoutModelKeySpecs(this.entries, this.batches, useCutout().models),
+      );
     },
     /**
      * Deletes stored trace photos and cutout models no queue entry or batch

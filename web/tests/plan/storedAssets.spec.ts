@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   referencedAssetIds,
+  referencedCutoutModelKeySpecs,
   sweepOrphanAssets,
   type AssetStoreLike,
 } from '../../src/engine/plan/storedAssets';
@@ -175,6 +176,69 @@ describe('referencedAssetIds', () => {
     );
     expect(referenced.tracePhotos).toEqual(new Set(['photo-a']));
     expect(referenced.cutoutModels).toEqual(new Set(['model-a']));
+  });
+});
+
+describe('referencedCutoutModelKeySpecs', () => {
+  // The keep-list the worker's solid cache retains. A queued bin's solid has
+  // to survive its editor closing, and an editor's solid has to survive plan
+  // mutations, so only the union over both is a correct keep-list.
+
+  it('returns the editor-held specs when no plan row orders a cutout bin', () => {
+    const specs = referencedCutoutModelKeySpecs(
+      [manualEntry('m1'), tracedEntry('t1', 'photo-a')],
+      [],
+      [{ modelSourceId: 'model-editor', unitScale: 25.4, clearanceMm: 0.6 }],
+    );
+    expect(specs).toEqual([
+      { modelSourceId: 'model-editor', unitScale: 25.4, clearanceMm: 0.6 },
+    ]);
+  });
+
+  it('collects queue entries and batch items when no editor holds a model', () => {
+    const specs = referencedCutoutModelKeySpecs(
+      [cutoutEntry('c1', 'model-a'), manualEntry('m1')],
+      [batchWith([{ product: { kind: 'bin', bin: cutoutBin('model-b') } }, {}])],
+      [],
+    );
+    expect(specs).toEqual([
+      { modelSourceId: 'model-a', unitScale: 1, clearanceMm: 0.4 },
+      { modelSourceId: 'model-b', unitScale: 1, clearanceMm: 0.4 },
+    ]);
+  });
+
+  it('names a model the editor and a queue row share exactly once', () => {
+    const specs = referencedCutoutModelKeySpecs(
+      [cutoutEntry('c1', 'model-shared')],
+      [],
+      [
+        { modelSourceId: 'model-shared', unitScale: 1, clearanceMm: 0.4 },
+        { modelSourceId: 'model-editor-only', unitScale: 1, clearanceMm: 0.4 },
+      ],
+    );
+    expect(specs).toEqual([
+      { modelSourceId: 'model-shared', unitScale: 1, clearanceMm: 0.4 },
+      { modelSourceId: 'model-editor-only', unitScale: 1, clearanceMm: 0.4 },
+    ]);
+  });
+
+  it('keeps two specs of one model apart when their clearances differ', () => {
+    // An editor retuning a queued bin's clearance holds the new solid while
+    // the queue row still names the old one; both are alive references and
+    // collapsing them would evict a solid a plan row still orders.
+    const specs = referencedCutoutModelKeySpecs(
+      [cutoutEntry('c1', 'model-a')],
+      [],
+      [{ modelSourceId: 'model-a', unitScale: 1, clearanceMm: 0.8 }],
+    );
+    expect(specs).toEqual([
+      { modelSourceId: 'model-a', unitScale: 1, clearanceMm: 0.8 },
+      { modelSourceId: 'model-a', unitScale: 1, clearanceMm: 0.4 },
+    ]);
+  });
+
+  it('returns nothing for an empty plan and an empty editor', () => {
+    expect(referencedCutoutModelKeySpecs([], [], [])).toEqual([]);
   });
 });
 

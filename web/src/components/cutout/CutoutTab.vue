@@ -9,9 +9,7 @@ import { useBinPreview } from '../../composables/useBinPreview';
 import {
   generateCutoutBinPreview,
   importCutoutModel,
-  releaseCutoutModels,
   type CutoutBinRequest,
-  type CutoutModelKeySpec,
   type CutoutPreviewResult,
 } from '../../workerClient';
 import { getModel, putModel } from '../../modelStore';
@@ -160,15 +158,6 @@ const carveRequest = computed<CutoutBinRequest>(() => ({
     draftAngleDeg: model.draftAngleDeg,
   })),
 }));
-
-/** The cached solids the worker should keep: one per model, at its own key. */
-function heldKeySpecs(): CutoutModelKeySpec[] {
-  return cutout.models.map((model) => ({
-    modelSourceId: model.modelSourceId,
-    unitScale: model.unitScale,
-    clearanceMm: model.clearanceMm,
-  }));
-}
 
 // ---------------------------------------------------------------------------
 // The two preview tiers
@@ -432,6 +421,9 @@ function discardModel(id: string, modelSourceId: string): void {
   delete boundsById.value[id];
   queue.releaseModel(modelSourceId);
   void queue.sweepStoredAssets();
+  // The removed model's solid follows its file: it stays cached only while a
+  // queue row still orders it.
+  queue.retainCutoutWorkerCache();
 }
 
 async function onAddFiles(files: File[]): Promise<void> {
@@ -478,10 +470,11 @@ async function onCommitClearance(id: string, clearanceMm: number): Promise<void>
       name: model.name,
     });
     cutout.setClearance(id, clearanceMm);
-    // The solid at the old clearance is under its own key and nothing names it
-    // anymore, so this is what stops a clearance tuned through five values from
+    // The solid at the old clearance is under its own key; once nothing on the
+    // page (this editor or a queue row) names it anymore, the retention drops
+    // it, which is what stops a clearance tuned through five values from
     // leaving five solids in the worker's heap.
-    void releaseCutoutModels(heldKeySpecs());
+    queue.retainCutoutWorkerCache();
   } catch (error) {
     cutout.setError(
       id,
@@ -554,7 +547,7 @@ async function onAcceptUnits(id: string): Promise<void> {
   }
   const failure = await runImportStage({ ...model, unitScale: proposal.unitScale });
   cutout.setError(id, failure);
-  void releaseCutoutModels(heldKeySpecs());
+  queue.retainCutoutWorkerCache();
 }
 
 function onKeepUnits(id: string): void {
@@ -743,6 +736,9 @@ function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
     queue.protectModel(model.modelSourceId);
     void loadStoredModel(model);
   }
+  // The abandoned design's solids lose their editor reference here exactly as
+  // its files did above; whatever the queue still orders stays cached.
+  queue.retainCutoutWorkerCache();
   const content = entry.product.kind === 'binWithInsert' ? entry.product.insert : null;
   designer.$patch({
     productChoice: choiceOf(entry.product),
@@ -813,8 +809,9 @@ function resetTab(): void {
   designer.labelText2 = '';
   designer.labelIcon = null;
   designer.notes = '';
-  // Nothing names the worker's prepared solids anymore.
-  void releaseCutoutModels([]);
+  // Solids only this editor was naming are unreferenced now; the ones queued
+  // bins still order stay cached, so re-opening a queue entry repeats no import.
+  queue.retainCutoutWorkerCache();
   // Files an abandoned design uploaded are unreferenced now; the sweep is what
   // collects them, and it runs off a plan change.
   void queue.sweepStoredAssets();
