@@ -294,14 +294,15 @@ describe('snapping', () => {
 
   it('spans the whole interior of a one wide bin when dragged just short of it', () => {
     // A one wide bin's interior is 39.6 mm deep, which is not a multiple of
-    // the 10.5 mm lattice step. Stopping 0.4 mm short of the bin wall is the
-    // gesture that discriminates: an overshooting drag is clamped to the
-    // boundary whatever snapping does, so it proves nothing, while here only a
-    // build that treats the boundary as a target of its own reaches it. The
-    // nearest lattice line is 21, which is 1.6 mm from the drag, so the
-    // boundary at 0.4 mm has to win on distance too.
+    // the 10.5 mm lattice step. Stopping 1.2 mm short of the bin wall is the
+    // gesture that discriminates: an overshooting drag comes back to the
+    // boundary whatever snapping does, so it proves nothing, and so does a
+    // drag that stops a whisker short, because the lattice line 1.2 mm outside
+    // the bin wall catches it and it is brought back in. From 18.6 the
+    // boundary at 19.8 is the only target in reach: 21 is 2.4 mm away and 10.5
+    // is 8.1 mm away, both outside the 2 mm pull.
     const s = state(1, 1, [{ x1: 0, y1: -19.8, x2: 0, y2: 0 }]);
-    moveWallEndpoint(s, 0, 2, 0, 19.4, on);
+    moveWallEndpoint(s, 0, 2, 0, 18.6, on);
     expect(s.walls[0].x2).toBeCloseTo(0, 9);
     expect(s.walls[0].y2).toBeCloseTo(19.8, 9);
     expect(wallLength(s.walls[0])).toBeCloseTo(39.6, 9);
@@ -317,10 +318,10 @@ describe('snapping', () => {
 
   it('spans the whole interior of a three wide bin when dragged just short of it', () => {
     // A three wide bin's interior is 123.6 mm across, again not a whole
-    // number of 10.5 mm steps: the nearest lattice line to a drag stopping
-    // 0.4 mm short is 63, which is 1.6 mm away, and the boundary is at 61.8.
+    // number of 10.5 mm steps. From 60.6 the boundary at 61.8 is 1.2 mm away
+    // and the nearest lattice lines, 63 and 52.5, are 2.4 mm and 8.1 mm away.
     const s = state(3, 2, [{ x1: -61.8, y1: 0, x2: 0, y2: 0 }]);
-    moveWallEndpoint(s, 0, 2, 61.4, 0, on);
+    moveWallEndpoint(s, 0, 2, 60.6, 0, on);
     expect(s.walls[0].y2).toBeCloseTo(0, 9);
     expect(s.walls[0].x2).toBeCloseTo(61.8, 9);
     expect(wallLength(s.walls[0])).toBeCloseTo(123.6, 9);
@@ -489,14 +490,22 @@ describe('interior half-extents the snapping matrix rests on', () => {
 });
 
 /**
- * How far short of the bin wall the discriminating drags stop. A drag that
- * overshoots the interior is clamped back to the boundary whatever snapping
- * does, so it cannot tell a working snap from a broken one. Stopping just
- * inside is the gesture that separates them: the boundary is 0.4 mm away and
- * the nearest lattice crossing is at least 8 mm away on every footprint here,
- * so only a build that treats the boundary as a stop lands on the bin wall.
+ * How far short of the bin wall the discriminating drags stop.
+ *
+ * A drag that overshoots the interior comes back to the boundary whatever
+ * snapping does, so it cannot tell a working snap from a broken one. Stopping
+ * just inside is the gesture that separates them, but only at the right
+ * distance. An interior half-extent is always 21n - 1.2 mm, so the first
+ * lattice line past the bin wall sits 1.2 mm outside it: a drag that stops a
+ * whisker short is captured by that outside line and then pulled back to the
+ * boundary anyway, and still proves nothing.
+ *
+ * Stopping 1.2 mm short puts the boundary 1.2 mm away, inside the 2 mm pull,
+ * and every lattice line at least 2.4 mm away, outside it. Only a build that
+ * treats the interior boundary as a target in its own right reaches the bin
+ * wall from here.
  */
-const SHORT_OF_WALL_MM = 0.4;
+const SHORT_OF_WALL_MM = 1.2;
 
 describe('snapped drags reach a full span on every footprint', () => {
   it.each(FOOTPRINTS)(
