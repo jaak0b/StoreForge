@@ -71,13 +71,13 @@ const downloadWarnings = ref<string[]>([]);
 const formats: { format: BatchFormat; title: string; detail: string }[] = [
   {
     format: 'stl',
-    title: 'STL (all bins merged)',
+    title: 'STL (all parts merged)',
     detail: 'One mesh; arrange it yourself in any slicer.',
   },
   {
     format: '3mf-single',
     title: '3MF, single color',
-    detail: 'One filament, the labels merged into their bins.',
+    detail: 'One filament, each label merged into its part.',
   },
   {
     format: '3mf-two',

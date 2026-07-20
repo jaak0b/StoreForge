@@ -6,6 +6,7 @@ import ManualBinTab from './ManualBinTab.vue';
 import ScrewEntryTab from './ScrewEntryTab.vue';
 import TraceTab from './trace/TraceTab.vue';
 import CutoutTab from './cutout/CutoutTab.vue';
+import BaseplateTab from './BaseplateTab.vue';
 
 /**
  * The add-bin card at the top of the page: a Manual bin tab (the full bin
@@ -50,6 +51,7 @@ function tabDisabled(name: TabName): boolean {
       <v-tab value="screw" :disabled="tabDisabled('screw')">Screw entry</v-tab>
       <v-tab value="trace" :disabled="tabDisabled('trace')">Tool bin</v-tab>
       <v-tab value="cutout" :disabled="tabDisabled('cutout')">Cutout bin</v-tab>
+      <v-tab value="baseplate" :disabled="tabDisabled('baseplate')">Baseplate</v-tab>
     </v-tabs>
     <v-divider />
     <v-card-text>
@@ -69,6 +71,9 @@ function tabDisabled(name: TabName): boolean {
         </v-window-item>
         <v-window-item value="cutout" :transition="false" :reverse-transition="false">
           <CutoutTab />
+        </v-window-item>
+        <v-window-item value="baseplate" :transition="false" :reverse-transition="false">
+          <BaseplateTab />
         </v-window-item>
       </v-window>
     </v-card-text>

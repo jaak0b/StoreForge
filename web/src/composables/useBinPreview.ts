@@ -49,7 +49,7 @@ export function useBinPreview<P = SlottedBinParams, R = PartMeshes>(
     } catch (error) {
       if (ticket === generationCounter) {
         errorMessage.value =
-          error instanceof Error ? error.message : 'Bin generation failed.';
+          error instanceof Error ? error.message : 'Generating the preview failed.';
       }
     } finally {
       if (ticket === generationCounter) generating.value = false;

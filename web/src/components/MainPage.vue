@@ -3,7 +3,11 @@ import { computed, ref } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
 import { originOf, type QueueEntry } from '../engine/plan/types';
-import { describeProduct, type RowDescriptor } from '../engine/plan/rowDescriptor';
+import {
+  describeProduct,
+  downloadSubtitles,
+  type RowDescriptor,
+} from '../engine/plan/rowDescriptor';
 import { snapshotProduct, type BatchSelection } from '../engine/plan/batches';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
@@ -73,7 +77,7 @@ const selectedEntries = computed(() =>
   queue.entries.filter((entry) => selectedIds.value.has(entry.id)),
 );
 
-const selectedBinTotal = computed(() =>
+const selectedPartTotal = computed(() =>
   selectedEntries.value.reduce((sum, entry) => sum + plateCountOf(entry), 0),
 );
 
@@ -133,7 +137,7 @@ function removeRow(entry: QueueEntry): void {
   <v-container class="main-page">
     <h1 class="text-h5 mt-2 mb-1">What do you want to print?</h1>
     <p class="text-body-2 text-medium-emphasis mb-5">
-      Add bins to the queue, select rows to create a build plate batch, then
+      Add parts to the queue, select rows to create a build plate batch, then
       confirm what printed.
     </p>
 
@@ -144,7 +148,7 @@ function removeRow(entry: QueueEntry): void {
     <div class="d-flex align-center mt-6 mb-2">
       <h2 class="text-subtitle-1 font-weight-bold">Your queue</h2>
       <v-chip size="small" variant="tonal" class="ml-2">
-        {{ queue.entries.length }} {{ queue.entries.length === 1 ? 'bin' : 'bins' }} queued
+        {{ queue.entries.length }} {{ queue.entries.length === 1 ? 'part' : 'parts' }} queued
       </v-chip>
     </div>
 
@@ -167,8 +171,8 @@ function removeRow(entry: QueueEntry): void {
     <v-empty-state
       v-if="queue.entries.length === 0"
       icon="mdi-cube-outline"
-      title="No bins queued"
-      text="Add a bin with the card above."
+      title="Nothing queued yet"
+      text="Add a part with the card above."
     />
 
     <div v-else class="d-flex flex-column ga-1">
@@ -241,18 +245,18 @@ function removeRow(entry: QueueEntry): void {
                 v-bind="menuProps"
               >
                 <v-icon icon="mdi-download-outline" size="18" />
-                <v-tooltip activator="parent" location="bottom">Download bin</v-tooltip>
+                <v-tooltip activator="parent" location="bottom">Download part</v-tooltip>
               </v-btn>
             </template>
             <v-list density="comfortable">
               <v-list-item
                 title="STL"
-                subtitle="One mesh, label merged into the bin."
+                :subtitle="downloadSubtitles(entry.product).stl"
                 @click="downloadRow(entry, 'stl')"
               />
               <v-list-item
                 title="3MF, two filaments"
-                subtitle="Body and label slots for toolchanger printing."
+                :subtitle="downloadSubtitles(entry.product).threeMf"
                 @click="downloadRow(entry, '3mf')"
               />
             </v-list>
@@ -273,11 +277,11 @@ function removeRow(entry: QueueEntry): void {
       <span class="text-body-2 mr-3">
         <b>{{ selectedEntries.length }}
           {{ selectedEntries.length === 1 ? 'row' : 'rows' }} selected</b>
-        <span class="text-medium-emphasis"> &middot; {{ selectedBinTotal }} bins</span>
+        <span class="text-medium-emphasis"> &middot; {{ selectedPartTotal }} parts</span>
       </span>
       <v-btn color="primary" variant="flat" @click="createPlate">
-        Create build plate ({{ selectedBinTotal }}
-        {{ selectedBinTotal === 1 ? 'bin' : 'bins' }})
+        Create build plate ({{ selectedPartTotal }}
+        {{ selectedPartTotal === 1 ? 'part' : 'parts' }})
       </v-btn>
     </div>
   </v-container>
