@@ -42,22 +42,25 @@ function isIsoTimestamp(value: unknown): value is string {
 
 /**
  * Validates one raw object as a CustomIcon. Returns null when it is valid,
- * otherwise a message naming the first offending field.
+ * otherwise a message naming the first offending field. The messages follow
+ * the same convention as the plan file's: an optional lowercase subject
+ * prefix naming the offending icon, then one complete sentence ending in a
+ * full stop, so a caller that wraps the message adds no punctuation.
  */
 export function validateCustomIconEntry(raw: unknown): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return 'an icon is not an object';
+    return 'An icon is not an object.';
   }
   const icon = raw as Record<string, unknown>;
   if (typeof icon.id !== 'string' || icon.id.length === 0) {
-    return 'an icon is missing its id';
+    return 'An icon is missing its id.';
   }
   const id = icon.id;
   if (typeof icon.name !== 'string' || icon.name.trim().length === 0) {
-    return `icon ${id}: name must be a non-empty string`;
+    return `icon ${id}: The icon name must be text that is not empty.`;
   }
   if (typeof icon.path !== 'string') {
-    return `icon ${id}: path must be a string`;
+    return `icon ${id}: The icon path must be text.`;
   }
   const pathCheck = validateCustomIcon(icon.path);
   if (!pathCheck.ok) {
@@ -68,10 +71,10 @@ export function validateCustomIconEntry(raw: unknown): string | null {
     icon.viewBox.length !== 4 ||
     icon.viewBox.some((n) => typeof n !== 'number' || !Number.isFinite(n))
   ) {
-    return `icon ${id}: viewBox must be four finite numbers`;
+    return `icon ${id}: The view box must be four finite numbers.`;
   }
   if (!isIsoTimestamp(icon.createdAt)) {
-    return `icon ${id}: createdAt must be an ISO 8601 timestamp`;
+    return `icon ${id}: The creation time must be an ISO 8601 timestamp.`;
   }
   return null;
 }
@@ -106,7 +109,7 @@ export function parseCustomIconFile(text: string): CustomIconParseResult {
   for (const item of envelope.icons) {
     const problem = validateCustomIconEntry(item);
     if (problem !== null) {
-      return { ok: false, error: `The icons are invalid: ${problem}.` };
+      return { ok: false, error: `The icons are invalid: ${problem}` };
     }
     const icon = item as Record<string, unknown>;
     const id = icon.id as string;

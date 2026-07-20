@@ -171,7 +171,8 @@ describe('serializePlanFile / parsePlanFile', () => {
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: entry b2: gridX must be an integer of at least 1.',
+      error:
+        'The plan is invalid: entry b2: The bin width must be a whole number of at least 1 grid unit.',
     });
   });
 
@@ -199,7 +200,8 @@ describe('serializePlanFile / parsePlanFile', () => {
     const result = parsePlanFile(text);
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: batch batch1: item i1: count must be an integer of at least 1.',
+      error:
+        'The plan is invalid: batch batch1: item i1: The count must be a whole number of at least 1.',
     });
   });
 
@@ -359,12 +361,16 @@ describe('validateEntry', () => {
   });
 
   it.each([
-    ['gridX', 0, 'gridX must be an integer of at least 1'],
-    ['gridY', 1.5, 'gridY must be an integer of at least 1'],
-    ['heightUnits', 1, 'heightUnits must be an integer of at least 2'],
-    ['magnetHoles', 1, 'magnetHoles must be true or false'],
-    ['walls', 'nope', 'walls must be a list'],
-    ['walls', [{ x1: 0, y1: 0, x2: 1 }], 'a divider wall needs finite x1, y1, x2 and y2'],
+    ['gridX', 0, 'The bin width must be a whole number of at least 1 grid unit.'],
+    ['gridY', 1.5, 'The bin depth must be a whole number of at least 1 grid unit.'],
+    ['heightUnits', 1, 'The bin height must be a whole number of at least 2 height units.'],
+    ['magnetHoles', 1, 'The magnet holes setting must be true or false.'],
+    ['walls', 'nope', 'The divider walls must be a list.'],
+    [
+      'walls',
+      [{ x1: 0, y1: 0, x2: 1 }],
+      'A divider wall needs finite x1, y1, x2 and y2 coordinates.',
+    ],
   ])('rejects a bad bin %s field', (field, value, message) => {
     const raw = entry({
       product: { kind: 'bin', labelSlot: true, bin: { ...manualBin(), [field]: value } },
@@ -373,9 +379,9 @@ describe('validateEntry', () => {
   });
 
   it.each([
-    ['quantity', 0, 'quantity must be an integer of at least 1'],
-    ['createdAt', 'yesterday', 'createdAt must be an ISO 8601 timestamp'],
-    ['notes', 5, 'notes must be a string'],
+    ['quantity', 0, 'The quantity must be a whole number of at least 1.'],
+    ['createdAt', 'yesterday', 'The creation time must be an ISO 8601 timestamp.'],
+    ['notes', 5, 'The notes must be text.'],
   ])('rejects a bad entry %s field', (field, value, message) => {
     const raw = { ...entry(), [field]: value };
     expect(validateEntry(raw)).toBe(`entry a1: ${message}`);
@@ -384,17 +390,17 @@ describe('validateEntry', () => {
   it('rejects an entry with a missing field', () => {
     const raw: Record<string, unknown> = { ...entry() };
     delete raw.quantity;
-    expect(validateEntry(raw)).toBe('entry a1: quantity must be an integer of at least 1');
+    expect(validateEntry(raw)).toBe('entry a1: The quantity must be a whole number of at least 1.');
   });
 
   it('rejects a non-object', () => {
-    expect(validateEntry('hello')).toBe('an entry is not an object');
+    expect(validateEntry('hello')).toBe('An entry is not an object.');
   });
 
   it('rejects a missing id', () => {
     const raw: Record<string, unknown> = { ...entry() };
     delete raw.id;
-    expect(validateEntry(raw)).toBe('an entry is missing its id');
+    expect(validateEntry(raw)).toBe('An entry is missing its id.');
   });
 });
 
@@ -412,7 +418,7 @@ describe('validateBatch', () => {
   it('rejects a missing id', () => {
     const raw: Record<string, unknown> = { ...batch() };
     delete raw.id;
-    expect(validateBatch(raw)).toBe('a batch is missing its id');
+    expect(validateBatch(raw)).toBe('A batch is missing its id.');
   });
 
   it('rejects a bad item product field', () => {
@@ -422,14 +428,14 @@ describe('validateBatch', () => {
       product: { kind: 'bin', labelSlot: true, bin: { ...manualBin(), gridX: 'two' } },
     };
     expect(validateBatch(batch({ items: [badItem as unknown as BatchItem] }))).toBe(
-      'batch batch1: item i1: gridX must be an integer of at least 1',
+      'batch batch1: item i1: The bin width must be a whole number of at least 1 grid unit.',
     );
   });
 
   it('rejects a missing items list', () => {
     const raw: Record<string, unknown> = { ...batch() };
     delete raw.items;
-    expect(validateBatch(raw)).toBe('batch batch1: items must be a list');
+    expect(validateBatch(raw)).toBe('batch batch1: The items must be a list.');
   });
 });
 
@@ -525,7 +531,7 @@ describe('bin entry kinds in plan files', () => {
 
   it('rejects an unknown product kind', () => {
     expect(validateEntry({ ...entry(), product: { kind: 'mystery' } })).toBe(
-      'entry a1: product kind must be bin, binWithInsert or insert',
+      'entry a1: The product kind must be bin, binWithInsert or insert.',
     );
   });
 
@@ -556,7 +562,7 @@ describe('bin entry kinds in plan files', () => {
       fused: 'yes' as never,
     };
     expect(validateEntry(entry({ id: 'f1', product: bad }))).toBe(
-      'entry f1: fused must be true or false',
+      'entry f1: The fused setting must be true or false.',
     );
   });
 
@@ -564,21 +570,21 @@ describe('bin entry kinds in plan files', () => {
     const bad: Product = { kind: 'bin', bin: { ...tracedBin() } };
     delete (bad.bin as Record<string, unknown>).pockets;
     expect(validateEntry(entry({ id: 't1', product: bad }))).toBe(
-      'entry t1: pockets must be an object',
+      'entry t1: The tool pockets must be an object.',
     );
   });
 
   it('rejects a traced bin with divider fields', () => {
     const bad: Product = { kind: 'bin', bin: { ...tracedBin(), dividerCountX: 1 } as never };
     expect(validateEntry(entry({ id: 't1', product: bad }))).toBe(
-      'entry t1: a traced bin cannot have divider walls',
+      'entry t1: A traced bin cannot have divider walls.',
     );
   });
 
   it('rejects a bin origin that is not manual, screw, traced or cutout', () => {
     const bad: Product = { kind: 'bin', bin: { ...manualBin(), origin: 'mystery' as never } };
     expect(validateEntry(entry({ product: bad }))).toBe(
-      'entry a1: bin origin must be manual, screw, traced or cutout',
+      'entry a1: The bin origin must be manual, screw, traced or cutout.',
     );
   });
 
@@ -590,7 +596,7 @@ describe('bin entry kinds in plan files', () => {
       }),
     };
     delete (bad.product as { bin: Record<string, unknown> }).bin.screw;
-    expect(validateEntry(bad)).toBe('entry s1: screw must be an object');
+    expect(validateEntry(bad)).toBe('entry s1: The screw must be an object.');
   });
 
   it('rejects a screw bin with an unknown head type', () => {
@@ -602,7 +608,7 @@ describe('bin entry kinds in plan files', () => {
         bin: screwBin({ screw: { ...screwSpec(), head: 'mushroom' as never } }),
       } as unknown as Product,
     });
-    expect(validateEntry(bad)).toBe('entry s1: screw head must be a known head type or null');
+    expect(validateEntry(bad)).toBe('entry s1: The screw head must be a known head type, or null.');
   });
 });
 
@@ -673,7 +679,7 @@ describe('trace sources in plan files', () => {
     (bad.tools[0] as Record<string, unknown>).minHoleWidthMm = 'wide';
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: minHoleWidthMm must be a number of at least 0');
+    ).toBe('entry t1: pocket tool t1: The minimum hole width must be a number of at least 0 mm.');
   });
 
   it('rejects a negative minimum hole width', () => {
@@ -681,7 +687,7 @@ describe('trace sources in plan files', () => {
     bad.tools[0].minHoleWidthMm = -1;
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: minHoleWidthMm must be a number of at least 0');
+    ).toBe('entry t1: pocket tool t1: The minimum hole width must be a number of at least 0 mm.');
   });
 
   it('rejects a filled hole index outside the outline holes', () => {
@@ -691,7 +697,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      "entry t1: pocket tool t1: filledHoleIndices must be whole numbers referring to the tool's holes",
+      "entry t1: pocket tool t1: The filled hole list must contain whole numbers referring to the tool's own holes.",
     );
   });
 
@@ -700,7 +706,7 @@ describe('trace sources in plan files', () => {
     bad.tools[0].clicks = [{ x: 1, y: 2, label: 3 as never }];
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: a click needs x, y and a label of 0 or 1');
+    ).toBe('entry t1: pocket tool t1: A click needs an x, a y and a label of 0 or 1.');
   });
 
   it('round-trips a tool carrying mixed add and erase brush strokes', () => {
@@ -766,7 +772,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.',
     );
   });
 
@@ -778,7 +784,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.',
     );
   });
 
@@ -790,7 +796,7 @@ describe('trace sources in plan files', () => {
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      'entry t1: pocket tool t1: a brush stroke needs mode add, erase or smooth, a radiusMm above 0 and a points list',
+      'entry t1: pocket tool t1: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.',
     );
   });
 
@@ -801,7 +807,7 @@ describe('trace sources in plan files', () => {
     ];
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: a brush stroke point needs x and y');
+    ).toBe('entry t1: pocket tool t1: A brush stroke point needs an x and a y.');
   });
 
   it('rejects a brushStrokes field that is not a list', () => {
@@ -809,7 +815,7 @@ describe('trace sources in plan files', () => {
     (bad.tools[0] as Record<string, unknown>).brushStrokes = { mode: 'add' };
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
-    ).toBe('entry t1: pocket tool t1: brushStrokes must be a list');
+    ).toBe('entry t1: pocket tool t1: The brush strokes must be a list.');
   });
 
   it('rejects an empty traceSourceId', () => {
@@ -817,7 +823,7 @@ describe('trace sources in plan files', () => {
       id: 't1',
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ traceSourceId: '' }) },
     });
-    expect(validateEntry(bad)).toBe('entry t1: traceSourceId must be a non-empty string');
+    expect(validateEntry(bad)).toBe('entry t1: The trace source id must be text that is not empty.');
   });
 
   it('rejects an unknown paper kind', () => {
@@ -826,7 +832,7 @@ describe('trace sources in plan files', () => {
       id: 't1',
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ paper: paper as never }) },
     });
-    expect(validateEntry(bad)).toBe('entry t1: paper kind must be a4 or letter');
+    expect(validateEntry(bad)).toBe('entry t1: The paper kind must be a4 or letter.');
   });
 
   it('rejects a paper corner without coordinates', () => {
@@ -836,7 +842,7 @@ describe('trace sources in plan files', () => {
       id: 't1',
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ paper: paper as never }) },
     });
-    expect(validateEntry(bad)).toBe('entry t1: paper corner br needs x and y coordinates');
+    expect(validateEntry(bad)).toBe('entry t1: The paper corner br needs an x and a y coordinate.');
   });
 
   it('round-trips a batch item carrying the trace source snapshot', () => {
@@ -866,7 +872,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [bad]));
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: batch batch1: item i1: paper must be an object.',
+      error: 'The plan is invalid: batch batch1: item i1: The paper must be an object.',
     });
   });
 });
@@ -880,7 +886,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: a pocket placement refers to a tool that is not in the pockets',
+      'entry t1: A pocket placement refers to a tool that is not in the pockets.',
     );
   });
 
@@ -895,7 +901,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: pocket tool t1: outline needs at least 3 outer points',
+      'entry t1: pocket tool t1: The outline needs at least 3 outer points.',
     );
   });
 
@@ -907,7 +913,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: a pocket placement needs xMm, yMm and a pocketDepthMm above 0',
+      'entry t1: A pocket placement needs an x, a y and a pocket depth above 0 mm.',
     );
   });
 
@@ -938,7 +944,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: pocket tool t1: an elongated finger hole needs both x2 and y2 as numbers',
+      'entry t1: pocket tool t1: An elongated finger hole needs its second point, so x2 and y2 must both be numbers.',
     );
   });
 });
@@ -1135,7 +1141,7 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
     );
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: entry a1: kind must be manual, screw or traced.',
+      error: 'The plan is invalid: entry a1: The entry kind must be manual, screw or traced.',
     });
   });
 
@@ -1145,7 +1151,7 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain('labelMode must be embossed, slot, slot-insert or insert');
+      expect(result.error).toContain('The label mode must be embossed, slot, slot-insert or insert.');
     }
   });
 });
@@ -1490,7 +1496,7 @@ describe('cutout bins in plan files', () => {
     const bad = badProduct({ ...cutoutBin(), walls: [{ x1: 0, y1: 0, x2: 10, y2: 0 }] });
 
     expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
-      'entry c1: a cutout bin cannot have divider walls',
+      'entry c1: A cutout bin cannot have divider walls.',
     );
   });
 
@@ -1498,7 +1504,7 @@ describe('cutout bins in plan files', () => {
     const bad = badProduct({ ...cutoutBin(), dividerCountX: 2 });
 
     expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
-      'entry c1: a cutout bin cannot have divider walls',
+      'entry c1: A cutout bin cannot have divider walls.',
     );
   });
 
@@ -1506,58 +1512,58 @@ describe('cutout bins in plan files', () => {
     const bad = badProduct({ ...cutoutBin(), models: 'nope' });
 
     expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
-      'entry c1: models must be a list',
+      'entry c1: The models must be a list.',
     );
   });
 
   it.each([
-    ['a non-object model', 'nope', 'a cutout model is not an object'],
-    ['a model with an empty id', { ...cutoutModel(), id: '' }, 'a cutout model is missing its id'],
-    ['a non-string name', { ...cutoutModel(), name: 7 }, 'cutout model m1: name must be a string'],
+    ['a non-object model', 'nope', 'A cutout model is not an object.'],
+    ['a model with an empty id', { ...cutoutModel(), id: '' }, 'A cutout model is missing its id.'],
+    ['a non-string name', { ...cutoutModel(), name: 7 }, 'cutout model m1: The model name must be text.'],
     [
       'an empty modelSourceId',
       { ...cutoutModel(), modelSourceId: '' },
-      'cutout model m1: modelSourceId must be a non-empty string',
+      'cutout model m1: The model source id must be text that is not empty.',
     ],
     [
       'a fractional triangle count',
       { ...cutoutModel(), triangleCount: 12.5 },
-      'cutout model m1: triangleCount must be an integer of at least 1',
+      'cutout model m1: The triangle count must be a whole number of at least 1.',
     ],
     [
       'a triangle count over the import ceiling',
       { ...cutoutModel(), triangleCount: 250001 },
-      'cutout model m1: triangleCount must not exceed 250000',
+      'cutout model m1: The triangle count must not exceed 250000.',
     ],
     [
       'a unit scale of zero',
       { ...cutoutModel(), unitScale: 0 },
-      'cutout model m1: unitScale must be a number greater than 0',
+      'cutout model m1: The unit scale must be a number greater than 0.',
     ],
     [
       'a size missing its z',
       { ...cutoutModel(), sizeMm: { x: 10, y: 10 } },
-      'cutout model m1: sizeMm needs finite x, y and z',
+      'cutout model m1: The model size needs a finite x, y and z in mm.',
     ],
     [
       'a placement that is not an object',
       { ...cutoutModel(), placement: 'centre' },
-      'cutout model m1: placement must be an object',
+      'cutout model m1: The placement must be an object.',
     ],
     [
       'a placement with a non-numeric position',
       { ...cutoutModel(), placement: { ...cutoutModel().placement, yMm: 'front' } },
-      'cutout model m1: placement yMm must be a number',
+      'cutout model m1: The placement value yMm must be a number.',
     ],
     [
       'a placement with a non-numeric rotation',
       { ...cutoutModel(), placement: { ...cutoutModel().placement, rotZDeg: null } },
-      'cutout model m1: placement rotZDeg must be a number',
+      'cutout model m1: The placement value rotZDeg must be a number.',
     ],
     [
       'a negative clearance',
       { ...cutoutModel(), clearanceMm: -0.1 },
-      'cutout model m1: clearanceMm must be a number of at least 0',
+      'cutout model m1: The clearance must be a number of at least 0 mm.',
     ],
   ])('rejects %s', (_name, model, message) => {
     const bad = badProduct({ ...cutoutBin(), models: [model] });
@@ -1569,7 +1575,7 @@ describe('cutout bins in plan files', () => {
     const bad = badProduct({ ...cutoutBin(), models: [cutoutModel(), cutoutModel()] });
 
     expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
-      'entry c1: cutout model id m1 appears twice',
+      'entry c1: The cutout model id m1 appears twice.',
     );
   });
 
@@ -1584,7 +1590,7 @@ describe('cutout bins in plan files', () => {
     });
 
     expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
-      'entry c1: cutout model m1: clearanceMm is 25 mm, but a bin 1 by 1 cells allows at most 19.8 mm',
+      'entry c1: cutout model m1: The clearance is 25 mm, but a bin of 1 by 1 grid units allows at most 19.8 mm.',
     );
   });
 
