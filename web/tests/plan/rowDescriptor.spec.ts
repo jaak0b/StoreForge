@@ -3,6 +3,8 @@ import { describeProduct } from '../../src/engine/plan/rowDescriptor';
 import { evenDividerWalls } from '../../src/engine/gridfinity/dividerModel';
 import type {
   BinPockets,
+  CutoutBin,
+  CutoutModel,
   LabelContent,
   ManualBin,
   ScrewBin,
@@ -83,6 +85,32 @@ function tracedBin(placementCount: number, overrides: Partial<TracedBin> = {}): 
   };
 }
 
+/** The given number of carved models, each a distinct entry in one bin. */
+function cutoutModels(count: number): CutoutModel[] {
+  return Array.from({ length: count }, (_unused, index) => ({
+    id: `m${index}`,
+    name: `socket-${index}.stl`,
+    modelSourceId: `src-${index}`,
+    triangleCount: 1200,
+    unitScale: 1,
+    sizeMm: { x: 20, y: 10, z: 8 },
+    placement: { xMm: 0, yMm: 0, zMm: 12, rotXDeg: 0, rotYDeg: 0, rotZDeg: 0 },
+    clearanceMm: 0.4,
+  }));
+}
+
+function cutoutBin(modelCount: number, overrides: Partial<CutoutBin> = {}): CutoutBin {
+  return {
+    origin: 'cutout',
+    gridX: 3,
+    gridY: 2,
+    heightUnits: 4,
+    magnetHoles: false,
+    models: cutoutModels(modelCount),
+    ...overrides,
+  };
+}
+
 function content(overrides: Partial<LabelContent> = {}): LabelContent {
   return { text: 'M3 x 20', text2: '', icon: 'countersunk screw', ...overrides };
 }
@@ -150,6 +178,30 @@ describe('describeProduct titles', () => {
     );
   });
 
+  it('names a cutout bin by its cutout count', () => {
+    expect(describeProduct({ kind: 'bin', bin: cutoutBin(1), labelSlot: true }).title).toBe(
+      'Cutout bin, 1 cutout',
+    );
+    expect(describeProduct({ kind: 'bin', bin: cutoutBin(3), labelSlot: true }).title).toBe(
+      'Cutout bin, 3 cutouts',
+    );
+    expect(describeProduct({ kind: 'bin', bin: cutoutBin(0), labelSlot: true }).title).toBe(
+      'Cutout bin',
+    );
+  });
+
+  it('does not describe a cutout bin as a manual one, whatever its magnet holes say', () => {
+    // A cutout bin carries no walls at all, so the divider-wall branch would
+    // read undefined; the magnet holes are set because that branch would put
+    // them in the title and the cutout branch must not.
+    const row = describeProduct({
+      kind: 'bin',
+      bin: cutoutBin(2, { magnetHoles: true }),
+      labelSlot: true,
+    });
+    expect(row.title).toBe('Cutout bin, 2 cutouts');
+  });
+
   it('never puts the size in the title', () => {
     for (const row of [
       describeProduct({ kind: 'bin', bin: manualBin(), labelSlot: true }),
@@ -207,6 +259,15 @@ describe('describeProduct captions', () => {
     expect(
       describeProduct({ kind: 'binWithInsert', bin: tracedBin(0), insert: content() }).caption,
     ).toBe('bin + insert · 3×2×4 · traced');
+  });
+
+  it('describes a cutout bin with and without models', () => {
+    expect(describeProduct({ kind: 'bin', bin: cutoutBin(2), labelSlot: true }).caption).toBe(
+      'bin · 3×2×4 · cutout · 2 cutouts',
+    );
+    expect(
+      describeProduct({ kind: 'binWithInsert', bin: cutoutBin(0), insert: content() }).caption,
+    ).toBe('bin + insert · 3×2×4 · cutout');
   });
 
   it('sizes a manual insert by its cell width alone', () => {

@@ -6,10 +6,13 @@ import {
   serializePlanFile,
   validateBatch,
   validateEntry,
+  type PlanParseResult,
 } from '../../src/engine/plan/planFile';
 import type {
   BatchItem,
   BinPockets,
+  CutoutBin,
+  CutoutModel,
   ManualBin,
   ManualInsertProduct,
   PrintBatch,
@@ -127,7 +130,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     const entries = [entry(), entry({ id: 'b2', notes: 'reprint in PETG' })];
     const batches = [batch()];
     const result = parsePlanFile(serializePlanFile(entries, batches));
-    expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches }, warnings: [] });
   });
 
   it('rejects text that is not JSON', () => {
@@ -142,10 +145,10 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects an envelope version newer than this build reads', () => {
-    const result = parsePlanFile('{"version":6,"entries":[],"batches":[]}');
+    const result = parsePlanFile('{"version":7,"entries":[],"batches":[]}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('version 6');
-    if (!result.ok) expect(result.error).toContain('versions 1 to 5');
+    if (!result.ok) expect(result.error).toContain('version 7');
+    if (!result.ok) expect(result.error).toContain('versions 1 to 6');
   });
 
   it('rejects a missing entries list', () => {
@@ -207,7 +210,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [entry()], batches: [] },
+      plan: { version: 6, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -246,7 +249,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 6, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -261,7 +264,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [queued, printed] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 6, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -274,7 +277,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 6, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -297,7 +300,7 @@ describe('version-3 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 3, entries: [raw], batches: [] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [entry()], batches: [] },
+      plan: { version: 6, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -314,7 +317,7 @@ describe('version-3 migration', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [], batches: [batch()] },
+      plan: { version: 6, entries: [], batches: [batch()] },
       warnings: [],
     });
   });
@@ -344,7 +347,7 @@ describe('divider walls migration', () => {
     const result = parsePlanFile(serializePlanFile([withWalls], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [withWalls], batches: [] },
+      plan: { version: 6, entries: [withWalls], batches: [] },
       warnings: [],
     });
   });
@@ -483,7 +486,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [imperial, lengthless], batches: [] },
+      plan: { version: 6, entries: [imperial, lengthless], batches: [] },
       warnings: [],
     });
   });
@@ -493,7 +496,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 6, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -515,7 +518,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [], batches: [withSnapshots] },
+      plan: { version: 6, entries: [], batches: [withSnapshots] },
       warnings: [],
     });
   });
@@ -540,7 +543,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([fused], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [fused], batches: [] },
+      plan: { version: 6, entries: [fused], batches: [] },
       warnings: [],
     });
   });
@@ -572,10 +575,10 @@ describe('bin entry kinds in plan files', () => {
     );
   });
 
-  it('rejects a bin origin that is not manual, screw or traced', () => {
+  it('rejects a bin origin that is not manual, screw, traced or cutout', () => {
     const bad: Product = { kind: 'bin', bin: { ...manualBin(), origin: 'mystery' as never } };
     expect(validateEntry(entry({ product: bad }))).toBe(
-      'entry a1: bin origin must be manual, screw or traced',
+      'entry a1: bin origin must be manual, screw, traced or cutout',
     );
   });
 
@@ -624,7 +627,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 6, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -713,7 +716,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 6, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -730,7 +733,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 6, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -847,7 +850,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSource]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [], batches: [withSource] },
+      plan: { version: 6, entries: [], batches: [withSource] },
       warnings: [],
     });
   });
@@ -918,7 +921,7 @@ describe('pockets in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 5, entries: [traced], batches: [] },
+      plan: { version: 6, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -1302,7 +1305,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1323,7 +1326,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 5, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1342,6 +1345,295 @@ describe('divider walls survive a save and reload', () => {
 
     const result = parsePlanFile(serializePlanFile([], batches));
 
-    expect(result).toEqual({ ok: true, plan: { version: 5, entries: [], batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 6, entries: [], batches }, warnings: [] });
+  });
+});
+
+describe('cutout bins in plan files', () => {
+  /** One carved model, complete in every field a version-6 plan stores. */
+  function cutoutModel(overrides: Partial<CutoutModel> = {}): CutoutModel {
+    return {
+      id: 'm1',
+      name: 'socket-19.stl',
+      modelSourceId: 'model-a',
+      triangleCount: 14842,
+      unitScale: 1,
+      sizeMm: { x: 24.5, y: 24.5, z: 40 },
+      placement: { xMm: 12.4, yMm: -3.1, zMm: 21.75, rotXDeg: 0, rotYDeg: 90, rotZDeg: 15 },
+      clearanceMm: 0.4,
+      ...overrides,
+    };
+  }
+
+  function cutoutBin(overrides: Partial<CutoutBin> = {}): CutoutBin {
+    return {
+      origin: 'cutout',
+      gridX: 3,
+      gridY: 2,
+      heightUnits: 6,
+      magnetHoles: true,
+      models: [cutoutModel()],
+      ...overrides,
+    };
+  }
+
+  /** An entry ordering a cutout bin. */
+  function cutoutEntry(bin: CutoutBin = cutoutBin()): QueueEntry {
+    return entry({ id: 'c1', product: { kind: 'bin', labelSlot: true, bin } });
+  }
+
+  /** A cutout product whose bin fields are deliberately malformed. */
+  function badProduct(bin: Record<string, unknown>): Product {
+    return { kind: 'bin', labelSlot: true, bin } as unknown as Product;
+  }
+
+  /**
+   * Serializes one cutout entry, drops the named field from its single model,
+   * and parses the result: the shape a plan written before that field existed
+   * has on disk.
+   */
+  function withoutModelField(field: string): PlanParseResult {
+    const raw = JSON.parse(serializePlanFile([cutoutEntry()], [])) as {
+      entries: Array<{ product: { bin: { models: Record<string, unknown>[] } } }>;
+    };
+    delete raw.entries[0].product.bin.models[0][field];
+    return parsePlanFile(JSON.stringify(raw));
+  }
+
+  /** The cutout bin of a parsed plan's single entry. */
+  function loadedBin(result: PlanParseResult): CutoutBin {
+    if (!result.ok) throw new Error(`expected the plan to load: ${result.error}`);
+    return (result.plan.entries[0].product as { bin: CutoutBin }).bin;
+  }
+
+  it('round-trips a cutout bin with every model field intact', () => {
+    const entries = [cutoutEntry()];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(result).toEqual({ ok: true, plan: { version: 6, entries, batches: [] }, warnings: [] });
+  });
+
+  it('round-trips a cutout bin inside a print batch', () => {
+    // A batch carries its own copy of the product, so it is a second place a
+    // model list can be lost between sessions.
+    const batches = [
+      batch({ items: [batchItem({ product: { kind: 'bin', labelSlot: true, bin: cutoutBin() } })] }),
+    ];
+
+    const result = parsePlanFile(serializePlanFile([], batches));
+
+    expect(result).toEqual({ ok: true, plan: { version: 6, entries: [], batches }, warnings: [] });
+  });
+
+  it('keeps two models in one bin on their own clearances', () => {
+    // A bin-wide clearance creeping back into the loader would collapse these
+    // two values into one, giving one model the other's fit with no symptom
+    // until the part is printed.
+    const entries = [
+      cutoutEntry(
+        cutoutBin({
+          models: [
+            cutoutModel({ id: 'm1', clearanceMm: 0 }),
+            cutoutModel({ id: 'm2', modelSourceId: 'model-b', clearanceMm: 0.6 }),
+          ],
+        }),
+      ),
+    ];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(loadedBin(result).models.map((model) => model.clearanceMm)).toEqual([0, 0.6]);
+  });
+
+  it('defaults a model saved without a clearance to one nozzle width', () => {
+    const result = withoutModelField('clearanceMm');
+
+    expect(loadedBin(result).models[0].clearanceMm).toBe(0.4);
+  });
+
+  it('keeps a unit scale of 25.4, the value an inch-authored model needs', () => {
+    const entries = [cutoutEntry(cutoutBin({ models: [cutoutModel({ unitScale: 25.4 })] }))];
+
+    const result = parsePlanFile(serializePlanFile(entries, []));
+
+    expect(loadedBin(result).models[0].unitScale).toBe(25.4);
+  });
+
+  it('defaults a model saved without a unit scale to millimetres', () => {
+    // A plan written before the field existed described a model that was
+    // already being treated as millimetres, so 1 reproduces what it meant.
+    const result = withoutModelField('unitScale');
+
+    expect(loadedBin(result).models[0].unitScale).toBe(1);
+    expect(result.ok && result.warnings).toEqual([]);
+  });
+
+  it('defaults an absent model size to zeroes, which the next generation recomputes', () => {
+    const result = withoutModelField('sizeMm');
+
+    expect(loadedBin(result).models[0].sizeMm).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('drops an unknown extra model field rather than carrying it into storage', () => {
+    const raw = JSON.parse(serializePlanFile([cutoutEntry()], [])) as {
+      entries: Array<{ product: { bin: { models: Record<string, unknown>[] } } }>;
+    };
+    raw.entries[0].product.bin.models[0].stlBase64 = 'AAAA';
+
+    const result = parsePlanFile(JSON.stringify(raw));
+
+    expect(loadedBin(result).models[0]).toEqual(cutoutModel());
+  });
+
+  it('rejects a cutout bin carrying divider walls', () => {
+    const bad = badProduct({ ...cutoutBin(), walls: [{ x1: 0, y1: 0, x2: 10, y2: 0 }] });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: a cutout bin cannot have divider walls',
+    );
+  });
+
+  it('rejects a cutout bin carrying legacy divider counts', () => {
+    const bad = badProduct({ ...cutoutBin(), dividerCountX: 2 });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: a cutout bin cannot have divider walls',
+    );
+  });
+
+  it('rejects a models field that is not a list', () => {
+    const bad = badProduct({ ...cutoutBin(), models: 'nope' });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: models must be a list',
+    );
+  });
+
+  it.each([
+    ['a non-object model', 'nope', 'a cutout model is not an object'],
+    ['a model with an empty id', { ...cutoutModel(), id: '' }, 'a cutout model is missing its id'],
+    ['a non-string name', { ...cutoutModel(), name: 7 }, 'cutout model m1: name must be a string'],
+    [
+      'an empty modelSourceId',
+      { ...cutoutModel(), modelSourceId: '' },
+      'cutout model m1: modelSourceId must be a non-empty string',
+    ],
+    [
+      'a fractional triangle count',
+      { ...cutoutModel(), triangleCount: 12.5 },
+      'cutout model m1: triangleCount must be an integer of at least 1',
+    ],
+    [
+      'a triangle count over the import ceiling',
+      { ...cutoutModel(), triangleCount: 250001 },
+      'cutout model m1: triangleCount must not exceed 250000',
+    ],
+    [
+      'a unit scale of zero',
+      { ...cutoutModel(), unitScale: 0 },
+      'cutout model m1: unitScale must be a number greater than 0',
+    ],
+    [
+      'a size missing its z',
+      { ...cutoutModel(), sizeMm: { x: 10, y: 10 } },
+      'cutout model m1: sizeMm needs finite x, y and z',
+    ],
+    [
+      'a placement that is not an object',
+      { ...cutoutModel(), placement: 'centre' },
+      'cutout model m1: placement must be an object',
+    ],
+    [
+      'a placement with a non-numeric position',
+      { ...cutoutModel(), placement: { ...cutoutModel().placement, yMm: 'front' } },
+      'cutout model m1: placement yMm must be a number',
+    ],
+    [
+      'a placement with a non-numeric rotation',
+      { ...cutoutModel(), placement: { ...cutoutModel().placement, rotZDeg: null } },
+      'cutout model m1: placement rotZDeg must be a number',
+    ],
+    [
+      'a negative clearance',
+      { ...cutoutModel(), clearanceMm: -0.1 },
+      'cutout model m1: clearanceMm must be a number of at least 0',
+    ],
+  ])('rejects %s', (_name, model, message) => {
+    const bad = badProduct({ ...cutoutBin(), models: [model] });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(`entry c1: ${message}`);
+  });
+
+  it('rejects two models sharing one id', () => {
+    const bad = badProduct({ ...cutoutBin(), models: [cutoutModel(), cutoutModel()] });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: cutout model id m1 appears twice',
+    );
+  });
+
+  it('rejects a clearance wider than the bin allows, naming the limit that bin has', () => {
+    // A 1 by 1 bin has a 39.6 mm interior, and a clearance dilates the model in
+    // every direction, so half of that is the most any model in it can carry.
+    const bad = badProduct({
+      ...cutoutBin(),
+      gridX: 1,
+      gridY: 1,
+      models: [cutoutModel({ clearanceMm: 25 })],
+    });
+
+    expect(validateEntry(entry({ id: 'c1', product: bad }))).toBe(
+      'entry c1: cutout model m1: clearanceMm is 25 mm, but a bin 1 by 1 cells allows at most 19.8 mm',
+    );
+  });
+
+  it('accepts a clearance exactly at the bin limit', () => {
+    const atLimit = badProduct({
+      ...cutoutBin(),
+      gridX: 1,
+      gridY: 1,
+      models: [cutoutModel({ clearanceMm: 19.8 })],
+    });
+
+    expect(validateEntry(entry({ id: 'c1', product: atLimit }))).toBeNull();
+  });
+
+  it('accepts a cutout bin with no models at all', () => {
+    expect(validateEntry(cutoutEntry(cutoutBin({ models: [] })))).toBeNull();
+  });
+});
+
+describe('a plan written by the previous build', () => {
+  it('loads a version-5 plan unchanged, with no warnings', () => {
+    // The regression that matters most: binQueue.loadPlan degrades a parse
+    // failure to an empty plan and only logs, so a break here would silently
+    // empty every existing user's queue on their next visit.
+    const stored = {
+      id: 'a1',
+      quantity: 2,
+      createdAt: '2026-07-01T10:00:00.000Z',
+      notes: 'reprint in PETG',
+      product: {
+        kind: 'binWithInsert',
+        bin: {
+          origin: 'manual',
+          gridX: 2,
+          gridY: 1,
+          heightUnits: 3,
+          magnetHoles: false,
+          walls: [{ x1: 0, y1: -20, x2: 0, y2: 20 }],
+        },
+        insert: { text: 'M3 x 20', text2: 'drawer 2', icon: 'countersunk screw' },
+      },
+    };
+
+    const result = parsePlanFile(JSON.stringify({ version: 5, entries: [stored], batches: [] }));
+
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 6, entries: [stored], batches: [] },
+      warnings: [],
+    });
   });
 });

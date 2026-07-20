@@ -4,7 +4,9 @@ import {
   type Bin,
   type BinPockets,
   type BinWithInsertProduct,
+  type CutoutModel,
   type LabelContent,
+  type ModelPlacement,
   type PlanFile,
   type PrintBatch,
   type Product,
@@ -15,6 +17,8 @@ import {
   type DividerWall,
 } from './types';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
+import { DEFAULT_CUTOUT_CLEARANCE_MM, maxClearanceMm } from '../cutout/cutoutBin';
+import { MAX_TRIANGLES } from '../cutout/stlReader';
 import {
   composeLabelText,
   HEAD_ICON_NAME,
@@ -275,6 +279,136 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
   return { tools, placements };
 }
 
+/** The six placement fields, in the order the validator reports them. */
+const PLACEMENT_KEYS = ['xMm', 'yMm', 'zMm', 'rotXDeg', 'rotYDeg', 'rotZDeg'] as const;
+
+/**
+ * Validates a raw value as a cutout bin's list of carved models. Returns null
+ * when it is valid, otherwise a message naming the first offending field.
+ *
+ * The bin's own gridX and gridY are taken because the clearance ceiling
+ * depends on them: a clearance dilates the model in every direction, so the
+ * largest one a bin can hold is half its narrowest interior dimension. The
+ * message then names the limit this bin actually allows rather than saying the
+ * value is merely wrong, as the pocket depth message does.
+ *
+ * The model's triangles are deliberately not part of the plan: only the
+ * metadata is, so a reader holding the JSON without the bytes can still list,
+ * describe and validate the bin.
+ */
+export function validateCutoutModels(
+  raw: unknown,
+  subject: string,
+  gridX: number,
+  gridY: number,
+): string | null {
+  if (!Array.isArray(raw)) {
+    return `${subject}: models must be a list`;
+  }
+  const modelIds = new Set<string>();
+  for (const rawModel of raw) {
+    if (typeof rawModel !== 'object' || rawModel === null || Array.isArray(rawModel)) {
+      return `${subject}: a cutout model is not an object`;
+    }
+    const model = rawModel as Record<string, unknown>;
+    if (typeof model.id !== 'string' || model.id.length === 0) {
+      return `${subject}: a cutout model is missing its id`;
+    }
+    const id = model.id;
+    if (modelIds.has(id)) {
+      return `${subject}: cutout model id ${id} appears twice`;
+    }
+    modelIds.add(id);
+    if (typeof model.name !== 'string') {
+      return `${subject}: cutout model ${id}: name must be a string`;
+    }
+    if (typeof model.modelSourceId !== 'string' || model.modelSourceId.length === 0) {
+      return `${subject}: cutout model ${id}: modelSourceId must be a non-empty string`;
+    }
+    if (!isPositiveInteger(model.triangleCount, 1)) {
+      return `${subject}: cutout model ${id}: triangleCount must be an integer of at least 1`;
+    }
+    if (model.triangleCount > MAX_TRIANGLES) {
+      return `${subject}: cutout model ${id}: triangleCount must not exceed ${MAX_TRIANGLES}`;
+    }
+    // unitScale, sizeMm and clearanceMm are accepted as absent and defaulted on
+    // pick, so a plan written before each of them existed still loads.
+    if (model.unitScale !== undefined) {
+      if (!isFiniteNumber(model.unitScale) || model.unitScale <= 0) {
+        return `${subject}: cutout model ${id}: unitScale must be a number greater than 0`;
+      }
+    }
+    if (model.sizeMm !== undefined) {
+      const size = model.sizeMm as Record<string, unknown> | null;
+      if (
+        typeof size !== 'object' ||
+        size === null ||
+        !isFiniteNumber(size.x) ||
+        !isFiniteNumber(size.y) ||
+        !isFiniteNumber(size.z)
+      ) {
+        return `${subject}: cutout model ${id}: sizeMm needs finite x, y and z`;
+      }
+    }
+    const placement = model.placement as Record<string, unknown> | null | undefined;
+    if (typeof placement !== 'object' || placement === null || Array.isArray(placement)) {
+      return `${subject}: cutout model ${id}: placement must be an object`;
+    }
+    for (const key of PLACEMENT_KEYS) {
+      if (!isFiniteNumber(placement[key])) {
+        return `${subject}: cutout model ${id}: placement ${key} must be a number`;
+      }
+    }
+    if (model.clearanceMm !== undefined) {
+      if (!isFiniteNumber(model.clearanceMm) || model.clearanceMm < 0) {
+        return `${subject}: cutout model ${id}: clearanceMm must be a number of at least 0`;
+      }
+      const limit = maxClearanceMm(gridX, gridY);
+      if (model.clearanceMm > limit) {
+        return (
+          `${subject}: cutout model ${id}: clearanceMm is ${model.clearanceMm} mm, but a bin ` +
+          `${gridX} by ${gridY} cells allows at most ${limit} mm`
+        );
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Copies only the known CutoutModel fields from a validated raw bin. The three
+ * fields that were added after the first cutout bins could be written default
+ * here: the clearance to the shared default, the unit scale to 1 (which is
+ * exactly what a plan written before the field existed meant, since it
+ * described a model already treated as millimetres), and the size to zeroes,
+ * which the next generation recomputes from the model itself.
+ */
+export function pickCutoutModels(raw: Record<string, unknown>): CutoutModel[] {
+  return (raw.models as Record<string, unknown>[]).map((model): CutoutModel => {
+    const placement = model.placement as Record<string, number>;
+    const size = model.sizeMm as { x: number; y: number; z: number } | undefined;
+    const picked: ModelPlacement = {
+      xMm: placement.xMm,
+      yMm: placement.yMm,
+      zMm: placement.zMm,
+      rotXDeg: placement.rotXDeg,
+      rotYDeg: placement.rotYDeg,
+      rotZDeg: placement.rotZDeg,
+    };
+    return {
+      id: model.id as string,
+      name: model.name as string,
+      modelSourceId: model.modelSourceId as string,
+      triangleCount: model.triangleCount as number,
+      unitScale: (model.unitScale as number | undefined) ?? 1,
+      sizeMm:
+        size !== undefined ? { x: size.x, y: size.y, z: size.z } : { x: 0, y: 0, z: 0 },
+      placement: picked,
+      clearanceMm: (model.clearanceMm as number | undefined) ?? DEFAULT_CUTOUT_CLEARANCE_MM,
+    };
+  });
+}
+
 const CORNER_KEYS = ['tl', 'tr', 'br', 'bl'] as const;
 
 /**
@@ -502,7 +636,17 @@ function validateBin(raw: unknown, subject: string): string | null {
     if (pocketsProblem !== null) return pocketsProblem;
     return validateTraceSource(bin, subject);
   }
-  return `${subject}: bin origin must be manual, screw or traced`;
+  if (bin.origin === 'cutout') {
+    if (
+      bin.walls !== undefined ||
+      bin.dividerCountX !== undefined ||
+      bin.dividerCountY !== undefined
+    ) {
+      return `${subject}: a cutout bin cannot have divider walls`;
+    }
+    return validateCutoutModels(bin.models, subject, bin.gridX, bin.gridY);
+  }
+  return `${subject}: bin origin must be manual, screw, traced or cutout`;
 }
 
 /** Copies only the known Bin fields from a validated raw object. */
@@ -521,6 +665,9 @@ function pickBin(raw: Record<string, unknown>): Bin {
     };
     assignTraceSource(bin, raw);
     return bin;
+  }
+  if (raw.origin === 'cutout') {
+    return { ...envelope, origin: 'cutout', models: pickCutoutModels(raw) };
   }
   const walls = pickWalls(raw);
   if (raw.origin === 'screw') {
@@ -1100,10 +1247,11 @@ export function parsePlanFile(text: string): PlanParseResult {
     return { ok: false, error: 'The plan is missing its entries list.' };
   }
   // Versions 1 and 2 carry flat design fields per entry and convert through
-  // the legacy path. Versions 3, 4 and 5 already have the current product/bin
+  // the legacy path. Versions 3 to 6 already have the current product/bin
   // shape and read through the current path; versions 3 and 4 carry divider
-  // counts (converted to walls on pick) where version 5 carries walls, and
-  // the validators and pickers accept either.
+  // counts (converted to walls on pick) where versions 5 and 6 carry walls, and
+  // the validators and pickers accept either. Version 6 adds cutout-origin
+  // bins, which no earlier version can contain, so nothing else changes.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];

@@ -2,7 +2,14 @@ import type {
   InsertParams,
   SlottedBinParams,
 } from '../gridfinity/types';
-import { assertNever, insertOf, type Bin, type BinPockets, type Product } from './types';
+import {
+  assertNever,
+  insertOf,
+  type Bin,
+  type BinPockets,
+  type CutoutModel,
+  type Product,
+} from './types';
 
 /**
  * The single mapping from the plan layer's Product to the geometry layer's
@@ -16,10 +23,33 @@ export type PrintablePart =
       part: 'bin';
       bin: SlottedBinParams;
       pockets?: BinPockets;
+      /** The models carved out of the interior, for a cutout-origin bin. */
+      models?: CutoutModel[];
       /** Display name source: the paired insert's text, for slicer object names. */
       labelText?: string;
     }
   | { part: 'insert'; insert: InsertParams };
+
+/**
+ * The interior features a bin carries beyond its envelope, keyed by the origin
+ * that owns them: tool pockets for a traced bin, carved models for a cutout
+ * bin, and neither for a bin whose interior is described by divider walls. The
+ * single place a bin's interior features are read off its origin, so every
+ * part a product expands into carries the same ones.
+ */
+function interiorFeaturesOf(bin: Bin): { pockets?: BinPockets; models?: CutoutModel[] } {
+  switch (bin.origin) {
+    case 'traced':
+      return { pockets: bin.pockets };
+    case 'cutout':
+      return { models: bin.models };
+    case 'manual':
+    case 'screw':
+      return {};
+    default:
+      return assertNever(bin);
+  }
+}
 
 /** The geometry parameters of a bin, with the slot flag and paired insert content given. */
 export function toSlottedBinParams(
@@ -33,8 +63,9 @@ export function toSlottedBinParams(
     gridY: bin.gridY,
     heightUnits: bin.heightUnits,
     magnetHoles: bin.magnetHoles,
-    // The pocket generator rejects divider walls, so a traced bin has none.
-    walls: bin.origin === 'traced' ? [] : bin.walls,
+    // Both carve flows fill the interior solid before subtracting, so neither a
+    // traced nor a cutout bin has divider walls for the walls to divide.
+    walls: bin.origin === 'traced' || bin.origin === 'cutout' ? [] : bin.walls,
     labelSlot,
     insert,
     fusedLabel,
@@ -50,13 +81,17 @@ export function toSlottedBinParams(
 export function partsOf(product: Product): PrintablePart[] {
   switch (product.kind) {
     case 'bin': {
-      const pockets = product.bin.origin === 'traced' ? product.bin.pockets : undefined;
+      const interior = interiorFeaturesOf(product.bin);
       return [
-        { part: 'bin', bin: toSlottedBinParams(product.bin, product.labelSlot, null), pockets },
+        {
+          part: 'bin',
+          bin: toSlottedBinParams(product.bin, product.labelSlot, null),
+          ...interior,
+        },
       ];
     }
     case 'binWithInsert': {
-      const pockets = product.bin.origin === 'traced' ? product.bin.pockets : undefined;
+      const interior = interiorFeaturesOf(product.bin);
       const insert = insertOf(product)!;
       if (product.fused) {
         // Fused: one part only, the bin with the label raised on its top face
@@ -64,7 +99,7 @@ export function partsOf(product: Product): PrintablePart[] {
         const bin: PrintablePart = {
           part: 'bin',
           bin: toSlottedBinParams(product.bin, false, null, insert.content),
-          pockets,
+          ...interior,
         };
         if (insert.content.text !== '') bin.labelText = insert.content.text;
         return [bin];
@@ -72,7 +107,7 @@ export function partsOf(product: Product): PrintablePart[] {
       const bin: PrintablePart = {
         part: 'bin',
         bin: toSlottedBinParams(product.bin, true, null),
-        pockets,
+        ...interior,
       };
       if (insert.content.text !== '') bin.labelText = insert.content.text;
       return [

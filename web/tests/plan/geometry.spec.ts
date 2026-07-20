@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { partsOf, previewBinParams } from '../../src/engine/plan/geometry';
-import type { BinWithInsertProduct, ManualBin } from '../../src/engine/plan/types';
+import type {
+  BinWithInsertProduct,
+  CutoutBin,
+  CutoutModel,
+  ManualBin,
+} from '../../src/engine/plan/types';
 
 function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
@@ -22,6 +27,74 @@ function binWithInsert(overrides: Partial<BinWithInsertProduct> = {}): BinWithIn
     ...overrides,
   };
 }
+
+function cutoutModel(): CutoutModel {
+  return {
+    id: 'm1',
+    name: 'socket-19.stl',
+    modelSourceId: 'src-1',
+    triangleCount: 14842,
+    unitScale: 1,
+    sizeMm: { x: 24, y: 24, z: 40 },
+    placement: { xMm: 3, yMm: -2, zMm: 21.75, rotXDeg: 0, rotYDeg: 90, rotZDeg: 15 },
+    clearanceMm: 0.4,
+  };
+}
+
+function cutoutBin(overrides: Partial<CutoutBin> = {}): CutoutBin {
+  return {
+    origin: 'cutout',
+    gridX: 3,
+    gridY: 2,
+    heightUnits: 6,
+    magnetHoles: false,
+    models: [cutoutModel()],
+    ...overrides,
+  };
+}
+
+describe('partsOf for a cutout bin', () => {
+  it('carries the models through on a bin ordered alone', () => {
+    const parts = partsOf({ kind: 'bin', bin: cutoutBin(), labelSlot: true });
+    expect(parts).toHaveLength(1);
+    const bin = parts[0];
+    if (bin.part !== 'bin') throw new Error('expected bin part');
+    expect(bin.models).toEqual([cutoutModel()]);
+    expect(bin.pockets).toBeUndefined();
+  });
+
+  it('carries the models through on a bin ordered with its insert', () => {
+    const parts = partsOf({
+      kind: 'binWithInsert',
+      bin: cutoutBin(),
+      insert: { text: 'sockets', text2: '', icon: null },
+    });
+    expect(parts.map((p) => p.part)).toEqual(['bin', 'insert']);
+    const bin = parts[0];
+    if (bin.part !== 'bin') throw new Error('expected bin part');
+    expect(bin.models).toEqual([cutoutModel()]);
+  });
+
+  it('carries the models through on a fused bin', () => {
+    const parts = partsOf({
+      kind: 'binWithInsert',
+      bin: cutoutBin(),
+      insert: { text: 'sockets', text2: '', icon: null },
+      fused: true,
+    });
+    expect(parts).toHaveLength(1);
+    const bin = parts[0];
+    if (bin.part !== 'bin') throw new Error('expected bin part');
+    expect(bin.models).toEqual([cutoutModel()]);
+  });
+
+  it('gives a cutout bin no divider walls, because its interior is filled for the carve', () => {
+    const parts = partsOf({ kind: 'bin', bin: cutoutBin(), labelSlot: true });
+    const bin = parts[0];
+    if (bin.part !== 'bin') throw new Error('expected bin part');
+    expect(bin.bin.walls).toEqual([]);
+  });
+});
 
 describe('partsOf for binWithInsert', () => {
   it('expands the swappable-insert product into a bin and a separate insert', () => {
