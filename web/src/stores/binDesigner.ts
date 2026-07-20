@@ -37,13 +37,23 @@ export const useBinDesigner = defineStore('binDesigner', {
     /** Index of the wall the canvas editor has selected, or null for none. */
     selectedWallIndex: null as number | null,
     /**
-     * Whether interactive divider edits snap to the quarter pitch lattice and
-     * to 15 degree directions. A global editor setting rather than a property
-     * of any wall: it constrains how an edit is applied and leaves nothing
-     * behind on the wall it produced. On by default, since clean layouts are
-     * the common case and free angles are the deliberate exception.
+     * Whether interactive divider edits are attracted to the quarter pitch
+     * lattice, the bin interior, the other walls and 15 degree directions. A
+     * global editor setting rather than a property of any wall: it constrains
+     * how an edit is applied and leaves nothing behind on the wall it
+     * produced. On by default, since clean layouts are the common case; the
+     * attraction is magnetic, so free positions and free angles stay reachable
+     * without turning it off.
      */
     snapEnabled: true,
+    /**
+     * How far in mm an edit may be from a target and still be attracted to it.
+     * The canvas owns the figure and republishes it whenever a gesture starts,
+     * converting its fixed pixel pull radius through the view scale in force.
+     * Zero until a view has reported a scale, which attracts nothing: no view
+     * means no screen-space affordance to honour.
+     */
+    snapToleranceMm: 0,
     labelText: '',
     labelText2: '',
     labelIcon: null as string | null,
@@ -112,7 +122,11 @@ export const useBinDesigner = defineStore('binDesigner', {
     },
     /** The current snapping settings, as the divider model takes them. */
     snapOptions(): divider.SnapOptions {
-      return { enabled: this.snapEnabled };
+      return { enabled: this.snapEnabled, toleranceMm: this.snapToleranceMm };
+    },
+    /** Publishes the pull radius the canvas derived from its current scale. */
+    setSnapToleranceMm(toleranceMm: number): void {
+      this.snapToleranceMm = toleranceMm;
     },
     /** Adds a wall, selects it, and returns its index. */
     addWall(wall?: DividerWall): number {

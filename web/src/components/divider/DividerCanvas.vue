@@ -34,10 +34,29 @@ const HANDLE_MM = 2.5;
 /** Radius an endpoint handle is drawn at, in pixels. */
 const HANDLE_PX = 4;
 
+/**
+ * How near a snap target an edit must come, in css pixels, before the target
+ * attracts it. A screen-space affordance rather than a geometric figure: it is
+ * how close the user's hand has to be, so it is fixed on screen and the mm
+ * equivalent the model works in is derived from it through the view scale in
+ * force. Twice the drawn endpoint handle, the smallest radius that still feels
+ * like a comfortable pointer target, so the freely positionable gap between
+ * targets stays as wide as possible.
+ */
+const SNAP_PULL_PX = 2 * HANDLE_PX;
+
 const hoveredIndex = ref<number | null>(null);
 
-const { setCanvas, canvasWidth, hoverCursor, scheduleDraw, clientToMm, freezeView, releaseView } =
-  useTopDownCanvas({
+const {
+  setCanvas,
+  canvasWidth,
+  hoverCursor,
+  scheduleDraw,
+  currentView,
+  clientToMm,
+  freezeView,
+  releaseView,
+} = useTopDownCanvas({
     bin: () => {
       // The wall model is bin-local with the bin centred on the origin, so
       // the interior rectangle is the footprint's interior about the origin.
@@ -141,6 +160,9 @@ let drawStart: MmPoint | null = null;
 
 function onPointerDown(event: PointerEvent): void {
   freezeView();
+  // The view is frozen for the gesture, so the pull radius converts once here
+  // and stays the same distance on screen for every move that follows.
+  store.setSnapToleranceMm(SNAP_PULL_PX / currentView().s);
   const p = clientToMm(event.clientX, event.clientY);
   dragStartMm = p;
   dragOriginWall = null;
