@@ -5,17 +5,17 @@
 // injected so the WASM stays out of the main bundle.
 import type { ManifoldToplevel, SimplePolygon } from 'manifold-3d';
 import type { FingerHole, MmPoint, TracedOutline, TracedTool } from './types';
+import { circleSegments } from '../geometry/circleSegments';
 
 /**
  * Maximum chordal deviation in mm when a circle or arc is flattened to
  * segments. 0.1 mm: well under the 0.25 mm rectified-pixel size and the
  * 0.2 mm contour simplification tolerance, so flattening never costs more
  * accuracy than the trace already did, while keeping vertex counts small.
+ * This flow's own accuracy policy, spent against the shared circleSegments
+ * derivation at every call site below.
  */
 export const CHORDAL_TOLERANCE_MM = 0.1;
-
-/** Floor on segments per full circle so tiny radii still look round. */
-const MIN_CIRCLE_SEGMENTS = 12;
 
 /**
  * Signed shoelace area of a closed polygon. In outline convention (see
@@ -144,20 +144,6 @@ export function transformTool(
 }
 
 /**
- * Segments for a full circle of the given radius under CHORDAL_TOLERANCE_MM,
- * rounded up to a multiple of 4 so the four axis extremes land on vertices
- * and primitive bounds are exactly the requested dimensions.
- */
-function circleSegments(radiusMm: number): number {
-  let n = MIN_CIRCLE_SEGMENTS;
-  if (radiusMm > CHORDAL_TOLERANCE_MM) {
-    const step = 2 * Math.acos(1 - CHORDAL_TOLERANCE_MM / radiusMm);
-    n = Math.max(MIN_CIRCLE_SEGMENTS, Math.ceil((2 * Math.PI) / step));
-  }
-  return Math.ceil(n / 4) * 4;
-}
-
-/**
  * Grow the outline outward by offsetMm with rounded joins, holes shrinking by
  * the same amount. The outline is offset as one composed cross-section
  * (outer plus holes, EvenOdd fill): manifold offsets the filled region, so
@@ -185,7 +171,12 @@ export function applyClearance(
   );
   const section = new m.CrossSection(loops, 'EvenOdd');
   try {
-    const grown = section.offset(offsetMm, 'Round', undefined, circleSegments(offsetMm));
+    const grown = section.offset(
+      offsetMm,
+      'Round',
+      undefined,
+      circleSegments(offsetMm, CHORDAL_TOLERANCE_MM),
+    );
     try {
       let outer: MmPoint[] | null = null;
       let outerArea = 0;
@@ -221,7 +212,7 @@ export function applyClearance(
 /** Circle outline of the given diameter, positively wound, centered at (cx, cy). */
 function circleOutline(cx: number, cy: number, diameterMm: number): TracedOutline {
   const r = diameterMm / 2;
-  const n = circleSegments(r);
+  const n = circleSegments(r, CHORDAL_TOLERANCE_MM);
   const outer: MmPoint[] = [];
   for (let i = 0; i < n; i += 1) {
     const angle = (2 * Math.PI * i) / n;
@@ -284,7 +275,7 @@ export function primitiveOutline(
   // Four quarter arcs joined by the straight edges between their tangent
   // points; arc endpoints land exactly on the tangent points, so the bounds
   // stay exactly widthMm by heightMm.
-  const arcSteps = Math.max(1, Math.ceil(circleSegments(r) / 4));
+  const arcSteps = Math.max(1, Math.ceil(circleSegments(r, CHORDAL_TOLERANCE_MM) / 4));
   const outer: MmPoint[] = [];
   const corners: Array<{ cx: number; cy: number; startDeg: number }> = [
     { cx: hw - r, cy: hh - r, startDeg: 0 },
@@ -334,7 +325,7 @@ export function fingerHoleOutline(hole: FingerHole): TracedOutline {
   const r = hole.diameterMm / 2;
   const theta = Math.atan2(dy, dx);
   // Half a full circle's segments per cap keeps the chordal rule intact.
-  const capSteps = circleSegments(r) / 2;
+  const capSteps = circleSegments(r, CHORDAL_TOLERANCE_MM) / 2;
   const outer: MmPoint[] = [];
   const cap = (cx: number, cy: number, startAngle: number): void => {
     for (let k = 0; k <= capSteps; k += 1) {
@@ -405,7 +396,12 @@ export function cullNarrowHoles(
       'NonZero',
     );
     try {
-      const eroded = region.offset(-erosion, 'Round', undefined, circleSegments(erosion));
+      const eroded = region.offset(
+        -erosion,
+        'Round',
+        undefined,
+        circleSegments(erosion, CHORDAL_TOLERANCE_MM),
+      );
       try {
         if (!eroded.isEmpty()) {
           kept.push(loop.map((p) => ({ ...p })));
