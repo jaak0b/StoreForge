@@ -18,54 +18,39 @@
  */
 
 import type { PersistedSolidRecord } from './engine/cutout/persistedSolids';
-import { SOLID_STORE, withStore, type StoreBinding } from './idb';
+import { makeBlobStore, SOLID_STORE } from './idb';
 
-const SOLIDS: StoreBinding = {
-  name: SOLID_STORE,
-  openFailure: 'Opening the solid cache storage failed',
-};
+// The record arrives keyed by a field of its own (key), so it is persisted as
+// is: the mapping is the identity both ways, and the store key is record.key.
+const solids = makeBlobStore<PersistedSolidRecord, PersistedSolidRecord>({
+  binding: { name: SOLID_STORE, openFailure: 'Opening the solid cache storage failed' },
+  putFailure: 'Storing the cached cutout solid failed',
+  getFailure: 'Reading the cached cutout solid failed',
+  deleteFailure: 'Deleting the cached cutout solid failed',
+  listFailure: 'Listing the cached cutout solids failed',
+  toRecord: (_id, record) => record,
+  fromRecord: (record) => record,
+});
 
 /** Stores (or replaces) a persisted solid record under its cache key. */
-export async function putSolidRecord(record: PersistedSolidRecord): Promise<void> {
-  await withStore(
-    SOLIDS,
-    'readwrite',
-    (store) => store.put(record),
-    'Storing the cached cutout solid failed',
-  );
+export function putSolidRecord(record: PersistedSolidRecord): Promise<void> {
+  return solids.put(record.key, record);
 }
 
 /**
  * Loads a persisted solid record. Returns null when nothing is stored under
  * the key, which is the normal cold-cache case, not an error.
  */
-export async function getSolidRecord(key: string): Promise<PersistedSolidRecord | null> {
-  const record = await withStore<PersistedSolidRecord | undefined>(
-    SOLIDS,
-    'readonly',
-    (store) => store.get(key) as IDBRequest<PersistedSolidRecord | undefined>,
-    'Reading the cached cutout solid failed',
-  );
-  return record ?? null;
+export function getSolidRecord(key: string): Promise<PersistedSolidRecord | null> {
+  return solids.get(key);
 }
 
 /** Deletes a persisted solid record. Deleting a missing key is a no-op. */
-export async function deleteSolidRecord(key: string): Promise<void> {
-  await withStore(
-    SOLIDS,
-    'readwrite',
-    (store) => store.delete(key),
-    'Deleting the cached cutout solid failed',
-  );
+export function deleteSolidRecord(key: string): Promise<void> {
+  return solids.delete(key);
 }
 
 /** Lists the keys of all persisted solid records, for garbage collection. */
-export async function listSolidRecordKeys(): Promise<string[]> {
-  const keys = await withStore<IDBValidKey[]>(
-    SOLIDS,
-    'readonly',
-    (store) => store.getAllKeys(),
-    'Listing the cached cutout solids failed',
-  );
-  return keys.map((key) => String(key));
+export function listSolidRecordKeys(): Promise<string[]> {
+  return solids.listIds();
 }

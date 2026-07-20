@@ -53,10 +53,19 @@ function requestError(request: IDBRequest | IDBOpenDBRequest): string {
 }
 
 /**
+ * The one live connection per JS context, opened lazily and reused across
+ * requests. A cached promise means concurrent callers share a single open
+ * instead of racing their own. It is invalidated (set back to null) when the
+ * connection closes, when another realm starts a version upgrade, or when a
+ * request against it fails, so the next call reopens a fresh connection.
+ */
+let connection: Promise<IDBDatabase> | null = null;
+
+/**
  * Opens the shared database, creating every store the current version needs.
  * The failure wording comes from the calling store's binding.
  */
-export async function openDatabase(binding: StoreBinding): Promise<IDBDatabase> {
+async function openDatabase(binding: StoreBinding): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') {
     throw new Error('This browser does not offer IndexedDB storage.');
   }
@@ -82,6 +91,35 @@ export async function openDatabase(binding: StoreBinding): Promise<IDBDatabase> 
   );
 }
 
+/**
+ * Returns the shared connection, opening it on first use and reusing it after.
+ * Every connection handed out closes itself when another realm starts an
+ * upgrade, and the cache is dropped on that event, on an unexpected close, and
+ * on a failed open, so a later call always reopens a healthy connection.
+ */
+function connect(binding: StoreBinding): Promise<IDBDatabase> {
+  if (connection === null) {
+    const opening = openDatabase(binding).then((db) => {
+      db.onversionchange = () => {
+        // Another realm is upgrading; step aside so its upgrade is not blocked,
+        // and drop the cache so the next request reopens at the new version.
+        db.close();
+        if (connection === opening) connection = null;
+      };
+      db.onclose = () => {
+        if (connection === opening) connection = null;
+      };
+      return db;
+    });
+    // A failed open must not poison the cache; clear it so the next call retries.
+    opening.catch(() => {
+      if (connection === opening) connection = null;
+    });
+    connection = opening;
+  }
+  return connection;
+}
+
 function hasAllStores(db: IDBDatabase): boolean {
   return [PHOTO_STORE, MODEL_STORE, SOLID_STORE].every((name) =>
     db.objectStoreNames.contains(name),
@@ -91,6 +129,8 @@ function hasAllStores(db: IDBDatabase): boolean {
 /**
  * Opens the database, wiring the shared upgrade handler. With a version it
  * requests that exact version; without one it accepts whatever exists on disk.
+ * Every opened connection self-closes on a version change from another realm,
+ * and a blocked upgrade rejects rather than hanging forever.
  */
 function openAtVersion(binding: StoreBinding, version?: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -110,7 +150,25 @@ function openAtVersion(binding: StoreBinding, version?: number): Promise<IDBData
         db.createObjectStore(SOLID_STORE, { keyPath: 'key' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      // Every connection handed out steps aside when another realm upgrades, so
+      // that realm's upgrade is never blocked by a stale connection this one left
+      // open. connect replaces this handler on the connection it caches to also
+      // invalidate the cache.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+    // An upgrade is blocked while another realm still holds an older version
+    // open. Surface it as an error the caller can report rather than leaving the
+    // open request pending forever; the other realm's onversionchange should
+    // normally have closed it already.
+    request.onblocked = () =>
+      reject(
+        new Error(
+          `${binding.openFailure} (another tab or window is holding an older version of the database open; close the app's other tabs and retry).`,
+        ),
+      );
     request.onerror = () =>
       reject(new Error(`${binding.openFailure} (${requestError(request)}).`));
   });
@@ -123,7 +181,7 @@ export async function withStore<T>(
   run: (store: IDBObjectStore) => IDBRequest<T>,
   failure: string,
 ): Promise<T> {
-  const db = await openDatabase(binding);
+  const db = await connect(binding);
   try {
     return await new Promise<T>((resolve, reject) => {
       const transaction = db.transaction(binding.name, mode);
@@ -131,7 +189,94 @@ export async function withStore<T>(
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(new Error(`${failure} (${requestError(request)}).`));
     });
-  } finally {
-    db.close();
+  } catch (error) {
+    // Drop the shared connection so the next call reopens; the current
+    // connection may be broken (a closed database or an aborted upgrade). The
+    // connection is not force-closed here because concurrent callers may still
+    // be using it; it closes when the last reference is released.
+    if (connection !== null) connection = null;
+    throw error;
   }
+}
+
+/**
+ * One blob store's failure wording and the mapping between the value a caller
+ * passes and the record persisted under it. Photos and models wrap their blob
+ * in a timestamped record keyed by id; the solid store persists the record as
+ * it arrives, keyed by a field of its own.
+ */
+export interface BlobStoreConfig<TValue, TRecord> {
+  /** Identity and open-failure wording of the shared object store. */
+  binding: StoreBinding;
+  /** Failure wording for a failed put, without the detail or the full stop. */
+  putFailure: string;
+  /** Failure wording for a failed get. */
+  getFailure: string;
+  /** Failure wording for a failed delete. */
+  deleteFailure: string;
+  /** Failure wording for a failed key listing. */
+  listFailure: string;
+  /** Builds the persisted record from the key and the caller's value. */
+  toRecord(id: string, value: TValue): TRecord;
+  /** Recovers the caller's value from a persisted record. */
+  fromRecord(record: TRecord): TValue;
+}
+
+/** The put/get/delete/listIds quartet every blob store exposes. */
+export interface BlobStore<TValue> {
+  /** Stores (or replaces) a value under its key. */
+  put(id: string, value: TValue): Promise<void>;
+  /** Loads a value, or null when nothing is stored under the key. */
+  get(id: string): Promise<TValue | null>;
+  /** Deletes a value; deleting a missing key is a no-op. */
+  delete(id: string): Promise<void>;
+  /** Lists the keys of every stored value, for garbage collection. */
+  listIds(): Promise<string[]>;
+}
+
+/**
+ * Builds one blob store's CRUD quartet over the shared connection, so the
+ * three stores (photos, models, solids) declare only their record mapping and
+ * their wording rather than repeat the same four transactions apiece.
+ */
+export function makeBlobStore<TValue, TRecord>(
+  config: BlobStoreConfig<TValue, TRecord>,
+): BlobStore<TValue> {
+  const { binding } = config;
+  return {
+    async put(id, value) {
+      await withStore(
+        binding,
+        'readwrite',
+        (store) => store.put(config.toRecord(id, value)),
+        config.putFailure,
+      );
+    },
+    async get(id) {
+      const record = await withStore<TRecord | undefined>(
+        binding,
+        'readonly',
+        (store) => store.get(id) as IDBRequest<TRecord | undefined>,
+        config.getFailure,
+      );
+      return record === undefined ? null : config.fromRecord(record);
+    },
+    async delete(id) {
+      await withStore(
+        binding,
+        'readwrite',
+        (store) => store.delete(id),
+        config.deleteFailure,
+      );
+    },
+    async listIds() {
+      const keys = await withStore<IDBValidKey[]>(
+        binding,
+        'readonly',
+        (store) => store.getAllKeys(),
+        config.listFailure,
+      );
+      return keys.map((key) => String(key));
+    },
+  };
 }

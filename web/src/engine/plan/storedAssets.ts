@@ -145,9 +145,9 @@ async function sweepStore(
 ): Promise<string[]> {
   const stored = await store.listIds();
   const orphans = stored.filter((id) => !referenced.has(id) && !protectedIds.has(id));
-  for (const id of orphans) {
-    await store.deleteAsset(id);
-  }
+  // The per-record deletes are independent, so run them together rather than
+  // one round trip after another.
+  await Promise.all(orphans.map((id) => store.deleteAsset(id)));
   return orphans;
 }
 
@@ -165,9 +165,9 @@ async function sweepSolidStore(
 ): Promise<string[]> {
   const stored = await store.listIds();
   const orphans = stored.filter((key) => !persistedSolidKeyIsFor(key, keepModelKeys));
-  for (const key of orphans) {
-    await store.deleteAsset(key);
-  }
+  // The per-record deletes are independent, so run them together rather than
+  // one round trip after another.
+  await Promise.all(orphans.map((key) => store.deleteAsset(key)));
   return orphans;
 }
 
@@ -200,9 +200,25 @@ export async function sweepOrphanAssets(
   const keepModelKeys = referencedCutoutModelKeySpecs(entries, batches, editorModels).map(
     (spec) => cutoutModelKey(spec.modelSourceId, spec.unitScale, spec.clearanceMm),
   );
-  return {
-    tracePhotos: await sweepStore(stores.photos, referenced.tracePhotos, protectedIds),
-    cutoutModels: await sweepStore(stores.models, referenced.cutoutModels, protectedIds),
-    cutoutSolids: await sweepSolidStore(stores.solids, keepModelKeys),
-  };
+  // The three store sweeps are independent, so run them together. Every sweep
+  // still runs to completion even when another fails, and every store's error
+  // is collected and surfaced as one thrown error, so no failure is swallowed
+  // and the caller (binQueue) logs the lot in its single catch.
+  const results = await Promise.allSettled([
+    sweepStore(stores.photos, referenced.tracePhotos, protectedIds),
+    sweepStore(stores.models, referenced.cutoutModels, protectedIds),
+    sweepSolidStore(stores.solids, keepModelKeys),
+  ]);
+  const failures = results
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) =>
+      result.reason instanceof Error ? result.reason.message : String(result.reason),
+    );
+  if (failures.length > 0) {
+    throw new Error(failures.join(' '));
+  }
+  const [tracePhotos, cutoutModels, cutoutSolids] = results.map(
+    (result) => (result as PromiseFulfilledResult<string[]>).value,
+  );
+  return { tracePhotos, cutoutModels, cutoutSolids };
 }

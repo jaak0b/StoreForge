@@ -141,6 +141,28 @@ function fakeStore(ids: string[]): AssetStoreLike & { deleted: string[] } {
   };
 }
 
+/**
+ * A store that rejects the delete of one named id, so a sweep failure can be
+ * exercised while the other ids still delete. Records the ids it did delete.
+ */
+function failingStore(
+  ids: string[],
+  failDeleteId: string,
+): AssetStoreLike & { deleted: string[] } {
+  const deleted: string[] = [];
+  return {
+    deleted,
+    listIds: () => Promise.resolve([...ids]),
+    deleteAsset: (id: string) => {
+      if (id === failDeleteId) {
+        return Promise.reject(new Error(`Deleting ${id} failed.`));
+      }
+      deleted.push(id);
+      return Promise.resolve();
+    },
+  };
+}
+
 function fakeStores(photoIds: string[], modelIds: string[], solidKeys: string[] = []) {
   return {
     photos: fakeStore(photoIds),
@@ -386,6 +408,41 @@ describe('sweepOrphanAssets', () => {
       'model-a:1:0.8',
     ]);
     expect(stores.solids.deleted).toEqual(deleted.cutoutSolids);
+  });
+
+  it('surfaces a store delete failure instead of swallowing it', async () => {
+    const stores = {
+      photos: failingStore(['photo-stale'], 'photo-stale'),
+      models: fakeStore([]),
+      solids: fakeStore([]),
+    };
+    await expect(sweepOrphanAssets(stores, [], [])).rejects.toThrow(
+      'Deleting photo-stale failed',
+    );
+  });
+
+  it('runs every store sweep in parallel even when one fails', async () => {
+    // The photo store fails, but the model and solid sweeps are independent and
+    // must still run to completion; the failure is surfaced, not swallowed.
+    const stores = {
+      photos: failingStore(['photo-stale'], 'photo-stale'),
+      models: fakeStore(['model-stale']),
+      solids: fakeStore(['solid-stale']),
+    };
+    await expect(sweepOrphanAssets(stores, [], [])).rejects.toThrow();
+    expect(stores.models.deleted).toEqual(['model-stale']);
+    expect(stores.solids.deleted).toEqual(['solid-stale']);
+  });
+
+  it('collects and surfaces every failing store, not just the first', async () => {
+    const stores = {
+      photos: failingStore(['photo-stale'], 'photo-stale'),
+      models: failingStore(['model-stale'], 'model-stale'),
+      solids: fakeStore([]),
+    };
+    const error = await sweepOrphanAssets(stores, [], []).catch((thrown) => thrown as Error);
+    expect(error.message).toContain('photo-stale');
+    expect(error.message).toContain('model-stale');
   });
 
   it('keeps the solid records of a model the open editor holds', async () => {

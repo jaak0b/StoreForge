@@ -19,12 +19,7 @@
  * is tested with a fake store.
  */
 
-import { MODEL_STORE, withStore, type StoreBinding } from './idb';
-
-const MODELS: StoreBinding = {
-  name: MODEL_STORE,
-  openFailure: 'Opening the model storage failed',
-};
+import { makeBlobStore, MODEL_STORE } from './idb';
 
 interface ModelRecord {
   id: string;
@@ -32,48 +27,35 @@ interface ModelRecord {
   createdAt: string;
 }
 
+const models = makeBlobStore<Blob, ModelRecord>({
+  binding: { name: MODEL_STORE, openFailure: 'Opening the model storage failed' },
+  putFailure: 'Storing the cutout model failed',
+  getFailure: 'Reading the stored cutout model failed',
+  deleteFailure: 'Deleting the stored cutout model failed',
+  listFailure: 'Listing the stored cutout models failed',
+  toRecord: (id, model) => ({ id, model, createdAt: new Date().toISOString() }),
+  fromRecord: (record) => record.model,
+});
+
 /** Stores (or replaces) the uploaded model file under its model source id. */
-export async function putModel(id: string, model: Blob): Promise<void> {
-  const record: ModelRecord = { id, model, createdAt: new Date().toISOString() };
-  await withStore(
-    MODELS,
-    'readwrite',
-    (store) => store.put(record),
-    'Storing the cutout model failed',
-  );
+export function putModel(id: string, model: Blob): Promise<void> {
+  return models.put(id, model);
 }
 
 /**
  * Loads a stored model file. Returns null when no model is stored under the
  * id, which is the normal case for plans imported from another device.
  */
-export async function getModel(id: string): Promise<Blob | null> {
-  const record = await withStore<ModelRecord | undefined>(
-    MODELS,
-    'readonly',
-    (store) => store.get(id) as IDBRequest<ModelRecord | undefined>,
-    'Reading the stored cutout model failed',
-  );
-  return record?.model ?? null;
+export function getModel(id: string): Promise<Blob | null> {
+  return models.get(id);
 }
 
 /** Deletes a stored model file. Deleting a missing id is a no-op. */
-export async function deleteModel(id: string): Promise<void> {
-  await withStore(
-    MODELS,
-    'readwrite',
-    (store) => store.delete(id),
-    'Deleting the stored cutout model failed',
-  );
+export function deleteModel(id: string): Promise<void> {
+  return models.delete(id);
 }
 
 /** Lists the ids of all stored model files, for garbage collection. */
-export async function listModelIds(): Promise<string[]> {
-  const keys = await withStore<IDBValidKey[]>(
-    MODELS,
-    'readonly',
-    (store) => store.getAllKeys(),
-    'Listing the stored cutout models failed',
-  );
-  return keys.map((key) => String(key));
+export function listModelIds(): Promise<string[]> {
+  return models.listIds();
 }
