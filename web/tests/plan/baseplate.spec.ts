@@ -6,6 +6,8 @@ import {
   validateEntry,
 } from '../../src/engine/plan/planFile';
 import { partsOf } from '../../src/engine/plan/geometry';
+import { baseplateSpanMm } from '../../src/engine/baseplate/generator';
+import { fileStem, partFootprint } from '../../src/binDownloads';
 import type {
   BaseplateProduct,
   ConnectionClipProduct,
@@ -220,5 +222,29 @@ describe('part deduplication keys across clip tolerances', () => {
     const loosened = JSON.stringify(partsOf(clip(0.2))[0]);
     expect(nominal).toBe(nominalAgain);
     expect(nominal).not.toBe(loosened);
+  });
+});
+
+describe('export plumbing for the new kinds', () => {
+  it('takes a custom-size plate footprint from baseplateSpanMm on both axes', () => {
+    const product = fullBaseplate();
+    const part = partsOf(product)[0];
+    // Compared against the geometry module's function, not a hardcoded
+    // number: the arranger must agree with the generator by construction.
+    expect(partFootprint(part)).toEqual({
+      widthMm: baseplateSpanMm(product.unitsX, product.customXMm),
+      depthMm: baseplateSpanMm(product.unitsY, product.customYMm),
+    });
+  });
+
+  it('names baseplate downloads by grid size with a suffix for custom spans', () => {
+    expect(fileStem(plainBaseplate())).toBe('gridfinity_baseplate_4x2');
+    expect(fileStem(fullBaseplate())).toBe('gridfinity_baseplate_4x2_custom');
+  });
+
+  it('gives clips at different tolerances distinct file stems', () => {
+    expect(fileStem(clip(0))).toBe('gridfinity_connection_clip');
+    expect(fileStem(clip(0.2))).toBe('gridfinity_connection_clip_tol0p2');
+    expect(fileStem(clip(0))).not.toBe(fileStem(clip(0.2)));
   });
 });
