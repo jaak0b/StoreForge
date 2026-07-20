@@ -13,6 +13,14 @@ export const BASE_TOP_SIZE = 41.5;
 /** Height of one Gridfinity height unit. */
 export const HEIGHT_UNIT = 7.0;
 
+/**
+ * Fewest height units a bin can be printed at. One height unit is entirely
+ * taken up by the base (FLOOR_TOP is exactly HEIGHT_UNIT), so a one-unit bin
+ * has no interior at all and nothing to carve, divide or drop a part into.
+ * The plan file validator enforces the same floor when it reads a stored bin.
+ */
+export const MIN_HEIGHT_UNITS = 2;
+
 /** Corner radius of the bin body outer wall. */
 export const OUTER_CORNER_RADIUS = 4.0;
 
@@ -190,6 +198,27 @@ export function binOuterSizeMm(cells: number): number {
  */
 export function binInteriorSizeMm(cells: number): number {
   return binOuterSizeMm(cells) - 2 * WALL_THICKNESS;
+}
+
+/**
+ * Fewest grid cells along one axis whose clear interior spans `extentMm`.
+ *
+ * The inverse of binInteriorSizeMm and the single home for the question every
+ * flow that grows a bin to hold something has to ask: a traced layout sizing
+ * itself to its pockets, and a cutout bin fitted to its placed models. Both
+ * must answer it identically, so both derive it here.
+ *
+ * The interior is treated as its bounding rectangle; the rounded corners are
+ * not modelled, and the carve's exact containment check stays the authority
+ * over whether a given shape actually fits.
+ */
+export function cellsForInteriorMm(extentMm: number): number {
+  if (!Number.isFinite(extentMm)) {
+    throw new RangeError(`extentMm must be finite, got ${extentMm}`);
+  }
+  let cells = 1;
+  while (binInteriorSizeMm(cells) < extentMm) cells += 1;
+  return cells;
 }
 
 /**

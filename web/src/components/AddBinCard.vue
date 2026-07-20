@@ -5,6 +5,7 @@ import type { ProductOrigin } from '../engine/plan/types';
 import ManualBinTab from './ManualBinTab.vue';
 import ScrewEntryTab from './ScrewEntryTab.vue';
 import TraceTab from './trace/TraceTab.vue';
+import CutoutTab from './cutout/CutoutTab.vue';
 
 /**
  * The add-bin card at the top of the page: a Manual bin tab (the full bin
@@ -64,13 +65,8 @@ function tabDisabled(name: TabName): boolean {
         <v-window-item value="trace" :transition="false" :reverse-transition="false">
           <TraceTab />
         </v-window-item>
-        <!-- The cutout designer is still being built. The tab is mapped here
-             already so that a cutout-origin queue row has an owning tab to
-             route its edit to; the designer replaces this notice. -->
         <v-window-item value="cutout" :transition="false" :reverse-transition="false">
-          <p class="text-medium-emphasis">
-            The cutout bin designer is not available yet.
-          </p>
+          <CutoutTab />
         </v-window-item>
       </v-window>
     </v-card-text>

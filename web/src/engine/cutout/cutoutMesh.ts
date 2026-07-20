@@ -2,6 +2,7 @@
 // stages can offset and subtract. The ManifoldToplevel is injected as
 // everywhere else in the engine so the WASM stays out of the main bundle.
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
+import type { MeshData } from '../gridfinity/types';
 import type { RawMesh } from './stlReader';
 
 /** Axis-aligned bounds of an imported model in mm. */
@@ -58,6 +59,39 @@ export function meshBounds(raw: RawMesh): MeshBounds {
     sizeY: maxY - minY,
     sizeZ: maxZ - minZ,
   };
+}
+
+/**
+ * The imported triangles in the frame the carve places them from: scaled to
+ * millimetres by the unit scale, then moved so the bounding box centre sits on
+ * the origin.
+ *
+ * This is the ghost the editor draws while a model is dragged, and it exists
+ * because the ghost has to agree with the pocket. prepareCutoutModel performs
+ * exactly these two steps, in this order, on the welded solid before it is
+ * simplified and dilated, and placeCutter then rotates about the origin. Draw
+ * the raw file coordinates instead and every rotation would swing the ghost
+ * around a point the carve does not rotate about. The two derivations are
+ * necessarily separate, because one runs in the WASM heap in the worker and the
+ * other has to run on the main thread every frame, so they are kept in step by
+ * a test that measures both.
+ *
+ * Simplification and the clearance dilation are deliberately not reproduced.
+ * The ghost shows the model, not the pocket; the dilated size is what the carve
+ * reports back as a footprint.
+ */
+export function centredModelMesh(raw: RawMesh, unitScale: number): MeshData {
+  const bounds = meshBounds(raw);
+  const centreX = ((bounds.minX + bounds.maxX) / 2) * unitScale;
+  const centreY = ((bounds.minY + bounds.maxY) / 2) * unitScale;
+  const centreZ = ((bounds.minZ + bounds.maxZ) / 2) * unitScale;
+  const vertices = new Float32Array(raw.vertices.length);
+  for (let i = 0; i < raw.vertices.length; i += 3) {
+    vertices[i] = raw.vertices[i] * unitScale - centreX;
+    vertices[i + 1] = raw.vertices[i + 1] * unitScale - centreY;
+    vertices[i + 2] = raw.vertices[i + 2] * unitScale - centreZ;
+  }
+  return { vertices, indices: raw.indices.slice() };
 }
 
 /**

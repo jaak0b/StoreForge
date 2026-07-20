@@ -7,6 +7,8 @@ import { cutoutModelKey } from './engine/cutout/cutoutBin';
 import type { CutoutCarveResult, CutoutUnionResult } from './engine/cutout/cutoutBin';
 import type {
   CutoutBinRequest,
+  CutoutModelFacts,
+  CutoutModelIdentity,
   CutoutModelKeySpec,
   CutoutModelRequest,
   CutoutPreviewResult,
@@ -22,6 +24,8 @@ import type { PocketBinParams } from './engine/trace/pocketBin';
 
 export type {
   CutoutBinRequest,
+  CutoutModelFacts,
+  CutoutModelIdentity,
   CutoutModelKeySpec,
   CutoutModelRequest,
   CutoutPreviewResult,
@@ -98,6 +102,41 @@ function keySpecOf(model: CutoutModelKeySpec): CutoutModelKeySpec {
  * not read it afterwards. That is safe because the blob hands out a fresh
  * buffer on every read and the stored original is untouched.
  */
+async function uploadCutoutModel(model: CutoutModelIdentity): Promise<CutoutModelFacts> {
+  const blob = await getModel(model.modelSourceId);
+  if (blob === null) throw new Error(modelNotStoredMessage(model));
+  const buffer = await blob.arrayBuffer();
+  return getWorker().putCutoutModel(
+    {
+      modelSourceId: model.modelSourceId,
+      unitScale: model.unitScale,
+      clearanceMm: model.clearanceMm,
+      name: model.name,
+    },
+    Comlink.transfer(buffer, [buffer]),
+  );
+}
+
+/**
+ * Run one model's import stage in the worker and report what it measured: the
+ * scale, centring, simplification and clearance dilation that every later carve
+ * of that model reuses.
+ *
+ * The editor calls this directly rather than letting the next carve pull the
+ * model in, because this is the one genuinely slow step in the feature and the
+ * user has to be told which row is busy while it runs. A carve that follows
+ * finds the solid already cached and does no import work at all.
+ *
+ * Takes the same path a carve's own upload takes, so a first upload, a
+ * clearance change and a unit scale change are one code path here as well as in
+ * the worker.
+ */
+export async function importCutoutModel(
+  model: CutoutModelIdentity,
+): Promise<CutoutModelFacts> {
+  return uploadCutoutModel(model);
+}
+
 async function ensureCutoutModels(models: CutoutModelRequest[]): Promise<void> {
   const worker = getWorker();
   const byKey = new Map(
@@ -119,18 +158,7 @@ async function ensureCutoutModels(models: CutoutModelRequest[]): Promise<void> {
         spec.modelSourceId
       }.`);
     }
-    const blob = await getModel(spec.modelSourceId);
-    if (blob === null) throw new Error(modelNotStoredMessage(model));
-    const buffer = await blob.arrayBuffer();
-    await worker.putCutoutModel(
-      {
-        modelSourceId: model.modelSourceId,
-        unitScale: model.unitScale,
-        clearanceMm: model.clearanceMm,
-        name: model.name,
-      },
-      Comlink.transfer(buffer, [buffer]),
-    );
+    await uploadCutoutModel(model);
   }
 }
 

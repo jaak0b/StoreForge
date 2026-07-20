@@ -5,6 +5,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import type { MeshData, PartMeshes } from '../../engine/gridfinity/types';
 import type { MeshBounds } from '../../engine/cutout/cutoutMesh';
 import type { ModelPlacement } from '../../engine/cutout/cutoutBin';
+import { fitsInterior } from '../../engine/cutout/binEnvelope';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import {
   buildMeshObject,
@@ -47,6 +48,13 @@ const emit = defineEmits<{
   placementChange: [moved: CutoutGhostMoved];
   /** The drag ended. This is the event a fresh carve should start from. */
   placementCommit: [moved: CutoutGhostMoved];
+  /**
+   * A ghost's exact bounds were recomputed, because it was drawn for the first
+   * time or its placement changed from outside a drag. Only this component
+   * holds the transformed triangles, so it is the only place these bounds can
+   * be measured without keeping a second copy of every model.
+   */
+  boundsChange: [moved: CutoutGhostMoved];
 }>();
 
 /**
@@ -205,23 +213,11 @@ function ghostBounds(mesh: THREE.Mesh): MeshBounds {
   };
 }
 
-function containedBy(bounds: MeshBounds, interior: MeshBounds | null | undefined): boolean {
-  if (!interior) return true;
-  return (
-    bounds.minX >= interior.minX &&
-    bounds.minY >= interior.minY &&
-    bounds.minZ >= interior.minZ &&
-    bounds.maxX <= interior.maxX &&
-    bounds.maxY <= interior.maxY &&
-    bounds.maxZ <= interior.maxZ
-  );
-}
-
 /** Give a ghost the material its current bounds call for. */
 function applyFitMaterial(entry: GhostEntry): void {
-  entry.mesh.material = containedBy(entry.bounds, props.interior)
-    ? ghostMaterial
-    : ghostOutsideMaterial;
+  const interior = props.interior;
+  entry.mesh.material =
+    !interior || fitsInterior(entry.bounds, interior) ? ghostMaterial : ghostOutsideMaterial;
 }
 
 /** Recompute a ghost's bounds and re-judge its fit. */
@@ -285,6 +281,11 @@ function syncGhosts(ctx: ThreeSceneContext): void {
       }
       applyPlacement(existing.mesh, ghost.placement);
       refreshBounds(existing);
+      emit('boundsChange', {
+        id: ghost.id,
+        placement: placementOf(existing.mesh),
+        bounds: existing.bounds,
+      });
       continue;
     }
     if (existing) {
@@ -301,6 +302,11 @@ function syncGhosts(ctx: ThreeSceneContext): void {
     const entry: GhostEntry = { mesh, source: ghost.mesh, bounds: ghostBounds(mesh) };
     ghostEntries.set(ghost.id, entry);
     applyFitMaterial(entry);
+    emit('boundsChange', {
+      id: ghost.id,
+      placement: placementOf(mesh),
+      bounds: entry.bounds,
+    });
     // A newly drawn ghost is a new object, so the gizmo has to be pointed at
     // it again if it is the selected one.
     if (ghost.id === attachedId) attachedId = null;

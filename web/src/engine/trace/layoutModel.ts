@@ -23,7 +23,7 @@ function cloneStrokes(strokes: BrushStroke[]): BrushStroke[] {
   }));
 }
 import { boundsOf, transformTool } from './edit';
-import { binInteriorSizeMm, PITCH } from '../gridfinity/constants';
+import { binInteriorSizeMm, cellsForInteriorMm, PITCH } from '../gridfinity/constants';
 
 /**
  * Clear interior kept around the pockets when the bin footprint is
@@ -157,11 +157,8 @@ export function requiredFootprint(
   }
   const b = layoutBounds(tools, placements);
   // Smallest cell count whose interior spans the extent plus both margins.
-  const cellsFor = (extent: number): number => {
-    let cells = 1;
-    while (binInteriorSizeMm(cells) < extent + 2 * marginMm) cells += 1;
-    return cells;
-  };
+  const cellsFor = (extent: number): number =>
+    cellsForInteriorMm(extent + 2 * marginMm);
   return {
     gridX: cellsFor(b.maxX - b.minX),
     gridY: cellsFor(b.maxY - b.minY),
