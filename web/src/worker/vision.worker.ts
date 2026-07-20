@@ -20,6 +20,7 @@ import {
 import { maskToContour } from '../engine/trace/contour';
 import type { MaskContourFailure } from '../engine/trace/contour';
 import { removeShadow } from '../engine/trace/shadow';
+import type { ShadowOptions } from '../engine/trace/shadow';
 import { applyStrokes } from '../engine/trace/strokeMask';
 import type {
   BrushStroke,
@@ -289,9 +290,13 @@ const api = {
   /**
    * Segment the rectified sheet at the given click prompts (rectified-image
    * pixels) and return the traced outline in sheet millimeters plus a mask
-   * overlay for the UI.
+   * overlay for the UI. `options` tunes the shadow and halo post-filter.
    */
-  async segmentAt(points: SamPoint[], strokes: BrushStroke[]): Promise<SegmentResult> {
+  async segmentAt(
+    points: SamPoint[],
+    strokes: BrushStroke[],
+    options: ShadowOptions = {},
+  ): Promise<SegmentResult> {
     if (!embedding || !rectified || !rectifiedCalibration) {
       return {
         ok: false,
@@ -350,7 +355,7 @@ const api = {
       // Remove drop-shadow pixels the SAM mask picked up on the white sheet
       // before the mask is traced. Uses the rectified color image kept
       // worker-side.
-      removeShadow(cv, rectified, maskMat);
+      removeShadow(cv, rectified, maskMat, options);
       // Painted pixels are applied after shadow removal so the shadow filter
       // never removes user paint.
       applyStrokes(cv, maskMat, strokes, rectifiedCalibration.mmPerPixel);

@@ -5,13 +5,20 @@
 // SAM folds both into the mask. Neither is part of the tool: a shadow is a gray
 // attenuation of the white sheet, the halo is the white sheet itself, and both
 // have near-zero saturation. This module identifies the low-saturation pixels
-// (mid-luminance shadow or bright paper) that hang off the mask boundary and
-// clears them, keeping interior detail and any genuinely colored region.
+// that hang off the mask boundary and clears them, keeping interior detail and
+// any genuinely colored region.
+//
+// Which luminance classes count as removable depends on the keepMetal option.
+// By default both the middle (shadow) and the bright (paper halo) class are
+// removable, which is what a painted or plastic tool needs. Bare metal and
+// chrome are bright and achromatic too, so on such a tool the bright class must
+// stay: keepMetal restricts removal to the middle class, at the cost of leaving
+// a decoder halo behind.
 import { extractSaturation, type Cv, type CvMat } from './paper';
 
 /** Three-class luminance split from multilevel Otsu. */
 export interface MultilevelOtsuResult {
-  /** Upper bound of the dark class: v <= t1 is dark tool, v > t1 is removable. */
+  /** Upper bound of the dark class: v <= t1 is the dark tool body. */
   t1: number;
   /** Upper bound of the middle class: t1 < v <= t2 is the mid-luminance shadow. */
   t2: number;
@@ -89,6 +96,18 @@ export function multilevelOtsu(hist: ArrayLike<number>): MultilevelOtsuResult {
   };
 }
 
+/** Caller options for {@link removeShadow}. */
+export interface ShadowOptions {
+  /**
+   * True when the traced tool is bare metal or chrome. Shiny silver is bright
+   * and achromatic, so with the default filter it looks exactly like the paper
+   * underneath and is stripped from the mask. Setting this bounds removal to
+   * the middle luminance class (t1 < v <= t2), which is the cast shadow, and
+   * spares the bright class. Default false.
+   */
+  keepMetal?: boolean;
+}
+
 /**
  * Remove border-connected shadow and paper-halo pixels from a binary SAM mask
  * in place, using the rectified color sheet. Mutates `mask` (CV_8UC1, 0/255).
@@ -99,7 +118,13 @@ export function multilevelOtsu(hist: ArrayLike<number>): MultilevelOtsuResult {
  * A dimension mismatch is a programming error and throws rather than being
  * silently tolerated.
  */
-export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
+export function removeShadow(
+  cv: Cv,
+  rectified: CvMat,
+  mask: CvMat,
+  options: ShadowOptions = {},
+): void {
+  const keepMetal = options.keepMetal === true;
   if (rectified.rows !== mask.rows || rectified.cols !== mask.cols) {
     throw new Error(
       `removeShadow: rectified (${rectified.rows}x${rectified.cols}) and mask ` +
@@ -133,11 +158,13 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
     for (let i = 0; i < grayData.length; i += 1) {
       hist[grayData[i]] += 1;
     }
-    const { t1, classesNonEmpty } = multilevelOtsu(hist);
+    const { t1, t2, classesNonEmpty } = multilevelOtsu(hist);
     if (!classesNonEmpty) {
       // Degenerate multilevel Otsu: a luminance class is empty, skip shadow
       // removal. With fewer than three luminance populations there is no
       // middle band to attribute to a shadow, so leave the mask untouched.
+      // This holds in both states: neither predicate can name a trustworthy
+      // shadow or halo class on such a scene.
       return;
     }
 
@@ -154,18 +181,20 @@ export function removeShadow(cv: Cv, rectified: CvMat, mask: CvMat): void {
     cv.threshold(sat, satMask, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
 
     // Step 3: removable candidate = in the SAM mask AND low saturation AND not
-    // dark tool (mid-luminance shadow or bright paper halo, v > t1). The bright
-    // class is included so plain paper the decoder wrapped around the tool is a
-    // candidate too, not just the mid-luminance shadow band. One pass over the
-    // flat buffers.
+    // dark tool (v > t1). By default the bright class is included as well, so
+    // plain paper the decoder wrapped around the tool is a candidate too, not
+    // just the mid-luminance shadow band. With keepMetal the candidate is
+    // bounded above by t2, leaving the bright class (which a shiny silver tool
+    // shares with the paper) in the mask. One pass over the flat buffers.
     removable.create(mask.rows, mask.cols, cv.CV_8UC1);
     const maskData = mask.data;
     const satMaskData = satMask.data;
     const removableData = removable.data;
     for (let i = 0; i < maskData.length; i += 1) {
       const v = grayData[i];
+      const inRemovableClass = v > t1 && (!keepMetal || v <= t2);
       removableData[i] =
-        maskData[i] && v > t1 && satMaskData[i] === 0 ? 255 : 0;
+        maskData[i] && inRemovableClass && satMaskData[i] === 0 ? 255 : 0;
     }
 
     // Step 4: keep only candidate components that touch the background. A real

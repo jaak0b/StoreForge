@@ -22,7 +22,7 @@ import {
  */
 
 const store = useToolTrace();
-const { rectifiedPreview, calibration, embedReady, tools } = storeToRefs(store);
+const { rectifiedPreview, calibration, embedReady, tools, keepMetal } = storeToRefs(store);
 
 const emit = defineEmits<{ accepted: [] }>();
 
@@ -475,6 +475,9 @@ async function runSegment(): Promise<void> {
     const result = await segmentAt(
       JSON.parse(JSON.stringify(points.value)) as SamPoint[],
       JSON.parse(JSON.stringify(strokes.value)) as BrushStroke[],
+      // A plain object built from the ref's value: the store's reactive proxy
+      // itself cannot be structured-cloned across the worker boundary.
+      { keepMetal: keepMetal.value },
     );
     if (!result.ok) {
       errorMessage.value = result.error;
@@ -495,6 +498,16 @@ async function runSegment(): Promise<void> {
     segmenting.value = false;
     draw();
   }
+}
+
+/**
+ * Re-runs the segmentation after the bare metal option changed, so the outline
+ * on screen always matches the current setting. With no clicks yet there is
+ * nothing to segment and the new setting simply applies to the next click.
+ */
+function onKeepMetalChanged(): void {
+  if (points.value.length === 0) return;
+  void runSegment();
 }
 
 /**
@@ -979,6 +992,18 @@ function acceptTool(finish: boolean): void {
           <v-tooltip activator="parent" location="bottom">Clear strokes</v-tooltip>
         </v-btn>
       </div>
+      <v-checkbox
+        v-model="keepMetal"
+        label="Tool is bare metal or chrome"
+        density="compact"
+        hide-details
+        :disabled="segmenting"
+        class="keep-metal"
+        @update:model-value="onKeepMetalChanged"
+      />
+      <p class="text-caption text-medium-emphasis keep-metal-hint">
+        Keeps shiny silver parts that would otherwise be mistaken for the paper underneath.
+      </p>
       <div v-if="iouScore !== null" class="text-caption text-medium-emphasis mt-2 readout">
         <div><span>Mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
         <div><span>Decode time</span><span>{{ decodeMs!.toFixed(0) }} ms</span></div>
@@ -1045,6 +1070,15 @@ function acceptTool(finish: boolean): void {
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+/* The mask option sits with the brush controls, tightened so the island stays compact. */
+.keep-metal {
+  margin-top: 4px;
+}
+
+.keep-metal-hint {
+  margin-left: 40px;
 }
 
 .readout > div {

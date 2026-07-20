@@ -85,6 +85,12 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const fingerHoleDiameterMm = ref(DEFAULT_FINGER_HOLE_DIAMETER_MM);
   /** True while a click on the layout canvas fills the hole under it. */
   const fillHolesMode = ref(false);
+  /**
+   * True when the photographed tools are bare metal or chrome, which tells the
+   * segmentation post-filter to keep bright neutral pixels instead of reading
+   * them as the paper underneath.
+   */
+  const keepMetal = ref(false);
 
   /**
    * Bin footprint in cells: the layout's required footprint while auto-sized,
@@ -268,6 +274,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     fingerHoleMode.value = false;
     fingerHoleDiameterMm.value = DEFAULT_FINGER_HOLE_DIAMETER_MM;
     fillHolesMode.value = false;
+    keepMetal.value = false;
     gridX.value = 1;
     gridY.value = 1;
     gridManual.value = false;
@@ -294,6 +301,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     fingerHoleMode,
     fingerHoleDiameterMm,
     fillHolesMode,
+    keepMetal,
     gridX,
     gridY,
     gridManual,

@@ -164,6 +164,48 @@ describe('removeShadow', () => {
     mask.delete();
   });
 
+  it('removes a bright neutral region touching the mask boundary by default', async () => {
+    const cv = await loadOpenCv();
+    // Same fixture as the keepMetal case below: a bright neutral band (the
+    // right half of the masked rectangle, 61..75) touches the mask boundary and
+    // is 8-adjacent to the mid-gray ground. With the default options a bright
+    // neutral border region is read as paper halo and is cleared.
+    const rectified = sheet(cv, 90, 120, MID_GRAY);
+    fillRect(cv, rectified, 15, 15, 75, 65, BRIGHT_PAPER);
+    fillRect(cv, rectified, 20, 20, 60, 60, DARK_TOOL);
+    const mask = emptyMask(cv, 90, 120);
+    fillMask(cv, mask, 15, 15, 75, 65);
+
+    removeShadow(cv, rectified, mask);
+
+    expect(maskAt(mask, 70, 40)).toBe(0);
+    expect(maskAt(mask, 40, 40)).toBe(255);
+
+    rectified.delete();
+    mask.delete();
+  });
+
+  it('keeps a bright neutral region touching the mask boundary when keepMetal is set', async () => {
+    const cv = await loadOpenCv();
+    // Identical fixture to the test above, differing only in the option. Here
+    // the bright band stands for a chrome jaw rather than paper halo: bounding
+    // the removable class above by t2 leaves the bright class in the mask, so
+    // the border-touching silver region survives.
+    const rectified = sheet(cv, 90, 120, MID_GRAY);
+    fillRect(cv, rectified, 15, 15, 75, 65, BRIGHT_PAPER);
+    fillRect(cv, rectified, 20, 20, 60, 60, DARK_TOOL);
+    const mask = emptyMask(cv, 90, 120);
+    fillMask(cv, mask, 15, 15, 75, 65);
+
+    removeShadow(cv, rectified, mask, { keepMetal: true });
+
+    expect(maskAt(mask, 70, 40)).toBe(255);
+    expect(maskAt(mask, 40, 40)).toBe(255);
+
+    rectified.delete();
+    mask.delete();
+  });
+
   it('keeps a bright specular highlight fully enclosed by the tool', async () => {
     const cv = await loadOpenCv();
     // Mid-gray scene ground (150), a dark tool (15..75) with a small bright
