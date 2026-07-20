@@ -1,0 +1,224 @@
+import { describe, expect, it } from 'vitest';
+import {
+  mergeEntries,
+  parsePlanFile,
+  serializePlanFile,
+  validateEntry,
+} from '../../src/engine/plan/planFile';
+import { partsOf } from '../../src/engine/plan/geometry';
+import type {
+  BaseplateProduct,
+  ConnectionClipProduct,
+  Product,
+  QueueEntry,
+} from '../../src/engine/plan/types';
+
+/** A baseplate with every option on and non-default. */
+function fullBaseplate(): BaseplateProduct {
+  return {
+    kind: 'baseplate',
+    unitsX: 4,
+    unitsY: 2,
+    customXMm: 30.5,
+    customYMm: 42,
+    magnets: { diameterMm: 8.2, heightMm: 1 },
+    screwHoles: true,
+    connectable: true,
+  };
+}
+
+/** A baseplate with every option off. */
+function plainBaseplate(): BaseplateProduct {
+  return {
+    kind: 'baseplate',
+    unitsX: 4,
+    unitsY: 2,
+    customXMm: null,
+    customYMm: null,
+    magnets: null,
+    screwHoles: false,
+    connectable: false,
+  };
+}
+
+function clip(toleranceMm: number): ConnectionClipProduct {
+  return { kind: 'clip', toleranceMm };
+}
+
+function entry(id: string, product: Product): QueueEntry {
+  return {
+    id,
+    quantity: 1,
+    createdAt: '2026-07-20T10:00:00.000Z',
+    product,
+  };
+}
+
+/** Parses a serialized plan or fails the test with the parser's error. */
+function roundTrip(entries: QueueEntry[]): QueueEntry[] {
+  const result = parsePlanFile(serializePlanFile(entries, []));
+  if (!result.ok) throw new Error(result.error);
+  expect(result.warnings).toEqual([]);
+  return result.plan.entries;
+}
+
+describe('baseplate round trip', () => {
+  it('round-trips a fully optioned baseplate with every field intact', () => {
+    const back = roundTrip([entry('a1', fullBaseplate())]);
+    expect(back).toHaveLength(1);
+    expect(back[0].product).toEqual(fullBaseplate());
+  });
+
+  it('round-trips an all-off baseplate with its nulls surviving as null', () => {
+    const back = roundTrip([entry('a1', plainBaseplate())]);
+    const product = back[0].product;
+    if (product.kind !== 'baseplate') throw new Error('expected a baseplate');
+    // Explicit null, never undefined: undefined would serialize away entirely
+    // on the next persist and quietly corrupt the stored plan.
+    expect(product.customXMm).toBeNull();
+    expect(product.customYMm).toBeNull();
+    expect(product.magnets).toBeNull();
+    expect(product).toEqual(plainBaseplate());
+  });
+
+  it('round-trips clips at the nominal and at a raised tolerance exactly', () => {
+    const back = roundTrip([entry('c1', clip(0)), entry('c2', clip(0.35))]);
+    expect(back.map((e) => e.product)).toEqual([clip(0), clip(0.35)]);
+  });
+
+  it('keeps all five product kinds in order through a round trip', () => {
+    const entries = [
+      entry('e1', {
+        kind: 'bin',
+        labelSlot: true,
+        bin: { origin: 'manual', gridX: 2, gridY: 1, heightUnits: 3, magnetHoles: false, walls: [] },
+      }),
+      entry('e2', {
+        kind: 'binWithInsert',
+        bin: { origin: 'manual', gridX: 2, gridY: 1, heightUnits: 3, magnetHoles: false, walls: [] },
+        insert: { text: 'M3', text2: '', icon: null },
+      }),
+      entry('e3', {
+        kind: 'insert',
+        origin: 'manual',
+        cells: 2,
+        content: { text: 'M4', text2: '', icon: null },
+      }),
+      entry('e4', plainBaseplate()),
+      entry('e5', clip(0.2)),
+    ];
+    const back = roundTrip(entries);
+    expect(back.map((e) => e.product.kind)).toEqual([
+      'bin',
+      'binWithInsert',
+      'insert',
+      'baseplate',
+      'clip',
+    ]);
+    expect(back).toEqual(entries);
+  });
+});
+
+describe('baseplate and clip validation messages', () => {
+  function baseplateEntry(overrides: Partial<Record<string, unknown>>): Record<string, unknown> {
+    return { ...entry('a1', { ...fullBaseplate(), ...overrides } as unknown as Product) };
+  }
+
+  it.each([
+    [{ unitsX: 0 }, 'entry a1: unitsX must be an integer from 1 to 20'],
+    [{ unitsX: 21 }, 'entry a1: unitsX must be an integer from 1 to 20'],
+    [{ unitsX: 2.5 }, 'entry a1: unitsX must be an integer from 1 to 20'],
+    [{ unitsY: 0 }, 'entry a1: unitsY must be an integer from 1 to 20'],
+    [{ customXMm: 0 }, 'entry a1: customXMm must be a number from 1 to 42, or null for a full grid cell'],
+    [{ customXMm: 43 }, 'entry a1: customXMm must be a number from 1 to 42, or null for a full grid cell'],
+    [{ customXMm: 'wide' }, 'entry a1: customXMm must be a number from 1 to 42, or null for a full grid cell'],
+    [{ magnets: 5 }, 'entry a1: magnets must be an object or null'],
+    [{ magnets: { diameterMm: 1.9, heightMm: 2 } }, 'entry a1: magnet diameterMm must be a number from 2 to 8.2'],
+    [{ magnets: { diameterMm: 8.3, heightMm: 2 } }, 'entry a1: magnet diameterMm must be a number from 2 to 8.2'],
+    [{ magnets: { diameterMm: 6.5, heightMm: 0.5 } }, 'entry a1: magnet heightMm must be a number from 1 to 4'],
+    [{ magnets: { diameterMm: 6.5, heightMm: 4.1 } }, 'entry a1: magnet heightMm must be a number from 1 to 4'],
+    [{ screwHoles: 'yes' }, 'entry a1: screwHoles must be true or false'],
+    [{ connectable: null }, 'entry a1: connectable must be true or false'],
+  ])('rejects a baseplate with %j', (overrides, message) => {
+    expect(validateEntry(baseplateEntry(overrides))).toBe(message);
+  });
+
+  it.each([
+    [-0.1],
+    [0.6],
+    ['0.2'],
+  ])('rejects a clip whose toleranceMm is %j', (toleranceMm) => {
+    const bad = entry('a1', { kind: 'clip', toleranceMm } as unknown as Product);
+    expect(validateEntry(bad)).toBe('entry a1: toleranceMm must be a number from 0 to 0.5');
+  });
+
+  it.each([
+    [{ unitsX: 1 }],
+    [{ unitsX: 20 }],
+    [{ customXMm: 42 }],
+    [{ magnets: { diameterMm: 2, heightMm: 2 } }],
+    [{ magnets: { diameterMm: 8.2, heightMm: 2 } }],
+    [{ magnets: { diameterMm: 6.5, heightMm: 1 } }],
+    [{ magnets: { diameterMm: 6.5, heightMm: 4 } }],
+  ])('accepts the inclusive baseplate boundary %j', (overrides) => {
+    expect(validateEntry(baseplateEntry(overrides))).toBeNull();
+  });
+
+  it.each([[0], [0.5]])('accepts the inclusive clip tolerance boundary %d', (toleranceMm) => {
+    expect(validateEntry(entry('a1', clip(toleranceMm)))).toBeNull();
+  });
+
+  it('rejects an unknown product kind with the full list of kinds', () => {
+    expect(validateEntry({ ...entry('a1', plainBaseplate()), product: { kind: 'plate' } })).toBe(
+      'entry a1: product kind must be bin, binWithInsert, insert, baseplate or clip',
+    );
+  });
+
+  it('accepts an unknown extra key on a baseplate and drops it on load', () => {
+    const withExtra = {
+      ...entry('a1', plainBaseplate()),
+      product: { ...plainBaseplate(), mysteryKey: 12 },
+    };
+    expect(validateEntry(withExtra)).toBeNull();
+    const result = parsePlanFile(
+      JSON.stringify({ version: 8, entries: [withExtra], batches: [] }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      plan: { version: 8, entries: [entry('a1', plainBaseplate())], batches: [] },
+      warnings: [],
+    });
+  });
+});
+
+describe('merge semantics with the new kinds', () => {
+  it('replaces an existing bin entry with an imported baseplate sharing its id', () => {
+    const existing = [
+      entry('a1', {
+        kind: 'bin',
+        labelSlot: true,
+        bin: { origin: 'manual', gridX: 2, gridY: 1, heightUnits: 3, magnetHoles: false, walls: [] },
+      }),
+    ];
+    const merged = mergeEntries(existing, [entry('a1', fullBaseplate())]);
+    expect(merged).toEqual([entry('a1', fullBaseplate())]);
+  });
+
+  it('appends an imported clip entry with a new id in file order', () => {
+    const existing = [entry('a1', plainBaseplate())];
+    const merged = mergeEntries(existing, [entry('c1', clip(0.2))]);
+    expect(merged).toEqual([entry('a1', plainBaseplate()), entry('c1', clip(0.2))]);
+  });
+});
+
+describe('part deduplication keys across clip tolerances', () => {
+  it('gives clips at different tolerances distinct keys and identical ones the same key', () => {
+    // partKey is JSON.stringify of the part, so this asserts the exact
+    // property the batch arranger's dedupe map relies on.
+    const nominal = JSON.stringify(partsOf(clip(0))[0]);
+    const nominalAgain = JSON.stringify(partsOf(clip(0))[0]);
+    const loosened = JSON.stringify(partsOf(clip(0.2))[0]);
+    expect(nominal).toBe(nominalAgain);
+    expect(nominal).not.toBe(loosened);
+  });
+});

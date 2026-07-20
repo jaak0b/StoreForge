@@ -17,7 +17,7 @@ import CutoutTab from './cutout/CutoutTab.vue';
  */
 
 const app = useApp();
-type TabName = 'manual' | 'screw' | 'trace' | 'cutout';
+type TabName = 'manual' | 'screw' | 'trace' | 'cutout' | 'baseplate';
 const tab = ref<TabName>('manual');
 
 const TAB_OF_KIND: Record<ProductOrigin, TabName> = {
@@ -25,6 +25,8 @@ const TAB_OF_KIND: Record<ProductOrigin, TabName> = {
   screw: 'screw',
   traced: 'trace',
   cutout: 'cutout',
+  baseplate: 'baseplate',
+  clip: 'baseplate',
 };
 
 // Editing a queue entry lands on its owning tab; Ctrl+N lands on Manual.

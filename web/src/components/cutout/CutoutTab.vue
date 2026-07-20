@@ -718,6 +718,11 @@ function choiceOf(product: Product): ProductChoice {
       return product.labelSlot ? 'bin' : 'plainBin';
     case 'insert':
       return 'plainBin';
+    case 'baseplate':
+    case 'clip':
+      // Neither ever reaches this tab: their edits route to the Baseplate
+      // tab. Answered like the insert case rather than left to a fallthrough.
+      return 'plainBin';
     default:
       return assertNever(product);
   }

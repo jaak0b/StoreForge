@@ -72,7 +72,7 @@ function loadEditingEntry(entryId: string | null): void {
       labelIcon: product.content.icon,
       notes: entry.notes ?? '',
     });
-  } else {
+  } else if (product.kind === 'bin' || product.kind === 'binWithInsert') {
     const bin = product.bin;
     if (bin.origin !== 'manual') return;
     const content = product.kind === 'binWithInsert' ? product.insert : null;

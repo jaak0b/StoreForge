@@ -2,9 +2,11 @@ import type {
   InsertParams,
   SlottedBinParams,
 } from '../gridfinity/types';
+import type { BaseplateParams, ConnectionClipParams } from '../baseplate/constants';
 import {
   assertNever,
   insertOf,
+  type BaseplateProduct,
   type Bin,
   type BinPockets,
   type CutoutModel,
@@ -28,7 +30,9 @@ export type PrintablePart =
       /** Display name source: the paired insert's text, for slicer object names. */
       labelText?: string;
     }
-  | { part: 'insert'; insert: InsertParams };
+  | { part: 'insert'; insert: InsertParams }
+  | { part: 'baseplate'; baseplate: BaseplateParams }
+  | { part: 'clip'; clip: ConnectionClipParams };
 
 /** A printable part that is a bin body, narrowed off the part union. */
 export type PrintableBinPart = Extract<PrintablePart, { part: 'bin' }>;
@@ -100,6 +104,26 @@ export function toSlottedBinParams(
 }
 
 /**
+ * The single place a stored baseplate becomes geometry: the preview, the STL
+ * path and the 3MF path all go through here, so what the user sees and what
+ * gets exported agree. A null custom span means the axis's last cell keeps
+ * the full pitch, which the generator resolves from its own pitch parameter
+ * rather than a stored 42. The magnets object is copied so the returned
+ * params are detached from the (possibly reactive) product.
+ */
+export function baseplateParamsOf(product: BaseplateProduct): BaseplateParams {
+  return {
+    unitsX: product.unitsX,
+    unitsY: product.unitsY,
+    customXMm: product.customXMm,
+    customYMm: product.customYMm,
+    magnets: product.magnets === null ? null : { ...product.magnets },
+    screwHoles: product.screwHoles,
+    connectable: product.connectable,
+  };
+}
+
+/**
  * Expand a product into the parts it prints. A bin ordered with its insert
  * expands into the bin (previewless of the insert) plus the insert as its
  * own placed part; the insert's width comes from insertOf, the single
@@ -146,6 +170,12 @@ export function partsOf(product: Product): PrintablePart[] {
       const insert = insertOf(product)!;
       return [{ part: 'insert', insert: { cells: insert.cells, content: insert.content } }];
     }
+    // Exactly one part each: a baseplate and a clip are single solids and
+    // never expand into two parts the way binWithInsert does.
+    case 'baseplate':
+      return [{ part: 'baseplate', baseplate: baseplateParamsOf(product) }];
+    case 'clip':
+      return [{ part: 'clip', clip: { toleranceMm: product.toleranceMm } }];
     default:
       return assertNever(product);
   }
@@ -155,7 +185,8 @@ export function partsOf(product: Product): PrintablePart[] {
  * The geometry parameters the live preview of a product uses: the bin with
  * its paired insert content riding along (shown resting in the slot), or
  * null when the product is a standalone insert (previewed through the insert
- * generator instead).
+ * generator instead). A baseplate and a clip are also null: each is previewed
+ * through its own generator.
  */
 export function previewBinParams(product: Product): SlottedBinParams | null {
   switch (product.kind) {
@@ -168,6 +199,8 @@ export function previewBinParams(product: Product): SlottedBinParams | null {
         ? toSlottedBinParams(product.bin, false, null, product.insert)
         : toSlottedBinParams(product.bin, true, product.insert);
     case 'insert':
+    case 'baseplate':
+    case 'clip':
       return null;
     default:
       return assertNever(product);

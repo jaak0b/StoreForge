@@ -1,5 +1,6 @@
 import {
   PLAN_FILE_VERSION,
+  type BaseplateProduct,
   type BatchItem,
   type Bin,
   type BinPockets,
@@ -17,6 +18,18 @@ import {
   type DividerWall,
 } from './types';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
+import { PITCH } from '../gridfinity/constants';
+import {
+  BASEPLATE_UNITS_MAX,
+  CLIP_TOLERANCE_MAX,
+  CLIP_TOLERANCE_MIN,
+  CUSTOM_SPAN_MIN,
+  MAGNET_DIAMETER_MAX,
+  MAGNET_DIAMETER_MIN,
+  MAGNET_HEIGHT_MAX,
+  MAGNET_HEIGHT_MIN,
+  type BaseplateMagnets,
+} from '../baseplate/constants';
 import {
   DEFAULT_CUTOUT_CLEARANCE_MM,
   DEFAULT_DRAFT_ANGLE_DEG,
@@ -60,6 +73,10 @@ export type PlanParseResult =
 
 function isPositiveInteger(value: unknown, min: number): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= min;
+}
+
+function isNumberInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
 }
 
 function isIsoTimestamp(value: unknown): value is string {
@@ -763,6 +780,95 @@ function binAloneProduct(
   return { kind: 'bin', bin, labelSlot };
 }
 
+/**
+ * Validates a raw value as a baseplate's magnets field: null (no magnets) or
+ * an object whose two dimensions sit inside the bounds the baseplate module
+ * exports. The bounds are interpolated into the messages, so the validator,
+ * the generator and the form sliders provably agree on the same numbers.
+ */
+function validateMagnets(raw: unknown, subject: string): string | null {
+  if (raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return `${subject}: magnets must be an object or null`;
+  }
+  const magnets = raw as Record<string, unknown>;
+  if (!isNumberInRange(magnets.diameterMm, MAGNET_DIAMETER_MIN, MAGNET_DIAMETER_MAX)) {
+    return `${subject}: magnet diameterMm must be a number from ${MAGNET_DIAMETER_MIN} to ${MAGNET_DIAMETER_MAX}`;
+  }
+  if (!isNumberInRange(magnets.heightMm, MAGNET_HEIGHT_MIN, MAGNET_HEIGHT_MAX)) {
+    return `${subject}: magnet heightMm must be a number from ${MAGNET_HEIGHT_MIN} to ${MAGNET_HEIGHT_MAX}`;
+  }
+  return null;
+}
+
+/** Copies only the known BaseplateMagnets fields from a validated raw value. */
+function pickMagnets(raw: Record<string, unknown> | null): BaseplateMagnets | null {
+  if (raw === null) return null;
+  return { diameterMm: raw.diameterMm as number, heightMm: raw.heightMm as number };
+}
+
+/**
+ * Validates the fields of a raw baseplate product, in the fixed order unitsX,
+ * unitsY, customXMm, customYMm, magnets, screwHoles, connectable. The custom
+ * spans and the magnets must be present (as a value or an explicit null): no
+ * older file contains a baseplate at all, so requiring them costs nothing and
+ * catches a truncated write.
+ */
+function validateBaseplate(raw: Record<string, unknown>, subject: string): string | null {
+  if (!isPositiveInteger(raw.unitsX, 1) || raw.unitsX > BASEPLATE_UNITS_MAX) {
+    return `${subject}: unitsX must be an integer from 1 to ${BASEPLATE_UNITS_MAX}`;
+  }
+  if (!isPositiveInteger(raw.unitsY, 1) || raw.unitsY > BASEPLATE_UNITS_MAX) {
+    return `${subject}: unitsY must be an integer from 1 to ${BASEPLATE_UNITS_MAX}`;
+  }
+  if (raw.customXMm !== null && !isNumberInRange(raw.customXMm, CUSTOM_SPAN_MIN, PITCH)) {
+    return `${subject}: customXMm must be a number from ${CUSTOM_SPAN_MIN} to ${PITCH}, or null for a full grid cell`;
+  }
+  if (raw.customYMm !== null && !isNumberInRange(raw.customYMm, CUSTOM_SPAN_MIN, PITCH)) {
+    return `${subject}: customYMm must be a number from ${CUSTOM_SPAN_MIN} to ${PITCH}, or null for a full grid cell`;
+  }
+  const magnetsProblem = validateMagnets(raw.magnets, subject);
+  if (magnetsProblem !== null) return magnetsProblem;
+  if (typeof raw.screwHoles !== 'boolean') {
+    return `${subject}: screwHoles must be true or false`;
+  }
+  if (typeof raw.connectable !== 'boolean') {
+    return `${subject}: connectable must be true or false`;
+  }
+  return null;
+}
+
+/** Validates the fields of a raw connection clip product. */
+function validateClip(raw: Record<string, unknown>, subject: string): string | null {
+  if (!isNumberInRange(raw.toleranceMm, CLIP_TOLERANCE_MIN, CLIP_TOLERANCE_MAX)) {
+    return `${subject}: toleranceMm must be a number from ${CLIP_TOLERANCE_MIN} to ${CLIP_TOLERANCE_MAX}`;
+  }
+  return null;
+}
+
+/**
+ * Copies only the known BaseplateProduct fields from a validated raw object,
+ * field by field: an unknown extra key in an imported file is dropped, not
+ * carried into localStorage.
+ */
+function pickBaseplate(raw: Record<string, unknown>): BaseplateProduct {
+  return {
+    kind: 'baseplate',
+    unitsX: raw.unitsX as number,
+    unitsY: raw.unitsY as number,
+    customXMm: raw.customXMm as number | null,
+    customYMm: raw.customYMm as number | null,
+    magnets: pickMagnets(raw.magnets as Record<string, unknown> | null),
+    screwHoles: raw.screwHoles as boolean,
+    connectable: raw.connectable as boolean,
+  };
+}
+
+/** Copies only the known ConnectionClipProduct fields from a validated raw object. */
+function pickClip(raw: Record<string, unknown>): Product {
+  return { kind: 'clip', toleranceMm: raw.toleranceMm as number };
+}
+
 /** Validates a raw value as a Product. */
 export function validateProduct(raw: unknown, subject: string): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
@@ -801,7 +907,13 @@ export function validateProduct(raw: unknown, subject: string): string | null {
     }
     return null;
   }
-  return `${subject}: The product kind must be bin, binWithInsert or insert.`;
+  if (product.kind === 'baseplate') {
+    return validateBaseplate(product, subject);
+  }
+  if (product.kind === 'clip') {
+    return validateClip(product, subject);
+  }
+  return `${subject}: product kind must be bin, binWithInsert, insert, baseplate or clip`;
 }
 
 /**
@@ -829,6 +941,12 @@ export function pickProduct(
     };
     if (raw.fused === true) product.fused = true;
     return product;
+  }
+  if (raw.kind === 'baseplate') {
+    return pickBaseplate(raw);
+  }
+  if (raw.kind === 'clip') {
+    return pickClip(raw);
   }
   const base = {
     kind: 'insert' as const,
@@ -1285,13 +1403,14 @@ export function parsePlanFile(text: string): PlanParseResult {
     return { ok: false, error: 'The plan is missing its entries list.' };
   }
   // Versions 1 and 2 carry flat design fields per entry and convert through
-  // the legacy path. Versions 3 to 7 already have the current product/bin
+  // the legacy path. Versions 3 to 8 already have the current product/bin
   // shape and read through the current path; versions 3 and 4 carry divider
   // counts (converted to walls on pick) where versions 5 and up carry walls,
   // and the validators and pickers accept either. Version 6 adds cutout-origin
-  // bins, which no earlier version can contain, and version 7 adds the
-  // per-model sweep fields, absent in earlier versions and defaulted to off on
-  // pick, so nothing else changes.
+  // bins, which no earlier version can contain, version 7 adds the per-model
+  // sweep fields, absent in earlier versions and defaulted to off on pick, and
+  // version 8 adds the baseplate and connection clip product kinds, which no
+  // earlier version can contain, so nothing else changes.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];

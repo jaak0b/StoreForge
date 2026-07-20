@@ -128,6 +128,24 @@ function captionOf(product: Product): string {
       const bin = product.bin;
       return joinCaption([kind, sizeToken(bin), bin.origin, detailToken(bin)]);
     }
+    case 'baseplate':
+      // Two dimensions, not three: a baseplate has no height units to state.
+      // Custom size is deliberately absent (it lives in the title); the three
+      // feature flags are the better spend on a caption that clips.
+      return joinCaption([
+        'baseplate',
+        `${product.unitsX}×${product.unitsY}`,
+        product.magnets !== null ? 'magnets' : '',
+        product.screwHoles ? 'screw holes' : '',
+        product.connectable ? 'connectable' : '',
+      ]);
+    case 'clip':
+      // The tolerance token appears only when non-zero, so two clip rows that
+      // print differently are distinguishable in the queue.
+      return joinCaption([
+        'connection clip',
+        product.toleranceMm !== 0 ? `tolerance ${product.toleranceMm} mm` : '',
+      ]);
     default:
       return assertNever(product);
   }
@@ -176,6 +194,31 @@ export function describeProduct(
       missingModels,
     };
   }
+  // The baseplate and clip branches must stay above the label-content
+  // fallthrough below, which dereferences an insert or content neither kind
+  // carries. titlePlaceholder stays false: true renders italic and dimmed,
+  // meaning "this row has no label yet", and a baseplate is not missing one.
+  if (product.kind === 'baseplate') {
+    const custom = product.customXMm !== null || product.customYMm !== null;
+    return {
+      title: custom ? 'Baseplate, custom size' : 'Baseplate',
+      titleLine2: '',
+      titlePlaceholder: false,
+      iconName: null,
+      caption,
+      missingModels,
+    };
+  }
+  if (product.kind === 'clip') {
+    return {
+      title: 'Connection clip',
+      titleLine2: '',
+      titlePlaceholder: false,
+      iconName: null,
+      caption,
+      missingModels,
+    };
+  }
   const content = product.kind === 'binWithInsert' ? product.insert : product.content;
   const hasText = content.text !== '';
   return {
@@ -186,4 +229,38 @@ export function describeProduct(
     caption,
     missingModels,
   };
+}
+
+/**
+ * The two download-menu subtitles of a row, derived per product kind: the
+ * bin wording is false on a part that has no label, so the strings live here
+ * beside the row's other user-facing text rather than hardcoded in a
+ * template.
+ */
+export function downloadSubtitles(product: Product): { stl: string; threeMf: string } {
+  switch (product.kind) {
+    case 'bin':
+    case 'binWithInsert':
+      return {
+        stl: 'One mesh, label merged into the bin.',
+        threeMf: 'Body and label slots for toolchanger printing.',
+      };
+    case 'insert':
+      return {
+        stl: 'One mesh, label merged into the insert.',
+        threeMf: 'Body and label slots for toolchanger printing.',
+      };
+    case 'baseplate':
+      return {
+        stl: 'One mesh.',
+        threeMf: 'Single filament; a baseplate has no label.',
+      };
+    case 'clip':
+      return {
+        stl: 'One mesh.',
+        threeMf: 'Single filament; a connection clip has no label.',
+      };
+    default:
+      return assertNever(product);
+  }
 }

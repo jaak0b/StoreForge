@@ -281,6 +281,73 @@ describe('describeProduct captions', () => {
     ).toBe('insert · 3 cells · manual');
   });
 
+  it('describes a plain baseplate by kind and two-dimension size alone', () => {
+    const row = describeProduct({
+      kind: 'baseplate',
+      unitsX: 4,
+      unitsY: 2,
+      customXMm: null,
+      customYMm: null,
+      magnets: null,
+      screwHoles: false,
+      connectable: false,
+    });
+    expect(row.title).toBe('Baseplate');
+    expect(row.caption).toBe('baseplate · 4×2');
+    expect(row.titleLine2).toBe('');
+    expect(row.titlePlaceholder).toBe(false);
+    expect(row.iconName).toBe(null);
+  });
+
+  it('lists the three feature flags of a fully optioned baseplate in the caption', () => {
+    const row = describeProduct({
+      kind: 'baseplate',
+      unitsX: 4,
+      unitsY: 2,
+      customXMm: null,
+      customYMm: null,
+      magnets: { diameterMm: 6.5, heightMm: 2.4 },
+      screwHoles: true,
+      connectable: true,
+    });
+    expect(row.title).toBe('Baseplate');
+    expect(row.caption).toBe('baseplate · 4×2 · magnets · screw holes · connectable');
+    expect(row.titlePlaceholder).toBe(false);
+    expect(row.iconName).toBe(null);
+  });
+
+  it('names a custom-size baseplate in the title, never in the caption', () => {
+    const row = describeProduct({
+      kind: 'baseplate',
+      unitsX: 4,
+      unitsY: 2,
+      customXMm: 30.5,
+      customYMm: null,
+      magnets: null,
+      screwHoles: true,
+      connectable: false,
+    });
+    expect(row.title).toBe('Baseplate, custom size');
+    expect(row.caption).toBe('baseplate · 4×2 · screw holes');
+    expect(row.titlePlaceholder).toBe(false);
+    expect(row.iconName).toBe(null);
+  });
+
+  it('shows a clip tolerance token only when the tolerance is non-zero', () => {
+    const nominal = describeProduct({ kind: 'clip', toleranceMm: 0 });
+    expect(nominal.title).toBe('Connection clip');
+    expect(nominal.caption).toBe('connection clip');
+    expect(nominal.titleLine2).toBe('');
+    expect(nominal.titlePlaceholder).toBe(false);
+    expect(nominal.iconName).toBe(null);
+
+    const loosened = describeProduct({ kind: 'clip', toleranceMm: 0.2 });
+    expect(loosened.title).toBe('Connection clip');
+    expect(loosened.caption).toBe('connection clip · tolerance 0.2 mm');
+    expect(loosened.titlePlaceholder).toBe(false);
+    expect(loosened.iconName).toBe(null);
+  });
+
   it('sizes a screw insert by its cell width alone', () => {
     expect(
       describeProduct({

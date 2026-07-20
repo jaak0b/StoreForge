@@ -8,6 +8,7 @@ import { useBinQueue } from '../stores/binQueue';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { previewBinParams } from '../engine/plan/geometry';
 import {
+  binOf,
   originOf,
   type LabelContent,
   type Product,
@@ -181,7 +182,9 @@ function productFor(
 
 function productSizeText(product: Product): string {
   if (product.kind === 'insert') return `${product.cells}u insert`;
-  const bin = product.bin;
+  const bin = binOf(product);
+  // This tab only ever composes insert and bin-bearing products.
+  if (bin === null) return '';
   return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
 }
 
@@ -235,7 +238,8 @@ const editingScrew = computed<ScrewSpec | null>(() => {
   if (entry === null) return null;
   const product = entry.product;
   if (product.kind === 'insert') return product.origin === 'screw' ? product.screw : null;
-  return product.bin.origin === 'screw' ? product.bin.screw : null;
+  const bin = binOf(product);
+  return bin !== null && bin.origin === 'screw' ? bin.screw : null;
 });
 
 /**
@@ -257,11 +261,12 @@ watch(
     const entry = queue.entryById(entryId);
     if (entry === null || originOf(entry.product) !== 'screw') return;
     const product = entry.product;
+    const bin = binOf(product);
     const screw =
       product.kind === 'insert'
         ? (product.origin === 'screw' ? product.screw : null)
-        : product.bin.origin === 'screw'
-          ? product.bin.screw
+        : bin !== null && bin.origin === 'screw'
+          ? bin.screw
           : null;
     if (screw === null) return;
     internalUpdate = true;
@@ -269,7 +274,7 @@ watch(
     head.value = screw.head;
     lengthMm.value = screw.lengthMm;
     count.value = entry.quantity;
-    if (product.kind !== 'insert') heightUnits.value = product.bin.heightUnits;
+    if (bin !== null) heightUnits.value = bin.heightUnits;
     shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
     internalUpdate = false;
     const patch: Record<string, unknown> = {
@@ -279,11 +284,11 @@ watch(
       fused: product.kind === 'binWithInsert' ? product.fused ?? false : false,
       notes: entry.notes ?? '',
     };
-    if (product.kind !== 'insert' && product.bin.origin === 'screw') {
-      patch.magnetHoles = product.bin.magnetHoles;
+    if (bin !== null && bin.origin === 'screw') {
+      patch.magnetHoles = bin.magnetHoles;
       // The loaded entry's walls become the editor's walls, so editing a screw
       // bin that has dividers shows them rather than starting from empty.
-      patch.walls = product.bin.walls.map((wall: DividerWall) => ({ ...wall }));
+      patch.walls = bin.walls.map((wall: DividerWall) => ({ ...wall }));
       patch.selectedWallIndex = null;
     }
     store.$patch(patch);
@@ -345,7 +350,7 @@ const pending = computed<{
 const pendingFootprints = computed<number[]>(() => [
   ...new Set(
     pending.value.batches
-      .map(({ product }) => (product.kind === 'insert' ? null : product.bin.gridX))
+      .map(({ product }) => binOf(product)?.gridX ?? null)
       .filter((cells): cells is number => cells !== null),
   ),
 ]);

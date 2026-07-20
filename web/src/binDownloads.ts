@@ -83,6 +83,10 @@ async function generatePartMeshes(
           return assertNever(interior);
       }
     }
+    case 'baseplate':
+      throw new Error('Baseplate export is not available yet.');
+    case 'clip':
+      throw new Error('Connection clip export is not available yet.');
     default:
       return assertNever(part);
   }
@@ -115,6 +119,10 @@ async function generatePartUnion(
           return assertNever(interior);
       }
     }
+    case 'baseplate':
+      throw new Error('Baseplate export is not available yet.');
+    case 'clip':
+      throw new Error('Connection clip export is not available yet.');
     default:
       return assertNever(part);
   }
@@ -132,6 +140,10 @@ function partFootprint(part: PrintablePart): { widthMm: number; depthMm: number 
         widthMm: binOuterSizeMm(part.bin.gridX),
         depthMm: binOuterSizeMm(part.bin.gridY),
       };
+    case 'baseplate':
+      throw new Error('Baseplate export is not available yet.');
+    case 'clip':
+      throw new Error('Connection clip export is not available yet.');
     default:
       return assertNever(part);
   }
@@ -162,6 +174,10 @@ function partName(part: PrintablePart): string {
       const size = `${part.bin.gridX}x${part.bin.gridY}x${part.bin.heightUnits}`;
       return part.labelText !== undefined ? `${part.labelText} (${size})` : size;
     }
+    case 'baseplate':
+      throw new Error('Baseplate export is not available yet.');
+    case 'clip':
+      throw new Error('Connection clip export is not available yet.');
     default:
       return assertNever(part);
   }
@@ -181,6 +197,10 @@ function fileStem(product: Product): string {
       const bin = product.bin;
       return `gridfinity_bin_${bin.gridX}x${bin.gridY}x${bin.heightUnits}`;
     }
+    case 'baseplate':
+      throw new Error('Baseplate export is not available yet.');
+    case 'clip':
+      throw new Error('Connection clip export is not available yet.');
     default:
       return assertNever(product);
   }
