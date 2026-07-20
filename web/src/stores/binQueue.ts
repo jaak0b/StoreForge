@@ -23,6 +23,7 @@ import {
 } from '../engine/plan/storedAssets';
 import { deletePhoto, listPhotoIds } from '../photoStore';
 import { deleteModel, listModelIds } from '../modelStore';
+import { deleteSolidRecord, listSolidRecordKeys } from '../solidStore';
 import { releaseCutoutModels } from '../workerClient';
 import { useCutout } from './cutout';
 
@@ -120,10 +121,15 @@ export const useBinQueue = defineStore('binQueue', {
           {
             photos: { listIds: listPhotoIds, deleteAsset: deletePhoto },
             models: { listIds: listModelIds, deleteAsset: deleteModel },
+            // The persisted cutout solids follow their model references, so
+            // the sweep that deletes an orphaned model file also deletes the
+            // solids computed from it.
+            solids: { listIds: listSolidRecordKeys, deleteAsset: deleteSolidRecord },
           },
           this.entries,
           this.batches,
           new Set(this.protectedModelIds),
+          useCutout().models,
         );
       } catch (error) {
         console.error('Cleaning up stored trace photos and cutout models failed.', error);

@@ -12,17 +12,23 @@
 const DB_NAME = 'storeforge';
 
 /**
- * Version 1 held only the trace photos. Version 2 adds the cutout models. The
- * upgrade handler creates every missing store, so a user upgrading from
- * version 1 gains the models store and a fresh user gets both.
+ * Version 1 held only the trace photos. Version 2 adds the cutout models.
+ * Version 3 adds the persisted cutout solids. The upgrade handler creates
+ * every missing store, so any upgrade path ends with all stores present.
  */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /** Object store holding the original trace photos, keyed by trace source id. */
 export const PHOTO_STORE = 'photos';
 
 /** Object store holding the uploaded cutout model files, keyed by model source id. */
 export const MODEL_STORE = 'models';
+
+/**
+ * Object store holding the persisted cutout solid records (clearance-offset
+ * prepared models and swept cutters), keyed by their in-memory cache key.
+ */
+export const SOLID_STORE = 'solids';
 
 /**
  * One store's identity plus the wording it uses when the shared database
@@ -59,6 +65,9 @@ export function openDatabase(binding: StoreBinding): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(MODEL_STORE)) {
         db.createObjectStore(MODEL_STORE, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(SOLID_STORE)) {
+        db.createObjectStore(SOLID_STORE, { keyPath: 'key' });
       }
     };
     request.onsuccess = () => resolve(request.result);

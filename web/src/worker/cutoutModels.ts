@@ -243,6 +243,81 @@ export class CutoutSweptCache {
   }
 }
 
+/**
+ * The persisted tier under the two in-memory caches: IndexedDB records that
+ * survive a page reload. Injectable so the decisions below are testable with
+ * an in-memory fake (node has no IndexedDB); the worker supplies the real
+ * implementation over src/solidStore.ts.
+ *
+ * The load side is async and consulted only on an in-memory miss. The save
+ * side is deliberately fire-and-forget and returns nothing: a failed cache
+ * write must not fail the carve that produced the solid, so the
+ * implementation logs the failure and the carve proceeds. A load returning
+ * null covers every way a record can be unusable (absent, stale version,
+ * corrupt mesh); to the caller they are all the same plain miss.
+ */
+export interface PersistedSolids {
+  loadPrepared(spec: CutoutModelKeySpec): Promise<PreparedCutoutModel | null>;
+  savePrepared(spec: CutoutModelKeySpec, prepared: PreparedCutoutModel): void;
+  loadSwept(key: string): Promise<SweptSolid | null>;
+  saveSwept(key: string, entry: SweptSolid): void;
+}
+
+/** A cache fill answered by a persisted record, and what the load cost. */
+export interface PersistedRestore {
+  spec: CutoutModelKeySpec;
+  loadMs: number;
+}
+
+/**
+ * Fill the in-memory cache from the persisted tier for every spec it does not
+ * hold, and report which specs a record answered with what the load and
+ * reconstruction cost. Specs with no usable record are simply absent from the
+ * result: they stay misses and take the normal import path. This runs where
+ * the worker is asked which models it is missing, so a model whose solid
+ * survived the reload never has its bytes read and sent at all.
+ */
+export async function restoreCutoutModels(
+  cache: CutoutModelCache,
+  specs: CutoutModelKeySpec[],
+  persisted: PersistedSolids,
+): Promise<PersistedRestore[]> {
+  const restored: PersistedRestore[] = [];
+  for (const spec of cache.missing(specs)) {
+    const startedAt = Date.now();
+    const prepared = await persisted.loadPrepared(spec);
+    if (prepared === null) continue;
+    cache.put(spec, prepared);
+    restored.push({ spec, loadMs: Date.now() - startedAt });
+  }
+  return restored;
+}
+
+/**
+ * Fill the swept cache from the persisted tier for every key it does not
+ * hold, and report what each restore cost. Runs before a carve, because the
+ * sweep memo the carve consults is synchronous by design (it sits inside the
+ * eager geometry evaluation) and cannot await IndexedDB itself; prefetching
+ * by the keys the carve is about to name gives the memo the same hits a
+ * warm in-memory cache would.
+ */
+export async function restoreSweptSolids(
+  cache: CutoutSweptCache,
+  keys: string[],
+  persisted: PersistedSolids,
+): Promise<{ key: string; loadMs: number }[]> {
+  const restored: { key: string; loadMs: number }[] = [];
+  for (const key of keys) {
+    if (cache.get(key) !== undefined) continue;
+    const startedAt = Date.now();
+    const entry = await persisted.loadSwept(key);
+    if (entry === null) continue;
+    cache.put(key, entry);
+    restored.push({ key, loadMs: Date.now() - startedAt });
+  }
+  return restored;
+}
+
 /** What one memo consultation did, for the timing line the worker prints. */
 export type SweptMemoEvent =
   | { outcome: 'hit'; key: string }
@@ -262,6 +337,7 @@ export type SweptMemoEvent =
 export function sweptMemoFor(
   cache: CutoutSweptCache,
   report: (event: SweptMemoEvent) => void,
+  persist?: (key: string, entry: SweptSolid) => void,
 ): SweptSolidMemo {
   return (key, lengths, compute) => {
     const cached = cache.get(key);
@@ -275,6 +351,10 @@ export function sweptMemoFor(
     const elapsedMs = Date.now() - startedAt;
     const entry: SweptSolid = { solid, lengthMm };
     cache.put(key, entry);
+    // Fire-and-forget by contract: the sweep just cost seconds, so keeping it
+    // across a reload is worth a write, but a failed write must not fail the
+    // carve that produced it.
+    persist?.(key, entry);
     report({ outcome: 'miss', key, elapsedMs });
     return entry;
   };
@@ -305,6 +385,7 @@ export function importCutoutModel(
   cache: CutoutModelCache,
   spec: CutoutModelKeySpec,
   prepare: () => PreparedCutoutModel,
+  persist?: (spec: CutoutModelKeySpec, prepared: PreparedCutoutModel) => void,
 ): CutoutModelImport {
   const cached = cache.get(spec);
   if (cached !== undefined) {
@@ -317,6 +398,10 @@ export function importCutoutModel(
   const prepared = prepare();
   const totalMs = Date.now() - startedAt;
   cache.put(spec, prepared);
+  // Fire-and-forget by contract, exactly as the swept memo's persist is: this
+  // import just cost up to tens of seconds, so a reload should not repeat it,
+  // but a failed cache write must not fail the import that succeeded.
+  persist?.(spec, prepared);
   return {
     outcome: 'miss',
     facts: { triangleCount: prepared.triangleCount, sizeMm: prepared.sizeMm },

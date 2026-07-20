@@ -141,8 +141,12 @@ function fakeStore(ids: string[]): AssetStoreLike & { deleted: string[] } {
   };
 }
 
-function fakeStores(photoIds: string[], modelIds: string[]) {
-  return { photos: fakeStore(photoIds), models: fakeStore(modelIds) };
+function fakeStores(photoIds: string[], modelIds: string[], solidKeys: string[] = []) {
+  return {
+    photos: fakeStore(photoIds),
+    models: fakeStore(modelIds),
+    solids: fakeStore(solidKeys),
+  };
 }
 
 describe('referencedAssetIds', () => {
@@ -322,7 +326,11 @@ describe('sweepOrphanAssets', () => {
   it('sweeps an unreferenced model without touching the photo store', async () => {
     const stores = fakeStores(['photo-a'], ['model-stale']);
     const deleted = await sweepOrphanAssets(stores, [tracedEntry('t1', 'photo-a')], []);
-    expect(deleted).toEqual({ tracePhotos: [], cutoutModels: ['model-stale'] });
+    expect(deleted).toEqual({
+      tracePhotos: [],
+      cutoutModels: ['model-stale'],
+      cutoutSolids: [],
+    });
     expect(stores.photos.deleted).toEqual([]);
     expect(stores.models.deleted).toEqual(['model-stale']);
   });
@@ -330,7 +338,11 @@ describe('sweepOrphanAssets', () => {
   it('sweeps an unreferenced photo without touching the model store', async () => {
     const stores = fakeStores(['photo-stale'], ['model-a']);
     const deleted = await sweepOrphanAssets(stores, [cutoutEntry('c1', 'model-a')], []);
-    expect(deleted).toEqual({ tracePhotos: ['photo-stale'], cutoutModels: [] });
+    expect(deleted).toEqual({
+      tracePhotos: ['photo-stale'],
+      cutoutModels: [],
+      cutoutSolids: [],
+    });
     expect(stores.models.deleted).toEqual([]);
   });
 
@@ -351,5 +363,40 @@ describe('sweepOrphanAssets', () => {
     const deleted = await sweepOrphanAssets(stores, [], [], new Set());
     expect(deleted.cutoutModels).toEqual(['model-abandoned']);
     expect(stores.models.deleted).toEqual(['model-abandoned']);
+  });
+
+  it('deletes persisted solid records for unreferenced model keys and keeps the rest', async () => {
+    // cutoutModel() uses unit scale 1 and clearance 0.4, so the referenced
+    // model key is 'model-a:1:0.4'. Its offset record (the key itself) and
+    // its swept records (the key as a prefix) survive; every record of a
+    // model no plan row references goes in the same sweep that deletes the
+    // orphaned model file.
+    const stores = fakeStores([], ['model-a', 'model-stale'], [
+      'model-a:1:0.4',
+      'model-a:1:0.4:0:0:90:5',
+      'model-stale:1:0.4',
+      'model-stale:1:0.4:0:0:0:0',
+      // A superseded clearance of a still-referenced model is an orphan too.
+      'model-a:1:0.8',
+    ]);
+    const deleted = await sweepOrphanAssets(stores, [cutoutEntry('c1', 'model-a')], []);
+    expect(deleted.cutoutSolids).toEqual([
+      'model-stale:1:0.4',
+      'model-stale:1:0.4:0:0:0:0',
+      'model-a:1:0.8',
+    ]);
+    expect(stores.solids.deleted).toEqual(deleted.cutoutSolids);
+  });
+
+  it('keeps the solid records of a model the open editor holds', async () => {
+    // A solid computed for a model still being edited is not referenced by
+    // any plan row yet; the editor's key specs protect it exactly as
+    // protectedIds protects the model blob.
+    const stores = fakeStores([], [], ['model-editing:1:0.4', 'model-editing:1:0.4:0:0:0:0']);
+    const deleted = await sweepOrphanAssets(stores, [], [], new Set(), [
+      { modelSourceId: 'model-editing', unitScale: 1, clearanceMm: 0.4 },
+    ]);
+    expect(deleted.cutoutSolids).toEqual([]);
+    expect(stores.solids.deleted).toEqual([]);
   });
 });

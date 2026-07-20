@@ -31,6 +31,8 @@ import {
   carveModelNames,
   importCutoutModel,
   resolveCutoutModels,
+  restoreCutoutModels,
+  restoreSweptSolids,
   sweptMemoFor,
   type CutoutBinRequest,
   type CutoutModelFacts,
@@ -39,11 +41,14 @@ import {
   type CutoutPreviewResult,
 } from './cutoutModels';
 import { cutoutModelKey, type CutoutBinParams } from '../engine/cutout/cutoutBin';
+import { persistedSolidsFor } from './persistedSolids';
 import {
   reportCutoutModelCacheHit,
+  reportCutoutModelPersistedHit,
   reportCutoutModelPrepared,
   reportSweptCacheHit,
   reportSweptCacheMiss,
+  reportSweptPersistedHit,
   timed,
 } from './timing';
 import type {
@@ -123,7 +128,10 @@ const cutoutSwept = new CutoutSweptCache();
  * current carve names, which is what stops a model rotated through many
  * angles from accumulating one solid per angle.
  */
-function cutoutCarveParams(request: CutoutBinRequest): CutoutBinParams {
+async function cutoutCarveParams(
+  m: ManifoldToplevel,
+  request: CutoutBinRequest,
+): Promise<CutoutBinParams> {
   const models = resolveCutoutModels(cutoutModels, request.models);
   const keptKeys: string[] = [];
   const nameByKey = new Map<string, string>();
@@ -133,19 +141,31 @@ function cutoutCarveParams(request: CutoutBinRequest): CutoutBinParams {
     nameByKey.set(model.sweptKey, model.name);
   }
   cutoutSwept.release(keptKeys);
-  const sweptMemo = sweptMemoFor(cutoutSwept, (event) => {
-    const name = nameByKey.get(event.key) ?? event.key;
-    switch (event.outcome) {
-      case 'hit':
-        reportSweptCacheHit(name);
-        return;
-      case 'miss':
-        reportSweptCacheMiss(name, event.elapsedMs);
-        return;
-      default:
-        return assertNever(event);
-    }
-  });
+  // The sweep memo the carve consults is synchronous, so persisted swept
+  // solids are prefetched here, by the keys this carve is about to name;
+  // whatever a record answers is a memory hit by the time the memo asks.
+  const persisted = persistedSolidsFor(m);
+  const restored = await restoreSweptSolids(cutoutSwept, keptKeys, persisted);
+  for (const { key, loadMs } of restored) {
+    reportSweptPersistedHit(nameByKey.get(key) ?? key, loadMs);
+  }
+  const sweptMemo = sweptMemoFor(
+    cutoutSwept,
+    (event) => {
+      const name = nameByKey.get(event.key) ?? event.key;
+      switch (event.outcome) {
+        case 'hit':
+          reportSweptCacheHit(name);
+          return;
+        case 'miss':
+          reportSweptCacheMiss(name, event.elapsedMs);
+          return;
+        default:
+          return assertNever(event);
+      }
+    },
+    (key, entry) => persisted.saveSwept(key, entry),
+  );
   return { ...request, models, sweptMemo };
 }
 
@@ -210,6 +230,19 @@ const api = {
    * failure: a first upload and a clearance change are the same request here.
    */
   async missingCutoutModels(specs: CutoutModelKeySpec[]): Promise<CutoutModelKeySpec[]> {
+    // A spec a persisted record answers is restored into the in-memory cache
+    // here and never reported missing, so after a reload the main thread does
+    // not read and send bytes for a model whose prepared solid survived. The
+    // restore reports the model key's parts; the file name lives with the
+    // request objects and this endpoint only sees key specs.
+    const m = await loadManifold();
+    const restored = await restoreCutoutModels(cutoutModels, specs, persistedSolidsFor(m));
+    for (const { spec, loadMs } of restored) {
+      reportCutoutModelPersistedHit(
+        { name: spec.modelSourceId, unitScale: spec.unitScale, clearanceMm: spec.clearanceMm },
+        loadMs,
+      );
+    }
     return cutoutModels.missing(specs);
   },
 
@@ -228,15 +261,29 @@ const api = {
     buffer: ArrayBuffer,
   ): Promise<CutoutModelFacts> {
     const m = await loadManifold();
-    const result = importCutoutModel(cutoutModels, spec, () => {
-      const solid = timed('STL parse', [spec.name], () =>
-        meshToManifold(m, parseStl(buffer).mesh),
-      );
-      return prepareCutoutModel(m, solid, spec);
-    });
+    const persisted = persistedSolidsFor(m);
+    // A persisted record can answer this import outright: restore it into the
+    // in-memory cache first, so the import below becomes a hit and skips the
+    // parse and the whole prepare stage.
+    const restored = await restoreCutoutModels(cutoutModels, [spec], persisted);
+    const result = importCutoutModel(
+      cutoutModels,
+      spec,
+      () => {
+        const solid = timed('STL parse', [spec.name], () =>
+          meshToManifold(m, parseStl(buffer).mesh),
+        );
+        return prepareCutoutModel(m, solid, spec);
+      },
+      (keySpec, prepared) => persisted.savePrepared(keySpec, prepared),
+    );
     switch (result.outcome) {
       case 'hit':
-        reportCutoutModelCacheHit(spec);
+        if (restored.length > 0) {
+          reportCutoutModelPersistedHit(spec, restored[0].loadMs);
+        } else {
+          reportCutoutModelCacheHit(spec);
+        }
         return result.facts;
       case 'miss':
         reportCutoutModelPrepared(
@@ -283,7 +330,7 @@ const api = {
     const ctx = newExecutionContext(m);
     activePreviewContext = ctx;
     try {
-      const params = cutoutCarveParams(request);
+      const params = await cutoutCarveParams(m, request);
       const carve = timed('carve', carveModelNames(request.models), () =>
         carveCutoutBin(m, font, params, ctx),
       );
@@ -312,7 +359,7 @@ const api = {
    */
   async generateCutoutBin(request: CutoutBinRequest): Promise<CutoutCarveResult> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const params = cutoutCarveParams(request);
+    const params = await cutoutCarveParams(m, request);
     const carve = timed('carve', carveModelNames(request.models), () =>
       carveCutoutBin(m, font, params),
     );
@@ -322,7 +369,7 @@ const api = {
   /** The same, as one unioned mesh for the single-mesh STL export. */
   async generateCutoutBinUnion(request: CutoutBinRequest): Promise<CutoutUnionResult> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const params = cutoutCarveParams(request);
+    const params = await cutoutCarveParams(m, request);
     const carve = timed('carve', carveModelNames(request.models), () =>
       carveCutoutBinUnion(m, font, params),
     );

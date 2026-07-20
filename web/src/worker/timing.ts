@@ -132,6 +132,24 @@ export function reportCutoutModelCacheHit(model: TimedModel): void {
 }
 
 /**
+ * Report an import answered by a persisted record from IndexedDB rather than
+ * by the in-memory cache: the reload-survival case the persisted tier exists
+ * for. Its own line rather than a variant of the hit line, and with the load
+ * plus reconstruction cost attached, because it is the one hit that is not
+ * free and the figure decides whether persisting stays worth it.
+ */
+export function reportCutoutModelPersistedHit(model: TimedModel, loadMs: number): void {
+  console.log(
+    row([
+      'offset cache persisted hit',
+      models([model.name]),
+      ...keyParts(model),
+      ms(loadMs),
+    ]),
+  );
+}
+
+/**
  * Report a sweep that had to be computed at carve time: the Minkowski sum of
  * the rotated cutter with the sweep operand, which is the per-rotation cost
  * the swept-solid cache exists to avoid repeating. Printed per carve like the
@@ -145,4 +163,13 @@ export function reportSweptCacheMiss(name: string, elapsedMs: number): void {
 /** Report a carve whose sweep a cached swept solid answered. */
 export function reportSweptCacheHit(name: string): void {
   console.log(row(['sweep cache hit', models([name]), 'reused the swept solid']));
+}
+
+/**
+ * Report a sweep answered by a persisted record from IndexedDB, with the load
+ * plus reconstruction cost, for the same reason the offset line above carries
+ * it: the persisted hit is the one hit that is not free.
+ */
+export function reportSweptPersistedHit(name: string, loadMs: number): void {
+  console.log(row(['sweep cache persisted hit', models([name]), ms(loadMs)]));
 }

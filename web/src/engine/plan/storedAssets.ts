@@ -1,5 +1,6 @@
 import { assertNever, binOf, type PrintBatch, type Product, type QueueEntry } from './types';
 import { cutoutModelKey, type CutoutModelKeySpec } from '../cutout/cutoutBin';
+import { persistedSolidKeyIsFor } from '../cutout/persistedSolids';
 
 /**
  * Garbage collection of the blobs a plan references but does not contain. Two
@@ -33,6 +34,8 @@ export interface ReferencedAssetIds {
 export interface SweptAssetIds {
   tracePhotos: string[];
   cutoutModels: string[];
+  /** Persisted solid record keys whose model key nothing references anymore. */
+  cutoutSolids: string[];
 }
 
 /** Visits every product a plan row orders: each queue entry's and each batch item's. */
@@ -149,6 +152,26 @@ async function sweepStore(
 }
 
 /**
+ * Deletes every persisted solid record whose model key nothing references
+ * anymore. The keep-list is the same referencedCutoutModelKeySpecs union the
+ * worker's in-memory cache retains by, so the persisted tier and the memory
+ * tier live and die by one rule. A swept record's key is its model key plus a
+ * suffix, so retention matches by the model key as a prefix, exactly as the
+ * worker's retainForModelKeys does for the in-memory swept solids.
+ */
+async function sweepSolidStore(
+  store: AssetStoreLike,
+  keepModelKeys: string[],
+): Promise<string[]> {
+  const stored = await store.listIds();
+  const orphans = stored.filter((key) => !persistedSolidKeyIsFor(key, keepModelKeys));
+  for (const key of orphans) {
+    await store.deleteAsset(key);
+  }
+  return orphans;
+}
+
+/**
  * Deletes every stored asset whose id no plan row references anymore, and
  * returns the ids that were deleted, per store. Runs after plan mutations and
  * once on app start (to catch assets orphaned by an interrupted session).
@@ -160,16 +183,26 @@ async function sweepStore(
  * before the bin is saved, and a plan mutation in between would otherwise
  * sweep the blob away microseconds after it was written. Asset ids are unique
  * across both kinds, so one set covers both stores.
+ *
+ * `editorModels` are the key specs the open cutout editor holds, for the
+ * persisted solid sweep: a solid computed for a model being edited must
+ * survive the sweep before the bin referencing it is queued, which is the
+ * same reasoning protectedIds encodes for the model blobs.
  */
 export async function sweepOrphanAssets(
-  stores: { photos: AssetStoreLike; models: AssetStoreLike },
+  stores: { photos: AssetStoreLike; models: AssetStoreLike; solids: AssetStoreLike },
   entries: QueueEntry[],
   batches: PrintBatch[],
   protectedIds: ReadonlySet<string> = new Set(),
+  editorModels: readonly CutoutModelKeySpec[] = [],
 ): Promise<SweptAssetIds> {
   const referenced = referencedAssetIds(entries, batches);
+  const keepModelKeys = referencedCutoutModelKeySpecs(entries, batches, editorModels).map(
+    (spec) => cutoutModelKey(spec.modelSourceId, spec.unitScale, spec.clearanceMm),
+  );
   return {
     tracePhotos: await sweepStore(stores.photos, referenced.tracePhotos, protectedIds),
     cutoutModels: await sweepStore(stores.models, referenced.cutoutModels, protectedIds),
+    cutoutSolids: await sweepSolidStore(stores.solids, keepModelKeys),
   };
 }
