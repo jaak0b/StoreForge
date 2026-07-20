@@ -15,6 +15,7 @@ import type {
   PaperKind,
   SamPoint,
 } from './engine/trace/types';
+import type { ShadowOptions } from './engine/trace/shadow';
 
 // Model URLs are resolved here because the worker script lives under assets/,
 // so a BASE_URL-relative path would resolve against the wrong directory there.
@@ -87,14 +88,17 @@ export async function embedImage(): Promise<EmbedResult> {
 /**
  * Segment the tool at the given click prompts (rectified-image pixels), with
  * the given brush strokes painted onto the mask, and return its outline in
- * sheet millimeters plus a mask overlay preview.
+ * sheet millimeters plus a mask overlay preview. `options` tunes the shadow and
+ * halo post-filter; every argument must be a plain structured-cloneable value
+ * because it crosses the worker boundary.
  */
 export async function segmentAt(
   points: SamPoint[],
   strokes: BrushStroke[],
+  options: ShadowOptions = {},
 ): Promise<SegmentResult> {
   const worker = await getReadyWorker();
-  return worker.segmentAt(points, strokes);
+  return worker.segmentAt(points, strokes, options);
 }
 
 /** Verify that OpenCV and both MobileSAM ONNX sessions load in the worker. */
