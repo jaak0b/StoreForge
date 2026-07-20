@@ -5,8 +5,10 @@ import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 /**
  * Debounced live 3D preview generation for a reactive set of part
  * parameters. Regenerates in the geometry worker whenever the parameters
- * change; stale results are discarded by ticket so a slow generation never
- * overwrites a newer one. Generic over the parameter shape so the tabs can
+ * change; results display progressively by ticket: a superseded carve's
+ * meshes still display if nothing newer has displayed yet, so long waits
+ * show each completed step instead of freezing, while an older result can
+ * never overwrite a newer one. Generic over the parameter shape so the tabs can
  * preview slotted bins, pocket bins or standalone inserts with one
  * composable.
  *
@@ -32,6 +34,7 @@ export function useBinPreview<P = SlottedBinParams, R = PartMeshes>(
 
   let debounceHandle: ReturnType<typeof setTimeout> | null = null;
   let generationCounter = 0;
+  let displayedTicket = 0;
 
   async function regenerate(): Promise<void> {
     const ticket = ++generationCounter;
@@ -39,7 +42,10 @@ export function useBinPreview<P = SlottedBinParams, R = PartMeshes>(
     errorMessage.value = null;
     try {
       const result = await generate(params());
-      if (ticket === generationCounter) meshes.value = result;
+      if (ticket > displayedTicket) {
+        displayedTicket = ticket;
+        meshes.value = result;
+      }
     } catch (error) {
       if (ticket === generationCounter) {
         errorMessage.value =
