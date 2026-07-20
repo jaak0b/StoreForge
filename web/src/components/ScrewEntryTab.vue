@@ -26,8 +26,10 @@ import {
   overallLengthMm,
   HEAD_ICON_NAME,
   HEAD_TYPES,
+  IMPERIAL_THREADS,
   LENGTHLESS_HEADS,
   MAX_LENGTH_MM,
+  METRIC_THREADS,
   MIN_LENGTH_MM,
   parseShorthand,
   type HeadType,
@@ -53,9 +55,6 @@ const queue = useBinQueue();
 const store = useBinDesigner();
 const { productChoice, fused } = storeToRefs(store);
 const { smAndDown } = useDisplay();
-
-const METRIC_THREADS = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
-const IMPERIAL_THREADS = ['#4', '#6', '#8', '#10', '#12', '1/4-20', '5/16-18', '3/8-16'];
 
 /** Thread choices grouped by measurement system. */
 const THREAD_ITEMS = [

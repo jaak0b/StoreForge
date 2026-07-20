@@ -133,6 +133,12 @@ export const HEAD_ICON_NAME: Record<HeadType, string> = {
   'threaded insert': 'threaded insert',
 };
 
+/** Thread choices offered in the UI for metric fasteners. The parser accepts more. */
+export const METRIC_THREADS: readonly string[] = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
+
+/** Thread choices offered in the UI for imperial fasteners. The parser accepts more. */
+export const IMPERIAL_THREADS: readonly string[] = ['#4', '#6', '#8', '#10', '#12', '1/4-20', '5/16-18', '3/8-16'];
+
 /** Head types with no meaningful length (label and sizing skip the length). */
 export const LENGTHLESS_HEADS: ReadonlySet<HeadType> = new Set<HeadType>([
   'hex nut',

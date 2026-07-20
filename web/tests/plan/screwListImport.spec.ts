@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  METRIC_THREADS,
+  IMPERIAL_THREADS,
   composeLabelText,
   computeBinWidthUnits,
   groupBatchRows,
@@ -8,6 +10,13 @@ import {
   parseShorthand,
   threadDiameterMm,
 } from '../../src/engine/plan/screwListImport';
+
+describe('thread lists', () => {
+  it('exposes the metric and imperial thread choices', () => {
+    expect(METRIC_THREADS).toContain('M3');
+    expect(IMPERIAL_THREADS).toContain('1/4-20');
+  });
+});
 
 describe('parseShorthand', () => {
   it('parses a compact thread-first batch', () => {
