@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
@@ -24,30 +24,27 @@ import {
   composeShorthand,
   computeBinWidthUnits,
   overallLengthMm,
+  HEAD_ALIASES_REVERSE,
   HEAD_ICON_NAME,
   HEAD_TYPES,
-  IMPERIAL_THREADS,
   LENGTHLESS_HEADS,
-  MAX_LENGTH_MM,
-  METRIC_THREADS,
-  MIN_LENGTH_MM,
   parseShorthand,
   type HeadType,
   type ScrewBatch,
 } from '../engine/plan/screwListImport';
+import { applySuggestion, suggestShorthand, type ScrewSuggestion } from '../engine/plan/screwSuggest';
 import BinViewport from './BinViewport.vue';
 import ProductSelect from './ProductSelect.vue';
 import MoreOptions from './MoreOptions.vue';
 
 /**
  * The Screw entry tab of the add-bin card: one shorthand field ("m3x20 fhcs
- * x5") that parses live into a synced Thread/Head/Length/Count/Height
- * breakdown, with the resulting product (computed size, label, icon)
- * previewing live beside it. A comma-separated shorthand list adds every
- * parsed screw at once; the breakdown then shows the first entry and
- * disables editing, since there is no single set of fields to edit. The
- * product choice decides the packaging: a bin, a bin with its label insert,
- * or just the insert (a label for a screw bin that already exists).
+ * x5") with an autocomplete menu of field completions and a live hint line
+ * reflecting the parse, with the resulting product (computed size, label,
+ * icon) previewing live beside it. A comma-separated shorthand list adds every
+ * parsed screw at once; the hint line then lists each entry. The product
+ * choice decides the packaging: a bin, a bin with its label insert, or just
+ * the insert (a label for a screw bin that already exists).
  */
 
 const app = useApp();
@@ -56,23 +53,11 @@ const store = useBinDesigner();
 const { productChoice, fused } = storeToRefs(store);
 const { smAndDown } = useDisplay();
 
-/** Thread choices grouped by measurement system. */
-const THREAD_ITEMS = [
-  { type: 'subheader' as const, title: 'Metric' },
-  ...METRIC_THREADS,
-  { type: 'subheader' as const, title: 'Imperial' },
-  ...IMPERIAL_THREADS,
-];
-
 /** Default bin height for a screw entry when nothing else determines it; the
  * engine does not derive a minimum height from screw length, so this is a
  * plain starting value the user can raise. */
 const DEFAULT_HEIGHT_UNITS = 6;
 
-const thread = ref('M3');
-const head = ref<HeadType | null>('countersunk screw');
-const lengthMm = ref<number | null>(20);
-const count = ref(1);
 const heightUnits = ref(DEFAULT_HEIGHT_UNITS);
 const shorthand = ref('M3x20 fhcs x1');
 const shorthandFocused = ref(false);
@@ -81,28 +66,22 @@ const previewLoaded = ref(!smAndDown.value);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
 
-/** Head choices: the canonical head types plus an explicit none. */
-const HEAD_ITEMS = [
-  { title: 'No head type', value: null },
-  ...HEAD_TYPES.map((h) => ({ title: h, value: h })),
-];
-
-const lengthless = computed(() => head.value !== null && LENGTHLESS_HEADS.has(head.value));
-
-const lengthValid = computed(
-  () =>
-    lengthless.value ||
-    (lengthMm.value !== null &&
-      Number.isInteger(lengthMm.value) &&
-      lengthMm.value >= MIN_LENGTH_MM &&
-      lengthMm.value <= MAX_LENGTH_MM),
-);
-
-const countValid = computed(() => Number.isInteger(count.value) && count.value >= 1);
 const heightValid = computed(() => Number.isInteger(heightUnits.value) && heightUnits.value >= 2);
+
+const heightRules = [
+  (v: number) =>
+    (Number.isInteger(v) && v >= 2) ||
+    'The height must be a whole number of at least 2 height units.',
+];
 
 function headIconPath(headType: HeadType): string {
   return iconByName(HEAD_ICON_NAME[headType]).path;
+}
+
+/** The fastener silhouette for a head suggestion, or null when it has none. */
+function headIconForSuggestion(s: ScrewSuggestion): string | null {
+  const headType = HEAD_TYPES.find((h) => HEAD_ALIASES_REVERSE[h] === s.insert);
+  return headType !== undefined ? headIconPath(headType) : null;
 }
 
 /**
@@ -196,31 +175,11 @@ function productLabelText(product: Product): string {
   return describeProduct(product).title;
 }
 
-// Parsing the shorthand field is the single source of truth; the breakdown
-// pickers are a synced view onto it. `internalUpdate` suppresses the pickers
-// -> shorthand watcher while the shorthand -> pickers watcher is applying a
-// parse result, so the two directions never fight over the caret.
-let internalUpdate = false;
-
+// Parsing the shorthand field is the single source of truth for every derived
+// value on this tab: there are no breakdown pickers to keep in sync.
 const parsed = computed(() => parseShorthand(shorthand.value));
 const isMultiple = computed(() => parsed.value.batches.length > 1);
 const firstBatch = computed<ScrewBatch | null>(() => parsed.value.batches[0] ?? null);
-
-watch(shorthand, () => {
-  const batch = firstBatch.value;
-  if (batch === null) return;
-  internalUpdate = true;
-  if (batch.thread !== null) thread.value = batch.thread;
-  if (batch.head !== null) head.value = batch.head;
-  if (batch.lengthMm !== null) lengthMm.value = batch.lengthMm;
-  count.value = batch.quantity;
-  internalUpdate = false;
-});
-
-watch([thread, head, lengthMm, count], () => {
-  if (internalUpdate || shorthandFocused.value || isMultiple.value) return;
-  shorthand.value = composeShorthand(thread.value, lengthMm.value, head.value, count.value);
-});
 
 function quickBatchComplete(batch: ScrewBatch): boolean {
   const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
@@ -228,6 +187,79 @@ function quickBatchComplete(batch: ScrewBatch): boolean {
 }
 
 const completeBatches = computed(() => parsed.value.batches.filter(quickBatchComplete));
+
+// The autocomplete menu. The caret position drives which field of the segment
+// under it the engine suggests completions for; the component holds no grammar
+// knowledge of its own. `menuDismissed` lets Escape hide the menu until the
+// next keystroke without blurring the field.
+const shorthandWrap = ref<HTMLElement | null>(null);
+const cursorPos = ref(0);
+const highlightIndex = ref(0);
+const menuDismissed = ref(false);
+
+const suggestions = computed(() => suggestShorthand(shorthand.value, cursorPos.value));
+const menuVisible = computed(
+  () => shorthandFocused.value && !menuDismissed.value && suggestions.value.length > 0,
+);
+
+function inputEl(): HTMLInputElement | null {
+  return shorthandWrap.value?.querySelector('input') ?? null;
+}
+
+function syncCursor(): void {
+  const el = inputEl();
+  if (el !== null) cursorPos.value = el.selectionStart ?? el.value.length;
+}
+
+function onShorthandInput(): void {
+  menuDismissed.value = false;
+  highlightIndex.value = 0;
+  syncCursor();
+}
+
+function chooseSuggestion(s: ScrewSuggestion): void {
+  const el = inputEl();
+  const cursor = el?.selectionStart ?? cursorPos.value;
+  const applied = applySuggestion(shorthand.value, cursor, s);
+  shorthand.value = applied.value;
+  highlightIndex.value = 0;
+  void nextTick(() => {
+    const restored = inputEl();
+    if (restored !== null) {
+      restored.focus();
+      restored.setSelectionRange(applied.cursor, applied.cursor);
+    }
+    cursorPos.value = applied.cursor;
+  });
+}
+
+function onShorthandKeydown(e: KeyboardEvent): void {
+  if (menuVisible.value) {
+    const count = suggestions.value.length;
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        highlightIndex.value = (highlightIndex.value + 1) % count;
+        return;
+      case 'ArrowUp':
+        e.preventDefault();
+        highlightIndex.value = (highlightIndex.value - 1 + count) % count;
+        return;
+      case 'Enter':
+      case 'Tab':
+        e.preventDefault();
+        chooseSuggestion(suggestions.value[highlightIndex.value] ?? suggestions.value[0]);
+        return;
+      case 'Escape':
+        e.preventDefault();
+        menuDismissed.value = true;
+        return;
+      default:
+        return;
+    }
+  }
+  if (e.key === 'Enter') addToQueue();
+}
 
 /** The queue entry being edited on this tab, or null when designing a new one. */
 const editingEntry = computed<QueueEntry | null>(() => {
@@ -246,14 +278,15 @@ const editingScrew = computed<ScrewSpec | null>(() => {
 });
 
 /**
- * The loaded entry's imperial length text stays on the label only while the
- * length itself is unchanged; editing the length drops the stale inch text.
+ * The imperial length text a batch prints on its label. The loaded entry's
+ * inch text survives only while the length is unchanged; editing the length
+ * drops the stale inch text and falls back to whatever the shorthand parses.
  */
-const keptEnteredText = computed(() =>
-  editingScrew.value !== null && lengthMm.value === editingScrew.value.lengthMm
-    ? editingScrew.value.enteredLengthText
-    : null,
-);
+function enteredTextFor(batch: ScrewBatch): string | null {
+  const screw = editingScrew.value;
+  if (screw !== null && batch.lengthMm === screw.lengthMm) return screw.enteredLengthText;
+  return batch.enteredLengthText;
+}
 
 // Editing a screw queue row rehydrates the breakdown, height and shared
 // options from the entry's stored screw description.
@@ -271,14 +304,8 @@ watch(
           ? product.bin.screw
           : null;
     if (screw === null) return;
-    internalUpdate = true;
-    thread.value = screw.thread;
-    head.value = screw.head;
-    lengthMm.value = screw.lengthMm;
-    count.value = entry.quantity;
     if (product.kind !== 'insert') heightUnits.value = product.bin.heightUnits;
     shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
-    internalUpdate = false;
     const patch: Record<string, unknown> = {
       // The tab offers only these two choices, and a stored screw bin without
       // its insert is repaired to one on load, so nothing else can arrive.
@@ -298,49 +325,42 @@ watch(
   { immediate: true },
 );
 
-/** What Add to queue will do, driving both the summary caption and the
- * button's enabled state. A single screw uses the breakdown fields (which
- * stay editable and independently validated); a comma list uses every
- * complete parsed batch verbatim. While editing, only a single screw is
- * valid, since one queue row is being updated. */
+/** The screw description a complete parsed batch turns into. */
+function screwFor(batch: ScrewBatch): ScrewSpec {
+  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  return {
+    thread: batch.thread!,
+    lengthMm: noLength ? null : batch.lengthMm,
+    head: batch.head,
+    enteredLengthText: enteredTextFor(batch),
+  };
+}
+
+/** What Add to queue will do, driving both the hint line and the button's
+ * enabled state. A comma list uses every complete parsed batch verbatim at the
+ * default height; a single screw uses the editable Height field. While
+ * editing, only a single screw is valid, since one queue row is being
+ * updated. */
 const pending = computed<{
   batches: Array<{ product: Product; quantity: number }>;
 }>(() => {
-  if (isMultiple.value) {
-    if (editingEntry.value !== null) return { batches: [] };
-    return {
-      batches: completeBatches.value.map((batch) => ({
-        product: productFor(
-          batch,
-          {
-            thread: batch.thread!,
-            lengthMm:
-              batch.head !== null && LENGTHLESS_HEADS.has(batch.head) ? null : batch.lengthMm,
-            head: batch.head,
-            enteredLengthText: batch.enteredLengthText,
-          },
-          DEFAULT_HEIGHT_UNITS,
-        ),
-        quantity: batch.quantity,
-      })),
-    };
+  if (editingEntry.value !== null) {
+    const batch = firstBatch.value;
+    if (isMultiple.value || batch === null || !quickBatchComplete(batch) || !heightValid.value) {
+      return { batches: [] };
+    }
+    const screw = screwFor(batch);
+    return { batches: [{ product: productFor(screw, screw, heightUnits.value), quantity: batch.quantity }] };
   }
-  if (!lengthValid.value || !countValid.value || !heightValid.value || thread.value.trim() === '') {
-    return { batches: [] };
-  }
-  const screw: ScrewSpec = {
-    thread: thread.value,
-    lengthMm: lengthless.value ? null : lengthMm.value,
-    head: head.value,
-    enteredLengthText: keptEnteredText.value,
-  };
+  const complete = completeBatches.value;
+  if (complete.length === 0) return { batches: [] };
+  if (!isMultiple.value && !heightValid.value) return { batches: [] };
+  const height = isMultiple.value ? DEFAULT_HEIGHT_UNITS : heightUnits.value;
   return {
-    batches: [
-      {
-        product: productFor(screw, screw, heightUnits.value),
-        quantity: count.value,
-      },
-    ],
+    batches: complete.map((batch) => {
+      const screw = screwFor(batch);
+      return { product: productFor(screw, screw, height), quantity: batch.quantity };
+    }),
   };
 });
 
@@ -415,6 +435,64 @@ const resultText = computed(() => {
   return `Resulting bin: ${productLabelText(product)} (${productSizeText(product)}).`;
 });
 
+/** One label-text summary per parsed batch, for the multi-screw hint list. */
+const batchSummaries = computed(() =>
+  parsed.value.batches.map((batch) => {
+    const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+    return {
+      text: composeLabelText(
+        batch.thread,
+        noLength ? null : batch.lengthMm,
+        batch.head,
+        enteredTextFor(batch),
+      ),
+      quantity: batch.quantity,
+    };
+  }),
+);
+
+/** The next field a single incomplete batch still needs, in the order a screw
+ * is described: a thread, then a length (unless the head carries none), then a
+ * head type. Null once the batch is complete. */
+function nextMissingField(batch: ScrewBatch): string | null {
+  if (batch.thread === null) return 'Add a thread size.';
+  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  if (!noLength && batch.lengthMm === null) return 'Add a length.';
+  if (batch.head === null) return 'Add a head type.';
+  return null;
+}
+
+/** What a single incomplete batch has so far, as plain prose. */
+function recognizedState(batch: ScrewBatch): string {
+  const parts: string[] = [];
+  if (batch.thread !== null) parts.push(batch.thread);
+  if (batch.head !== null) parts.push(batch.head);
+  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  if (!noLength && batch.lengthMm !== null) {
+    parts.push(batch.enteredLengthText ?? `${batch.lengthMm} mm`);
+  }
+  return parts.join(', ');
+}
+
+/**
+ * The caption under the textbox for an incomplete single batch: one sentence
+ * of what is recognized, one sentence naming the next missing field. Empty for
+ * a complete batch (resultText covers it) and for a multi-screw list.
+ */
+const incompleteHint = computed(() => {
+  if (isMultiple.value) return '';
+  const batch = firstBatch.value;
+  if (batch === null || quickBatchComplete(batch)) return '';
+  const missing = nextMissingField(batch);
+  const state = recognizedState(batch);
+  if (missing === null) return '';
+  return state === '' ? missing : `${state}. ${missing}`;
+});
+
+/** The single hint caption: the resulting bin, the multi-add count, or the
+ * incomplete-batch guidance, whichever applies. */
+const hintText = computed(() => (resultText.value !== '' ? resultText.value : incompleteHint.value));
+
 const formValid = computed(() => pending.value.batches.length > 0 && wallProblem.value === null);
 
 const addedSnackbar = ref(false);
@@ -452,16 +530,29 @@ function cancelEdit(): void {
   app.stopEditing();
 }
 
-// The preview follows whichever product Add to queue would create first.
-const previewProduct = computed<Product>(
-  () =>
-    pending.value.batches[0]?.product ??
-    productFor(
-      { thread: null, lengthMm: null, head: null },
-      { thread: thread.value, lengthMm: null, head: null, enteredLengthText: null },
-      heightUnits.value,
-    ),
-);
+// The preview follows whichever product Add to queue would create first; while
+// the batch is still incomplete it previews from whatever has parsed so far.
+const previewProduct = computed<Product>(() => {
+  const ready = pending.value.batches[0]?.product;
+  if (ready !== undefined) return ready;
+  const batch = firstBatch.value;
+  const noLength = batch?.head != null && LENGTHLESS_HEADS.has(batch.head);
+  return productFor(
+    {
+      thread: batch?.thread ?? null,
+      lengthMm: noLength ? null : batch?.lengthMm ?? null,
+      head: batch?.head ?? null,
+      enteredLengthText: batch?.enteredLengthText ?? null,
+    },
+    {
+      thread: batch?.thread ?? '',
+      lengthMm: noLength ? null : batch?.lengthMm ?? null,
+      head: batch?.head ?? null,
+      enteredLengthText: batch?.enteredLengthText ?? null,
+    },
+    heightUnits.value,
+  );
+});
 
 function generatePreview(product: Product): Promise<PartMeshes> {
   if (product.kind === 'insert') {
@@ -479,127 +570,79 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
 <template>
   <v-row>
     <v-col cols="12" md="6">
-      <v-text-field
-        v-model="shorthand"
-        label="Screw"
-        placeholder="m3x20 fhcs x5"
-        prepend-inner-icon="mdi-pencil-outline"
-        density="comfortable"
-        hide-details
-        @focus="shorthandFocused = true"
-        @blur="shorthandFocused = false"
-        @keydown.enter="addToQueue"
-      />
+      <div ref="shorthandWrap" class="shorthand-wrap">
+        <v-text-field
+          v-model="shorthand"
+          label="Screw"
+          placeholder="m3x20 fhcs x5"
+          prepend-inner-icon="mdi-pencil-outline"
+          density="comfortable"
+          hide-details
+          autocomplete="off"
+          @focus="shorthandFocused = true"
+          @blur="shorthandFocused = false"
+          @input="onShorthandInput"
+          @click="syncCursor"
+          @keyup="syncCursor"
+          @keydown="onShorthandKeydown"
+        />
+        <v-list
+          v-if="menuVisible"
+          class="suggest-menu"
+          density="compact"
+          elevation="6"
+          role="listbox"
+        >
+          <v-list-item
+            v-for="(s, i) in suggestions"
+            :key="`${s.kind}-${s.insert}`"
+            :active="i === highlightIndex"
+            role="option"
+            @mousedown.prevent="chooseSuggestion(s)"
+          >
+            <template v-if="s.kind === 'head'" #prepend>
+              <svg
+                v-if="headIconForSuggestion(s) !== null"
+                width="18"
+                height="18"
+                viewBox="0 0 100 100"
+                class="mr-2"
+                aria-hidden="true"
+              >
+                <path
+                  :d="headIconForSuggestion(s) ?? ''"
+                  fill="currentColor"
+                  fill-rule="evenodd"
+                />
+              </svg>
+            </template>
+            <v-list-item-title>{{ s.label }}</v-list-item-title>
+          </v-list-item>
+        </v-list>
+      </div>
       <p class="text-caption text-medium-emphasis mt-1 mb-0">
         Separate screws with commas; imperial works too (#8 x 1-1/2" wood).
       </p>
 
-      <div class="text-caption text-medium-emphasis mt-4 mb-1">Breakdown</div>
-      <div class="d-flex flex-wrap ga-2">
-        <v-select
-          v-model="thread"
-          :items="THREAD_ITEMS"
-          label="Thread"
-          density="comfortable"
-          hide-details
-          :disabled="isMultiple"
-          class="screw-field"
-          style="min-width: 125px"
-        />
-        <v-select
-          v-model="head"
-          :items="HEAD_ITEMS"
-          label="Head"
-          density="comfortable"
-          hide-details
-          :disabled="isMultiple"
-          class="screw-field"
-          style="min-width: 150px"
-        >
-          <template #item="{ props: itemProps, item }">
-            <v-list-item v-bind="itemProps">
-              <template #prepend>
-                <svg
-                  v-if="item.raw.value !== null"
-                  width="18"
-                  height="18"
-                  viewBox="0 0 100 100"
-                  class="mr-2"
-                  aria-hidden="true"
-                >
-                  <path :d="headIconPath(item.raw.value)" fill="currentColor" fill-rule="evenodd" />
-                </svg>
-              </template>
-            </v-list-item>
-          </template>
-        </v-select>
-        <v-text-field
-          v-model.number="lengthMm"
-          type="number"
-          :min="MIN_LENGTH_MM"
-          :max="MAX_LENGTH_MM"
-          step="1"
-          label="Length"
-          suffix="mm"
-          density="comfortable"
-          hide-details
-          :disabled="isMultiple || lengthless"
-          class="screw-field"
-          style="min-width: 110px; max-width: 160px"
-        >
-          <template #append-inner>
-            <v-icon icon="mdi-help-circle-outline" size="small" class="length-help" />
-            <v-tooltip activator="parent" location="top" max-width="280">
-              Bin width is sized from the screw's overall length. Countersunk screws (FHCS) are
-              measured overall, so the nominal length is used as is. Other head types are measured
-              under the head, so the head height is added.
-            </v-tooltip>
-          </template>
-        </v-text-field>
-        <v-text-field
-          v-model.number="count"
-          type="number"
-          min="1"
-          step="1"
-          label="Count"
-          density="comfortable"
-          hide-details
-          :disabled="isMultiple"
-          class="screw-field"
-          style="min-width: 90px; max-width: 120px"
-        />
-        <v-text-field
-          v-if="!insertOnly"
-          v-model.number="heightUnits"
-          type="number"
-          min="2"
-          step="1"
-          label="Height"
-          density="comfortable"
-          hide-details
-          :disabled="isMultiple"
-          class="screw-field"
-          style="min-width: 90px; max-width: 120px"
-        />
-      </div>
-      <p v-if="isMultiple && editingEntry !== null" class="text-error text-body-2 mt-2 mb-0">
+      <p v-if="isMultiple && editingEntry !== null" class="text-error text-body-2 mt-3 mb-0">
         Remove the extra comma-separated screws to save; an edit updates one queue row.
       </p>
-      <p v-else-if="isMultiple" class="text-caption text-medium-emphasis mt-2 mb-0">
-        The shorthand lists more than one screw; the breakdown shows the first entry only.
-        Add to queue adds all of them.
-      </p>
-      <p v-else-if="!lengthValid" class="text-error text-body-2 mt-2 mb-0">
-        The length must be a whole number between {{ MIN_LENGTH_MM }} and
-        {{ MAX_LENGTH_MM }} mm.
-      </p>
-      <p v-else-if="!heightValid" class="text-error text-body-2 mt-2 mb-0">
-        The height must be a whole number of at least 2 height units.
-      </p>
 
-      <p v-if="resultText !== ''" class="text-caption text-medium-emphasis mt-2 mb-0">
-        {{ resultText }}
-      </p>
+      <div v-if="hintText !== ''" class="d-flex align-center mt-3">
+        <p class="text-caption text-medium-emphasis mb-0 mr-1">{{ hintText }}</p>
+        <span class="d-inline-flex align-center">
+          <v-icon icon="mdi-help-circle-outline" size="small" class="length-help" />
+          <v-tooltip activator="parent" location="top" max-width="280">
+            Bin width is sized from the screw's overall length. Countersunk screws (FHCS) are
+            measured overall, so the nominal length is used as is. Other head types are measured
+            under the head, so the head height is added.
+          </v-tooltip>
+        </span>
+      </div>
+      <ul v-if="isMultiple" class="text-caption text-medium-emphasis mt-1 mb-0 ps-4">
+        <li v-for="(s, i) in batchSummaries" :key="i">{{ s.text }} x {{ s.quantity }}</li>
+      </ul>
+
       <v-alert
         v-for="(error, i) in parsed.errors"
         :key="i"
@@ -617,7 +660,21 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         :per-bin-fields="false"
         :insert-only="insertOnly"
         :divider-notice="dividerNotice"
-      />
+      >
+        <template #fields>
+          <v-text-field
+            v-if="!insertOnly"
+            v-model.number="heightUnits"
+            type="number"
+            min="2"
+            step="1"
+            label="Height"
+            suffix="u"
+            density="comfortable"
+            :rules="heightRules"
+          />
+        </template>
+      </MoreOptions>
 
       <div class="d-flex ga-2 mt-4">
         <v-btn
@@ -684,7 +741,17 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
   min-height: 320px;
 }
 
-.screw-field {
-  flex: 1 1 0;
+.shorthand-wrap {
+  position: relative;
+}
+
+.suggest-menu {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border-radius: 4px;
 }
 </style>
