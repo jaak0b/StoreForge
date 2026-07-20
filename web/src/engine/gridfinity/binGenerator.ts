@@ -283,7 +283,7 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
  * stays solid.
  */
 function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | null {
-  const { gridX, gridY, magnetHoles, walls: dividerWalls } = params;
+  const { gridX, gridY, magnetHoles } = params;
   const eps = 0.01;
   const pocketTop = FLOOR_TOP - FLOOR_PLATE_THICKNESS;
 
@@ -299,64 +299,42 @@ function buildBasePocket(m: ManifoldToplevel, params: BinParams): Manifold | nul
   }
   let pocket = m.Manifold.union(pockets);
 
-  const strips: Manifold[] = [];
-  const stripWidth = DIVIDER_THICKNESS + 2 * BASE_WALL_THICKNESS;
-  const stripHeight = pocketTop + 2 * eps;
-  // One solid root strip under each divider wall, following the wall segment.
-  // The strip is stripWidth wide (the wall thickness plus a base wall on each
-  // side) and extended past a boundary endpoint by its own half-width, so the
-  // root reaches the foot shell and welds into it. A free endpoint gets no
-  // extension: where two walls meet, the strip already runs to the other
-  // wall's centreline and so overlaps that wall's own strip by half its width,
-  // which is a full weld, and where a wall ends in open interior an extension
-  // would only leave the root standing out beyond the wall it supports.
-  for (const wall of dividerWalls) {
-    strips.push(
-      wallFollowingBox(
-        m,
-        wall,
-        params,
-        stripWidth,
-        stripHeight,
-        -eps,
-        stripWidth / 2,
-      ),
-    );
-  }
+  const ribs: Manifold[] = [];
+  const ribHeight = pocketTop + 2 * eps;
   // Per-cell rib lattice, kept out of the pocket so the ribs intersect the
   // hollow exactly and weld into the foot shell walls at their ends. Plain
-  // overlap with magnet bosses or divider root strips is intentional. The "+"
-  // cross runs along both cell midlines; the two diagonals run corner to
-  // corner (a long rib rotated 45 degrees, clipped to the pocket automatically
-  // because it is subtracted from the pocket). All at the measured rib width.
+  // overlap with magnet bosses is intentional. The "+" cross runs along both
+  // cell midlines; the two diagonals run corner to corner (a long rib rotated
+  // 45 degrees, clipped to the pocket automatically because it is subtracted
+  // from the pocket). All at the measured rib width.
   const diagLength = PITCH * Math.SQRT2;
   for (let ix = 0; ix < gridX; ix++) {
     for (let iy = 0; iy < gridY; iy++) {
       const cx = (ix - (gridX - 1) / 2) * PITCH;
       const cy = (iy - (gridY - 1) / 2) * PITCH;
-      strips.push(
-        m.Manifold.cube([PITCH, BASE_RIB_THICKNESS, stripHeight], true).translate(
+      ribs.push(
+        m.Manifold.cube([PITCH, BASE_RIB_THICKNESS, ribHeight], true).translate(
           cx,
           cy,
-          stripHeight / 2 - eps,
+          ribHeight / 2 - eps,
         ),
-        m.Manifold.cube([BASE_RIB_THICKNESS, PITCH, stripHeight], true).translate(
+        m.Manifold.cube([BASE_RIB_THICKNESS, PITCH, ribHeight], true).translate(
           cx,
           cy,
-          stripHeight / 2 - eps,
+          ribHeight / 2 - eps,
         ),
       );
       for (const angle of [45, -45]) {
-        strips.push(
-          m.Manifold.cube([diagLength, BASE_RIB_THICKNESS, stripHeight], true)
+        ribs.push(
+          m.Manifold.cube([diagLength, BASE_RIB_THICKNESS, ribHeight], true)
             .rotate(0, 0, angle)
-            .translate(cx, cy, stripHeight / 2 - eps),
+            .translate(cx, cy, ribHeight / 2 - eps),
         );
       }
     }
   }
-  if (strips.length > 0) {
-    pocket = m.Manifold.difference(pocket, m.Manifold.union(strips));
+  if (ribs.length > 0) {
+    pocket = m.Manifold.difference(pocket, m.Manifold.union(ribs));
   }
   return pocket;
 }
@@ -588,8 +566,13 @@ function buildDividers(
   envelope: Manifold,
   bodyTop: number,
 ): Manifold {
-  // Embedded into the floor slab (feet top to floor top) for a solid weld.
-  const zBottom = FOOT_HEIGHT;
+  // A divider stands on the interior floor and belongs entirely to the
+  // container above it: nothing of it may reach into the base. The interior
+  // cutter opens the cavity from FLOOR_TOP upward, so the floor plate's top
+  // face is one plane at that height across the whole interior, and a wall
+  // based on it shares that plane exactly. No embedding is needed, because
+  // manifold's union is exact on coincident faces.
+  const zBottom = FLOOR_TOP;
   const height = bodyTop - zBottom;
   const boxes = dividerWalls.map((wall) =>
     // A boundary end is extended by the perimeter wall's own thickness, so it
