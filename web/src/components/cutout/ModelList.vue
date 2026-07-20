@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { useCutout } from '../../stores/cutout';
 import { modelNotStoredMessage } from '../../engine/plan/missingModels';
 import type { CutoutModel } from '../../engine/plan/types';
+import CarveProgressBar from '../CarveProgressBar.vue';
 
 /**
  * The models carved out of the bin: one row each, with the file's name, what
@@ -233,16 +234,7 @@ function warningsFor(id: string): string[] {
           <div class="text-caption text-medium-emphasis mt-2">
             Applying the clearance to this model.
           </div>
-          <v-progress-linear
-            indeterminate
-            striped
-            color="primary"
-            bg-color="grey-darken-3"
-            bg-opacity="1"
-            height="6"
-            rounded
-            class="mt-1"
-          />
+          <CarveProgressBar class="mt-1" />
         </template>
 
         <v-alert

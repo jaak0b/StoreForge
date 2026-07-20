@@ -46,6 +46,7 @@ import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import CutoutViewport from './CutoutViewport.vue';
 import ModelList from './ModelList.vue';
 import ModelReadout from './ModelReadout.vue';
+import CarveProgressBar from '../CarveProgressBar.vue';
 import LabelIconField from '../LabelIconField.vue';
 import ProductSelect from '../ProductSelect.vue';
 import MoreOptions from '../MoreOptions.vue';
@@ -171,10 +172,15 @@ const carveRequest = computed<CutoutBinRequest>(() => ({
  */
 const carveModelIds = computed(() => cutout.carvableModels.map((model) => model.id));
 
-/** The ids the request now in flight was built from. */
-let inFlightModelIds: string[] = [];
-/** The ids the last landed carve was of, which is what its results map through. */
-const carvedModelIds = shallowRef<string[]>([]);
+/**
+ * A carve result with the model ids it was built from carried alongside it.
+ * The ids belong to the result, not to shared state: progressive display can
+ * show an older finished carve while a newer one runs, so a list recorded
+ * separately would already hold the newer request's ids by the time the older
+ * result lands, and its footprints and warnings would map onto the wrong rows.
+ * Travelling with the result, the ids always match the carve they describe.
+ */
+type CarveResultWithIds = CutoutPreviewResult & { modelIds: string[] };
 
 /**
  * Carves the preview, or refuses because a model's file is not on this device.
@@ -185,16 +191,17 @@ const carvedModelIds = shallowRef<string[]>([]);
  * the file instead, exactly as the download does, and the ghosts of the models
  * that did resolve stay on screen so the rest of the bin is still editable.
  */
-function carvePreview(request: CutoutBinRequest): Promise<CutoutPreviewResult> {
+async function carvePreview(request: CutoutBinRequest): Promise<CarveResultWithIds> {
   const refusal = previewRefusal.value;
   if (refusal !== null) return Promise.reject(new Error(refusal));
-  // Recorded at the moment the request goes out, not when its result comes
+  // Captured at the moment the request goes out, not when its result comes
   // back: a model removed while a carve is running would otherwise shift every
   // index under it, and the finished carve's warnings and pocket sizes would
-  // land on the wrong models. Only the newest request's result is ever
-  // accepted, so this is the list that result belongs to.
-  inFlightModelIds = carveModelIds.value;
-  return generateCutoutBinPreview(request);
+  // land on the wrong models. The ids ride back with this request's own
+  // result, so which carve they belong to is never in doubt.
+  const modelIds = carveModelIds.value;
+  const result = await generateCutoutBinPreview(request);
+  return Object.assign(result, { modelIds });
 }
 
 /** Why no bin can be carved right now, or null. */
@@ -207,13 +214,13 @@ const {
   meshes: previewResult,
   generating,
   errorMessage,
-} = useBinPreview<CutoutBinRequest, CutoutPreviewResult>(
+} = useBinPreview<CutoutBinRequest, CarveResultWithIds>(
   () => carveRequest.value,
   carvePreview,
 );
 
 /** The last carve that actually landed, which is what the viewport draws. */
-const carved = shallowRef<Extract<CutoutPreviewResult, { outcome: 'carved' }> | null>(null);
+const carved = shallowRef<Extract<CarveResultWithIds, { outcome: 'carved' }> | null>(null);
 /** True from the first change until a carve of that change lands. */
 const stale = ref(false);
 
@@ -233,7 +240,6 @@ watch(previewResult, (result) => {
   switch (result.outcome) {
     case 'carved':
       carved.value = result;
-      carvedModelIds.value = inFlightModelIds;
       stale.value = false;
       return;
     case 'superseded':
@@ -251,7 +257,7 @@ const pocketSizeById = computed<Record<string, SizeMm>>(() => {
   if (result === null) return {};
   const sizes: Record<string, SizeMm> = {};
   result.footprints.forEach((footprint, index) => {
-    const id = carvedModelIds.value[index];
+    const id = result.modelIds[index];
     if (id !== undefined) sizes[id] = footprint.sizeMm;
   });
   return sizes;
@@ -269,7 +275,7 @@ const warningsByModelId = computed<Record<string, string[]>>(() => {
   if (result === null) return {};
   const byId: Record<string, string[]> = {};
   for (const warning of result.warnings) {
-    const id = carvedModelIds.value[warning.modelIndex];
+    const id = result.modelIds[warning.modelIndex];
     if (id === undefined) continue;
     (byId[id] ??= []).push(warning.message);
   }
@@ -803,7 +809,6 @@ function resetTab(): void {
   boundsById.value = {};
   uploadErrors.value = [];
   carved.value = null;
-  carvedModelIds.value = [];
   quantity.value = 1;
   designer.labelText = '';
   designer.labelText2 = '';
@@ -897,17 +902,7 @@ function editingTitle(entry: QueueEntry): string {
             Carving the bin.
           </span>
         </div>
-        <v-progress-linear
-          v-if="generating"
-          indeterminate
-          striped
-          color="primary"
-          bg-color="grey-darken-3"
-          bg-opacity="1"
-          height="6"
-          rounded
-          class="mt-1"
-        />
+        <CarveProgressBar v-if="generating" class="mt-1" />
       </div>
 
       <div class="text-caption text-medium-emphasis mb-1 mt-4">

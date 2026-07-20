@@ -128,7 +128,43 @@ export function useThreeScene(
   const context = shallowRef<ThreeSceneContext | null>(null);
 
   let resizeObserver: ResizeObserver | null = null;
+  let intersectionObserver: IntersectionObserver | null = null;
   let animationHandle = 0;
+  // The loop runs only while the container is on screen. A viewport in a hidden
+  // tab (display:none) has nothing to show yet keeps costing a full render at
+  // frame rate, so a second tab drags the whole app down; watching real
+  // visibility stops the cost the moment the tab goes away.
+  let running = false;
+  let visible = false;
+
+  /** One frame: advance the controls, let the owner draw, render. */
+  function renderFrame(ctx: ThreeSceneContext): void {
+    ctx.controls.update();
+    options.onFrame?.(ctx);
+    ctx.renderer.render(ctx.scene, ctx.camera);
+  }
+
+  function startLoop(): void {
+    if (running) return;
+    const ctx = context.value;
+    if (!ctx) return;
+    running = true;
+    const animate = (): void => {
+      animationHandle = requestAnimationFrame(animate);
+      renderFrame(ctx);
+    };
+    // animate() renders synchronously before scheduling the next frame, so the
+    // canvas is current the instant the loop resumes and a tab switch never
+    // shows the frame the loop was paused on.
+    animate();
+  }
+
+  function stopLoop(): void {
+    if (!running) return;
+    cancelAnimationFrame(animationHandle);
+    animationHandle = 0;
+    running = false;
+  }
 
   function resize(): void {
     const ctx = context.value;
@@ -194,17 +230,30 @@ export function useThreeScene(
 
     options.onReady?.(ctx);
 
-    const animate = (): void => {
-      animationHandle = requestAnimationFrame(animate);
-      ctx.controls.update();
-      options.onFrame?.(ctx);
-      ctx.renderer.render(ctx.scene, ctx.camera);
-    };
-    animate();
+    // IntersectionObserver reports a display:none subtree as not intersecting
+    // and fires again when the tab is shown, which is exactly the signal the
+    // loop needs. It also carries the first frame: the loop starts here only
+    // once the container is actually on screen.
+    intersectionObserver = new IntersectionObserver((entries) => {
+      const nowVisible = entries.some((entry) => entry.isIntersecting);
+      if (nowVisible === visible) return;
+      visible = nowVisible;
+      if (visible) {
+        // Dimensions can have changed while the tab was hidden, so the canvas
+        // is resized before the first frame is drawn.
+        resize();
+        startLoop();
+      } else {
+        stopLoop();
+      }
+    });
+    intersectionObserver.observe(el);
   });
 
   onBeforeUnmount(() => {
-    cancelAnimationFrame(animationHandle);
+    stopLoop();
+    intersectionObserver?.disconnect();
+    intersectionObserver = null;
     resizeObserver?.disconnect();
     resizeObserver = null;
     const ctx = context.value;

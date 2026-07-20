@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import * as THREE from 'three';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import type { MeshData, PartMeshes } from '../../engine/gridfinity/types';
@@ -472,7 +472,7 @@ function wireGizmo(
 
 const container = ref<HTMLDivElement | null>(null);
 
-useThreeScene(container, {
+const { context } = useThreeScene(container, {
   onReady: (ctx) => {
     // The translate instance is constructed first deliberately. Both instances
     // listen on the same canvas and the browser delivers pointerdown in
@@ -497,11 +497,6 @@ useThreeScene(container, {
     ctx.canvas.addEventListener('pointercancel', releaseStuckDrag);
     ctx.canvas.addEventListener('lostpointercapture', releaseStuckDrag);
 
-    syncBin(ctx);
-    syncGhosts(ctx);
-    syncSelection();
-  },
-  onFrame: (ctx) => {
     syncBin(ctx);
     syncGhosts(ctx);
     syncSelection();
@@ -531,6 +526,52 @@ useThreeScene(container, {
     for (const material of Object.values(ghostMaterials)) material.dispose();
   },
 });
+
+/**
+ * Reconciling the scene with the props is reactive work, not frame work: the
+ * bin mesh, the ghost list and the gizmo attachment each change only when a
+ * prop does, so a watcher runs them exactly then rather than the render loop
+ * re-deriving them sixty times a second. Every handler guards on the scene
+ * existing, because a prop can settle before onReady has built it; onReady runs
+ * the same three syncs once so the first paint is not left to a prop changing.
+ *
+ * What genuinely needs the frame loop stays there: the gizmo follows the model
+ * it drags through TransformControls itself, and the dragged ghost is skipped
+ * in syncGhosts so the placement echoed back through the props never fights the
+ * handle. The render loop that draws all of it lives in useThreeScene.
+ */
+watch(
+  () => props.meshes,
+  () => {
+    const ctx = context.value;
+    if (ctx) syncBin(ctx);
+  },
+);
+watch(
+  () => props.ghosts,
+  () => {
+    const ctx = context.value;
+    if (ctx) syncGhosts(ctx);
+  },
+);
+watch(
+  () => props.selectedModelId,
+  () => {
+    if (!context.value) return;
+    syncSelection();
+    // The selection tone is settled here rather than in syncSelection: the
+    // ghost that lost the selection and the one that gained it both change
+    // colour, and neither changed the ghost list that syncGhosts repaints from.
+    paintGhosts();
+  },
+);
+watch(
+  () => props.warnedModelIds,
+  () => {
+    if (context.value) paintGhosts();
+  },
+  { deep: true },
+);
 </script>
 
 <template>
