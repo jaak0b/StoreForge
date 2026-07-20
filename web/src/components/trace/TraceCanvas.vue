@@ -22,7 +22,7 @@ import {
  */
 
 const store = useToolTrace();
-const { rectifiedPreview, calibration, embedReady, tools, keepMetal } = storeToRefs(store);
+const { rectifiedPreview, calibration, embedReady, tools, removeShadows } = storeToRefs(store);
 
 const emit = defineEmits<{ accepted: [] }>();
 
@@ -477,7 +477,7 @@ async function runSegment(): Promise<void> {
       JSON.parse(JSON.stringify(strokes.value)) as BrushStroke[],
       // A plain object built from the ref's value: the store's reactive proxy
       // itself cannot be structured-cloned across the worker boundary.
-      { keepMetal: keepMetal.value },
+      { removeShadows: removeShadows.value },
     );
     if (!result.ok) {
       errorMessage.value = result.error;
@@ -501,11 +501,11 @@ async function runSegment(): Promise<void> {
 }
 
 /**
- * Re-runs the segmentation after the bare metal option changed, so the outline
- * on screen always matches the current setting. With no clicks yet there is
+ * Re-runs the segmentation after the shadow option changed, so the outline on
+ * screen always matches the current setting. With no clicks yet there is
  * nothing to segment and the new setting simply applies to the next click.
  */
-function onKeepMetalChanged(): void {
+function onRemoveShadowsChanged(): void {
   if (points.value.length === 0) return;
   void runSegment();
 }
@@ -993,16 +993,17 @@ function acceptTool(finish: boolean): void {
         </v-btn>
       </div>
       <v-checkbox
-        v-model="keepMetal"
-        label="Tool is bare metal or chrome"
+        v-model="removeShadows"
+        label="Photo has strong shadows around the tools"
         density="compact"
         hide-details
         :disabled="segmenting"
-        class="keep-metal"
-        @update:model-value="onKeepMetalChanged"
+        class="shadow-option"
+        @update:model-value="onRemoveShadowsChanged"
       />
-      <p class="text-caption text-medium-emphasis keep-metal-hint">
-        Keeps shiny silver parts that would otherwise be mistaken for the paper underneath.
+      <p class="text-caption text-medium-emphasis shadow-option-hint">
+        Removes grey shadow edges that would otherwise be traced as part of a tool. Leave this
+        off if any tool is bare metal or chrome.
       </p>
       <div v-if="iouScore !== null" class="text-caption text-medium-emphasis mt-2 readout">
         <div><span>Mask quality estimate</span><span>{{ iouScore!.toFixed(3) }}</span></div>
@@ -1073,11 +1074,11 @@ function acceptTool(finish: boolean): void {
 }
 
 /* The mask option sits with the brush controls, tightened so the island stays compact. */
-.keep-metal {
+.shadow-option {
   margin-top: 4px;
 }
 
-.keep-metal-hint {
+.shadow-option-hint {
   margin-left: 40px;
 }
 

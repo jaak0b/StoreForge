@@ -20,7 +20,6 @@ import {
 import { maskToContour } from '../engine/trace/contour';
 import type { MaskContourFailure } from '../engine/trace/contour';
 import { removeShadow } from '../engine/trace/shadow';
-import type { ShadowOptions } from '../engine/trace/shadow';
 import { applyStrokes } from '../engine/trace/strokeMask';
 import type {
   BrushStroke,
@@ -30,6 +29,7 @@ import type {
   PaperKind,
   PixelPoint,
   SamPoint,
+  SegmentOptions,
   TracedOutline,
 } from '../engine/trace/types';
 
@@ -290,12 +290,12 @@ const api = {
   /**
    * Segment the rectified sheet at the given click prompts (rectified-image
    * pixels) and return the traced outline in sheet millimeters plus a mask
-   * overlay for the UI. `options` tunes the shadow and halo post-filter.
+   * overlay for the UI. `options` selects the optional post-filter stages.
    */
   async segmentAt(
     points: SamPoint[],
     strokes: BrushStroke[],
-    options: ShadowOptions = {},
+    options: SegmentOptions = {},
   ): Promise<SegmentResult> {
     if (!embedding || !rectified || !rectifiedCalibration) {
       return {
@@ -352,10 +352,14 @@ const api = {
       maskHeight,
     );
     try {
-      // Remove drop-shadow pixels the SAM mask picked up on the white sheet
-      // before the mask is traced. Uses the rectified color image kept
-      // worker-side.
-      removeShadow(cv, rectified, maskMat, options);
+      // Optionally remove drop-shadow pixels the SAM mask picked up on the
+      // white sheet before the mask is traced, using the rectified color image
+      // kept worker-side. The filter mutates maskMat in place and allocates
+      // nothing the caller owns, so when it is skipped the decoder mask simply
+      // flows on unchanged; maskMat's own lifetime is unaffected either way.
+      if (options.removeShadows === true) {
+        removeShadow(cv, rectified, maskMat);
+      }
       // Painted pixels are applied after shadow removal so the shadow filter
       // never removes user paint.
       applyStrokes(cv, maskMat, strokes, rectifiedCalibration.mmPerPixel);

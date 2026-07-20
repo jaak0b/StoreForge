@@ -44,6 +44,20 @@ export interface SamPoint {
   label: 0 | 1;
 }
 
+/**
+ * Per-request settings for a segmentation run. Every field must be a plain
+ * structured-cloneable value, because this object crosses the worker boundary.
+ */
+export interface SegmentOptions {
+  /**
+   * True when the photo has strong cast shadows around the tools, which turns
+   * on the shadow and paper-halo post-filter. Default false: that filter reads
+   * a gray metal tool as a gray shadow and deletes it, so it only runs when the
+   * user states that the photo needs it.
+   */
+  removeShadows?: boolean;
+}
+
 /** A point in millimeters on the physical sheet, y increasing downward as in the image. */
 export interface MmPoint {
   x: number;

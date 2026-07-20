@@ -86,11 +86,12 @@ export const useToolTrace = defineStore('toolTrace', () => {
   /** True while a click on the layout canvas fills the hole under it. */
   const fillHolesMode = ref(false);
   /**
-   * True when the photographed tools are bare metal or chrome, which tells the
-   * segmentation post-filter to keep bright neutral pixels instead of reading
-   * them as the paper underneath.
+   * True when the photo has strong cast shadows around the tools, which turns
+   * on the segmentation shadow and paper-halo post-filter. Off by default,
+   * because that filter cannot tell a gray shadow from a gray metal tool and
+   * would delete a bare metal or chrome tool from the mask.
    */
-  const keepMetal = ref(false);
+  const removeShadows = ref(false);
 
   /**
    * Bin footprint in cells: the layout's required footprint while auto-sized,
@@ -274,7 +275,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     fingerHoleMode.value = false;
     fingerHoleDiameterMm.value = DEFAULT_FINGER_HOLE_DIAMETER_MM;
     fillHolesMode.value = false;
-    keepMetal.value = false;
+    removeShadows.value = false;
     gridX.value = 1;
     gridY.value = 1;
     gridManual.value = false;
@@ -301,7 +302,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     fingerHoleMode,
     fingerHoleDiameterMm,
     fillHolesMode,
-    keepMetal,
+    removeShadows,
     gridX,
     gridY,
     gridManual,
