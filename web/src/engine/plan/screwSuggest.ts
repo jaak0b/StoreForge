@@ -23,7 +23,7 @@ export interface ScrewSuggestion {
   kind: 'thread' | 'length' | 'head' | 'count';
 }
 
-// ISO 262 preferred coarse metric fastener lengths, the common values a
+// ISO 888 preferred nominal fastener lengths, the common values a
 // hardware drawer is stocked with.
 const COMMON_LENGTHS_MM: readonly number[] = [6, 8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60];
 
