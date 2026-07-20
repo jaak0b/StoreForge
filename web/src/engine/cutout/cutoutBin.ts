@@ -139,6 +139,24 @@ export interface PlacedCutout {
   cutter: Manifold;
 }
 
+/**
+ * One thing that is probably not what the user meant about one placed model.
+ *
+ * The message names the model, and it is the only wording: an editor showing
+ * the warning on that model's own card and a download dialog with no card to
+ * show it on display the same sentence, so there is nothing to keep in step.
+ */
+export interface CutoutPlacementWarning {
+  /**
+   * Which model the warning is about, as its index in the carve's own model
+   * list. An index rather than the name, because two uploads of the same file
+   * share a name, and the caller maps it back the same way it maps a footprint.
+   */
+  modelIndex: number;
+  /** The user-worded sentence, quoting the model's name. */
+  message: string;
+}
+
 /** What a cutout carve produces beyond the solid itself. */
 export interface CutoutCarve {
   body: Manifold;
@@ -147,7 +165,7 @@ export interface CutoutCarve {
    * the user meant. Returned, never thrown: a pocket that opens through a wall
    * is the user's decision to make.
    */
-  warnings: string[];
+  warnings: CutoutPlacementWarning[];
   /**
    * Each model's footprint after its placement, including the clearance
    * dilation, taken from the transformed cutter rather than from a transformed
@@ -168,14 +186,14 @@ export interface CutoutCarve {
  */
 export interface CutoutCarveResult {
   meshes: PartMeshes;
-  warnings: string[];
+  warnings: CutoutPlacementWarning[];
   footprints: CutoutCarve['footprints'];
 }
 
 /** The same, for the single-mesh STL export. */
 export interface CutoutUnionResult {
   mesh: MeshData;
-  warnings: string[];
+  warnings: CutoutPlacementWarning[];
   footprints: CutoutCarve['footprints'];
 }
 
@@ -427,11 +445,19 @@ export function placeCutter(solid: Manifold, placement: ModelPlacement): Manifol
  * Validate a cutout layout. Divider walls are an error, because the interior
  * is filled solid for the carve and walls have nothing to divide. Everything
  * else is returned as a user-worded warning rather than thrown: free placement
- * is the point of the tab, so a model that reaches outside the interior or
- * sits clear of it is a design decision the user is entitled to make, and the
- * bin still generates and still downloads.
+ * is the point of the tab, so a model that sits clear of the interior is a
+ * design decision the user is entitled to make, and the bin still generates and
+ * still downloads.
  *
- * Two models that overlap are deliberately not reported. The cutters are
+ * A model reaching THROUGH a wall is deliberately not reported at all, and that
+ * is the whole reason this flow exists. A model buried entirely inside the bin
+ * carves a pocket nothing can be put into, so every genuinely useful placement
+ * breaks the interior box somewhere: at the rim, at the front, or through a
+ * side wall on purpose, which is how a pocket is opened through the side of a
+ * bin. A warning that fires on almost every correct design carries no
+ * information and trains the user to ignore the ones that do.
+ *
+ * Two models that overlap are deliberately not reported either. The cutters are
  * unioned before subtraction, so overlapping models merge into one pocket, and
  * composing a pocket shape that way is a legitimate technique.
  */
@@ -439,13 +465,13 @@ export function validateCutoutPlacement(
   m: ManifoldToplevel,
   params: CutoutBinParams,
   placed: PlacedCutout[],
-): string[] {
+): CutoutPlacementWarning[] {
   if (params.walls.length > 0) {
     throw new Error(
       'Cutout models cannot be combined with divider walls. Remove the dividers to add models.',
     );
   }
-  const warnings: string[] = [];
+  const warnings: CutoutPlacementWarning[] = [];
   const interior = buildInteriorFill(m, params);
   const structure = labelStructureStrip(m, params);
   // The strip belongs to the shared carve stage, which every carve flow
@@ -454,25 +480,17 @@ export function validateCutoutPlacement(
     ? 'the label to stand on'
     : 'the insert to rest on';
   try {
-    for (const { name, cutter } of placed) {
+    placed.forEach(({ name, cutter }, modelIndex) => {
       const inside = cutter.intersect(interior);
       const carvesNothing = inside.isEmpty();
       inside.delete();
       if (carvesNothing) {
-        warnings.push(
-          `The model "${name}" sits entirely outside the bin interior, so it carves ` +
+        warnings.push({
+          modelIndex,
+          message:
+            `The model "${name}" sits entirely outside the bin interior, so it carves ` +
             'nothing. Move it into the bin.',
-        );
-      } else {
-        const outside = cutter.subtract(interior);
-        const breaksThrough = !outside.isEmpty();
-        outside.delete();
-        if (breaksThrough) {
-          warnings.push(
-            `The model "${name}" reaches outside the bin interior, so its pocket breaks ` +
-              'through the bin. Move it further in, or use a larger or taller bin.',
-          );
-        }
+        });
       }
       if (structure !== null) {
         const plan = cutter.project();
@@ -481,13 +499,15 @@ export function validateCutoutPlacement(
         overlap.delete();
         plan.delete();
         if (overlaps) {
-          warnings.push(
-            `The model "${name}" reaches under the ${structure.name}, which needs to stay ` +
+          warnings.push({
+            modelIndex,
+            message:
+              `The model "${name}" reaches under the ${structure.name}, which needs to stay ` +
               `solid for ${restsOn}. Move it away from the front wall.`,
-          );
+          });
         }
       }
-    }
+    });
   } finally {
     interior.delete();
     structure?.section.delete();
@@ -517,7 +537,7 @@ export function buildCutoutBinBody(
     name: model.name,
     cutter: placeCutter(model.solid, model.placement),
   }));
-  let warnings: string[];
+  let warnings: CutoutPlacementWarning[];
   let footprints: { name: string; sizeMm: SizeMm }[];
   try {
     warnings = validateCutoutPlacement(m, params, placed);

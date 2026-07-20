@@ -21,6 +21,7 @@
 import {
   cutoutModelKey,
   type CutoutModelSpec,
+  type CutoutPlacementWarning,
   type CutoutPrepareTimings,
   type ModelPlacement,
   type PreparedCutoutModel,
@@ -101,7 +102,7 @@ export type CutoutPreviewResult =
   | {
       outcome: 'carved';
       meshes: PartMeshes;
-      warnings: string[];
+      warnings: CutoutPlacementWarning[];
       footprints: { name: string; sizeMm: SizeMm }[];
     }
   | { outcome: 'superseded' };

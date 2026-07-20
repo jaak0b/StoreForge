@@ -170,6 +170,19 @@ function heldKeySpecs(): CutoutModelKeySpec[] {
 // ---------------------------------------------------------------------------
 
 /**
+ * The model ids the carve request names, in the order the carve receives them.
+ * The single mapping from a carve-order index back onto a model: the carve
+ * returns its footprints and its warnings in that order, and the names it
+ * quotes cannot be used, because two uploads of the same file share a name.
+ */
+const carveModelIds = computed(() => cutout.carvableModels.map((model) => model.id));
+
+/** The ids the request now in flight was built from. */
+let inFlightModelIds: string[] = [];
+/** The ids the last landed carve was of, which is what its results map through. */
+const carvedModelIds = shallowRef<string[]>([]);
+
+/**
  * Carves the preview, or refuses because a model's file is not on this device.
  *
  * The refusal is the point. A model with no bytes is simply left out of the
@@ -181,6 +194,12 @@ function heldKeySpecs(): CutoutModelKeySpec[] {
 function carvePreview(request: CutoutBinRequest): Promise<CutoutPreviewResult> {
   const refusal = previewRefusal.value;
   if (refusal !== null) return Promise.reject(new Error(refusal));
+  // Recorded at the moment the request goes out, not when its result comes
+  // back: a model removed while a carve is running would otherwise shift every
+  // index under it, and the finished carve's warnings and pocket sizes would
+  // land on the wrong models. Only the newest request's result is ever
+  // accepted, so this is the list that result belongs to.
+  inFlightModelIds = carveModelIds.value;
   return generateCutoutBinPreview(request);
 }
 
@@ -220,6 +239,7 @@ watch(previewResult, (result) => {
   switch (result.outcome) {
     case 'carved':
       carved.value = result;
+      carvedModelIds.value = inFlightModelIds;
       stale.value = false;
       return;
     case 'superseded':
@@ -235,17 +255,35 @@ watch(previewResult, (result) => {
 const pocketSizeById = computed<Record<string, SizeMm>>(() => {
   const result = carved.value;
   if (result === null) return {};
-  // The carve returns one footprint per model it was given, in that order, so
-  // the request that produced it is what maps them back onto model ids. Names
-  // cannot: two uploads of the same file share a name.
   const sizes: Record<string, SizeMm> = {};
-  const models = cutout.carvableModels;
   result.footprints.forEach((footprint, index) => {
-    const model = models[index];
-    if (model !== undefined) sizes[model.id] = footprint.sizeMm;
+    const id = carvedModelIds.value[index];
+    if (id !== undefined) sizes[id] = footprint.sizeMm;
   });
   return sizes;
 });
+
+/**
+ * What the last carve warned about, by model id. Every warning names one model,
+ * so every one of them has a card of its own to be shown on and nothing is left
+ * over for a block at the foot of the tab. The one placement problem that is
+ * NOT a warning, divider walls on a cutout bin, is thrown by the carve and
+ * reaches the user through the error alert instead.
+ */
+const warningsByModelId = computed<Record<string, string[]>>(() => {
+  const result = carved.value;
+  if (result === null) return {};
+  const byId: Record<string, string[]> = {};
+  for (const warning of result.warnings) {
+    const id = carvedModelIds.value[warning.modelIndex];
+    if (id === undefined) continue;
+    (byId[id] ??= []).push(warning.message);
+  }
+  return byId;
+});
+
+/** The models a warning is attached to, for the viewport's red ghosts. */
+const warnedModelIds = computed<string[]>(() => Object.keys(warningsByModelId.value));
 
 const ghosts = computed<CutoutGhost[]>(() =>
   cutout.models.flatMap((model) => {
@@ -722,6 +760,7 @@ function resetTab(): void {
   boundsById.value = {};
   uploadErrors.value = [];
   carved.value = null;
+  carvedModelIds.value = [];
   quantity.value = 1;
   designer.labelText = '';
   designer.labelText2 = '';
@@ -791,8 +830,8 @@ function editingTitle(entry: QueueEntry): string {
         <CutoutViewport
           :meshes="carved?.meshes ?? null"
           :ghosts="ghosts"
-          :interior="interior"
           :selected-model-id="cutout.selectedModelId"
+          :warned-model-ids="warnedModelIds"
           @update:selected-model-id="cutout.select($event)"
           @placement-change="onPlacementChange"
           @placement-commit="onPlacementCommit"
@@ -800,12 +839,21 @@ function editingTitle(entry: QueueEntry): string {
         />
       </v-card>
 
-      <div class="d-flex align-center ga-2 mt-2">
-        <v-chip v-if="stale" size="small" color="warning" label>Out of date</v-chip>
-        <span v-if="generating" class="text-caption text-medium-emphasis">
-          Carving the bin.
-        </span>
-        <v-progress-linear v-if="generating" indeterminate class="flex-grow-1" />
+      <!--
+        The chip and the status sentence share a line and the progress bar takes
+        one of its own. A full width bar on the same line squeezes the chip,
+        which then truncates its own label and runs under the sentence.
+      -->
+      <div class="mt-2">
+        <div class="d-flex align-center ga-2">
+          <v-chip v-if="stale" size="small" color="warning" label class="flex-shrink-0">
+            Out of date
+          </v-chip>
+          <span v-if="generating" class="text-caption text-medium-emphasis">
+            Carving the bin.
+          </span>
+        </div>
+        <v-progress-linear v-if="generating" indeterminate class="mt-1" />
       </div>
 
       <div class="text-caption text-medium-emphasis mb-1 mt-4">
@@ -878,18 +926,6 @@ function editingTitle(entry: QueueEntry): string {
       >
         {{ previewRefusal ?? errorMessage }}
       </v-alert>
-      <v-alert
-        v-if="carved && carved.warnings.length > 0"
-        type="warning"
-        variant="tonal"
-        class="mt-4"
-        density="compact"
-      >
-        <p v-for="warning in carved.warnings" :key="warning" class="mb-1">
-          {{ warning }}
-        </p>
-      </v-alert>
-
       <div class="d-flex ga-2 mt-4">
         <v-btn
           color="primary"
@@ -923,6 +959,7 @@ function editingTitle(entry: QueueEntry): string {
       <ModelList
         :max-clearance-mm="clearanceCeilingMm"
         :clearance-step-mm="CLEARANCE_STEP_MM"
+        :warnings-by-id="warningsByModelId"
         @add="onAddFiles"
         @locate="onLocateFile"
         @remove="onRemoveModel"

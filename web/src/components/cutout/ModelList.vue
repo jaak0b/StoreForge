@@ -18,6 +18,11 @@ import type { CutoutModel } from '../../engine/plan/types';
  * Clicking a row selects the model, which is the selection path that always
  * works: a model sunk into the bin is hidden behind a wall and cannot be
  * clicked in the 3D view at all.
+ *
+ * A row is also where the carve's warnings about that model are shown. Every
+ * warning is about one model, so it belongs beside that model rather than in a
+ * block at the foot of the tab where the reader has to match a file name in a
+ * sentence against a list further up.
  */
 
 const props = defineProps<{
@@ -25,6 +30,11 @@ const props = defineProps<{
   maxClearanceMm: number;
   /** Step of the clearance stepper, in mm. */
   clearanceStepMm: number;
+  /**
+   * What the last carve warned about, by model id. Shown on the model's own
+   * card, and the same sentences the download shows, so there is one wording.
+   */
+  warningsById: Record<string, string[]>;
 }>();
 
 const emit = defineEmits<{
@@ -75,6 +85,10 @@ function commitClearance(model: CutoutModel): void {
 
 function onClearanceInput(model: CutoutModel, value: unknown): void {
   cutout.setClearanceDraft(model.id, Number(value));
+}
+
+function warningsFor(id: string): string[] {
+  return props.warningsById[id] ?? [];
 }
 </script>
 
@@ -188,6 +202,17 @@ function onClearanceInput(model: CutoutModel, value: unknown): void {
           class="mt-2"
         >
           {{ cutout.stateOf(model.id).error }}
+        </v-alert>
+
+        <v-alert
+          v-for="warning in warningsFor(model.id)"
+          :key="warning"
+          type="warning"
+          variant="tonal"
+          density="compact"
+          class="mt-2"
+        >
+          {{ warning }}
         </v-alert>
 
         <v-alert

@@ -70,7 +70,9 @@ async function generatePartMeshes(
             ...part.bin,
             models: plainModels(interior.models),
           });
-          carve.warnings.forEach(warn);
+          // The download has no model card to show a warning on, so the
+          // sentence the carve wrote (which names the model) is what is shown.
+          for (const warning of carve.warnings) warn(warning.message);
           return carve.meshes;
         }
         case 'pockets':
@@ -102,7 +104,7 @@ async function generatePartUnion(
             ...part.bin,
             models: plainModels(interior.models),
           });
-          carve.warnings.forEach(warn);
+          for (const warning of carve.warnings) warn(warning.message);
           return carve.mesh;
         }
         case 'pockets':

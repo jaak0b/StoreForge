@@ -94,8 +94,10 @@ function editRow(entry: QueueEntry): void {
 }
 
 // Per-row single-bin downloads. A generated bin can come back with placement
-// warnings (a cutout model reaching outside the interior, for one); the file
-// is still written, so they are shown rather than dropped.
+// warnings (a cutout model sitting clear of the interior, for one); the file
+// is still written, so they are shown rather than dropped. The sentences name
+// the model they are about, which is what makes them readable here, where
+// there is no model list beside them.
 const downloadingId = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
 const downloadWarnings = ref<string[]>([]);

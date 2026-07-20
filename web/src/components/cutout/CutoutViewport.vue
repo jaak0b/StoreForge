@@ -5,7 +5,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import type { MeshData, PartMeshes } from '../../engine/gridfinity/types';
 import type { MeshBounds } from '../../engine/cutout/cutoutMesh';
 import type { ModelPlacement } from '../../engine/cutout/cutoutBin';
-import { fitsInterior } from '../../engine/cutout/binEnvelope';
+import { ERROR, INFO, PRIMARY } from '../../themeColors';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import {
   buildMeshObject,
@@ -34,11 +34,10 @@ const props = defineProps<{
   /** Which model the gizmo is attached to, or null for no selection. */
   selectedModelId: string | null;
   /**
-   * The bin interior in bin-local millimetres. A ghost whose exact transformed
-   * bounds leave this box is tinted as a warning, live, while it is dragged.
-   * Null leaves every ghost untinted.
+   * Ids of the models the last carve warned about. These are painted red,
+   * whether or not they are also the selected model.
    */
-  interior?: MeshBounds | null;
+  warnedModelIds: readonly string[];
 }>();
 
 const emit = defineEmits<{
@@ -53,6 +52,9 @@ const emit = defineEmits<{
    * time or its placement changed from outside a drag. Only this component
    * holds the transformed triangles, so it is the only place these bounds can
    * be measured without keeping a second copy of every model.
+   *
+   * The tab needs them for the model readout's footprint and resting height
+   * rows, and for sizing the bin around the models where they stand.
    */
   boundsChange: [moved: CutoutGhostMoved];
 }>();
@@ -78,50 +80,73 @@ const ROTATE_GIZMO_SIZE = 1.6;
  */
 const CLICK_TOLERANCE_PX = 4;
 
-/** A drawn ghost, the geometry it was built from, and its last computed bounds. */
+/**
+ * What a ghost's colour says about it. Exactly three states, in the order they
+ * take precedence.
+ *
+ * A warning outranks the selection deliberately. The selected model already
+ * carries the gizmo, so which one is selected is unmistakable without any
+ * colour at all, whereas a warning is the thing the user can miss. Painting the
+ * selected model blue over a warning would hide the warning on the one model he
+ * is actually working on.
+ */
+type GhostTone = 'warned' | 'selected' | 'plain';
+
+/** A drawn ghost, the geometry it was built from, its bounds and its colour. */
 interface GhostEntry {
   mesh: THREE.Mesh;
   source: MeshData;
   bounds: MeshBounds;
+  /**
+   * The tone its current material was chosen for, or null before it has been
+   * painted once. Recorded rather than inferred, so the paint pass can tell a
+   * ghost that is already the right colour from one that is stale, and no
+   * selection or warning change can leave a ghost showing an old material.
+   */
+  painted: GhostTone | null;
 }
 
 const bodyMaterial = createBodyMaterial();
 const labelMaterial = createLabelMaterial();
 
 /**
+ * The three ghost materials, one per tone, taking their colours from the
+ * theme's own accents: the amber the app accents everything with, the info blue
+ * and the error red.
+ *
  * Ghosts are drawn translucent so a model sunk into the bin still reads, and
  * with depth writing off so two overlapping ghosts do not punch holes in each
  * other. Depth testing stays on: a model hidden behind a bin wall is genuinely
  * not clickable in the viewport, which is why the model list is the selection
  * path that always works.
  */
-const ghostMaterial = new THREE.MeshStandardMaterial({
-  color: 0x6ea8fe,
-  metalness: 0.05,
-  roughness: 0.5,
-  transparent: true,
-  opacity: 0.55,
-  depthWrite: false,
-});
+function createGhostMaterial(color: string): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color),
+    metalness: 0.05,
+    roughness: 0.5,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  });
+}
 
-/** The same ghost once its bounds leave the bin interior. */
-const ghostOutsideMaterial = new THREE.MeshStandardMaterial({
-  color: 0xffb74d,
-  metalness: 0.05,
-  roughness: 0.5,
-  transparent: true,
-  opacity: 0.55,
-  depthWrite: false,
-});
+/**
+ * Keyed by the tone rather than switched on it. A record over the union is
+ * total by construction: a tone added later is a compile error here, at the
+ * definition, rather than a case that falls through at run time.
+ */
+const ghostMaterials: Record<GhostTone, THREE.MeshStandardMaterial> = {
+  plain: createGhostMaterial(PRIMARY),
+  selected: createGhostMaterial(INFO),
+  warned: createGhostMaterial(ERROR),
+};
 
 let binMesh: THREE.Mesh | null = null;
 let binLabelMesh: THREE.Mesh | null = null;
 let drawnMeshes: PartMeshes | null = null;
 
 const ghostEntries = new Map<string, GhostEntry>();
-
-/** The interior the drawn ghosts were last judged against, for the warning tint. */
-let judgedAgainstInterior: MeshBounds | null = null;
 
 let translateControls: TransformControls | null = null;
 let rotateControls: TransformControls | null = null;
@@ -178,9 +203,10 @@ function samePlacement(a: ModelPlacement, b: ModelPlacement): boolean {
 /**
  * Exact bounds of a placed ghost in bin-local millimetres, walking the
  * transformed vertices rather than transforming a bounding box. Transforming
- * the eight corners of the untransformed box is cheaper but overestimates
- * every shape that is not itself a box, which would warn about models that fit
- * perfectly well.
+ * the eight corners of the untransformed box is cheaper but overestimates every
+ * shape that is not itself a box, so the footprint the readout shows would be
+ * wrong and the bin the fit button sizes would come out larger than the models
+ * need.
  */
 function ghostBounds(mesh: THREE.Mesh): MeshBounds {
   const position = mesh.geometry.getAttribute('position');
@@ -213,17 +239,36 @@ function ghostBounds(mesh: THREE.Mesh): MeshBounds {
   };
 }
 
-/** Give a ghost the material its current bounds call for. */
-function applyFitMaterial(entry: GhostEntry): void {
-  const interior = props.interior;
-  entry.mesh.material =
-    !interior || fitsInterior(entry.bounds, interior) ? ghostMaterial : ghostOutsideMaterial;
+/** What a ghost's colour should say right now, warning ahead of selection. */
+function toneOf(id: string): GhostTone {
+  if (props.warnedModelIds.includes(id)) return 'warned';
+  if (id === props.selectedModelId) return 'selected';
+  return 'plain';
 }
 
-/** Recompute a ghost's bounds and re-judge its fit. */
+/**
+ * Give every drawn ghost the material its current tone calls for.
+ *
+ * Runs over the whole map on every frame rather than at the point something
+ * changes, and that is the point: the tone is a pure function of the props, so
+ * a ghost cannot be left holding a material chosen for a state that has since
+ * passed. Selecting a second model repaints the one that lost the selection as
+ * well as the one that gained it, whichever way the selection was changed, and
+ * clearing the selection returns its ghost to the plain colour. The recorded
+ * tone keeps the pass down to a comparison per ghost when nothing changed.
+ */
+function paintGhosts(): void {
+  for (const [id, entry] of ghostEntries) {
+    const tone = toneOf(id);
+    if (tone === entry.painted) continue;
+    entry.painted = tone;
+    entry.mesh.material = ghostMaterials[tone];
+  }
+}
+
+/** Recompute a ghost's bounds after it moved. */
 function refreshBounds(entry: GhostEntry): void {
   entry.bounds = ghostBounds(entry.mesh);
-  applyFitMaterial(entry);
 }
 
 function disposeGhost(ctx: ThreeSceneContext, entry: GhostEntry): void {
@@ -254,10 +299,6 @@ function syncBin(ctx: ThreeSceneContext): void {
 }
 
 function syncGhosts(ctx: ThreeSceneContext): void {
-  // A changed interior moves the line between fits and does not fit without
-  // any model moving, so every ghost is re-judged when the bin is resized.
-  const interiorChanged = (props.interior ?? null) !== judgedAgainstInterior;
-  judgedAgainstInterior = props.interior ?? null;
   const wanted = new Set(props.ghosts.map((ghost) => ghost.id));
   for (const [id, entry] of ghostEntries) {
     if (wanted.has(id)) continue;
@@ -273,12 +314,9 @@ function syncGhosts(ctx: ThreeSceneContext): void {
       // The gizmo is the authority on the model it is currently dragging, so
       // the placement echoed back through the props is not written over it.
       if (ghost.id === draggingId) continue;
-      if (samePlacement(placementOf(existing.mesh), ghost.placement)) {
-        // Nothing moved, so the bounds still stand and only the judgement of
-        // them can have changed.
-        if (interiorChanged) applyFitMaterial(existing);
-        continue;
-      }
+      // Nothing moved, so the bounds still stand and nothing has to be
+      // remeasured. The colour is settled by the paint pass below.
+      if (samePlacement(placementOf(existing.mesh), ghost.placement)) continue;
       applyPlacement(existing.mesh, ghost.placement);
       refreshBounds(existing);
       emit('boundsChange', {
@@ -292,16 +330,22 @@ function syncGhosts(ctx: ThreeSceneContext): void {
       disposeGhost(ctx, existing);
       ghostEntries.delete(ghost.id);
     }
-    const mesh = buildMeshObject(ghost.mesh, ghostMaterial);
+    // Built with the plain material and painted by the pass below, so a ghost
+    // drawn for the first time takes its colour from the same one place.
+    const mesh = buildMeshObject(ghost.mesh, ghostMaterials.plain);
     // Three's intrinsic ZYX Euler order equals the extrinsic XYZ order
     // Manifold.rotate documents, so the angles read off this object are the
     // angles the carve applies. Set before any placement is written.
     mesh.rotation.order = 'ZYX';
     applyPlacement(mesh, ghost.placement);
     ctx.modelRoot.add(mesh);
-    const entry: GhostEntry = { mesh, source: ghost.mesh, bounds: ghostBounds(mesh) };
+    const entry: GhostEntry = {
+      mesh,
+      source: ghost.mesh,
+      bounds: ghostBounds(mesh),
+      painted: null,
+    };
     ghostEntries.set(ghost.id, entry);
-    applyFitMaterial(entry);
     emit('boundsChange', {
       id: ghost.id,
       placement: placementOf(mesh),
@@ -311,6 +355,7 @@ function syncGhosts(ctx: ThreeSceneContext): void {
     // it again if it is the selected one.
     if (ghost.id === attachedId) attachedId = null;
   }
+  paintGhosts();
 }
 
 function syncSelection(): void {
@@ -473,8 +518,7 @@ useThreeScene(container, {
     binLabelMesh?.geometry.dispose();
     bodyMaterial.dispose();
     labelMaterial.dispose();
-    ghostMaterial.dispose();
-    ghostOutsideMaterial.dispose();
+    for (const material of Object.values(ghostMaterials)) material.dispose();
   },
 });
 </script>

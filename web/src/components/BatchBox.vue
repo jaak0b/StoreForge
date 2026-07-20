@@ -60,8 +60,9 @@ function commitConfirm(item: BatchItem): void {
 
 // Downloads.
 // A generated bin can come back with placement warnings (a cutout model
-// reaching outside the interior, for one). The batch file is still written,
-// so they are shown rather than dropped.
+// sitting clear of the interior, for one). The batch file is still written,
+// so they are shown rather than dropped. The sentences name the model they are
+// about, which is what makes them readable here, where there is no model list.
 const downloading = ref(false);
 const progressText = ref('');
 const errorMessage = ref<string | null>(null);

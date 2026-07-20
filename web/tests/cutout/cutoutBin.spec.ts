@@ -538,8 +538,12 @@ describe('placement warnings', () => {
     const result = buildCutoutBinBody(m, params({ models }));
 
     expect(result.warnings).toEqual([
-      'The model "away.stl" sits entirely outside the bin interior, so it carves nothing. ' +
-        'Move it into the bin.',
+      {
+        modelIndex: 0,
+        message:
+          'The model "away.stl" sits entirely outside the bin interior, so it carves ' +
+          'nothing. Move it into the bin.',
+      },
     ]);
     expect(result.body.status()).toBe('NoError');
     expect(componentVolumes(result.body).solids).toHaveLength(1);
@@ -548,15 +552,16 @@ describe('placement warnings', () => {
     for (const model of models) model.solid.delete();
   });
 
-  it('reports a model straddling a wall and still produces a valid solid', () => {
+  it('says nothing about a model straddling a wall, and still carves a valid solid', () => {
+    // Opening a pocket through the side of a bin is a design decision, not a
+    // mistake, and a model buried entirely inside the interior is unreachable,
+    // so a warning here would fire on almost every useful placement and mean
+    // nothing. The carve stays silent and still has to produce sound geometry.
     const wallX = binInteriorSizeMm(2) / 2;
     const models = [cubeModel(10, 0, at(wallX, 5, INTERIOR_MID_Z), 'wall.stl')];
     const result = buildCutoutBinBody(m, params({ models }));
 
-    expect(result.warnings).toContain(
-      'The model "wall.stl" reaches outside the bin interior, so its pocket breaks ' +
-        'through the bin. Move it further in, or use a larger or taller bin.',
-    );
+    expect(result.warnings).toEqual([]);
     expect(result.body.status()).toBe('NoError');
     expect(componentVolumes(result.body).solids).toHaveLength(1);
 
@@ -572,10 +577,33 @@ describe('placement warnings', () => {
     const models = [cubeModel(10, 0, at(0, frontY + 6, INTERIOR_MID_Z), 'front.stl')];
     const result = buildCutoutBinBody(m, params({ models }));
 
-    expect(result.warnings).toContain(
-      'The model "front.stl" reaches under the label insert slot, which needs to stay ' +
-        'solid for the insert to rest on. Move it away from the front wall.',
-    );
+    expect(result.warnings).toEqual([
+      {
+        modelIndex: 0,
+        message:
+          'The model "front.stl" reaches under the label insert slot, which needs to stay ' +
+          'solid for the insert to rest on. Move it away from the front wall.',
+      },
+    ]);
+
+    result.body.delete();
+    for (const model of models) model.solid.delete();
+  });
+
+  it('points each warning at the model it is about, by its place in the carve', () => {
+    // What the editor attaches a warning to a model row by, and what decides
+    // which ghost turns red. The name in the message cannot do it: two uploads
+    // of the same file share one, so an index off by a single model would put
+    // the warning on an innocent row and leave the offending one looking fine.
+    const models = [
+      cubeModel(10, 0, at(0, 5, INTERIOR_MID_Z), 'inside.stl'),
+      cubeModel(10, 0, at(300, 0, INTERIOR_MID_Z), 'away.stl'),
+    ];
+    const result = buildCutoutBinBody(m, params({ models }));
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].modelIndex).toBe(1);
+    expect(result.warnings[0].message).toContain('"away.stl"');
 
     result.body.delete();
     for (const model of models) model.solid.delete();
@@ -593,10 +621,14 @@ describe('placement warnings', () => {
       }),
     );
 
-    expect(result.warnings).toContain(
-      'The model "front.stl" reaches under the fused label shelf, which needs to stay ' +
-        'solid for the label to stand on. Move it away from the front wall.',
-    );
+    expect(result.warnings).toEqual([
+      {
+        modelIndex: 0,
+        message:
+          'The model "front.stl" reaches under the fused label shelf, which needs to stay ' +
+          'solid for the label to stand on. Move it away from the front wall.',
+      },
+    ]);
 
     result.body.delete();
     for (const model of models) model.solid.delete();
