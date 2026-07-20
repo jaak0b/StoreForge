@@ -900,7 +900,17 @@ function editingTitle(entry: QueueEntry): string {
             Carving the bin.
           </span>
         </div>
-        <v-progress-linear v-if="generating" indeterminate color="primary" height="6" rounded class="mt-1" />
+        <v-progress-linear
+          v-if="generating"
+          indeterminate
+          striped
+          color="primary"
+          bg-color="grey-darken-3"
+          bg-opacity="1"
+          height="6"
+          rounded
+          class="mt-1"
+        />
       </div>
 
       <div class="text-caption text-medium-emphasis mb-1 mt-4">

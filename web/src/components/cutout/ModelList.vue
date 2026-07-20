@@ -233,7 +233,16 @@ function warningsFor(id: string): string[] {
           <div class="text-caption text-medium-emphasis mt-2">
             Applying the clearance to this model.
           </div>
-          <v-progress-linear indeterminate color="primary" height="6" rounded class="mt-1" />
+          <v-progress-linear
+            indeterminate
+            striped
+            color="primary"
+            bg-color="grey-darken-3"
+            bg-opacity="1"
+            height="6"
+            rounded
+            class="mt-1"
+          />
         </template>
 
         <v-alert
