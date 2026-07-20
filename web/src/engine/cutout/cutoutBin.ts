@@ -210,13 +210,18 @@ export function maxClearanceMm(gridX: number, gridY: number): number {
 
 /**
  * The geometric error budget the simplification of one model may spend, in mm:
- * one tenth of that model's own clearance.
+ * one quarter of that model's own clearance.
  *
  * Manifold documents a simplify tolerance as the maximum distance between the
  * original and the simplified mesh, so it is directly comparable to the
- * clearance, which is the fit budget. Spending at most a tenth of the gap on
- * simplification bounds the worst-case fit degradation at ten percent of the
- * intended gap and leaves the guarantee substantially intact.
+ * clearance, which is the fit budget.
+ *
+ * Benchmarked 2026-07-20 on a real 127k-triangle model: a tolerance of
+ * clearance/10 left 18k triangles and a 40 s Minkowski offset, while
+ * clearance/4 (0.1 mm at the 0.4 mm default) leaves about 8k triangles and
+ * about 20 s. The worst case is 0.1 mm of one-sided under-dilation in concave
+ * detail, so the pocket can be slightly tighter but never looser, and the
+ * volume difference is about 1 percent.
  *
  * Per model, because the clearance is. Two models in one bin with different
  * clearances carry different tolerances and one may not be simplified at all;
@@ -224,7 +229,7 @@ export function maxClearanceMm(gridX: number, gridY: number): number {
  * bin-wide tolerance to protect.
  */
 export function simplifyToleranceMm(clearanceMm: number): number {
-  return clearanceMm / 10;
+  return clearanceMm / 4;
 }
 
 /**

@@ -836,13 +836,13 @@ describe('clearance is per model', () => {
 });
 
 describe('simplifyToleranceMm', () => {
-  it('is one tenth of the clearance, and zero for a zero clearance', () => {
+  it('is one quarter of the clearance, and zero for a zero clearance', () => {
     // A hardcoded literal here would be the fudge the derivation exists to
     // avoid: the tolerance is a stated fraction of the fit budget.
     for (const clearanceMm of [0.1, 0.2, 0.4, 0.8, 1]) {
-      expect(simplifyToleranceMm(clearanceMm)).toBeCloseTo(clearanceMm / 10, 12);
+      expect(simplifyToleranceMm(clearanceMm)).toBeCloseTo(clearanceMm / 4, 12);
     }
-    expect(simplifyToleranceMm(0.4)).toBeCloseTo(0.04, 12);
+    expect(simplifyToleranceMm(0.4)).toBeCloseTo(0.1, 12);
     expect(simplifyToleranceMm(0)).toBe(0);
   });
 });
