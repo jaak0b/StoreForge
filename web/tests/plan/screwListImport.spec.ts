@@ -3,7 +3,10 @@ import {
   composeLabelText,
   computeBinWidthUnits,
   groupBatchRows,
+  headHeightMm,
+  overallLengthMm,
   parseShorthand,
+  threadDiameterMm,
 } from '../../src/engine/plan/screwListImport';
 
 describe('parseShorthand', () => {
@@ -335,6 +338,84 @@ describe('computeBinWidthUnits', () => {
 
   it('fits the shortest supported screw in one unit', () => {
     expect(computeBinWidthUnits(6)).toBe(1);
+  });
+});
+
+describe('threadDiameterMm', () => {
+  it('reads a metric diameter directly', () => {
+    expect(threadDiameterMm('M5')).toBe(5);
+    expect(threadDiameterMm('M2.5')).toBe(2.5);
+  });
+
+  it('derives a number size from the ANSI unified formula', () => {
+    // #8: (0.060 + 0.013 * 8) in = 0.164 in.
+    expect(threadDiameterMm('#8')).toBeCloseTo(0.164 * 25.4, 6);
+  });
+
+  it('reads a fractional size in inches', () => {
+    expect(threadDiameterMm('1/4-20')).toBeCloseTo(6.35, 6);
+  });
+
+  it('returns null for an absent or unreadable thread', () => {
+    expect(threadDiameterMm(null)).toBeNull();
+    expect(threadDiameterMm('nonsense')).toBeNull();
+  });
+});
+
+describe('headHeightMm', () => {
+  it('adds the socket cap head height as the diameter (ISO 4762)', () => {
+    expect(headHeightMm('cap head screw', 5)).toBe(5);
+  });
+
+  it('adds 0.55 d for a button head (ISO 7380-1)', () => {
+    expect(headHeightMm('pan head screw', 5)).toBeCloseTo(2.75, 6);
+  });
+
+  it('adds nothing for a countersunk screw (measured overall)', () => {
+    expect(headHeightMm('countersunk screw', 5)).toBe(0);
+  });
+
+  it('uses the ISO 4014/4017 table for a hex bolt', () => {
+    expect(headHeightMm('hex bolt', 5)).toBe(3.5);
+    expect(headHeightMm('hex bolt', 8)).toBe(5.3);
+  });
+
+  it('adds nothing when the head or diameter is unknown', () => {
+    expect(headHeightMm(null, 5)).toBe(0);
+    expect(headHeightMm('cap head screw', null)).toBe(0);
+  });
+});
+
+describe('overallLengthMm', () => {
+  it('adds the head height for a socket cap screw', () => {
+    // m5x50 shcs: 50 + 5 = 55.
+    expect(overallLengthMm({ thread: 'M5', lengthMm: 50, head: 'cap head screw' })).toBe(55);
+  });
+
+  it('adds the button head height', () => {
+    // m5x50 bhcs: 50 + 0.55 * 5 = 52.75.
+    expect(overallLengthMm({ thread: 'M5', lengthMm: 50, head: 'pan head screw' })).toBeCloseTo(
+      52.75,
+      6,
+    );
+  });
+
+  it('leaves a countersunk length as the overall length', () => {
+    // m5x50 fhcs: nominal length is already overall.
+    expect(overallLengthMm({ thread: 'M5', lengthMm: 50, head: 'countersunk screw' })).toBe(50);
+  });
+
+  it('is null without a length', () => {
+    expect(overallLengthMm({ thread: 'M5', lengthMm: null, head: 'cap head screw' })).toBeNull();
+  });
+
+  it('pushes an M5x28 cap screw into two units the nominal length would not need', () => {
+    // Nominal 28 mm fits one unit (32 mm boundary); the 5 mm head takes the
+    // overall length to 33 mm, which forces two units.
+    expect(computeBinWidthUnits(28)).toBe(1);
+    expect(
+      computeBinWidthUnits(overallLengthMm({ thread: 'M5', lengthMm: 28, head: 'cap head screw' })!),
+    ).toBe(2);
   });
 });
 

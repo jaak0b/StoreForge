@@ -1,4 +1,5 @@
 import { binTopOpeningMm } from '../gridfinity/constants';
+import { assertNever } from './types';
 
 /**
  * Screw-list shorthand parsing and bin sizing for the "add bins from a screw
@@ -472,6 +473,139 @@ export function composeLabelText(
   }
   if (lengthless) parts.push(HEAD_LABEL_ABBREV[head as HeadType]);
   return parts.join(' ');
+}
+
+/**
+ * The nominal major diameter of a thread designation, in millimetres, or null
+ * when the thread is absent or unrecognized. Used only to derive a head height
+ * for bin sizing, never for geometry.
+ *
+ * Metric 'M<d>' is the diameter directly. Imperial number sizes use the ANSI
+ * unified formula d = 0.060 in + 0.013 in * N (ASME B1.1 / ANSI B18.6.3), so
+ * '#8' is 0.164 in. A fractional size like '1/4-20' is the fraction in inches.
+ * Inch diameters convert at 25.4 mm per inch.
+ */
+export function threadDiameterMm(thread: string | null): number | null {
+  if (thread === null) return null;
+  const metric = /^M(\d+(?:\.\d+)?)$/.exec(thread);
+  if (metric !== null) return Number(metric[1]);
+  const numberSeries = /^#(\d{1,2})$/.exec(thread);
+  if (numberSeries !== null) {
+    const n = Number(numberSeries[1]);
+    return (0.06 + 0.013 * n) * MM_PER_INCH;
+  }
+  const fraction = /^(\d+)\/(\d+)-\d{2,3}$/.exec(thread);
+  if (fraction !== null) {
+    const den = Number(fraction[2]);
+    if (den === 0) return null;
+    return (Number(fraction[1]) / den) * MM_PER_INCH;
+  }
+  return null;
+}
+
+/**
+ * ISO 4014/4017 hexagon bolt head height k, keyed by nominal diameter (mm).
+ * The head height is not a clean ratio of the diameter, so the standard's
+ * tabulated values are listed for every metric size the parser accepts; the
+ * three imperial sizes the picker offers carry their ASME B18.2.1 hex cap
+ * screw head heights (0.163, 0.211 and 0.243 in) at their converted diameters.
+ * Matched by nearest diameter within HEX_DIAMETER_EPS_MM so an inch diameter's
+ * rounding does not miss its row.
+ */
+const HEX_HEAD_HEIGHT_MM: ReadonlyArray<readonly [number, number]> = [
+  // ISO 4014/4017 (ISO 4014:2011 Table 2), diameter -> k_nominal:
+  [1.6, 1.1],
+  [2, 1.4],
+  [2.5, 1.7],
+  [3, 2.0],
+  [4, 2.8],
+  [5, 3.5],
+  [6, 4.0],
+  [8, 5.3],
+  [10, 6.4],
+  [12, 7.5],
+  [14, 8.8],
+  [16, 10.0],
+  [20, 12.5],
+  [24, 15.0],
+  [30, 18.7],
+  [36, 22.5],
+  // ASME B18.2.1 hex cap screw head height H (basic), diameter -> k:
+  [0.25 * MM_PER_INCH, 0.163 * MM_PER_INCH], // 1/4 in
+  [0.3125 * MM_PER_INCH, 0.211 * MM_PER_INCH], // 5/16 in
+  [0.375 * MM_PER_INCH, 0.243 * MM_PER_INCH], // 3/8 in
+];
+
+const HEX_DIAMETER_EPS_MM = 0.1;
+
+/** Hex bolt head height from the ISO 4014/4017 (or ASME B18.2.1) table. */
+function hexHeadHeightMm(diameterMm: number): number {
+  for (const [d, k] of HEX_HEAD_HEIGHT_MM) {
+    if (Math.abs(d - diameterMm) <= HEX_DIAMETER_EPS_MM) return k;
+  }
+  // An unlisted diameter is sized conservatively at the socket cap head height
+  // (k = d, ISO 4762) so the bin never comes out too short for the head.
+  return diameterMm;
+}
+
+/**
+ * The head height added to a fastener's nominal length to get its overall
+ * length for bin sizing, in millimetres. By ISO/ASME convention a countersunk
+ * (flat) screw's nominal length is already the overall length, so its head
+ * adds nothing; every other head type is measured under the head, so its head
+ * height is added. Zero when the head or diameter is unknown, or when the head
+ * carries no length (a nut, washer or insert is sized without one).
+ *
+ * Standards per head type:
+ *   cap head (ISO 4762): k = d.
+ *   pan/button head (ISO 7380-1): k = 0.55 d (M3 1.65, M4 2.20, M5 2.75, ...).
+ *   hex bolt (ISO 4014/4017, ASME B18.2.1): tabulated, see HEX_HEAD_HEIGHT_MM.
+ *   countersunk (ISO 10642): 0, the nominal length is the overall length.
+ *   self-tapping / pocket screw: measured under the head; no single ISO length
+ *     standard fixes their head height, so the ISO 7380-1 button ratio 0.55 d
+ *     is used as the published pan-family figure.
+ *   wood screw (ANSI/ASME B18.6.1 flat head): countersunk, measured overall, 0.
+ *   brad (ASTM F1667 finish nail): measured overall, negligible head, 0.
+ *   dowel pin (ISO 2338): no head, overall length, 0.
+ */
+export function headHeightMm(head: HeadType | null, diameterMm: number | null): number {
+  if (head === null || diameterMm === null) return 0;
+  switch (head) {
+    case 'cap head screw':
+      return diameterMm; // ISO 4762 k = d.
+    case 'pan head screw':
+    case 'self-tapping screw':
+    case 'pocket screw':
+      return 0.55 * diameterMm; // ISO 7380-1 button head k = 0.55 d.
+    case 'hex bolt':
+      return hexHeadHeightMm(diameterMm);
+    case 'countersunk screw': // ISO 10642: nominal length is overall.
+    case 'wood screw': // ANSI/ASME B18.6.1 flat head: measured overall.
+    case 'brad': // ASTM F1667: measured overall.
+    case 'dowel': // ISO 2338: no head.
+    case 'hex nut': // Lengthless: sized without a length.
+    case 'washer':
+    case 'threaded insert':
+      return 0;
+    default:
+      return assertNever(head);
+  }
+}
+
+/**
+ * A fastener's overall length in millimetres: its nominal length plus the head
+ * height that ISO/ASME convention leaves out for every head type but the
+ * countersunk one. Null when there is no length to size from. This is the
+ * single figure bin sizing measures; callers pass its result to
+ * computeBinWidthUnits rather than the nominal length.
+ */
+export function overallLengthMm(spec: {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+}): number | null {
+  if (spec.lengthMm === null) return null;
+  return spec.lengthMm + headHeightMm(spec.head, threadDiameterMm(spec.thread));
 }
 
 /**

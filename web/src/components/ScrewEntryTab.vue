@@ -23,6 +23,7 @@ import {
   composeLabelText,
   composeShorthand,
   computeBinWidthUnits,
+  overallLengthMm,
   HEAD_ICON_NAME,
   HEAD_TYPES,
   LENGTHLESS_HEADS,
@@ -133,8 +134,15 @@ function sizedContentFor(batch: {
 }): { cells: number; content: LabelContent } {
   const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
   const effectiveLength = noLength ? null : batch.lengthMm;
+  // Bins are sized from the overall length: the head height is added for every
+  // head type but the countersunk one, which is already measured overall.
+  const overall = overallLengthMm({
+    thread: batch.thread,
+    lengthMm: effectiveLength,
+    head: batch.head,
+  });
   return {
-    cells: effectiveLength !== null ? computeBinWidthUnits(effectiveLength) : 1,
+    cells: overall !== null ? computeBinWidthUnits(overall) : 1,
     content: {
       text: composeLabelText(
         batch.thread,
@@ -538,8 +546,17 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
           hide-details
           :disabled="isMultiple || lengthless"
           class="screw-field"
-          style="min-width: 110px; max-width: 150px"
-        />
+          style="min-width: 110px; max-width: 160px"
+        >
+          <template #append-inner>
+            <v-icon icon="mdi-help-circle-outline" size="small" class="length-help" />
+            <v-tooltip activator="parent" location="top" max-width="280">
+              Bin width is sized from the screw's overall length. Countersunk screws (FHCS) are
+              measured overall, so the nominal length is used as is. Other head types are measured
+              under the head, so the head height is added.
+            </v-tooltip>
+          </template>
+        </v-text-field>
         <v-text-field
           v-model.number="count"
           type="number"
