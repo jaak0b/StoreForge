@@ -33,6 +33,7 @@ import {
   resolveCutoutModels,
   restoreCutoutModels,
   restoreSweptSolids,
+  sweptKeyOf,
   sweptMemoFor,
   type CutoutBinRequest,
   type CutoutModelFacts,
@@ -122,51 +123,67 @@ const cutoutModels = new CutoutModelCache();
 const cutoutSwept = new CutoutSweptCache();
 
 /**
- * Resolve a carve request into engine params wired to the swept-solid cache.
- * The single place every cutout carve endpoint goes through, so none of them
- * can forget the eviction: the cache keeps exactly the swept solids the
- * current carve names, which is what stops a model rotated through many
- * angles from accumulating one solid per angle.
+ * Resolve a carve request into engine params wired to the swept-solid cache,
+ * and run the carve with every borrowed solid pinned. The single place every
+ * cutout carve endpoint goes through, so none of them can forget either the
+ * eviction (the swept cache keeps exactly the keys the current carve names,
+ * which is what stops a rotated model accumulating one solid per angle) or
+ * the pinning.
+ *
+ * The pinning is the use-after-free guard: this function awaits the persisted
+ * tier, and the worker's single thread services other Comlink messages during
+ * that suspension, so a plan mutation's releaseCutoutModels or a concurrent
+ * carve's own swept release can run while this carve's borrowed solids are in
+ * flight. Both cache scopes span the carve itself, because params borrow the
+ * solids and the eager carve is what consumes them; the caches defer any
+ * eviction of a pinned key until the scopes close (their whilePinned owns
+ * that argument).
  */
-async function cutoutCarveParams(
+async function withCutoutCarve<T>(
   m: ManifoldToplevel,
   request: CutoutBinRequest,
-): Promise<CutoutBinParams> {
-  const models = resolveCutoutModels(cutoutModels, request.models);
+  carve: (params: CutoutBinParams) => T,
+): Promise<T> {
   const keptKeys: string[] = [];
   const nameByKey = new Map<string, string>();
-  for (const model of models) {
-    if (model.sweptKey === undefined) continue;
-    keptKeys.push(model.sweptKey);
-    nameByKey.set(model.sweptKey, model.name);
+  for (const model of request.models) {
+    const key = sweptKeyOf(model);
+    if (key === null) continue;
+    keptKeys.push(key);
+    nameByKey.set(key, model.name);
   }
-  cutoutSwept.release(keptKeys);
-  // The sweep memo the carve consults is synchronous, so persisted swept
-  // solids are prefetched here, by the keys this carve is about to name;
-  // whatever a record answers is a memory hit by the time the memo asks.
-  const persisted = persistedSolidsFor(m);
-  const restored = await restoreSweptSolids(cutoutSwept, keptKeys, persisted);
-  for (const { key, loadMs } of restored) {
-    reportSweptPersistedHit(nameByKey.get(key) ?? key, loadMs);
-  }
-  const sweptMemo = sweptMemoFor(
-    cutoutSwept,
-    (event) => {
-      const name = nameByKey.get(event.key) ?? event.key;
-      switch (event.outcome) {
-        case 'hit':
-          reportSweptCacheHit(name);
-          return;
-        case 'miss':
-          reportSweptCacheMiss(name, event.elapsedMs);
-          return;
-        default:
-          return assertNever(event);
+  return cutoutModels.whilePinned(request.models, () =>
+    cutoutSwept.whilePinned(keptKeys, async () => {
+      cutoutSwept.release(keptKeys);
+      // The sweep memo the carve consults is synchronous, so persisted swept
+      // solids are prefetched here, by the keys this carve is about to name;
+      // whatever a record answers is a memory hit by the time the memo asks.
+      const persisted = persistedSolidsFor(m);
+      const restored = await restoreSweptSolids(cutoutSwept, keptKeys, persisted);
+      for (const { key, loadMs } of restored) {
+        reportSweptPersistedHit(nameByKey.get(key) ?? key, loadMs);
       }
-    },
-    (key, entry) => persisted.saveSwept(key, entry),
+      const sweptMemo = sweptMemoFor(
+        cutoutSwept,
+        (event) => {
+          const name = nameByKey.get(event.key) ?? event.key;
+          switch (event.outcome) {
+            case 'hit':
+              reportSweptCacheHit(name);
+              return;
+            case 'miss':
+              reportSweptCacheMiss(name, event.elapsedMs);
+              return;
+            default:
+              return assertNever(event);
+          }
+        },
+        (key, entry) => persisted.saveSwept(key, entry),
+      );
+      const models = resolveCutoutModels(cutoutModels, request.models);
+      return carve({ ...request, models, sweptMemo });
+    }),
   );
-  return { ...request, models, sweptMemo };
 }
 
 /**
@@ -330,9 +347,10 @@ const api = {
     const ctx = newExecutionContext(m);
     activePreviewContext = ctx;
     try {
-      const params = await cutoutCarveParams(m, request);
-      const carve = timed('carve', carveModelNames(request.models), () =>
-        carveCutoutBin(m, font, params, ctx),
+      const carve = await withCutoutCarve(m, request, (params) =>
+        timed('carve', carveModelNames(request.models), () =>
+          carveCutoutBin(m, font, params, ctx),
+        ),
       );
       const result: CutoutPreviewResult = { outcome: 'carved', ...carve };
       return Comlink.transfer(result, partBuffers(carve.meshes));
@@ -359,9 +377,10 @@ const api = {
    */
   async generateCutoutBin(request: CutoutBinRequest): Promise<CutoutCarveResult> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const params = await cutoutCarveParams(m, request);
-    const carve = timed('carve', carveModelNames(request.models), () =>
-      carveCutoutBin(m, font, params),
+    const carve = await withCutoutCarve(m, request, (params) =>
+      timed('carve', carveModelNames(request.models), () =>
+        carveCutoutBin(m, font, params),
+      ),
     );
     return Comlink.transfer(carve, partBuffers(carve.meshes));
   },
@@ -369,9 +388,10 @@ const api = {
   /** The same, as one unioned mesh for the single-mesh STL export. */
   async generateCutoutBinUnion(request: CutoutBinRequest): Promise<CutoutUnionResult> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
-    const params = await cutoutCarveParams(m, request);
-    const carve = timed('carve', carveModelNames(request.models), () =>
-      carveCutoutBinUnion(m, font, params),
+    const carve = await withCutoutCarve(m, request, (params) =>
+      timed('carve', carveModelNames(request.models), () =>
+        carveCutoutBinUnion(m, font, params),
+      ),
     );
     return Comlink.transfer(carve, meshBuffers(carve.mesh));
   },

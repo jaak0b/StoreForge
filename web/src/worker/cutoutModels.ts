@@ -114,6 +114,54 @@ export type CutoutPreviewResult =
   | { outcome: 'superseded' };
 
 /**
+ * The pin ledger both caches below share for the one concurrency hazard the
+ * worker has. The worker's single JS thread only yields at an await, but a
+ * carve borrows cached solids into its params and then awaits the persisted
+ * tier before the eager geometry runs. During that suspension another Comlink
+ * message can run an eviction (a plan mutation releasing models, or a second
+ * carve's own release of swept solids), and deleting a borrowed solid there
+ * is a use-after-free in WASM memory when the first carve resumes.
+ *
+ * The invariant, made local here so no call site has to re-prove it: a key
+ * pinned by an in-flight operation is never evicted. An eviction asked for
+ * while a key is pinned is remembered and applied when its last pin drops,
+ * so release keeps its meaning (what the caller stopped naming does go) with
+ * only its timing deferred. Pins nest, because a preview and an export can
+ * borrow the same key at once.
+ */
+class PinRegistry {
+  private readonly counts = new Map<string, number>();
+  private readonly deferred = new Set<string>();
+
+  pin(key: string): void {
+    this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
+  }
+
+  /** Drop one pin. True when this was the last pin and an eviction waits. */
+  unpin(key: string): boolean {
+    const count = this.counts.get(key);
+    if (count === undefined) {
+      // A miscounted pin would silently disable the protection, so it is a
+      // programming error worth failing loudly on, not a condition to absorb.
+      throw new Error(`A cutout cache key was unpinned without a pin: ${key}`);
+    }
+    if (count > 1) {
+      this.counts.set(key, count - 1);
+      return false;
+    }
+    this.counts.delete(key);
+    return this.deferred.delete(key);
+  }
+
+  /** True when the key is pinned; the eviction then waits for the last unpin. */
+  deferIfPinned(key: string): boolean {
+    if (!this.counts.has(key)) return false;
+    this.deferred.add(key);
+    return true;
+  }
+}
+
+/**
  * The worker's cache of finished import-stage solids: scaled to millimetres,
  * centred, simplified and dilated, ready to be transformed and subtracted.
  *
@@ -126,9 +174,36 @@ export type CutoutPreviewResult =
  */
 export class CutoutModelCache {
   private readonly entries = new Map<string, PreparedCutoutModel>();
+  private readonly pins = new PinRegistry();
 
   private static keyOf(spec: CutoutModelKeySpec): string {
     return cutoutModelKey(spec.modelSourceId, spec.unitScale, spec.clearanceMm);
+  }
+
+  /**
+   * Run an operation with these keys pinned, so a release that arrives while
+   * it is suspended at an await cannot delete a solid it borrowed. The unpin
+   * lives in a finally, so a throw (a model not stored, a cancelled carve)
+   * cannot leave a key pinned forever; evictions deferred meanwhile apply as
+   * the last pin drops.
+   */
+  async whilePinned<T>(specs: CutoutModelKeySpec[], run: () => Promise<T>): Promise<T> {
+    const keys = specs.map((spec) => CutoutModelCache.keyOf(spec));
+    for (const key of keys) this.pins.pin(key);
+    try {
+      return await run();
+    } finally {
+      for (const key of keys) {
+        if (this.pins.unpin(key)) this.evict(key);
+      }
+    }
+  }
+
+  private evict(key: string): void {
+    const prepared = this.entries.get(key);
+    if (prepared === undefined) return;
+    prepared.solid.delete();
+    this.entries.delete(key);
   }
 
   /** The prepared model under this key, or undefined when it is not cached. */
@@ -147,7 +222,10 @@ export class CutoutModelCache {
 
   /**
    * Take ownership of a prepared model. Replacing an entry deletes the solid
-   * it supersedes, so re-importing under a key already held cannot leak.
+   * it supersedes, so re-importing under a key already held cannot leak. A
+   * replacement of a pinned entry cannot occur: every put path (import and
+   * persisted restore) is guarded by a cache miss, and a pinned key resolves,
+   * so it is never a miss.
    */
   put(spec: CutoutModelKeySpec, prepared: PreparedCutoutModel): void {
     const key = CutoutModelCache.keyOf(spec);
@@ -155,11 +233,17 @@ export class CutoutModelCache {
     this.entries.set(key, prepared);
   }
 
-  /** Delete every cached solid whose key is not among the ones to keep. */
+  /**
+   * Delete every cached solid whose key is not among the ones to keep. A key
+   * pinned by an in-flight carve is not deleted now: its eviction is deferred
+   * to the moment the last pin drops, because a borrowed solid freed here
+   * would be used after free when that carve resumes.
+   */
   release(keep: CutoutModelKeySpec[]): void {
     const kept = new Set(keep.map((spec) => CutoutModelCache.keyOf(spec)));
     for (const [key, prepared] of this.entries) {
       if (kept.has(key)) continue;
+      if (this.pins.deferIfPinned(key)) continue;
       prepared.solid.delete();
       this.entries.delete(key);
     }
@@ -197,6 +281,7 @@ export class CutoutModelCache {
  */
 export class CutoutSweptCache {
   private readonly entries = new Map<string, SweptSolid>();
+  private readonly pins = new PinRegistry();
 
   /** The swept solid under this key, or undefined when it is not cached. */
   get(key: string): SweptSolid | undefined {
@@ -204,19 +289,52 @@ export class CutoutSweptCache {
   }
 
   /**
+   * Run an operation with these keys pinned, exactly as the prepared-model
+   * cache's whilePinned: no eviction path (release or retainForModelKeys)
+   * deletes a pinned solid, and evictions deferred meanwhile apply in the
+   * finally as the last pin drops.
+   */
+  async whilePinned<T>(keys: string[], run: () => Promise<T>): Promise<T> {
+    for (const key of keys) this.pins.pin(key);
+    try {
+      return await run();
+    } finally {
+      for (const key of keys) {
+        if (this.pins.unpin(key)) this.evict(key);
+      }
+    }
+  }
+
+  private evict(key: string): void {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return;
+    entry.solid.delete();
+    this.entries.delete(key);
+  }
+
+  /**
    * Take ownership of a swept solid. Replacing an entry deletes the solid it
-   * supersedes, so recomputing under a held key cannot leak.
+   * supersedes, so recomputing under a held key cannot leak. Replacement is
+   * safe under a pin, because a swept solid is only ever borrowed inside the
+   * synchronous eager carve (memo hit to subtraction, no await between), so
+   * no suspended operation can hold a reference to the superseded solid.
    */
   put(key: string, entry: SweptSolid): void {
     this.entries.get(key)?.solid.delete();
     this.entries.set(key, entry);
   }
 
-  /** Delete every cached solid whose key is not among the ones to keep. */
+  /**
+   * Delete every cached solid whose key is not among the ones to keep,
+   * deferring pinned keys as the prepared-model cache's release does: two
+   * concurrent carves each release to their own keep set, and neither may
+   * free a solid the other has in flight.
+   */
   release(keep: string[]): void {
     const kept = new Set(keep);
     for (const [key, entry] of this.entries) {
       if (kept.has(key)) continue;
+      if (this.pins.deferIfPinned(key)) continue;
       entry.solid.delete();
       this.entries.delete(key);
     }
@@ -232,6 +350,7 @@ export class CutoutSweptCache {
     const prefixes = modelKeys.map((key) => `${key}:`);
     for (const [key, entry] of this.entries) {
       if (prefixes.some((prefix) => key.startsWith(prefix))) continue;
+      if (this.pins.deferIfPinned(key)) continue;
       entry.solid.delete();
       this.entries.delete(key);
     }

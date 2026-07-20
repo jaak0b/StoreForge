@@ -256,6 +256,177 @@ describe('releasing cached solids', () => {
   });
 });
 
+describe('pinning borrowed solids across a carve await', () => {
+  /** A promise the test resolves by hand, standing in for the persisted-tier await. */
+  function gate(): { open: () => void; closed: Promise<void> } {
+    let open!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { open, closed };
+  }
+
+  it('does not free a borrowed solid when a release arrives during the await window', async () => {
+    // The worker's single thread yields at the persisted-tier await inside a
+    // carve, and a plan mutation's release can run right there. The solid the
+    // carve borrowed must survive that release, or the carve resumes on freed
+    // WASM memory.
+    const borrowed = spec({ modelSourceId: 'model-borrowed' });
+    const unreferenced = spec({ modelSourceId: 'model-unreferenced' });
+    const cache = cacheOf([borrowed, unreferenced]);
+    const borrowedSolid = cache.get(borrowed)!.solid;
+    const unreferencedSolid = cache.get(unreferenced)!.solid;
+    const awaitWindow = gate();
+
+    const carve = cache.whilePinned([borrowed], async () => {
+      await awaitWindow.closed;
+      // The carve resumes and consumes the solid it borrowed before the await.
+      return borrowedSolid.volume();
+    });
+    // The release fires while the carve is suspended, keeping nothing.
+    cache.release([]);
+
+    // The unpinned entry went; the pinned one is deferred, not freed.
+    expect(() => unreferencedSolid.volume()).toThrow(/deleted object/);
+    expect(cache.get(borrowed)).toBeDefined();
+
+    awaitWindow.open();
+    await expect(carve).resolves.toBeGreaterThan(0);
+
+    cache.release([]);
+  });
+
+  it('applies the deferred eviction when the borrow ends', async () => {
+    const borrowed = spec({ modelSourceId: 'model-borrowed' });
+    const cache = cacheOf([borrowed]);
+    const borrowedSolid = cache.get(borrowed)!.solid;
+    const awaitWindow = gate();
+
+    const carve = cache.whilePinned([borrowed], async () => {
+      await awaitWindow.closed;
+    });
+    cache.release([]);
+    awaitWindow.open();
+    await carve;
+
+    // The release keeps its meaning with only its timing deferred: once no
+    // carve borrows the solid, what the caller stopped naming does go.
+    expect(cache.get(borrowed)).toBeUndefined();
+    expect(cache.size).toBe(0);
+    expect(() => borrowedSolid.volume()).toThrow(/deleted object/);
+  });
+
+  it('keeps a still-named pinned entry cached after the borrow ends', async () => {
+    // A release that KEEPS the pinned key must not schedule an eviction: the
+    // deferral only remembers evictions actually asked for.
+    const borrowed = spec({ modelSourceId: 'model-borrowed' });
+    const cache = cacheOf([borrowed]);
+    const awaitWindow = gate();
+
+    const carve = cache.whilePinned([borrowed], async () => {
+      await awaitWindow.closed;
+    });
+    cache.release([borrowed]);
+    awaitWindow.open();
+    await carve;
+
+    expect(cache.get(borrowed)).toBeDefined();
+    cache.release([]);
+  });
+
+  it('leaves both carves’ solids alive when two interleaved carves each release to their own keep set', async () => {
+    // The preview vs export interleaving: each carve releases keeping only
+    // the keys it names, so each release would evict the other carve's
+    // borrowed solid if pins did not defer it.
+    const forPreview = spec({ modelSourceId: 'model-preview' });
+    const forExport = spec({ modelSourceId: 'model-export' });
+    const cache = cacheOf([forPreview, forExport]);
+    const previewSolid = cache.get(forPreview)!.solid;
+    const exportSolid = cache.get(forExport)!.solid;
+    const previewWindow = gate();
+    const exportWindow = gate();
+
+    const preview = cache.whilePinned([forPreview], async () => {
+      await previewWindow.closed;
+      return previewSolid.volume();
+    });
+    const exportCarve = cache.whilePinned([forExport], async () => {
+      await exportWindow.closed;
+      return exportSolid.volume();
+    });
+    // Each carve's own release names only its own model.
+    cache.release([forPreview]);
+    cache.release([forExport]);
+
+    // Both borrowed solids are still alive while both carves are in flight.
+    expect(previewSolid.volume()).toBeGreaterThan(0);
+    expect(exportSolid.volume()).toBeGreaterThan(0);
+
+    previewWindow.open();
+    exportWindow.open();
+    await expect(preview).resolves.toBeGreaterThan(0);
+    await expect(exportCarve).resolves.toBeGreaterThan(0);
+
+    // The deferred evictions applied as each borrow ended: the preview's
+    // model was evicted by the export's release and vice versa.
+    expect(cache.size).toBe(0);
+  });
+
+  it('protects a pinned swept solid from release and retainForModelKeys alike', async () => {
+    const cache = new CutoutSweptCache();
+    const modelKey = cutoutModelKey('model-a', 1, 0.4);
+    const key = `${modelKey}:0:0:0:5`;
+    const solid = m.Manifold.cube([2, 2, 40], true);
+    cache.put(key, { solid, lengthMm: 40 });
+    const awaitWindow = gate();
+
+    const carve = cache.whilePinned([key], async () => {
+      await awaitWindow.closed;
+      return solid.volume();
+    });
+    // Both eviction paths fire during the await window: a concurrent carve's
+    // release and a plan mutation dropping the source model.
+    cache.release([]);
+    cache.retainForModelKeys([]);
+
+    expect(cache.get(key)).toBeDefined();
+    awaitWindow.open();
+    await expect(carve).resolves.toBeGreaterThan(0);
+
+    // The deferred eviction applied when the borrow ended.
+    expect(cache.size).toBe(0);
+    expect(() => solid.volume()).toThrow(/deleted object/);
+  });
+
+  it('frees a solid pinned by two overlapping carves only after the last unpin', async () => {
+    // A preview and an export of the same bin pin the same key at once; the
+    // first to finish must not free what the second still borrows.
+    const shared = spec({ modelSourceId: 'model-shared' });
+    const cache = cacheOf([shared]);
+    const sharedSolid = cache.get(shared)!.solid;
+    const firstWindow = gate();
+    const secondWindow = gate();
+
+    const first = cache.whilePinned([shared], async () => {
+      await firstWindow.closed;
+    });
+    const second = cache.whilePinned([shared], async () => {
+      await secondWindow.closed;
+      return sharedSolid.volume();
+    });
+    cache.release([]);
+
+    firstWindow.open();
+    await first;
+    // The first carve finished, the second still borrows: not freed yet.
+    expect(sharedSolid.volume()).toBeGreaterThan(0);
+
+    secondWindow.open();
+    await expect(second).resolves.toBeGreaterThan(0);
+    expect(cache.size).toBe(0);
+  });
+});
+
 describe('resolving a carve request against the cache', () => {
   function request(overrides: Partial<CutoutModelRequest> = {}): CutoutModelRequest {
     return {
