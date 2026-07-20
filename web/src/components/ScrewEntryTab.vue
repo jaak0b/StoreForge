@@ -66,12 +66,12 @@ const previewLoaded = ref(!smAndDown.value);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
 
+const HEIGHT_INVALID_MESSAGE = 'The height must be a whole number of at least 2 height units.';
+
 const heightValid = computed(() => Number.isInteger(heightUnits.value) && heightUnits.value >= 2);
 
 const heightRules = [
-  (v: number) =>
-    (Number.isInteger(v) && v >= 2) ||
-    'The height must be a whole number of at least 2 height units.',
+  (v: number) => (Number.isInteger(v) && v >= 2) || HEIGHT_INVALID_MESSAGE,
 ];
 
 function headIconPath(headType: HeadType): string {
@@ -652,6 +652,16 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         class="mt-2"
       >
         {{ error }}
+      </v-alert>
+
+      <v-alert
+        v-if="!insertOnly && !heightValid"
+        type="warning"
+        density="compact"
+        variant="tonal"
+        class="mt-2"
+      >
+        {{ HEIGHT_INVALID_MESSAGE }}
       </v-alert>
 
       <ProductSelect v-model="productChoice" v-model:fused="fused" hide-bin-alone class="mt-4" />
