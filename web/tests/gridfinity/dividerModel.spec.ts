@@ -218,10 +218,11 @@ describe('divider editor mutations', () => {
 
 /**
  * The pull radius every snapping expectation below is read against, in mm. A
- * real editor derives it from a fixed pixel radius and its own view scale; 2 mm
- * is squarely in the range the divider canvas produces (its 8 px radius over
- * the 2.4 to 6.5 px/mm its footprints fit at). Stated once, because a magnetic
- * assist has no meaning without the radius it acts over.
+ * real editor derives it from a fixed pixel radius and its own view scale: the
+ * divider canvas converts 8 css px into roughly 2.2 mm on a one by one bin and
+ * 4.9 mm on a three by three one, so 2 mm sits just under the range it
+ * produces. Stated once, because a magnetic assist has no meaning without the
+ * radius it acts over.
  */
 const TOLERANCE_MM = 2;
 

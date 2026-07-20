@@ -52,8 +52,8 @@ const {
   canvasWidth,
   hoverCursor,
   scheduleDraw,
-  currentView,
   clientToMm,
+  cssPxToMm,
   freezeView,
   releaseView,
 } = useTopDownCanvas({
@@ -162,7 +162,7 @@ function onPointerDown(event: PointerEvent): void {
   freezeView();
   // The view is frozen for the gesture, so the pull radius converts once here
   // and stays the same distance on screen for every move that follows.
-  store.setSnapToleranceMm(SNAP_PULL_PX / currentView().s);
+  store.setSnapToleranceMm(cssPxToMm(SNAP_PULL_PX));
   const p = clientToMm(event.clientX, event.clientY);
   dragStartMm = p;
   dragOriginWall = null;
