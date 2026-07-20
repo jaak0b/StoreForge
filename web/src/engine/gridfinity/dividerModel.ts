@@ -68,13 +68,26 @@ export function wallAngleDeg(wall: DividerWall): number {
  * property: it constrains how an edit is applied, and leaves no trace on the
  * wall it produced, so a wall drawn with snapping on is an ordinary free
  * segment afterwards.
+ *
+ * Snapping is magnetic, not quantizing. An edit is attracted to a target only
+ * while it is within toleranceMm of one; outside that radius the position, the
+ * length and the angle are free and continuous, so every value in between
+ * stays reachable.
+ *
+ * toleranceMm is a screen-space affordance expressed in mm, not a geometric
+ * figure: the view that owns the pointer converts its own fixed pixel radius
+ * through its current scale, so the pull covers the same distance on screen at
+ * every zoom. The engine therefore never learns anything about zoom. A
+ * tolerance of zero attracts nothing, which is what a caller with no view
+ * scale to convert should ask for.
  */
 export interface SnapOptions {
   enabled: boolean;
+  toleranceMm: number;
 }
 
 /** Snapping off: the identity setting, so callers can always pass something. */
-export const SNAP_OFF: SnapOptions = { enabled: false };
+export const SNAP_OFF: SnapOptions = { enabled: false, toleranceMm: 0 };
 
 /**
  * How many equal parts of the Gridfinity grid pitch a snapped position may
@@ -101,17 +114,61 @@ function roundToMultiple(value: number, step: number): number {
 }
 
 /**
- * The nearest point on the position snapping lattice, which is anchored on
- * the bin's centre (the origin of the wall model's coordinates). Returns the
- * point unchanged when snapping is off.
+ * The nearest of `candidates` to `value`, or null when none of them lies
+ * within the tolerance: the one-dimensional magnet every axis-aligned target
+ * resolves through. Returning null rather than `value` keeps "already exactly
+ * on a target" distinguishable from "attracted by nothing", which is what lets
+ * a rigid translation tell which of its two ends is actually being caught.
+ */
+function nearestWithin(
+  value: number,
+  candidates: number[],
+  toleranceMm: number,
+): number | null {
+  let best: number | null = null;
+  let bestError = Infinity;
+  for (const candidate of candidates) {
+    const error = Math.abs(candidate - value);
+    if (error <= toleranceMm && error < bestError) {
+      bestError = error;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/**
+ * The axis-aligned snap candidates for one coordinate: the nearest line of the
+ * position snapping lattice, which is anchored on the bin's centre, plus the
+ * interior rectangle's two edges on that axis when the footprint is known. The
+ * boundary belongs in the set because it is where a full span wall terminates,
+ * exactly as evenDividerWalls places its endpoints.
+ */
+function axisCandidates(value: number, halfExtent: number | null): number[] {
+  const candidates = [roundToMultiple(value, SNAP_STEP_MM)];
+  if (halfExtent !== null) candidates.push(halfExtent, -halfExtent);
+  return candidates;
+}
+
+/**
+ * The point attracted onto the position snapping lattice and, when a footprint
+ * is given, the interior boundary. Each axis is attracted independently, so a
+ * point near a single grid line is pulled onto that line and left free on the
+ * other axis. Returns the point unchanged when snapping is off, or when
+ * nothing is within the tolerance.
  */
 export function snapPoint(
   x: number,
   y: number,
   options: SnapOptions,
+  footprint?: BinFootprint,
 ): { x: number; y: number } {
   if (!options.enabled) return { x, y };
-  return { x: roundToMultiple(x, SNAP_STEP_MM), y: roundToMultiple(y, SNAP_STEP_MM) };
+  const half = footprint ? interiorHalfExtents(footprint) : null;
+  return {
+    x: nearestWithin(x, axisCandidates(x, half ? half.hx : null), options.toleranceMm) ?? x,
+    y: nearestWithin(y, axisCandidates(y, half ? half.hy : null), options.toleranceMm) ?? y,
+  };
 }
 
 /**
@@ -143,90 +200,233 @@ const SNAP_EPS = 1e-9;
 export const WALL_BOUNDARY_EPS = 1e-6;
 
 /**
- * The distances along a ray at which a dragged endpoint may legitimately come
- * to rest: the ray's crossings with the position snapping lattice's grid
- * lines (standard ray/axis-aligned-line intersection, only the two crossings
- * per axis bracketing the drag distance, since a farther one can never be the
- * nearest), plus, when the footprint is known, the ray's intersections with
- * the interior rectangle's boundary. The boundary belongs in the set because
- * it is where a full span wall terminates, exactly as evenDividerWalls places
- * its endpoints. Candidates behind the anchor, and any landing outside the
- * interior, are dropped.
+ * What an edit may be attracted to: the footprint whose interior boundary is a
+ * target, plus the other walls already in the bin. DividerState satisfies it,
+ * so the editor paths pass their own state and name the wall being edited so
+ * it is not offered as its own target.
  */
-function snapStopsAlongRay(
-  anchor: { x: number; y: number },
-  ux: number,
-  uy: number,
-  dragLength: number,
-  footprint?: BinFootprint,
-): number[] {
-  const axes = [
-    { origin: anchor.x, direction: ux },
-    { origin: anchor.y, direction: uy },
-  ];
-  const stops: number[] = [];
-  for (const axis of axes) {
-    if (Math.abs(axis.direction) < SNAP_EPS) continue;
-    const at = axis.origin + dragLength * axis.direction;
-    const line = at / SNAP_STEP_MM;
-    for (const k of [Math.floor(line), Math.ceil(line)]) {
-      stops.push((k * SNAP_STEP_MM - axis.origin) / axis.direction);
-    }
-  }
-  if (footprint) {
-    const { hx, hy } = interiorHalfExtents(footprint);
-    const edges = [
-      { origin: anchor.x, direction: ux, at: hx },
-      { origin: anchor.x, direction: ux, at: -hx },
-      { origin: anchor.y, direction: uy, at: hy },
-      { origin: anchor.y, direction: uy, at: -hy },
-    ];
-    for (const edge of edges) {
-      if (Math.abs(edge.direction) < SNAP_EPS) continue;
-      stops.push((edge.at - edge.origin) / edge.direction);
-    }
-  }
-  return stops.filter((t) => {
-    if (!(t > SNAP_EPS)) return false;
-    if (!footprint) return true;
-    const { hx, hy } = interiorHalfExtents(footprint);
-    return (
-      Math.abs(anchor.x + t * ux) <= hx + SNAP_EPS &&
-      Math.abs(anchor.y + t * uy) <= hy + SNAP_EPS
-    );
-  });
+export interface SnapContext extends BinFootprint {
+  /** Every wall in the bin; each one is a snap target. */
+  walls?: DividerWall[];
+  /** Index in `walls` of the wall being edited, excluded from the targets. */
+  excludeIndex?: number;
 }
 
 /**
- * The snapped form of a wall for the edit that produced it.
+ * The point of segment a-b closest to p: the standard perpendicular projection
+ * onto the infinite line, with the parameter clamped to the segment. The one
+ * home for the projection, so the hit test and the snapping agree.
+ */
+function closestPointOnSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { x: number; y: number } {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return { x: ax, y: ay };
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return { x: ax + t * dx, y: ay + t * dy };
+}
+
+/**
+ * The nearest point on another wall within the tolerance, or null.
  *
- * Translating ('translate') moves both endpoints by the offset that puts the
- * first endpoint on the lattice, which leaves the length and the angle exactly
- * as they were. Reshaping (1 or 2, the endpoint being dragged) holds the other
- * endpoint fixed, rounds the direction to SNAP_ANGLE_STEP_DEG, and then places
- * the dragged endpoint at the legitimate stopping point along that ray nearest
- * the drag: a lattice crossing, or the interior boundary, so a wall can span
- * the interior exactly. The endpoint's position is what quantizes; the length
- * follows from it and is never quantized as a proxy.
+ * Endpoints are offered before midspan projections: an endpoint is the more
+ * specific target, so a drag near the end of another wall closes an exact
+ * corner instead of stopping just short of it on the segment. A midspan
+ * projection is what lands an endpoint flush on another wall and makes a clean
+ * T junction.
+ */
+function attractToWalls(
+  px: number,
+  py: number,
+  context: SnapContext | undefined,
+  toleranceMm: number,
+): { x: number; y: number } | null {
+  if (!context?.walls) return null;
+  const endpoints: { x: number; y: number }[] = [];
+  const projections: { x: number; y: number }[] = [];
+  context.walls.forEach((wall, index) => {
+    if (index === context.excludeIndex) return;
+    endpoints.push({ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 });
+    projections.push(closestPointOnSegment(px, py, wall.x1, wall.y1, wall.x2, wall.y2));
+  });
+  for (const tier of [endpoints, projections]) {
+    let best: { x: number; y: number } | null = null;
+    let bestError = Infinity;
+    for (const target of tier) {
+      const error = Math.hypot(target.x - px, target.y - py);
+      if (error <= toleranceMm && error < bestError) {
+        bestError = error;
+        best = target;
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
+/**
+ * The dragged endpoint rotated about the fixed one onto the nearest multiple
+ * of SNAP_ANGLE_STEP_DEG at unchanged length, or null when that rotation would
+ * move the endpoint further than the tolerance.
  *
- * Passing the footprint makes the interior boundary a snap target and keeps
- * the result inside the interior; without it only the lattice applies.
+ * The angular assist deliberately has no tolerance of its own: it reuses the
+ * position tolerance by measuring how far the lock would actually displace the
+ * endpoint. The angular window therefore narrows as the wall grows, and the
+ * assist covers the same distance on screen at any wall length, which is the
+ * same affordance the position magnets offer.
+ */
+function attractAngle(
+  fixed: { x: number; y: number },
+  moved: { x: number; y: number },
+  toleranceMm: number,
+): { x: number; y: number } | null {
+  const dx = moved.x - fixed.x;
+  const dy = moved.y - fixed.y;
+  const length = Math.hypot(dx, dy);
+  if (length < SNAP_EPS) return null;
+  const step = (SNAP_ANGLE_STEP_DEG * Math.PI) / 180;
+  const angle = roundToMultiple(Math.atan2(dy, dx), step);
+  const end = {
+    x: fixed.x + length * Math.cos(angle),
+    y: fixed.y + length * Math.sin(angle),
+  };
+  return Math.hypot(end.x - moved.x, end.y - moved.y) <= toleranceMm ? end : null;
+}
+
+/**
+ * The endpoint shortened back along its own direction to the interior
+ * rectangle's boundary when it lies outside it (standard ray/axis-aligned-box
+ * clip). Shortening along the ray rather than clamping each axis is what keeps
+ * a snapped direction intact when the drag runs past the bin wall: a per-axis
+ * clamp would leave the wall at an arbitrary angle. With the fixed end already
+ * outside, there is no ray to clip and the caller's clamp is what bounds the
+ * wall.
+ */
+function clipToInterior(
+  fixed: { x: number; y: number },
+  end: { x: number; y: number },
+  context: SnapContext | undefined,
+): { x: number; y: number } {
+  if (!context) return end;
+  const { hx, hy } = interiorHalfExtents(context);
+  if (Math.abs(end.x) <= hx + SNAP_EPS && Math.abs(end.y) <= hy + SNAP_EPS) return end;
+  const dx = end.x - fixed.x;
+  const dy = end.y - fixed.y;
+  const length = Math.hypot(dx, dy);
+  if (length < SNAP_EPS) return end;
+  const ux = dx / length;
+  const uy = dy / length;
+  let limit = Infinity;
+  for (const axis of [
+    { origin: fixed.x, direction: ux, half: hx },
+    { origin: fixed.y, direction: uy, half: hy },
+  ]) {
+    if (Math.abs(axis.direction) < SNAP_EPS) continue;
+    const edge = axis.direction > 0 ? axis.half : -axis.half;
+    limit = Math.min(limit, (edge - axis.origin) / axis.direction);
+  }
+  if (!(limit > SNAP_EPS) || limit >= length) return end;
+  return { x: fixed.x + limit * ux, y: fixed.y + limit * uy };
+}
+
+/**
+ * The rigid offset a translated wall is attracted by. Both endpoints probe the
+ * targets, so the wall is caught by whichever of its ends reaches one first.
+ * Another wall wins outright when one is in range, being a two-dimensional
+ * target; otherwise each axis independently takes the smallest correction any
+ * endpoint asks for, so the two ends cannot pull the wall apart, and an end
+ * already sitting on a target holds the wall where it is.
+ */
+function translateOffset(
+  wall: DividerWall,
+  context: SnapContext | undefined,
+  toleranceMm: number,
+): { dx: number; dy: number } {
+  const probes = [
+    { x: wall.x1, y: wall.y1 },
+    { x: wall.x2, y: wall.y2 },
+  ];
+  let onWall: { dx: number; dy: number } | null = null;
+  let onWallError = Infinity;
+  for (const probe of probes) {
+    const target = attractToWalls(probe.x, probe.y, context, toleranceMm);
+    if (!target) continue;
+    const error = Math.hypot(target.x - probe.x, target.y - probe.y);
+    if (error < onWallError) {
+      onWallError = error;
+      onWall = { dx: target.x - probe.x, dy: target.y - probe.y };
+    }
+  }
+  if (onWall) return onWall;
+  const half = context ? interiorHalfExtents(context) : null;
+  const axes = [
+    { values: probes.map((p) => p.x), half: half ? half.hx : null },
+    { values: probes.map((p) => p.y), half: half ? half.hy : null },
+  ];
+  const offsets = axes.map((axis) => {
+    let offset = 0;
+    let bestError = Infinity;
+    for (const value of axis.values) {
+      const target = nearestWithin(value, axisCandidates(value, axis.half), toleranceMm);
+      if (target === null) continue;
+      const error = Math.abs(target - value);
+      if (error < bestError) {
+        bestError = error;
+        offset = target - value;
+      }
+    }
+    return offset;
+  });
+  return { dx: offsets[0], dy: offsets[1] };
+}
+
+/**
+ * The snapped form of a wall for the edit that produced it, magnetic
+ * throughout: a target attracts only from within options.toleranceMm, and an
+ * edit outside every target's reach is returned exactly as the drag left it.
+ *
+ * Translating ('translate') offsets both endpoints rigidly, which leaves the
+ * length and the angle exactly as they were. Reshaping (1 or 2, the endpoint
+ * being dragged) holds the other endpoint fixed and resolves the dragged one
+ * against the targets in this order, the first that is in range winning
+ * outright so the assists combine instead of fighting:
+ *
+ *  1. another wall's endpoint, so corners and L shapes meet exactly;
+ *  2. a point along another wall's segment, which is the clean T junction;
+ *  3. the lattice and the interior boundary, each axis independently;
+ *  4. failing all of those, the direction locks to a multiple of
+ *     SNAP_ANGLE_STEP_DEG and the length stays free.
+ *
+ * A position target is honoured exactly and its angle simply falls out; the
+ * angle lock only ever applies where no position target was in reach, so the
+ * two can never disagree about where the endpoint goes. The result is finally
+ * shortened along its own direction to stay inside the interior.
+ *
+ * Passing the context makes the interior boundary and the other walls targets;
+ * without it only the lattice and the angle apply.
  *
  * Returns a copy of the wall unchanged when snapping is off. Pure: standard
- * rounding, atan2, rotation about a point and ray/line intersection, with no
- * tuned constants.
+ * rounding to a multiple, point-to-segment projection, atan2, rotation about a
+ * point and ray/box clipping, with no tuned constants.
  */
 export function snapWall(
   wall: DividerWall,
   anchor: SnapAnchor,
   options: SnapOptions,
-  footprint?: BinFootprint,
+  context?: SnapContext,
 ): DividerWall {
   if (!options.enabled) return { ...wall };
+  const tolerance = options.toleranceMm;
   if (anchor === 'translate') {
-    const snapped = snapPoint(wall.x1, wall.y1, options);
-    const dx = snapped.x - wall.x1;
-    const dy = snapped.y - wall.y1;
+    const { dx, dy } = translateOffset(wall, context, tolerance);
     return {
       x1: wall.x1 + dx,
       y1: wall.y1 + dy,
@@ -236,32 +436,19 @@ export function snapWall(
   }
   const fixed = anchor === 1 ? { x: wall.x2, y: wall.y2 } : { x: wall.x1, y: wall.y1 };
   const moved = anchor === 1 ? { x: wall.x1, y: wall.y1 } : { x: wall.x2, y: wall.y2 };
-  const dragLength = Math.hypot(moved.x - fixed.x, moved.y - fixed.y);
-  if (dragLength === 0) return { ...wall };
-  const angle = Math.atan2(moved.y - fixed.y, moved.x - fixed.x);
-  const step = (SNAP_ANGLE_STEP_DEG * Math.PI) / 180;
-  const snappedAngle = roundToMultiple(angle, step);
-  const ux = Math.cos(snappedAngle);
-  const uy = Math.sin(snappedAngle);
-  const stops = snapStopsAlongRay(fixed, ux, uy, dragLength, footprint);
-  // With no stop reachable (an anchor already outside the interior), the drag
-  // distance stands and the caller's clamp is what bounds the wall.
-  let distance = dragLength;
-  let best = Infinity;
-  for (const stop of stops) {
-    const error = Math.abs(stop - dragLength);
-    if (error < best) {
-      best = error;
-      distance = stop;
-    }
+  if (Math.hypot(moved.x - fixed.x, moved.y - fixed.y) === 0) return { ...wall };
+  let end = attractToWalls(moved.x, moved.y, context, tolerance);
+  if (!end) {
+    const half = context ? interiorHalfExtents(context) : null;
+    const x = nearestWithin(moved.x, axisCandidates(moved.x, half ? half.hx : null), tolerance);
+    const y = nearestWithin(moved.y, axisCandidates(moved.y, half ? half.hy : null), tolerance);
+    if (x !== null || y !== null) end = { x: x ?? moved.x, y: y ?? moved.y };
   }
-  const end = {
-    x: fixed.x + distance * ux,
-    y: fixed.y + distance * uy,
-  };
+  if (!end) end = attractAngle(fixed, moved, tolerance);
+  const placed = clipToInterior(fixed, end ?? moved, context);
   return anchor === 1
-    ? { x1: end.x, y1: end.y, x2: fixed.x, y2: fixed.y }
-    : { x1: fixed.x, y1: fixed.y, x2: end.x, y2: end.y };
+    ? { x1: placed.x, y1: placed.y, x2: fixed.x, y2: fixed.y }
+    : { x1: fixed.x, y1: fixed.y, x2: placed.x, y2: placed.y };
 }
 
 /**
@@ -277,13 +464,8 @@ export function pointSegmentDistance(
   bx: number,
   by: number,
 ): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len2 = dx * dx + dy * dy;
-  if (len2 === 0) return Math.hypot(px - ax, py - ay);
-  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  const closest = closestPointOnSegment(px, py, ax, ay, bx, by);
+  return Math.hypot(px - closest.x, py - closest.y);
 }
 
 /** Orientation sign of the ordered triple (a, b, c): +1 ccw, -1 cw, 0 colinear. */
@@ -504,10 +686,10 @@ export function addWall(
   wall: DividerWall,
   snap: SnapOptions = SNAP_OFF,
 ): DividerWall {
-  // Snapping a new wall puts its first endpoint on the lattice and then
-  // rebuilds the second about it, so both the position and the angle are
-  // clean; with snapping off both passes are the identity.
-  const positioned = snapWall(wall, 'translate', snap);
+  // A new wall is offered the targets at both ends: first rigidly, which
+  // catches whichever end is near something, then by reshaping the second end
+  // about the first. With snapping off both passes are the identity.
+  const positioned = snapWall(wall, 'translate', snap, state);
   state.walls.push(clampWall(state, snapWall(positioned, 2, snap, state)));
   return state.walls[state.walls.length - 1];
 }
@@ -571,6 +753,7 @@ export function moveWall(
     { x1: from.x1 + dxMm, y1: from.y1 + dyMm, x2: from.x2 + dxMm, y2: from.y2 + dyMm },
     'translate',
     snap,
+    { gridX: state.gridX, gridY: state.gridY, walls: state.walls, excludeIndex: index },
   );
   const requestedDx = shifted.x1 - from.x1;
   const requestedDy = shifted.y1 - from.y1;
@@ -614,8 +797,15 @@ export function moveWallEndpoint(
       ? { x1: xMm, y1: yMm, x2: wall.x2, y2: wall.y2 }
       : { x1: wall.x1, y1: wall.y1, x2: xMm, y2: yMm };
   // The footprint goes with it, so the snapped position can land on the
-  // interior boundary and a full span wall is reachable with snapping on.
-  const snapped = snapWall(dragged, endpoint, snap, state);
+  // interior boundary and a full span wall is reachable with snapping on; the
+  // other walls go with it so an endpoint can meet one exactly. The wall being
+  // reshaped is excluded so it cannot snap to itself.
+  const snapped = snapWall(dragged, endpoint, snap, {
+    gridX: state.gridX,
+    gridY: state.gridY,
+    walls: state.walls,
+    excludeIndex: index,
+  });
   const target =
     endpoint === 1
       ? { x: snapped.x1, y: snapped.y1 }
