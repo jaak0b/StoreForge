@@ -13,7 +13,7 @@ import { binOuterSizeMm } from './engine/gridfinity/constants';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
 import type { MeshData, PartMeshes } from './engine/gridfinity/types';
 import { assertNever, type BinPockets, type CutoutModel, type Product } from './engine/plan/types';
-import { partsOf, type PrintablePart } from './engine/plan/geometry';
+import { binInteriorOf, partsOf, type PrintablePart } from './engine/plan/geometry';
 import { arrangeAutoPlate, type FootprintItem, type Placement } from './engine/plate/arranger';
 import { mergePlacedMeshes, type PlacedMesh } from './engine/plate/placement';
 import { writePlate3mf, type PlateItem } from './engine/threeMf/writer';
@@ -63,18 +63,23 @@ async function generatePartMeshes(
     case 'insert':
       return generateInsert(part.insert);
     case 'bin': {
-      if (part.models !== undefined) {
-        const carve = await generateCutoutBin({
-          ...part.bin,
-          models: plainModels(part.models),
-        });
-        carve.warnings.forEach(warn);
-        return carve.meshes;
+      const interior = binInteriorOf(part);
+      switch (interior.interior) {
+        case 'models': {
+          const carve = await generateCutoutBin({
+            ...part.bin,
+            models: plainModels(interior.models),
+          });
+          carve.warnings.forEach(warn);
+          return carve.meshes;
+        }
+        case 'pockets':
+          return generatePocketBin({ ...part.bin, ...plainPockets(interior.pockets) });
+        case 'walls':
+          return generateSlottedBin(part.bin);
+        default:
+          return assertNever(interior);
       }
-      if (part.pockets !== undefined) {
-        return generatePocketBin({ ...part.bin, ...plainPockets(part.pockets) });
-      }
-      return generateSlottedBin(part.bin);
     }
     default:
       return assertNever(part);
@@ -90,18 +95,23 @@ async function generatePartUnion(
     case 'insert':
       return generateInsertUnion(part.insert);
     case 'bin': {
-      if (part.models !== undefined) {
-        const carve = await generateCutoutBinUnion({
-          ...part.bin,
-          models: plainModels(part.models),
-        });
-        carve.warnings.forEach(warn);
-        return carve.mesh;
+      const interior = binInteriorOf(part);
+      switch (interior.interior) {
+        case 'models': {
+          const carve = await generateCutoutBinUnion({
+            ...part.bin,
+            models: plainModels(interior.models),
+          });
+          carve.warnings.forEach(warn);
+          return carve.mesh;
+        }
+        case 'pockets':
+          return generatePocketBinUnion({ ...part.bin, ...plainPockets(interior.pockets) });
+        case 'walls':
+          return generateSlottedBinUnion(part.bin);
+        default:
+          return assertNever(interior);
       }
-      if (part.pockets !== undefined) {
-        return generatePocketBinUnion({ ...part.bin, ...plainPockets(part.pockets) });
-      }
-      return generateSlottedBinUnion(part.bin);
     }
     default:
       return assertNever(part);
@@ -110,13 +120,19 @@ async function generatePartUnion(
 
 /** The part's plate footprint in millimetres. */
 function partFootprint(part: PrintablePart): { widthMm: number; depthMm: number } {
-  if (part.part === 'insert') {
-    return { widthMm: insertLengthMm(part.insert.cells), depthMm: INSERT_DEPTH };
+  switch (part.part) {
+    case 'insert':
+      return { widthMm: insertLengthMm(part.insert.cells), depthMm: INSERT_DEPTH };
+    case 'bin':
+      // A carved interior never reaches outside the envelope, so a cutout bin
+      // occupies exactly the plate area its grid size does.
+      return {
+        widthMm: binOuterSizeMm(part.bin.gridX),
+        depthMm: binOuterSizeMm(part.bin.gridY),
+      };
+    default:
+      return assertNever(part);
   }
-  return {
-    widthMm: binOuterSizeMm(part.bin.gridX),
-    depthMm: binOuterSizeMm(part.bin.gridY),
-  };
 }
 
 /** Stable key identifying one printable part, for deduplication. */
@@ -135,21 +151,37 @@ export function triggerDownload(blob: Blob, name: string): void {
 
 /** Object name of one part, shown in the slicer. */
 function partName(part: PrintablePart): string {
-  if (part.part === 'insert') {
-    const text = part.insert.content.text;
-    return text !== '' ? `${text} label insert` : `${part.insert.cells}u label insert`;
+  switch (part.part) {
+    case 'insert': {
+      const text = part.insert.content.text;
+      return text !== '' ? `${text} label insert` : `${part.insert.cells}u label insert`;
+    }
+    case 'bin': {
+      const size = `${part.bin.gridX}x${part.bin.gridY}x${part.bin.heightUnits}`;
+      return part.labelText !== undefined ? `${part.labelText} (${size})` : size;
+    }
+    default:
+      return assertNever(part);
   }
-  const size = `${part.bin.gridX}x${part.bin.gridY}x${part.bin.heightUnits}`;
-  return part.labelText !== undefined ? `${part.labelText} (${size})` : size;
 }
 
-/** File name stem of a single-product download. */
+/**
+ * File name stem of a single-product download. Every bin-bearing product is
+ * named by its grid size whatever the bin's origin, so a cutout bin downloads
+ * under the same convention a manual or traced one does.
+ */
 function fileStem(product: Product): string {
-  if (product.kind === 'insert') {
-    return `gridfinity_label_insert_${product.cells}u`;
+  switch (product.kind) {
+    case 'insert':
+      return `gridfinity_label_insert_${product.cells}u`;
+    case 'bin':
+    case 'binWithInsert': {
+      const bin = product.bin;
+      return `gridfinity_bin_${bin.gridX}x${bin.gridY}x${bin.heightUnits}`;
+    }
+    default:
+      return assertNever(product);
   }
-  const bin = product.bin;
-  return `gridfinity_bin_${bin.gridX}x${bin.gridY}x${bin.heightUnits}`;
 }
 
 /** A generated part with everywhere its copies go on the plate. */

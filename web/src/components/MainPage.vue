@@ -93,17 +93,23 @@ function editRow(entry: QueueEntry): void {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-// Per-row single-bin downloads.
+// Per-row single-bin downloads. A generated bin can come back with placement
+// warnings (a cutout model reaching outside the interior, for one); the file
+// is still written, so they are shown rather than dropped.
 const downloadingId = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
+const downloadWarnings = ref<string[]>([]);
 
 async function downloadRow(entry: QueueEntry, format: 'stl' | '3mf'): Promise<void> {
   downloadingId.value = entry.id;
   errorMessage.value = null;
+  downloadWarnings.value = [];
   try {
     const product = snapshotProduct(entry.product);
-    if (format === 'stl') await downloadProductStl(product);
-    else await downloadProduct3mf(product);
+    downloadWarnings.value =
+      format === 'stl'
+        ? await downloadProductStl(product)
+        : await downloadProduct3mf(product);
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : 'The download failed.';
@@ -142,6 +148,18 @@ function removeRow(entry: QueueEntry): void {
 
     <v-alert v-if="errorMessage" type="error" density="compact" class="mb-3">
       {{ errorMessage }}
+    </v-alert>
+
+    <v-alert
+      v-if="downloadWarnings.length > 0"
+      type="warning"
+      variant="tonal"
+      density="compact"
+      class="mb-3"
+    >
+      <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">
+        {{ warning }}
+      </p>
     </v-alert>
 
     <v-empty-state

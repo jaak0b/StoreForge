@@ -30,6 +30,33 @@ export type PrintablePart =
     }
   | { part: 'insert'; insert: InsertParams };
 
+/** A printable part that is a bin body, narrowed off the part union. */
+export type PrintableBinPart = Extract<PrintablePart, { part: 'bin' }>;
+
+/**
+ * Which interior a printable bin part carries, as a tagged union: models to
+ * carve out, tool pockets to subtract, or an interior described by divider
+ * walls alone (which travel inside the bin's own geometry parameters).
+ */
+export type BinInterior =
+  | { interior: 'models'; models: CutoutModel[] }
+  | { interior: 'pockets'; pockets: BinPockets }
+  | { interior: 'walls' };
+
+/**
+ * Reads a bin part's interior into that tagged form. This is the read side of
+ * what interiorFeaturesOf writes, kept beside it so the two cannot drift, and
+ * it exists so that choosing a generator is an exhaustive switch rather than a
+ * chain of presence checks whose last branch assumes whatever is left. That
+ * assumption is what would let a cutout bin be generated as a plain one and
+ * exported as an uncarved solid, which looks correct and wastes a real print.
+ */
+export function binInteriorOf(part: PrintableBinPart): BinInterior {
+  if (part.models !== undefined) return { interior: 'models', models: part.models };
+  if (part.pockets !== undefined) return { interior: 'pockets', pockets: part.pockets };
+  return { interior: 'walls' };
+}
+
 /**
  * The interior features a bin carries beyond its envelope, keyed by the origin
  * that owns them: tool pockets for a traced bin, carved models for a cutout

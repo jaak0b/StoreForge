@@ -59,9 +59,13 @@ function commitConfirm(item: BatchItem): void {
 }
 
 // Downloads.
+// A generated bin can come back with placement warnings (a cutout model
+// reaching outside the interior, for one). The batch file is still written,
+// so they are shown rather than dropped.
 const downloading = ref(false);
 const progressText = ref('');
 const errorMessage = ref<string | null>(null);
+const downloadWarnings = ref<string[]>([]);
 
 const formats: { format: BatchFormat; title: string; detail: string }[] = [
   {
@@ -84,8 +88,9 @@ const formats: { format: BatchFormat; title: string; detail: string }[] = [
 async function download(format: BatchFormat): Promise<void> {
   downloading.value = true;
   errorMessage.value = null;
+  downloadWarnings.value = [];
   try {
-    await downloadBatch(
+    downloadWarnings.value = await downloadBatch(
       // Custom icon paths are resolved inside the worker client.
       props.batch.items.map((item) => ({
         product: item.product,
@@ -163,6 +168,17 @@ async function download(format: BatchFormat): Promise<void> {
       </p>
       <v-alert v-if="errorMessage" type="error" density="compact" class="ma-2">
         {{ errorMessage }}
+      </v-alert>
+      <v-alert
+        v-if="downloadWarnings.length > 0"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="ma-2"
+      >
+        <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">
+          {{ warning }}
+        </p>
       </v-alert>
       <div
         v-for="item in batch.items"
