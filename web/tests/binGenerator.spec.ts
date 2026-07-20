@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { ManifoldToplevel } from 'manifold-3d';
+import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { loadManifold } from './helpers/manifold';
 import {
   buildBinManifold,
@@ -756,5 +756,242 @@ describe('generateBin', () => {
     for (const index of mesh.indices) {
       expect(index).toBeLessThan(numVert);
     }
+  });
+});
+
+/**
+ * The volumes of a solid's connected components, split by sign. Manifold gives
+ * an enclosed void a negative volume because its surface is inverted, so the
+ * sign is what distinguishes a sealed cavity inside the material from a
+ * genuinely detached piece of plastic.
+ */
+function componentVolumes(solid: Manifold): { solids: number[]; voids: number[] } {
+  const volumes = solid.decompose().map((part) => part.volume());
+  return {
+    solids: volumes.filter((v) => v > 0),
+    voids: volumes.filter((v) => v < 0),
+  };
+}
+
+/**
+ * Interior half-extents in bin-local mm, hand-calculated from the Gridfinity
+ * standard: n cells span n * 42 mm of pitch less the 0.5 mm shared footprint
+ * clearance and a 0.95 mm wall per side, so the interior is n * 42 - 2.4 mm.
+ */
+const HALF_1 = 19.8;
+const HALF_2 = 40.8;
+const HALF_3 = 61.8;
+
+/**
+ * Wall layouts spanning the shapes the editor can produce, on footprints whose
+ * interior is deliberately not a whole multiple of the snap step. Three
+ * footprints rather than an exhaustive sweep, because each build costs real
+ * time and the failure modes under test are shape-driven, not size-driven.
+ */
+const WALL_LAYOUTS = [
+  {
+    name: 'a full-span wall on a 1x1 bin',
+    grid: { gridX: 1, gridY: 1 },
+    walls: [{ x1: 0, y1: -HALF_1, x2: 0, y2: HALF_1 }],
+  },
+  {
+    name: 'a partial wall ending in open interior on a 2x2 bin',
+    grid: { gridX: 2, gridY: 2 },
+    walls: [{ x1: 0, y1: -12, x2: 0, y2: 12 }],
+  },
+  {
+    name: 'an angled wall on a 2x2 bin',
+    grid: { gridX: 2, gridY: 2 },
+    walls: [{ x1: -18, y1: -9, x2: 18, y2: 9 }],
+  },
+  {
+    name: 'a T junction on a 2x2 bin',
+    grid: { gridX: 2, gridY: 2 },
+    walls: [
+      { x1: -HALF_2, y1: 0, x2: HALF_2, y2: 0 },
+      { x1: 0, y1: 0, x2: 0, y2: 22 },
+    ],
+  },
+  {
+    name: 'two crossing walls on a 3x2 bin',
+    grid: { gridX: 3, gridY: 2 },
+    walls: [
+      { x1: 0, y1: -HALF_2, x2: 0, y2: HALF_2 },
+      { x1: -HALF_3, y1: 0, x2: HALF_3, y2: 0 },
+    ],
+  },
+  {
+    name: 'a corner-to-corner diagonal on a 3x2 bin',
+    grid: { gridX: 3, gridY: 2 },
+    walls: [{ x1: -HALF_3, y1: -HALF_2, x2: HALF_3, y2: HALF_2 }],
+  },
+  {
+    name: 'four walls at once on a 3x2 bin',
+    grid: { gridX: 3, gridY: 2 },
+    walls: [
+      { x1: -20, y1: -HALF_2, x2: -20, y2: HALF_2 },
+      { x1: 20, y1: -HALF_2, x2: 20, y2: HALF_2 },
+      { x1: -HALF_3, y1: 0, x2: -20, y2: 0 },
+      { x1: 20, y1: 0, x2: HALF_3, y2: 0 },
+    ],
+  },
+] as const;
+
+describe('divider walls are part of the bin, never a loose part', () => {
+  it.each(WALL_LAYOUTS)('builds $name as a single connected solid', ({ grid, walls }) => {
+    // The invariant that actually matters for printability. A wall that failed
+    // to fuse would print as a loose fin rattling in the bin, and manifold
+    // would still report NoError, because a solid made of several disconnected
+    // pieces is perfectly valid geometry.
+    const bin = buildBinManifold(m, params({ ...grid, walls: [...walls] }));
+
+    expect(bin.status()).toBe('NoError');
+    expect(componentVolumes(bin).solids).toHaveLength(1);
+
+    bin.delete();
+  });
+
+  it.each(WALL_LAYOUTS)('leaves $name with no spurious handle', ({ grid, walls }) => {
+    // Genus counts handles on the solid itself. A divider welded to the floor
+    // along its whole underside and to the walls at its ends adds no handle; a
+    // divider bridging the interior without reaching the floor would.
+    const bin = buildBinManifold(m, params({ ...grid, walls: [...walls] }));
+
+    const [body] = bin.decompose().filter((part) => part.volume() > 0);
+    expect(body.genus()).toBe(0);
+
+    bin.delete();
+  });
+
+  it('reports negative genus only for sealed voids in the hollow base', () => {
+    // A corner-to-corner diagonal runs its root strip close alongside the foot
+    // shell and the base rib lattice, pinching slots of the base hollow shut.
+    // Those sealed cavities are what drives genus negative: the whole solid's
+    // genus is one minus its component count, so four sealed voids read as -4
+    // even though nothing has come loose. Sealed base cavities are an artifact
+    // of the hollow base, not a detached wall, so their number is not pinned
+    // here; what is pinned is that they are voids and that the plastic is
+    // still one piece.
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 3,
+        gridY: 2,
+        heightUnits: 6,
+        walls: [{ x1: -HALF_3, y1: -HALF_2, x2: HALF_3, y2: HALF_2 }],
+      }),
+    );
+
+    const { solids, voids } = componentVolumes(bin);
+
+    expect(bin.status()).toBe('NoError');
+    expect(solids).toHaveLength(1);
+    expect(voids.length).toBeGreaterThan(0);
+    expect(bin.genus()).toBeLessThan(0);
+
+    bin.delete();
+  });
+});
+
+describe('a built divider matches the wall that was drawn', () => {
+  it.each([
+    { name: 'a 1x1 bin', gridX: 1, gridY: 1, half: HALF_1 },
+    { name: 'a 2x2 bin', gridX: 2, gridY: 2, half: HALF_2 },
+    { name: 'a 3x2 bin', gridX: 3, gridY: 2, half: HALF_2 },
+  ])('welds a full-span wall into both perimeter walls of $name', ({ gridX, gridY, half }) => {
+    // Both endpoints sit on the interior boundary, so both ends must be
+    // extended into the perimeter and reach it.
+    const bin = buildBinManifold(
+      m,
+      params({ gridX, gridY, walls: [{ x1: 0, y1: -half, x2: 0, y2: half }] }),
+    );
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+
+    for (const sign of [-1, 1]) {
+      const probe = m.Manifold.cube([DIVIDER_THICKNESS / 2, 0.1, 2], true).translate(
+        0,
+        sign * (half - 0.05),
+        midZ,
+      );
+      const hit = bin.intersect(probe);
+      expect(hit.isEmpty()).toBe(false);
+      hit.delete();
+      probe.delete();
+    }
+
+    bin.delete();
+  });
+
+  it('stops an angled wall at its free endpoint instead of running past it', () => {
+    // The wall ends in open interior at both ends, so neither end may be
+    // extended. An unconditional extension would push it most of a millimetre
+    // beyond each endpoint along its own direction.
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        scoop: false,
+        walls: [{ x1: -18, y1: -9, x2: 18, y2: 9 }],
+      }),
+    );
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+    // Unit direction of the wall, used only to place the probes.
+    const length = Math.hypot(36, 18);
+    const ux = 36 / length;
+    const uy = 18 / length;
+
+    // Solid just inside the free endpoint.
+    const inside = m.Manifold.cube([0.3, 0.3, 2], true).translate(
+      18 - ux * 0.3,
+      9 - uy * 0.3,
+      midZ,
+    );
+    const insideHit = bin.intersect(inside);
+    expect(insideHit.isEmpty()).toBe(false);
+    insideHit.delete();
+    inside.delete();
+
+    // Air just beyond it, well within the 0.95 mm an unconditional extension
+    // would have added.
+    const beyond = m.Manifold.cube([0.3, 0.3, 2], true).translate(
+      18 + ux * 0.5,
+      9 + uy * 0.5,
+      midZ,
+    );
+    const beyondHit = bin.intersect(beyond);
+    expect(beyondHit.isEmpty()).toBe(true);
+    beyondHit.delete();
+    beyond.delete();
+
+    bin.delete();
+  });
+
+  it('keeps a junction wall solid through the wall that ends against it', () => {
+    // The ending wall must not notch or split the wall it meets: the material
+    // inside the junction stays whole, which is what makes the weld hold.
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        scoop: false,
+        walls: [
+          { x1: -HALF_2, y1: 0, x2: HALF_2, y2: 0 },
+          { x1: 0, y1: 0, x2: 0, y2: 22 },
+        ],
+      }),
+    );
+    const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
+
+    // A block entirely within the junction wall's cross-section at the meeting
+    // point: it must be completely filled with plastic.
+    const probe = m.Manifold.cube([2, DIVIDER_THICKNESS - 0.1, 2], true).translate(0, 0, midZ);
+    const hit = bin.intersect(probe);
+    expect(hit.volume()).toBeCloseTo(probe.volume(), 6);
+    hit.delete();
+    probe.delete();
+
+    bin.delete();
   });
 });
