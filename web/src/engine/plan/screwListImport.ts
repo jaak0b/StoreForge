@@ -167,6 +167,8 @@ export interface ScrewBatch {
   enteredUnit: EnteredUnit;
   /** The length as entered for an imperial batch ('1-1/2"'), display only. */
   enteredLengthText: string | null;
+  /** Whether the segment text explicitly gave a quantity, versus defaulting to 1. */
+  quantityExplicit: boolean;
 }
 
 /** Result of parsing one shorthand line. */
@@ -251,6 +253,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
   let lengthSeen = false;
   let head: HeadType | null = null;
   let quantity: number | null = null;
+  let quantityExplicit = false;
   let expectQty = false;
   let pendingSeparator = false;
   let sawAnything = false;
@@ -299,6 +302,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
       return;
     }
     quantity = value;
+    quantityExplicit = true;
   };
 
   let i = 0;
@@ -412,6 +416,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
     quantity: quantity ?? 1,
     enteredUnit: imperial ? 'imperial' : 'metric',
     enteredLengthText,
+    quantityExplicit,
   };
 }
 
@@ -441,7 +446,7 @@ export function composeShorthand(
 }
 
 /** Canonical shorthand alias used to compose text back out for each head type. */
-const HEAD_ALIASES_REVERSE: Record<HeadType, string> = {
+export const HEAD_ALIASES_REVERSE: Record<HeadType, string> = {
   'countersunk screw': 'fhcs',
   'pan head screw': 'bhcs',
   'cap head screw': 'shcs',

@@ -23,7 +23,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('m3x20 fhcs');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M3', lengthMm: 20, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M3', lengthMm: 20, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -31,7 +31,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('fhcs m5x12mm');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M5', lengthMm: 12, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M5', lengthMm: 12, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -39,8 +39,8 @@ describe('parseShorthand', () => {
     const result = parseShorthand('fhcs m5x12mm, bhcs m3x10mm');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M5', lengthMm: 12, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
-      { thread: 'M3', lengthMm: 10, head: 'pan head screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M5', lengthMm: 12, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
+      { thread: 'M3', lengthMm: 10, head: 'pan head screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -48,7 +48,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('m4x40 hex bolt x6');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M4', lengthMm: 40, head: 'hex bolt', quantity: 6, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M4', lengthMm: 40, head: 'hex bolt', quantity: 6, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: true },
     ]);
   });
 
@@ -65,7 +65,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('m3x20x6');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M3', lengthMm: 20, head: null, quantity: 6, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M3', lengthMm: 20, head: null, quantity: 6, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: true },
     ]);
   });
 
@@ -73,7 +73,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('m3 x 20 shcs');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M3', lengthMm: 20, head: 'cap head screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M3', lengthMm: 20, head: 'cap head screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -81,7 +81,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('m2.5x8 pan');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M2.5', lengthMm: 8, head: 'pan head screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M2.5', lengthMm: 8, head: 'pan head screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -119,7 +119,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('m5 nut');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M5', lengthMm: null, head: 'hex nut', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M5', lengthMm: null, head: 'hex nut', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -136,7 +136,7 @@ describe('parseShorthand', () => {
       "Can't read head type 'flanged'. Pick one from the row's dropdown instead.",
     ]);
     expect(result.batches).toEqual([
-      { thread: 'M3', lengthMm: 20, head: null, quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M3', lengthMm: 20, head: null, quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -162,7 +162,7 @@ describe('parseShorthand', () => {
       "Can't find a thread size (like M3 or #8) in '20 fhcs'.",
     ]);
     expect(result.batches).toEqual([
-      { thread: null, lengthMm: 20, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: null, lengthMm: 20, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
@@ -188,7 +188,7 @@ describe('parseShorthand', () => {
     const result = parseShorthand('M4×16 FHCS');
     expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
-      { thread: 'M4', lengthMm: 16, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null },
+      { thread: 'M4', lengthMm: 16, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 });
@@ -205,6 +205,7 @@ describe('parseShorthand imperial', () => {
         quantity: 1,
         enteredUnit: 'imperial',
         enteredLengthText: '1-1/2"',
+        quantityExplicit: false,
       },
     ]);
   });
@@ -220,6 +221,7 @@ describe('parseShorthand imperial', () => {
         quantity: 1,
         enteredUnit: 'imperial',
         enteredLengthText: '1"',
+        quantityExplicit: false,
       },
     ]);
   });
@@ -257,6 +259,7 @@ describe('parseShorthand imperial', () => {
         quantity: 1,
         enteredUnit: 'metric',
         enteredLengthText: null,
+        quantityExplicit: false,
       },
       {
         thread: '#8',
@@ -265,6 +268,7 @@ describe('parseShorthand imperial', () => {
         quantity: 6,
         enteredUnit: 'imperial',
         enteredLengthText: '1-1/2"',
+        quantityExplicit: true,
       },
     ]);
   });
