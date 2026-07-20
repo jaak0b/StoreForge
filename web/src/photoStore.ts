@@ -4,15 +4,18 @@
  * of the localStorage plan; a missing photo is a normal condition (the plan
  * was imported from another device), not an error.
  *
- * This is a deliberately thin hand-rolled wrapper (a dependency like idb
- * would only save the promisify helpers below). Node has no IndexedDB, so
- * the wrapper itself stays untested; the garbage-collection logic around it
- * lives in engine/plan/traceSources.ts and is tested with a fake store.
+ * The database connection itself belongs to src/idb.ts, which every blob store
+ * shares. Node has no IndexedDB, so this wrapper stays untested; the
+ * garbage-collection logic around it lives in engine/plan/storedAssets.ts and
+ * is tested with a fake store.
  */
 
-const DB_NAME = 'storeforge';
-const DB_VERSION = 1;
-const PHOTO_STORE = 'photos';
+import { PHOTO_STORE, withStore, type StoreBinding } from './idb';
+
+const PHOTOS: StoreBinding = {
+  name: PHOTO_STORE,
+  openFailure: 'Opening the photo storage failed',
+};
 
 interface PhotoRecord {
   id: string;
@@ -20,51 +23,15 @@ interface PhotoRecord {
   createdAt: string;
 }
 
-function requestError(request: IDBRequest | IDBOpenDBRequest): string {
-  return request.error?.message ?? 'unknown IndexedDB error';
-}
-
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      reject(new Error('This browser does not offer IndexedDB storage.'));
-      return;
-    }
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(PHOTO_STORE)) {
-        db.createObjectStore(PHOTO_STORE, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () =>
-      reject(new Error(`Opening the photo storage failed (${requestError(request)}).`));
-  });
-}
-
-async function withStore<T>(
-  mode: IDBTransactionMode,
-  run: (store: IDBObjectStore) => IDBRequest<T>,
-  failure: string,
-): Promise<T> {
-  const db = await openDatabase();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const transaction = db.transaction(PHOTO_STORE, mode);
-      const request = run(transaction.objectStore(PHOTO_STORE));
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(new Error(`${failure} (${requestError(request)}).`));
-    });
-  } finally {
-    db.close();
-  }
-}
-
 /** Stores (or replaces) the original photo of a trace under its source id. */
 export async function putPhoto(id: string, photo: Blob): Promise<void> {
   const record: PhotoRecord = { id, photo, createdAt: new Date().toISOString() };
-  await withStore('readwrite', (store) => store.put(record), 'Storing the trace photo failed');
+  await withStore(
+    PHOTOS,
+    'readwrite',
+    (store) => store.put(record),
+    'Storing the trace photo failed',
+  );
 }
 
 /**
@@ -73,6 +40,7 @@ export async function putPhoto(id: string, photo: Blob): Promise<void> {
  */
 export async function getPhoto(id: string): Promise<Blob | null> {
   const record = await withStore<PhotoRecord | undefined>(
+    PHOTOS,
     'readonly',
     (store) => store.get(id) as IDBRequest<PhotoRecord | undefined>,
     'Reading the stored trace photo failed',
@@ -82,12 +50,18 @@ export async function getPhoto(id: string): Promise<Blob | null> {
 
 /** Deletes a stored trace photo. Deleting a missing id is a no-op. */
 export async function deletePhoto(id: string): Promise<void> {
-  await withStore('readwrite', (store) => store.delete(id), 'Deleting the stored trace photo failed');
+  await withStore(
+    PHOTOS,
+    'readwrite',
+    (store) => store.delete(id),
+    'Deleting the stored trace photo failed',
+  );
 }
 
 /** Lists the ids of all stored trace photos, for garbage collection. */
 export async function listPhotoIds(): Promise<string[]> {
   const keys = await withStore<IDBValidKey[]>(
+    PHOTOS,
     'readonly',
     (store) => store.getAllKeys(),
     'Listing the stored trace photos failed',

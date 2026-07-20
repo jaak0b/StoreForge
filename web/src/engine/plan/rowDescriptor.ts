@@ -1,5 +1,7 @@
+import { describeMissingModels, missingCutoutModels } from './missingModels';
 import {
   assertNever,
+  binOf,
   type Bin,
   type BinEnvelope,
   type CutoutBin,
@@ -28,6 +30,13 @@ export interface RowDescriptor {
   iconName: string | null;
   /** The physical description: kind, size, origin and one detail. */
   caption: string;
+  /**
+   * A sentence naming the model files this device does not have, so a bin
+   * imported from another machine states what it needs without being opened.
+   * Empty when nothing is missing, and empty whenever the caller did not say
+   * which models are stored (an unread model store must not read as missing).
+   */
+  missingModels: string;
 }
 
 /** Title of a row whose insert carries no text to name it by. */
@@ -124,9 +133,39 @@ function captionOf(product: Product): string {
   }
 }
 
-/** Describes one plan row's product as a title line and a caption line. */
-export function describeProduct(product: Product): RowDescriptor {
+/**
+ * What the row says about model files this device does not have. Exhaustive
+ * over the origin for the same reason detailToken is: an origin that comes to
+ * depend on stored blobs has to answer this question for itself.
+ */
+function missingModelsOf(bin: Bin, storedModelIds: ReadonlySet<string>): string {
+  switch (bin.origin) {
+    case 'cutout':
+      return describeMissingModels(missingCutoutModels(bin, storedModelIds));
+    case 'traced':
+    case 'manual':
+    case 'screw':
+      return '';
+    default:
+      return assertNever(bin);
+  }
+}
+
+/**
+ * Describes one plan row's product as a title line and a caption line.
+ *
+ * `storedModelIds` is the set of cutout model ids this device actually holds,
+ * which only a caller that has read the model store can know. Leaving it out
+ * means the question was never asked, and no row then claims a missing model.
+ */
+export function describeProduct(
+  product: Product,
+  storedModelIds?: ReadonlySet<string>,
+): RowDescriptor {
   const caption = captionOf(product);
+  const bin = binOf(product);
+  const missingModels =
+    storedModelIds === undefined || bin === null ? '' : missingModelsOf(bin, storedModelIds);
   if (product.kind === 'bin') {
     return {
       title: synthesizedTitle(product.bin),
@@ -134,6 +173,7 @@ export function describeProduct(product: Product): RowDescriptor {
       titlePlaceholder: false,
       iconName: null,
       caption,
+      missingModels,
     };
   }
   const content = product.kind === 'binWithInsert' ? product.insert : product.content;
@@ -144,5 +184,6 @@ export function describeProduct(product: Product): RowDescriptor {
     titlePlaceholder: !hasText,
     iconName: content.icon,
     caption,
+    missingModels,
   };
 }

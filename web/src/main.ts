@@ -76,6 +76,7 @@ const vuetify = createVuetify({
 const pinia = createPinia();
 createApp(App).use(pinia).use(vuetify).mount('#app');
 
-// Stored trace photos orphaned by an interrupted session (photo stored, plan
-// mutation never persisted) are cleaned up once at startup.
-void useBinQueue(pinia).sweepStoredPhotos();
+// Stored blobs orphaned by an interrupted session (photo or model stored, plan
+// mutation never persisted) are cleaned up once at startup. The same pass reads
+// which cutout models this device holds, so rows can name the ones it does not.
+void useBinQueue(pinia).sweepStoredAssets();

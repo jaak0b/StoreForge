@@ -24,7 +24,7 @@ const queue = useBinQueue();
 
 /** The row's title, caption and icon, from the shared row descriptor. */
 function rowOf(entry: QueueEntry): RowDescriptor {
-  return describeProduct(entry.product);
+  return describeProduct(entry.product, queue.storedModelIdSet);
 }
 
 /** The row's label icon, resolved from the descriptor's icon name. */
@@ -190,6 +190,13 @@ function removeRow(entry: QueueEntry): void {
           </span>
           <span class="row-caption" :title="rowOf(entry).caption">
             {{ rowOf(entry).caption }}
+          </span>
+          <span
+            v-if="rowOf(entry).missingModels !== ''"
+            class="row-caption text-warning"
+            :title="rowOf(entry).missingModels"
+          >
+            {{ rowOf(entry).missingModels }}
           </span>
         </span>
         <span class="qty-badge">×{{ entry.quantity }}</span>

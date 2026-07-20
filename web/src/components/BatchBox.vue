@@ -21,7 +21,7 @@ const queue = useBinQueue();
 
 /** The item's title, caption and icon, from the shared row descriptor. */
 function rowOf(item: BatchItem): RowDescriptor {
-  return describeProduct(item.product);
+  return describeProduct(item.product, queue.storedModelIdSet);
 }
 
 /** The item's label icon, resolved from the descriptor's icon name. */
@@ -193,6 +193,13 @@ async function download(format: BatchFormat): Promise<void> {
           </span>
           <span class="row-caption" :title="rowOf(item).caption">
             {{ rowOf(item).caption }}
+          </span>
+          <span
+            v-if="rowOf(item).missingModels !== ''"
+            class="row-caption text-warning"
+            :title="rowOf(item).missingModels"
+          >
+            {{ rowOf(item).missingModels }}
           </span>
         </span>
         <span class="qty-badge">×{{ item.count }}</span>

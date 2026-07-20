@@ -17,8 +17,9 @@ import {
   failBatchItem,
   type BatchSelection,
 } from '../engine/plan/batches';
-import { sweepOrphanTracePhotos } from '../engine/plan/traceSources';
+import { sweepOrphanAssets } from '../engine/plan/storedAssets';
 import { deletePhoto, listPhotoIds } from '../photoStore';
+import { deleteModel, listModelIds } from '../modelStore';
 
 const STORAGE_KEY = 'storeforge.plan';
 
@@ -42,11 +43,35 @@ function loadPlan(): { entries: QueueEntry[]; batches: PrintBatch[] } {
 
 /** The print plan: queue entries and print batches, persisted to localStorage. */
 export const useBinQueue = defineStore('binQueue', {
-  state: () => loadPlan(),
+  state: () => ({
+    ...loadPlan(),
+    /**
+     * Ids of the cutout models this device holds, or null until the model
+     * store has been read once. Null and empty mean different things: empty
+     * says this device holds no models, so every cutout bin is missing its
+     * files, while null says the question has not been answered yet, and no
+     * row may claim a model is missing before it has been.
+     */
+    storedModelIds: null as string[] | null,
+    /**
+     * Cutout model ids an editor holds live, before any plan row references
+     * them. A model file has to reach the store before the bin that uses it is
+     * queued, because the carve preview needs the bytes long before the bin is
+     * saved; without this list the sweep below would delete such a blob on the
+     * very next plan mutation, silently and asynchronously.
+     */
+    protectedModelIds: [] as string[],
+  }),
   getters: {
     queuedCount: (state) => state.entries.length,
     entryById: (state) => (id: string) => state.entries.find((e) => e.id === id) ?? null,
     batchById: (state) => (id: string) => state.batches.find((b) => b.id === id) ?? null,
+    /**
+     * The stored cutout model ids as a set for row descriptions, or undefined
+     * while the model store has not been read.
+     */
+    storedModelIdSet: (state): ReadonlySet<string> | undefined =>
+      state.storedModelIds === null ? undefined : new Set(state.storedModelIds),
   },
   actions: {
     persist() {
@@ -56,25 +81,55 @@ export const useBinQueue = defineStore('binQueue', {
         console.error('Saving the plan failed.', error);
       }
       // Every plan mutation runs through here, so this is the single place
-      // where stored trace photos that no plan row references anymore are
-      // cleaned up (fire and forget; a failed sweep only leaves photos behind).
-      void this.sweepStoredPhotos();
+      // where stored blobs that no plan row references anymore are cleaned up
+      // (fire and forget; a failed sweep only leaves blobs behind).
+      void this.sweepStoredAssets();
     },
     /**
-     * Deletes stored trace photos no queue entry or batch item references
-     * anymore. Runs after every plan mutation and once on app start (to catch
-     * photos orphaned by an interrupted session).
+     * Deletes stored trace photos and cutout models no queue entry or batch
+     * item references anymore. Runs after every plan mutation and once on app
+     * start (to catch blobs orphaned by an interrupted session). Models an
+     * editor is still holding are protected, so an upload that has not been
+     * queued yet survives.
      */
-    async sweepStoredPhotos() {
+    async sweepStoredAssets() {
       try {
-        await sweepOrphanTracePhotos(
-          { listIds: listPhotoIds, deletePhoto },
+        await sweepOrphanAssets(
+          {
+            photos: { listIds: listPhotoIds, deleteAsset: deletePhoto },
+            models: { listIds: listModelIds, deleteAsset: deleteModel },
+          },
           this.entries,
           this.batches,
+          new Set(this.protectedModelIds),
         );
       } catch (error) {
-        console.error('Cleaning up stored trace photos failed.', error);
+        console.error('Cleaning up stored trace photos and cutout models failed.', error);
       }
+      await this.refreshStoredModelIds();
+    },
+    /**
+     * Reads which cutout models this device holds, so plan rows can say which
+     * bins arrived without their model files.
+     */
+    async refreshStoredModelIds() {
+      try {
+        this.storedModelIds = await listModelIds();
+      } catch (error) {
+        console.error('Reading the stored cutout models failed.', error);
+      }
+    },
+    /**
+     * Marks a freshly stored cutout model as held by an editor, so the sweep
+     * leaves it alone until a plan row references it. Call this before storing
+     * the file, never after queueing the bin.
+     */
+    protectModel(id: string) {
+      if (!this.protectedModelIds.includes(id)) this.protectedModelIds.push(id);
+    },
+    /** Drops an editor's hold on a stored cutout model, once the bin is saved or discarded. */
+    releaseModel(id: string) {
+      this.protectedModelIds = this.protectedModelIds.filter((held) => held !== id);
     },
     /** Adds a new queued entry ordering the given product. Returns its id. */
     add(product: Product, quantity = 1, notes?: string): string {
