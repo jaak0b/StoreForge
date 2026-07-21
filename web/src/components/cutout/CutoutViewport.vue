@@ -48,6 +48,12 @@ const props = defineProps<{
   canUndo: boolean;
   /** Whether Ctrl+Y has an edit to redo, so the shortcut knows to claim the key. */
   canRedo: boolean;
+  /**
+   * The eye button's own sticky toggle. Combined with Tab held (which is
+   * temporary and tracked internally) to decide whether the model ghosts are
+   * hidden, matching the trace canvas's "hold Tab or eye button" behaviour.
+   */
+  modelsHiddenButton: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -71,8 +77,10 @@ const emit = defineEmits<{
   strokeCommit: [points: Vec3Mm[]];
   /** A flatten click landed: the hit point and the clicked surface's outward unit normal. */
   flattenCommit: [centerMm: Vec3Mm, normalMm: Vec3Mm];
-  /** The user pressed Escape inside the viewport while painting. */
-  exitPaint: [];
+  /** A tool shortcut (B, E, S, V or Escape) picked the named tool, or null for pointer mode. */
+  setTool: [tool: 'add' | 'remove' | 'flatten' | null];
+  /** The [ or ] key stepped the brush radius by this signed amount in mm. */
+  stepBrushRadius: [deltaMm: number];
   /** Ctrl+Z (or Cmd+Z) was pressed with an edit to undo. */
   undo: [];
   /** Ctrl+Y (or Cmd+Shift+Z) was pressed with an edit to redo. */
@@ -223,12 +231,14 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Applies the current Tab-held state to every drawn ghost mesh. Called after
- * every ghost sync (so a ghost rebuilt while Tab is down comes in hidden) and
- * on every Tab keydown/keyup.
+ * Applies the current hidden state to every drawn ghost mesh. Called after
+ * every ghost sync (so a ghost rebuilt while hidden comes in hidden), on every
+ * Tab keydown/keyup, and whenever the eye button's sticky toggle changes.
+ * Either Tab held or the eye button hides the ghosts, matching the trace
+ * canvas's "hold Tab or eye button" behaviour.
  */
 function applyGhostVisibility(): void {
-  const hidden = tabHeld.value;
+  const hidden = tabHeld.value || props.modelsHiddenButton;
   for (const entry of ghostEntries.values()) {
     entry.mesh.visible = !hidden;
   }
@@ -772,18 +782,20 @@ function onPointerUpPaint(ctx: ThreeSceneContext, event: PointerEvent): void {
   }
 }
 
-/** Escape leaves paint mode; only meaningful while a tool is active. */
-function onKeyDownPaint(event: KeyboardEvent): void {
-  if (props.paintTool === null) return;
-  if (event.key !== 'Escape') return;
-  emit('exitPaint');
-}
+/**
+ * The step, in mm, that the [ and ] keys move the brush radius by. Matches
+ * the trace canvas's own bracket-key step for its (differently ranged) brush
+ * size; the store clamps the result to the cavity edit radius bounds, so this
+ * component never has to know them.
+ */
+const BRUSH_RADIUS_STEP_MM = 1;
 
 /**
  * The viewport's own keyboard shortcuts: Tab held hides the ghosts, "?"
  * toggles the shortcut help popover, Ctrl+Z (or Cmd+Z) undoes and Ctrl+Y (or
- * Cmd+Y, or Cmd+Shift+Z on mac) redoes, and Escape leaves the active paint
- * tool. None of these fire while focus sits in a field.
+ * Cmd+Y, or Cmd+Shift+Z on mac) redoes, B/E/S pick the paint tools, V or
+ * Escape returns to pointer mode, and [ and ] step the brush radius. None of
+ * these fire while focus sits in a field.
  */
 function onKeyDownGlobal(event: KeyboardEvent): void {
   if (event.key === 'Tab') {
@@ -817,7 +829,36 @@ function onKeyDownGlobal(event: KeyboardEvent): void {
     }
     return;
   }
-  onKeyDownPaint(event);
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  switch (key) {
+    case 'b':
+    case 'B':
+      emit('setTool', 'add');
+      break;
+    case 'e':
+    case 'E':
+      emit('setTool', 'remove');
+      break;
+    case 's':
+    case 'S':
+      emit('setTool', 'flatten');
+      break;
+    case 'v':
+    case 'V':
+    case 'Escape':
+      if (props.paintTool === null) return;
+      emit('setTool', null);
+      break;
+    case '[':
+      emit('stepBrushRadius', -BRUSH_RADIUS_STEP_MM);
+      break;
+    case ']':
+      emit('stepBrushRadius', BRUSH_RADIUS_STEP_MM);
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
 }
 
 /** Tab release restores every ghost's visibility to what the paint pass already decided. */
@@ -961,6 +1002,11 @@ watch(
     if (context.value) paintGhosts();
   },
   { deep: true },
+);
+/** The eye button's sticky toggle combines with Tab held; either hides the ghosts. */
+watch(
+  () => props.modelsHiddenButton,
+  () => applyGhostVisibility(),
 );
 
 /**

@@ -357,14 +357,34 @@ const clearEditsDialogOpen = ref(false);
 /** Whether the viewport's shortcut help popover is open. */
 const shortcutHelpOpen = ref(false);
 
-/** The cutout paint shortcuts listed in the help popover, in plain prose. */
-const shortcutLines: string[] = [
-  'Left drag paints.',
-  'Right drag orbits the camera.',
-  'Escape leaves the paint tool.',
-  'Holding Tab hides the models.',
-  'Ctrl+Z undoes an edit; Ctrl+Y redoes an edit.',
+/**
+ * The eye button's own sticky toggle, combined with Tab held (tracked inside
+ * the viewport) to hide the model ghosts, matching the trace canvas's "hold
+ * Tab or eye button" behaviour.
+ */
+const modelsHiddenButton = ref(false);
+
+/** The cutout paint shortcuts listed in the help popover, action left, keys right. */
+const shortcutRows: { action: string; keys: string }[] = [
+  { action: 'Paint add', keys: 'B' },
+  { action: 'Paint remove', keys: 'E' },
+  { action: 'Flatten', keys: 'S' },
+  { action: 'Pointer mode', keys: 'V or Escape' },
+  { action: 'Brush size', keys: '[ and ]' },
+  { action: 'Undo', keys: 'Ctrl+Z' },
+  { action: 'Redo', keys: 'Ctrl+Y' },
+  { action: 'Hide models', keys: 'Hold Tab or eye button' },
 ];
+
+/** Sets the active paint tool from a viewport keyboard shortcut. */
+function onSetTool(tool: 'add' | 'remove' | 'flatten' | null): void {
+  cutout.setActiveTool(tool);
+}
+
+/** Steps the brush radius from the viewport's [ and ] shortcuts; the store clamps the result. */
+function onStepBrushRadius(deltaMm: number): void {
+  cutout.setBrushRadius(cutout.brushRadiusMm + deltaMm);
+}
 
 function onConfirmClearEdits(): void {
   cutout.clearEdits();
@@ -1046,7 +1066,7 @@ function editingTitle(entry: QueueEntry): string {
           :color="cutout.activeTool === 'flatten' ? 'secondary' : undefined"
           @click="cutout.setActiveTool(cutout.activeTool === 'flatten' ? null : 'flatten')"
         >
-          <v-icon icon="mdi-arrow-collapse-down" size="20" />
+          <v-icon icon="mdi-blur" size="20" />
           <v-tooltip activator="parent" location="bottom">Flatten to bin surface.</v-tooltip>
         </v-btn>
         <v-text-field
@@ -1094,21 +1114,34 @@ function editingTitle(entry: QueueEntry): string {
           <v-icon icon="mdi-delete" size="20" />
           <v-tooltip activator="parent" location="bottom">Clear all edits.</v-tooltip>
         </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          :color="modelsHiddenButton ? 'primary' : undefined"
+          @click="modelsHiddenButton = !modelsHiddenButton"
+        >
+          <v-icon :icon="modelsHiddenButton ? 'mdi-eye-off' : 'mdi-eye'" size="20" />
+          <v-tooltip activator="parent" location="bottom">
+            Hide the model ghosts. Holding Tab does the same while held.
+          </v-tooltip>
+        </v-btn>
         <v-menu v-model="shortcutHelpOpen" location="top end" :close-on-content-click="false">
           <template #activator="{ props: menuProps }">
             <v-btn icon size="small" variant="text" v-bind="menuProps">
-              <v-icon icon="mdi-help-circle" size="20" />
-              <v-tooltip activator="parent" location="bottom">Show keyboard shortcuts.</v-tooltip>
+              <v-icon icon="mdi-help-circle-outline" size="20" />
+              <v-tooltip activator="parent" location="bottom">Canvas shortcuts</v-tooltip>
             </v-btn>
           </template>
           <v-card min-width="280" class="pa-2">
-            <p
-              v-for="line in shortcutLines"
-              :key="line"
-              class="text-body-2 px-2 py-1 mb-0"
+            <div
+              v-for="row in shortcutRows"
+              :key="row.action"
+              class="d-flex align-center justify-space-between ga-4 px-2 py-1 shortcut-row"
             >
-              {{ line }}
-            </p>
+              <span class="text-body-2">{{ row.action }}</span>
+              <span class="text-caption text-medium-emphasis">{{ row.keys }}</span>
+            </div>
           </v-card>
         </v-menu>
       </div>
@@ -1139,13 +1172,15 @@ function editingTitle(entry: QueueEntry): string {
           :brush-radius-mm="cutout.brushRadiusMm"
           :can-undo="cutout.edits.length > 0"
           :can-redo="cutout.redoStack.length > 0"
+          :models-hidden-button="modelsHiddenButton"
           @update:selected-model-id="cutout.select($event)"
           @placement-change="onPlacementChange"
           @placement-commit="onPlacementCommit"
           @bounds-change="onBoundsChange"
           @stroke-commit="onStrokeCommit"
           @flatten-commit="onFlattenCommit"
-          @exit-paint="cutout.setActiveTool(null)"
+          @set-tool="onSetTool"
+          @step-brush-radius="onStepBrushRadius"
           @undo="cutout.undoEdit()"
           @redo="cutout.redoEdit()"
           @toggle-shortcut-help="shortcutHelpOpen = !shortcutHelpOpen"
