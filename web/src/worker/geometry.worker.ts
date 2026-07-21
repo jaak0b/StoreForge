@@ -22,6 +22,7 @@ import type {
   ConnectionClipParams,
 } from '../engine/baseplate/constants';
 import { CarveCancelledError } from '../engine/gridfinity/carvedBin';
+import { normalizeCustomIcon, type CustomIconValidation } from '../engine/label/customIcon';
 import { generatePocketBin, generatePocketBinUnion } from '../engine/trace/pocketBin';
 import type { PocketBinParams } from '../engine/trace/pocketBin';
 import {
@@ -264,6 +265,16 @@ const api = {
   async generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
     return transferMesh(generatePocketBinUnion(m, font, params));
+  },
+
+  /**
+   * Validate and normalize a custom label icon into a single filled path,
+   * unioning filled shapes and expanded strokes. Runs here because the union
+   * and the stroke offsetting are Clipper2 (manifold) operations.
+   */
+  async validateCustomIcon(input: string): Promise<CustomIconValidation> {
+    const m = await loadManifold();
+    return normalizeCustomIcon(m, input);
   },
 
   /**

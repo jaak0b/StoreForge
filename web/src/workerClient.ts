@@ -13,6 +13,7 @@ import type {
   CutoutModelRequest,
   CutoutPreviewResult,
 } from './worker/cutoutModels';
+import type { CustomIconValidation } from './engine/label/customIcon';
 import type {
   BinParams,
   InsertParams,
@@ -35,6 +36,7 @@ export type {
   CutoutPreviewResult,
 } from './worker/cutoutModels';
 export type { CutoutCarveResult, CutoutUnionResult } from './engine/cutout/cutoutBin';
+export type { CustomIconValidation } from './engine/label/customIcon';
 
 let remote: Comlink.Remote<GeometryWorkerApi> | null = null;
 
@@ -51,6 +53,14 @@ function getWorker(): Comlink.Remote<GeometryWorkerApi> {
 /** Generate a plain bin mesh in the geometry worker. */
 export async function generateBin(params: BinParams): Promise<MeshData> {
   return getWorker().generateBin(params);
+}
+
+/**
+ * Validate and normalize a custom label icon in the worker, where the manifold
+ * union that merges its shapes and expands its strokes lives.
+ */
+export async function validateCustomIcon(input: string): Promise<CustomIconValidation> {
+  return getWorker().validateCustomIcon(input);
 }
 
 /** Generate a slotted bin as separate body and preview-insert meshes. */

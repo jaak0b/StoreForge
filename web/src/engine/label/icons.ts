@@ -247,9 +247,14 @@ export const LABEL_ICONS: LabelIcon[] = [
   },
 ];
 
+/** Look up a built-in icon by name, or null when the name is unknown. */
+export function findLabelIcon(name: string): LabelIcon | null {
+  return LABEL_ICONS.find((entry) => entry.name === name) ?? null;
+}
+
 /** Look up an icon by name, or throw when the name is unknown. */
 export function iconByName(name: string): LabelIcon {
-  const icon = LABEL_ICONS.find((entry) => entry.name === name);
+  const icon = findLabelIcon(name);
   if (!icon) {
     throw new Error(`Unknown label icon "${name}"`);
   }

@@ -5,6 +5,7 @@ import {
   buildBinManifold,
   buildFoot,
   generateBin,
+  labelSpecOf,
   roundedRectPolygon,
   validateParams,
 } from '../src/engine/gridfinity/binGenerator';
@@ -1055,5 +1056,29 @@ describe('a built divider matches the wall that was drawn', () => {
     probe.delete();
 
     bin.delete();
+  });
+});
+
+describe('labelSpecOf icon resolution', () => {
+  it('resolves a built-in icon name', () => {
+    const spec = labelSpecOf({ text: 'a', text2: '', icon: 'hex bolt' });
+    expect(spec.icon?.name).toBe('hex bolt');
+  });
+
+  it('uses a passed-in custom icon path', () => {
+    const spec = labelSpecOf({
+      text: 'a',
+      text2: '',
+      icon: 'my-gear',
+      iconPath: 'M0 0H10V10H0Z',
+    });
+    expect(spec.icon?.category).toBe('custom');
+    expect(spec.icon?.path).toBe('M0 0H10V10H0Z');
+  });
+
+  it('falls back to no icon when a removed custom icon name cannot be resolved', () => {
+    const spec = labelSpecOf({ text: 'a', text2: '', icon: 'deleted-icon' });
+    expect(spec.icon).toBeNull();
+    expect(spec.text).toBe('a');
   });
 });
