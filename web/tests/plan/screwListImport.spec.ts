@@ -8,6 +8,7 @@ import {
   headHeightMm,
   overallLengthMm,
   parseShorthand,
+  screwBinWidthUnits,
   threadDiameterMm,
 } from '../../src/engine/plan/screwListImport';
 
@@ -429,6 +430,19 @@ describe('overallLengthMm', () => {
     expect(
       computeBinWidthUnits(overallLengthMm({ thread: 'M5', lengthMm: 28, head: 'cap head screw' })!),
     ).toBe(2);
+  });
+});
+
+describe('screwBinWidthUnits', () => {
+  it('sizes from the overall length so an M5x28 cap screw needs two units', () => {
+    // The nominal 28 mm fits one unit, but the sizing entry point adds the
+    // 5 mm cap head, taking the overall length across the 32 mm boundary.
+    expect(screwBinWidthUnits({ thread: 'M5', lengthMm: 28, head: 'countersunk screw' })).toBe(1);
+    expect(screwBinWidthUnits({ thread: 'M5', lengthMm: 28, head: 'cap head screw' })).toBe(2);
+  });
+
+  it('returns one unit for a lengthless head', () => {
+    expect(screwBinWidthUnits({ thread: 'M5', lengthMm: 20, head: 'hex nut' })).toBe(1);
   });
 });
 

@@ -49,6 +49,39 @@ describe('suggestShorthand', () => {
     const s = suggestShorthand(input, input.length);
     expect(s.map((x) => x.insert)).toContain('M4');
   });
+
+  // Finding 1: a non-numeric partial while the length is still missing must fall
+  // through to head suggestions rather than blanking the menu.
+  it('suggests a lengthless head while the length is still open', () => {
+    const s = suggestShorthand('M3 nu', 5);
+    expect(s.some((x) => x.kind === 'head' && /hex nut/.test(x.label))).toBe(true);
+  });
+
+  // Finding 2: a compact token completes its remaining field.
+  it('suggests heads after a compact, complete thread and length', () => {
+    const s = suggestShorthand('m3x20', 5);
+    expect(s.some((x) => x.kind === 'head')).toBe(true);
+    expect(s.map((x) => x.insert)).toContain('m3x20 fhcs');
+  });
+  it('suggests length completions for a compact, partial length', () => {
+    const s = suggestShorthand('m3x2', 4);
+    expect(s.every((x) => x.kind === 'length')).toBe(true);
+    expect(s.map((x) => x.insert)).toEqual(expect.arrayContaining(['m3x20', 'm3x25']));
+  });
+
+  // Finding 3: a bare "x" with no digits shows the full length list.
+  it('shows the full length list for a bare x after a thread', () => {
+    const s = suggestShorthand('M3 x', 4);
+    expect(s.length).toBeGreaterThan(1);
+    expect(s.every((x) => x.kind === 'length')).toBe(true);
+    expect(s.map((x) => x.insert)).toEqual(expect.arrayContaining(['x20', 'x25']));
+  });
+
+  // Finding 4: parser-accepted aliases beyond the canonical one complete.
+  it('completes a non-canonical head alias', () => {
+    const s = suggestShorthand('M3x20 fl', 8);
+    expect(s.some((x) => x.kind === 'head' && /countersunk screw/.test(x.label))).toBe(true);
+  });
 });
 
 describe('applySuggestion', () => {

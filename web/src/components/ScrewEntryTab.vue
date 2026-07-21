@@ -22,12 +22,10 @@ import { iconByName } from '../engine/label/icons';
 import {
   composeLabelText,
   composeShorthand,
-  computeBinWidthUnits,
-  overallLengthMm,
-  HEAD_ALIASES_REVERSE,
+  screwBinWidthUnits,
+  isLengthlessHead,
+  HEAD_ALIASES,
   HEAD_ICON_NAME,
-  HEAD_TYPES,
-  LENGTHLESS_HEADS,
   parseShorthand,
   type HeadType,
   type ScrewBatch,
@@ -78,9 +76,12 @@ function headIconPath(headType: HeadType): string {
   return iconByName(HEAD_ICON_NAME[headType]).path;
 }
 
-/** The fastener silhouette for a head suggestion, or null when it has none. */
+/** The fastener silhouette for a head suggestion, or null when it has none. The
+ * head alias is the last whitespace-separated token of the insert, since a
+ * compact suggestion prepends the already-typed thread and length. */
 function headIconForSuggestion(s: ScrewSuggestion): string | null {
-  const headType = HEAD_TYPES.find((h) => HEAD_ALIASES_REVERSE[h] === s.insert);
+  const alias = s.insert.split(/\s+/).pop() ?? '';
+  const headType = HEAD_ALIASES[alias];
   return headType !== undefined ? headIconPath(headType) : null;
 }
 
@@ -110,17 +111,18 @@ function sizedContentFor(batch: {
   head: HeadType | null;
   enteredLengthText?: string | null;
 }): { cells: number; content: LabelContent } {
-  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  const noLength = isLengthlessHead(batch.head);
   const effectiveLength = noLength ? null : batch.lengthMm;
-  // Bins are sized from the overall length: the head height is added for every
-  // head type but the countersunk one, which is already measured overall.
-  const overall = overallLengthMm({
-    thread: batch.thread,
-    lengthMm: effectiveLength,
-    head: batch.head,
-  });
+  // Bins are sized from the overall length through the engine's single sizing
+  // entry point: for heads measured under the head the head height is added,
+  // and for heads measured overall (like countersunk) the nominal length is
+  // used as is.
   return {
-    cells: overall !== null ? computeBinWidthUnits(overall) : 1,
+    cells: screwBinWidthUnits({
+      thread: batch.thread,
+      lengthMm: batch.lengthMm,
+      head: batch.head,
+    }),
     content: {
       text: composeLabelText(
         batch.thread,
@@ -182,7 +184,7 @@ const isMultiple = computed(() => parsed.value.batches.length > 1);
 const firstBatch = computed<ScrewBatch | null>(() => parsed.value.batches[0] ?? null);
 
 function quickBatchComplete(batch: ScrewBatch): boolean {
-  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  const noLength = isLengthlessHead(batch.head);
   return batch.thread !== null && (noLength || batch.lengthMm !== null);
 }
 
@@ -327,7 +329,7 @@ watch(
 
 /** The screw description a complete parsed batch turns into. */
 function screwFor(batch: ScrewBatch): ScrewSpec {
-  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  const noLength = isLengthlessHead(batch.head);
   return {
     thread: batch.thread!,
     lengthMm: noLength ? null : batch.lengthMm,
@@ -438,7 +440,7 @@ const resultText = computed(() => {
 /** One label-text summary per parsed batch, for the multi-screw hint list. */
 const batchSummaries = computed(() =>
   parsed.value.batches.map((batch) => {
-    const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+    const noLength = isLengthlessHead(batch.head);
     return {
       text: composeLabelText(
         batch.thread,
@@ -456,7 +458,7 @@ const batchSummaries = computed(() =>
  * head type. Null once the batch is complete. */
 function nextMissingField(batch: ScrewBatch): string | null {
   if (batch.thread === null) return 'Add a thread size.';
-  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  const noLength = isLengthlessHead(batch.head);
   if (!noLength && batch.lengthMm === null) return 'Add a length.';
   if (batch.head === null) return 'Add a head type.';
   return null;
@@ -467,7 +469,7 @@ function recognizedState(batch: ScrewBatch): string {
   const parts: string[] = [];
   if (batch.thread !== null) parts.push(batch.thread);
   if (batch.head !== null) parts.push(batch.head);
-  const noLength = batch.head !== null && LENGTHLESS_HEADS.has(batch.head);
+  const noLength = isLengthlessHead(batch.head);
   if (!noLength && batch.lengthMm !== null) {
     parts.push(batch.enteredLengthText ?? `${batch.lengthMm} mm`);
   }
@@ -536,7 +538,7 @@ const previewProduct = computed<Product>(() => {
   const ready = pending.value.batches[0]?.product;
   if (ready !== undefined) return ready;
   const batch = firstBatch.value;
-  const noLength = batch?.head != null && LENGTHLESS_HEADS.has(batch.head);
+  const noLength = isLengthlessHead(batch?.head);
   return productFor(
     {
       thread: batch?.thread ?? null,
@@ -633,9 +635,9 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         <span class="d-inline-flex align-center">
           <v-icon icon="mdi-help-circle-outline" size="small" class="length-help" />
           <v-tooltip activator="parent" location="top" max-width="280">
-            Bin width is sized from the screw's overall length. Countersunk screws (FHCS) are
-            measured overall, so the nominal length is used as is. Other head types are measured
-            under the head, so the head height is added.
+            Bin width is sized from the screw's overall length. For head types that are measured
+            overall, like countersunk screws, the nominal length is used as is. For head types
+            measured under the head, the head height is added.
           </v-tooltip>
         </span>
       </div>
@@ -655,7 +657,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       </v-alert>
 
       <v-alert
-        v-if="!insertOnly && !heightValid"
+        v-if="!insertOnly && !isMultiple && !heightValid"
         type="warning"
         density="compact"
         variant="tonal"
@@ -681,6 +683,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
             label="Height"
             suffix="u"
             density="comfortable"
+            :disabled="isMultiple"
             :rules="heightRules"
           />
         </template>

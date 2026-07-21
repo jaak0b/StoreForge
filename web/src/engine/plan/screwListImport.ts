@@ -146,6 +146,15 @@ export const LENGTHLESS_HEADS: ReadonlySet<HeadType> = new Set<HeadType>([
   'threaded insert',
 ]);
 
+/**
+ * Whether a head type carries no meaningful length, so it is labelled and sized
+ * without one (a nut, washer or threaded insert). The single guard every flow
+ * shares: never re-test LENGTHLESS_HEADS membership inline.
+ */
+export function isLengthlessHead(head: HeadType | null | undefined): boolean {
+  return head !== null && head !== undefined && LENGTHLESS_HEADS.has(head);
+}
+
 /** The supported fastener length range in millimetres. */
 export const MIN_LENGTH_MM = 1;
 export const MAX_LENGTH_MM = 1000;
@@ -344,7 +353,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
     // An explicit imperial length ('1-1/2"', '3/4in', or any fraction).
     if (isExplicitImperialLength(word)) {
       pendingSeparator = false;
-      if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+      if (!lengthSeen && !isLengthlessHead(head)) {
         setImperialLength(word);
       } else {
         errors.push(`Can't read '${word}'. Use 'x4' for a quantity.`);
@@ -374,7 +383,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
       if (expectQty) {
         setQty(match[1]);
         expectQty = false;
-      } else if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+      } else if (!lengthSeen && !isLengthlessHead(head)) {
         setLength(match[1]);
       } else {
         setQty(match[1]);
@@ -406,7 +415,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
   if (thread === null) {
     errors.push(`Can't find a thread size (like M3 or #8) in '${text}'.`);
   }
-  if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+  if (!lengthSeen && !isLengthlessHead(head)) {
     errors.push(`'${text}' has no length. Add one like 'x20' or fill it in on the row.`);
   }
   return {
@@ -432,7 +441,7 @@ export function composeShorthand(
   head: HeadType | null,
   count: number,
 ): string {
-  const lengthless = head !== null && LENGTHLESS_HEADS.has(head);
+  const lengthless = isLengthlessHead(head);
   const parts: string[] = [];
   if (thread !== null && lengthMm !== null && !lengthless) {
     parts.push(`${thread}x${lengthMm}`);
@@ -478,7 +487,7 @@ export function composeLabelText(
 ): string {
   const parts: string[] = [];
   if (thread !== null) parts.push(thread);
-  const lengthless = head !== null && LENGTHLESS_HEADS.has(head);
+  const lengthless = isLengthlessHead(head);
   if (lengthMm !== null && !lengthless) {
     parts.push(`x ${enteredLengthText ?? lengthMm}`);
   }
@@ -639,12 +648,36 @@ export function computeBinWidthUnits(lengthMm: number): number {
   return units;
 }
 
-/** A raw row headed for grouping: a batch plus its effective bin width. */
+/**
+ * THE bin sizing entry point for a screw: the single chain every flow calls to
+ * turn a screw's fields into a bin width in grid units. It composes the
+ * lengthless check (a nut, washer or insert is sized without a length),
+ * overallLengthMm (nominal length plus the head height ISO/ASME leaves out for
+ * every head type but the countersunk one), and computeBinWidthUnits, which
+ * expects that OVERALL length rather than the nominal one. Returns 1 when there
+ * is no length to size from.
+ */
+export function screwBinWidthUnits(spec: {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+}): number {
+  const effectiveLength = isLengthlessHead(spec.head) ? null : spec.lengthMm;
+  const overall = overallLengthMm({ thread: spec.thread, lengthMm: effectiveLength, head: spec.head });
+  return overall !== null ? computeBinWidthUnits(overall) : 1;
+}
+
+/**
+ * A raw row headed for grouping: a batch plus its effective bin width.
+ * widthUnits is derived from the screw's OVERALL length via screwBinWidthUnits,
+ * never from the nominal length directly.
+ */
 export interface GroupableRow {
   thread: string | null;
   lengthMm: number | null;
   head: HeadType | null;
   quantity: number;
+  /** Bin width in grid units, derived from the overall length (screwBinWidthUnits). */
   widthUnits: number;
   /** Imperial length as entered, for labels; omitted or null for metric rows. */
   enteredLengthText?: string | null;
