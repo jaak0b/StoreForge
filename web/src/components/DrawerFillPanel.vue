@@ -23,7 +23,7 @@ import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
  * null) plans plates from the entered drawer and build-plate sizes and queues
  * them as a new drawer group. Edit mode (a groupId) preloads the same layout
  * from a saved group and colors its top-down preview by each plate's print
- * status, adds a back affordance, name and progress, re-plans or re-stamps the
+ * status, adds name and progress, re-plans or re-stamps the
  * group through an apply action, offers delete, and re-queues a not-queued
  * plate on click. Both modes share the two-column layout, the top-down preview
  * (drawerFillLayoutRects, the single layout source) and the plan table
@@ -392,13 +392,8 @@ function deleteGroup(): void {
 
 <template>
   <div class="drawer-fill-panel">
-    <!-- Edit mode: back affordance, name, progress. -->
+    <!-- Edit mode: name, progress. -->
     <template v-if="isEdit && group !== null && descriptor !== null">
-      <div class="d-flex align-center mb-3">
-        <v-btn variant="text" prepend-icon="mdi-arrow-left" @click="app.closeDrawer()">
-          Back to queue
-        </v-btn>
-      </div>
       <div class="d-flex align-center ga-2 mb-4" style="max-width: 520px">
         <v-text-field
           v-model="nameDraft"
@@ -577,28 +572,30 @@ function deleteGroup(): void {
         >
           Add plates to queue
         </v-btn>
-        <template v-else>
+        <div v-else class="edit-actions">
           <v-btn
             color="primary"
             variant="flat"
             size="large"
-            block
+            class="flex-grow-1"
             :disabled="!editDirty"
             @click="applyEdit"
           >
             Apply changes
           </v-btn>
+          <v-btn variant="outlined" size="large" @click="app.closeDrawer()">
+            Cancel edit
+          </v-btn>
           <v-btn
             variant="outlined"
             color="error"
+            size="large"
             prepend-icon="mdi-delete-outline"
-            class="mt-3"
-            block
             @click="deleteConfirmOpen = true"
           >
             Delete drawer
           </v-btn>
-        </template>
+        </div>
       </div>
     </div>
 
@@ -662,6 +659,10 @@ function deleteGroup(): void {
 }
 .fill-actions {
   order: 3;
+}
+.edit-actions {
+  display: flex;
+  gap: 12px;
 }
 
 .drawer-fill-preview {
