@@ -12,7 +12,7 @@ import {
 } from './workerClient';
 import { meshToStlBlob } from './engine/gridfinity/stlExport';
 import { binOuterSizeMm } from './engine/gridfinity/constants';
-import { baseplateSpanMm, clipFootprintMm } from './engine/baseplate/generator';
+import { baseplateOuterMm, clipFootprintMm } from './engine/baseplate/generator';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
 import type { MeshData, PartMeshes } from './engine/gridfinity/types';
 import { assertNever, type BinPockets, type CutoutModel, type Product } from './engine/plan/types';
@@ -154,10 +154,7 @@ export function partFootprint(part: PrintablePart): { widthMm: number; depthMm: 
     // here: a locally derived outer size could silently overlap plates in a
     // batch export.
     case 'baseplate':
-      return {
-        widthMm: baseplateSpanMm(part.baseplate.unitsX),
-        depthMm: baseplateSpanMm(part.baseplate.unitsY),
-      };
+      return baseplateOuterMm(part.baseplate);
     case 'clip':
       return clipFootprintMm(part.clip);
     default:

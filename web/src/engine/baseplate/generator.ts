@@ -36,6 +36,7 @@ import {
   CONNECTOR_SLOT_LENGTH,
 } from './constants';
 import type {
+  BaseplateBrim,
   BaseplateMagnets,
   BaseplateParams,
   ConnectionClipParams,
@@ -58,6 +59,26 @@ const EPS = 0.01;
  */
 export function baseplateSpanMm(units: number, pitchMm: number = PITCH): number {
   return units * pitchMm;
+}
+
+/** All-zero brim, the implicit value of an absent BaseplateParams.brim. */
+const ZERO_BRIM: BaseplateBrim = { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 };
+
+/**
+ * Outer size of a baseplate along both axes, in mm: the full-cell span
+ * (baseplateSpanMm) plus its brim on each side. The single source of a
+ * brimmed plate's outer size; the generator, the plate arranger's footprint
+ * and the drawer-fill UI readout all derive it here, never locally.
+ */
+export function baseplateOuterMm(
+  params: Pick<BaseplateParams, 'unitsX' | 'unitsY' | 'pitchMm' | 'brim'>,
+): { widthMm: number; depthMm: number } {
+  const pitch = params.pitchMm ?? PITCH;
+  const brim = params.brim ?? ZERO_BRIM;
+  return {
+    widthMm: baseplateSpanMm(params.unitsX, pitch) + brim.leftMm + brim.rightMm,
+    depthMm: baseplateSpanMm(params.unitsY, pitch) + brim.frontMm + brim.backMm,
+  };
 }
 
 /**
@@ -260,34 +281,56 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   const pitch = params.pitchMm ?? PITCH;
   const width = baseplateSpanMm(params.unitsX, pitch);
   const depth = baseplateSpanMm(params.unitsY, pitch);
+  const brim = params.brim ?? ZERO_BRIM;
   const riser = baseplateRiserMm(params.magnets, params.screwHoles);
   const height = riser + BASEPLATE_HEIGHT;
   const sections = socketSections(riser);
 
+  // The outer outline and its inset clipper grow asymmetrically by the
+  // brim: the full-cell lattice below stays centred on the origin (full
+  // cells never move), so the outline is built at the brimmed outer size
+  // and then shifted by half the difference between its two brims per
+  // axis, which lands the un-brimmed side back on the full-cell edge.
+  const outerWidth = width + brim.leftMm + brim.rightMm;
+  const outerDepth = depth + brim.frontMm + brim.backMm;
+  const dx = (brim.rightMm - brim.leftMm) / 2;
+  const dy = (brim.backMm - brim.frontMm) / 2;
+
   // Stage 1: the plate outline extruded to full height.
-  const outline = m.Manifold.extrude(
-    [roundedRectPolygon(width, depth, OUTER_CORNER_RADIUS)],
+  const plainOutline = m.Manifold.extrude(
+    [roundedRectPolygon(outerWidth, outerDepth, OUTER_CORNER_RADIUS)],
     height,
   );
+  const outline = plainOutline.translate(dx, dy, 0);
+  if (dx !== 0 || dy !== 0) plainOutline.delete();
 
   // Stage 2: the socket clipper, inset from the outline by the rim at every
-  // height. The corner radii fall out as OUTER_CORNER_RADIUS - inset (1.15 /
-  // 1.85 / 4.00), exactly the measured section table; insetPolygon is
-  // deliberately not used because loftChain produces the offset sections
-  // analytically, without tessellation error.
-  const clipper = loftChain(m, width, depth, sections);
+  // height, grown and shifted exactly like the outline so a brimmed cell's
+  // cavity clips consistently against the wall it actually sits behind.
+  const plainClipper = loftChain(m, outerWidth, outerDepth, sections);
+  const clipper = plainClipper.translate(dx, dy, 0);
+  if (dx !== 0 || dy !== 0) plainClipper.delete();
 
-  // Stage 3: sharp-cornered cell cavities on the pitch lattice. The cell
-  // section size is keyed to the bin's base footprint plus the socket
-  // clearance, not to the pitch: at the standard pitch the socket top equals
-  // the pitch and the rims vanish into knife edges at the top (the reference
-  // geometry); at a larger pitch a real top rim remains, which is physically
-  // correct because bins do not resize with a plate's pitch.
+  // Stage 3: sharp-cornered cell cavities on the pitch lattice. The full
+  // unitsX by unitsY cells are always present; one extra column or row is
+  // added on each brimmed side (brim is always less than one pitch, so the
+  // extra cell always straddles the plate's brimmed edge). That extra cell
+  // is a full-size socket cavity, exactly like a full cell; it is clipped
+  // down to only its brim-covered portion by the intersection with clipper
+  // in stage 4 below, the same mechanism that rounds a corner cavity today.
   const socketTop = BASE_TOP_SIZE + 2 * BASEPLATE_SOCKET_CLEARANCE;
   const cellSolid = loftChain(m, socketTop, socketTop, sections, 0, 0);
+  const ixValues: number[] = [];
+  if (brim.leftMm > 0) ixValues.push(-1);
+  for (let ix = 0; ix < params.unitsX; ix++) ixValues.push(ix);
+  if (brim.rightMm > 0) ixValues.push(params.unitsX);
+  const iyValues: number[] = [];
+  if (brim.frontMm > 0) iyValues.push(-1);
+  for (let iy = 0; iy < params.unitsY; iy++) iyValues.push(iy);
+  if (brim.backMm > 0) iyValues.push(params.unitsY);
   const cells: Manifold[] = [];
-  for (let ix = 0; ix < params.unitsX; ix++) {
-    for (let iy = 0; iy < params.unitsY; iy++) {
+  for (const ix of ixValues) {
+    for (const iy of iyValues) {
       cells.push(
         cellSolid.translate(cellCentre(ix, width, pitch), cellCentre(iy, depth, pitch), 0),
       );
@@ -296,7 +339,8 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   cellSolid.delete();
 
   // Stage 4: one intersection produces rounded cavity corners at the plate
-  // boundary and sharp ones internally.
+  // boundary, sharp ones internally, and (new) partial sockets wherever a
+  // brim cell's full-size cavity is cut short by the brimmed clipper.
   const cellUnion = m.Manifold.union(cells);
   const cavity = cellUnion.intersect(clipper);
   cellUnion.delete();
@@ -308,8 +352,10 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   let plate = outline.subtract(cavity);
   cavity.delete();
 
-  // Stages 6 to 8: bosses, screw holes and magnet pockets, at every magnet
-  // position.
+  // Stages 6 to 8: bosses, screw holes and magnet pockets, at every FULL
+  // cell's magnet position only. magnetSites already loops params.unitsX by
+  // params.unitsY, never the brim cells, so no change is needed here beyond
+  // reading the (unmoved) full-cell lattice.
   if (riser > 0) {
     const bossRadius =
       (params.magnets?.diameterMm ?? MAGNET_HOLE_DIAMETER) / 2 + BASEPLATE_BOSS_WALL;
@@ -362,10 +408,10 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   outline.delete();
 
   // Stage 9: connector slots, one per cell per outer edge, centred on the
-  // cell centre. A slot is emitted only when its full length lies on the
-  // straight part of the edge, clear of the corner arcs: the cutter's
-  // retained-skin profile is defined against a flat outer face. A feature
-  // that does not fully fit is omitted, never clipped.
+  // cell centre, skipped entirely on a brimmed edge (that edge sits against
+  // the drawer wall, not against another plate). A slot is emitted only when
+  // its full length lies on the straight part of the edge, clear of the
+  // corner arcs.
   if (params.connectable) {
     const slotFits = (centre: number, spanMm: number): boolean =>
       Math.abs(centre) + CONNECTOR_SLOT_LENGTH / 2 <= spanMm / 2 - OUTER_CORNER_RADIUS;
@@ -374,14 +420,20 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
     for (let ix = 0; ix < params.unitsX; ix++) {
       const cx = cellCentre(ix, width, pitch);
       if (!slotFits(cx, width)) continue;
-      slots.push(canonical.translate(cx, depth / 2, 0));
-      slots.push(canonical.rotate(0, 0, 180).translate(cx, -depth / 2, 0));
+      if (brim.backMm === 0) slots.push(canonical.translate(cx, depth / 2, 0));
+      if (brim.frontMm === 0) {
+        slots.push(canonical.rotate(0, 0, 180).translate(cx, -depth / 2, 0));
+      }
     }
     for (let iy = 0; iy < params.unitsY; iy++) {
       const cy = cellCentre(iy, depth, pitch);
       if (!slotFits(cy, depth)) continue;
-      slots.push(canonical.rotate(0, 0, -90).translate(width / 2, cy, 0));
-      slots.push(canonical.rotate(0, 0, 90).translate(-width / 2, cy, 0));
+      if (brim.rightMm === 0) {
+        slots.push(canonical.rotate(0, 0, -90).translate(width / 2, cy, 0));
+      }
+      if (brim.leftMm === 0) {
+        slots.push(canonical.rotate(0, 0, 90).translate(-width / 2, cy, 0));
+      }
     }
     canonical.delete();
     if (slots.length > 0) {
