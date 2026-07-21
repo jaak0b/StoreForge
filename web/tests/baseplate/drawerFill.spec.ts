@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { evenSplit, planDrawerFill } from '../../src/engine/baseplate/drawerFill';
 import { PITCH } from '../../src/engine/gridfinity/constants';
+import { BASEPLATE_UNITS_MAX } from '../../src/engine/baseplate/constants';
 
 describe('evenSplit', () => {
   it('splits evenly when the count divides exactly', () => {
@@ -121,6 +122,30 @@ describe('planDrawerFill', () => {
       error:
         "The printer's build plate is too small to fit a full grid cell plus this drawer's leftover width (41.0 mm split across the left and right edges). Use a larger build plate width.",
     });
+  });
+
+  it('caps every plate at BASEPLATE_UNITS_MAX units even when the mm span fits the build plate', () => {
+    // 21 cells per axis (21*42 = 882 mm) on a huge build plate: without the
+    // cap this would plan a single 21-unit plate the stored format rejects.
+    const result = planDrawerFill({
+      drawerWidthMm: 21 * PITCH,
+      drawerDepthMm: 21 * PITCH,
+      plateWidthMm: 1000,
+      plateDepthMm: 1000,
+    });
+    if ('error' in result) throw new Error(result.error);
+    // Each axis splits 21 -> 11 + 10, the near-even split, giving 4 plates.
+    expect(result.plates).toHaveLength(4);
+    for (const plate of result.plates) {
+      expect(plate.unitsX).toBeLessThanOrEqual(BASEPLATE_UNITS_MAX);
+      expect(plate.unitsY).toBeLessThanOrEqual(BASEPLATE_UNITS_MAX);
+    }
+    const at = (column: number, row: number) =>
+      result.plates.find((p) => p.column === column && p.row === row)!;
+    expect(at(0, 0).unitsX).toBe(11);
+    expect(at(1, 0).unitsX).toBe(10);
+    expect(at(0, 0).unitsY).toBe(11);
+    expect(at(0, 1).unitsY).toBe(10);
   });
 
   it.each([

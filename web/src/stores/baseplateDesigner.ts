@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import {
   MAGNET_DIAMETER_DEFAULT,
   MAGNET_HEIGHT_DEFAULT,
+  type BaseplateBrim,
   type BaseplateMagnets,
   type BaseplateParams,
 } from '../engine/baseplate/constants';
@@ -30,6 +31,13 @@ export const useBaseplateDesigner = defineStore('baseplateDesigner', {
     screwHoleMode: 'none' as HoleMode,
     connectable: false,
     notes: '',
+    /**
+     * Brim of the loaded product, carried through an edit unchanged. The form
+     * has no brim controls: a drawer-fill plate's brim comes from the planner
+     * and only survives the load-edit-save round trip here. Undefined for a
+     * plain plate and after $reset, so a new design never inherits one.
+     */
+    brim: undefined as BaseplateBrim | undefined,
   }),
   getters: {
     /** The stored magnet dimensions: the single magnet-mode collapse. */
@@ -47,6 +55,7 @@ export const useBaseplateDesigner = defineStore('baseplateDesigner', {
         magnets: this.magnets,
         screwHoles: state.screwHoleMode === 'full',
         connectable: state.connectable,
+        brim: state.brim,
       };
     },
     /** The geometry parameters, derived from the product, never built alongside it. */
@@ -69,6 +78,7 @@ export const useBaseplateDesigner = defineStore('baseplateDesigner', {
       this.magnetHeightMm = product.magnets?.heightMm ?? MAGNET_HEIGHT_DEFAULT;
       this.screwHoleMode = product.screwHoles ? 'full' : 'none';
       this.connectable = product.connectable;
+      this.brim = product.brim === undefined ? undefined : { ...product.brim };
     },
   },
 });

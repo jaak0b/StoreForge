@@ -35,4 +35,40 @@ describe('baseplateDesigner store', () => {
     expect(store.product.screwHoles).toBe(true);
     expect(store.product.connectable).toBe(true);
   });
+
+  it('round-trips a brimmed product through loadProduct and the product getter verbatim', () => {
+    // A queue edit of a drawer-fill plate loads here; the form has no brim
+    // controls, so the brim must survive the load-save round trip untouched.
+    const store = useBaseplateDesigner();
+    const brim = { leftMm: 4, rightMm: 0, frontMm: 0, backMm: 6.5 };
+    store.loadProduct({
+      kind: 'baseplate',
+      unitsX: 5,
+      unitsY: 3,
+      magnets: null,
+      screwHoles: false,
+      connectable: false,
+      brim,
+    });
+    expect(store.product.brim).toEqual(brim);
+    // The stored brim is a copy, detached from the loaded product object.
+    expect(store.brim).not.toBe(brim);
+  });
+
+  it('emits no brim on a fresh design and clears a loaded brim on reset', () => {
+    const store = useBaseplateDesigner();
+    expect(store.product.brim).toBeUndefined();
+    store.loadProduct({
+      kind: 'baseplate',
+      unitsX: 2,
+      unitsY: 2,
+      magnets: null,
+      screwHoles: false,
+      connectable: false,
+      brim: { leftMm: 1, rightMm: 1, frontMm: 0, backMm: 2 },
+    });
+    expect(store.product.brim).toBeDefined();
+    store.$reset();
+    expect(store.product.brim).toBeUndefined();
+  });
 });

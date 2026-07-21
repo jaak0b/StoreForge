@@ -21,7 +21,8 @@ import {
 import { originOf, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { planDrawerFill, type DrawerFillPlate } from '../engine/baseplate/drawerFill';
-import { baseplateOuterMm } from '../engine/baseplate/generator';
+import { baseplateCellCount, baseplateOuterMm } from '../engine/baseplate/generator';
+import { validateProduct } from '../engine/plan/planFile';
 import { PITCH } from '../engine/gridfinity/constants';
 import type { BaseplateProduct } from '../engine/plan/types';
 import BinViewport from './BinViewport.vue';
@@ -113,19 +114,29 @@ const drawerFillQueueError = ref<string | null>(null);
  * current magnet, screw-hole and connectable settings for the plate's full
  * cells (the same settings store.product uses today, shared between both
  * modes); each plate's brim comes from the planner, never recomputed here.
+ * All-or-nothing: every product is validated with the queue's own validator
+ * first, and nothing is queued unless all of them pass, so a refused plate
+ * never leaves the drawer partially filled.
  */
 function addDrawerFillPlates(): void {
   drawerFillQueueError.value = null;
-  for (const plate of drawerFillPlates.value) {
-    const product: BaseplateProduct = {
-      kind: 'baseplate',
-      unitsX: plate.unitsX,
-      unitsY: plate.unitsY,
-      magnets: store.magnets,
-      screwHoles: store.screwHoleMode === 'full',
-      connectable: store.connectable,
-      brim: plate.brim,
-    };
+  const products: BaseplateProduct[] = drawerFillPlates.value.map((plate) => ({
+    kind: 'baseplate',
+    unitsX: plate.unitsX,
+    unitsY: plate.unitsY,
+    magnets: store.magnets,
+    screwHoles: store.screwHoleMode === 'full',
+    connectable: store.connectable,
+    brim: plate.brim,
+  }));
+  for (const product of products) {
+    const problem = validateProduct(product, 'A planned plate');
+    if (problem !== null) {
+      drawerFillQueueError.value = problem;
+      return;
+    }
+  }
+  for (const product of products) {
     const error = queue.add(product, 1);
     if (error !== null) {
       drawerFillQueueError.value = error;
@@ -226,8 +237,13 @@ const drawerFillPreviewRects = computed<DrawerFillPreviewRect[]>(() => {
   return rects.map((rect) => ({ ...rect, y: depthMm - rect.y - rect.height }));
 });
 
-/** Whether the current plate is small enough to regenerate on every change. */
-const livePreview = computed(() => store.unitsX * store.unitsY <= LIVE_PREVIEW_MAX_CELLS);
+/**
+ * Whether the current plate is small enough to regenerate on every change.
+ * Counts the generated cells including the brim's partial cells
+ * (baseplateCellCount), so a brimmed plate loaded for editing is gated by
+ * the workload it actually generates.
+ */
+const livePreview = computed(() => baseplateCellCount(store.params) <= LIVE_PREVIEW_MAX_CELLS);
 
 /**
  * The parameters the preview has been asked to generate. Follows the form

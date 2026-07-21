@@ -1,4 +1,5 @@
 import { PITCH } from '../gridfinity/constants';
+import { BASEPLATE_UNITS_MAX } from './constants';
 
 /**
  * Pure math turning a drawer's mm size and a printer's build plate mm size
@@ -65,13 +66,16 @@ interface AxisPlan {
 
 /**
  * Finds the fewest groups `totalUnits` can be split into along one axis so
- * that every group's outer size (its units times PITCH, plus its brim where
- * it sits on the low or high edge) fits `buildDimMm`. Tries 1 group, then 2,
- * and so on, each time splitting as evenly as possible (evenSplit), because
- * an uneven split never fits when the even one does not: the even split
- * minimizes the largest group. Returns null when no group count up to
- * totalUnits succeeds, meaning the low or high edge's brim alone is
- * incompatible with buildDimMm (the brim does not shrink as the split grows).
+ * that every group stays within BASEPLATE_UNITS_MAX units and every group's
+ * outer size (its units times PITCH, plus its brim where it sits on the low
+ * or high edge) fits `buildDimMm`. Tries 1 group, then 2, and so on, each
+ * time splitting as evenly as possible (evenSplit), because an uneven split
+ * never fits when the even one does not: the even split minimizes the
+ * largest group. The unit cap keeps every planned plate a valid stored
+ * baseplate even when the mm span would fit the build plate. Returns null
+ * when no group count up to totalUnits succeeds, meaning the low or high
+ * edge's brim alone is incompatible with buildDimMm (the brim does not
+ * shrink as the split grows).
  */
 function planAxis(
   totalUnits: number,
@@ -86,7 +90,7 @@ function planAxis(
       const isLow = i === 0;
       const isHigh = i === count - 1;
       const outerMm = sizes[i] * PITCH + (isLow ? lowBrimMm : 0) + (isHigh ? highBrimMm : 0);
-      if (outerMm > buildDimMm) {
+      if (sizes[i] > BASEPLATE_UNITS_MAX || outerMm > buildDimMm) {
         fits = false;
         break;
       }

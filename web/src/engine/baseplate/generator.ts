@@ -82,6 +82,22 @@ export function baseplateOuterMm(
 }
 
 /**
+ * Number of socket cells the plate generates, counting the partial cell each
+ * brimmed side adds (the generator stamps one extra cell per brimmed side and
+ * clips it to the brim). The single source of the generated cell count; the
+ * designer's live-preview gate derives its workload estimate here, never
+ * locally.
+ */
+export function baseplateCellCount(
+  params: Pick<BaseplateParams, 'unitsX' | 'unitsY' | 'brim'>,
+): number {
+  const brim = params.brim ?? ZERO_BRIM;
+  const columns = params.unitsX + (brim.leftMm > 0 ? 1 : 0) + (brim.rightMm > 0 ? 1 : 0);
+  const rows = params.unitsY + (brim.frontMm > 0 ? 1 : 0) + (brim.backMm > 0 ? 1 : 0);
+  return columns * rows;
+}
+
+/**
  * Height of the vertical riser under the socket, in mm: zero on a plain
  * plate, otherwise the magnet pocket depth plus the solid floor beneath it.
  * A screws-only plate uses the default magnet depth, so magnets can be added
