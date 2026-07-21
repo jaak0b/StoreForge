@@ -89,15 +89,28 @@ function tokenize(d: string): Token[] {
 }
 
 /**
- * Parse an SVG path d attribute and flatten it into closed polygon contours
- * suitable for an even-odd filled cross-section.
+ * One flattened subpath: its polyline points in the path's own coordinate
+ * system (y down) and whether the subpath was explicitly closed with Z. A
+ * closed subpath is a filled outline; an open one is a stroke centreline.
  */
-export function svgPathToPolygons(
+export interface Subpath {
+  points: SimplePolygon;
+  closed: boolean;
+}
+
+/**
+ * Parse an SVG path d attribute and flatten every subpath into a polyline,
+ * preserving each subpath's open or closed state and keeping short subpaths
+ * (down to a single move) that a filled-contour parse would discard. This is
+ * the shared core: filled parsing cleans and drops sub-triangle contours,
+ * while stroke expansion needs the raw polylines and their closed flags.
+ */
+export function pathToSubpaths(
   d: string,
   toleranceMm: number = DEFAULT_CHORD_TOLERANCE_MM,
-): SimplePolygon[] {
+): Subpath[] {
   const tokens = tokenize(d);
-  const contours: SimplePolygon[] = [];
+  const subpaths: Subpath[] = [];
   let current: SimplePolygon = [];
   let cx = 0;
   let cy = 0;
@@ -107,9 +120,8 @@ export function svgPathToPolygons(
   let prevCubicControl: [number, number] | null = null;
   let prevQuadControl: [number, number] | null = null;
 
-  const finish = (): void => {
-    const cleaned = cleanContour(current);
-    if (cleaned) contours.push(cleaned);
+  const finish = (closed: boolean): void => {
+    if (current.length > 0) subpaths.push({ points: current, closed });
     current = [];
   };
 
@@ -122,7 +134,7 @@ export function svgPathToPolygons(
     if (upper !== 'Q' && upper !== 'T') prevQuadControl = null;
     switch (upper) {
       case 'M':
-        finish();
+        finish(false);
         cx = ox + args[0];
         cy = oy + args[1];
         startX = cx;
@@ -203,12 +215,42 @@ export function svgPathToPolygons(
       case 'Z':
         cx = startX;
         cy = startY;
-        finish();
+        finish(true);
         break;
       default:
         throw new Error(`Unsupported SVG path command "${command}"`);
     }
   }
-  finish();
+  finish(false);
+  return subpaths;
+}
+
+/**
+ * Parse an SVG path d attribute and flatten it into closed polygon contours
+ * suitable for an even-odd filled cross-section. Subpaths that collapse to
+ * fewer than three distinct points carry no fillable area and are dropped.
+ */
+export function svgPathToPolygons(
+  d: string,
+  toleranceMm: number = DEFAULT_CHORD_TOLERANCE_MM,
+): SimplePolygon[] {
+  const contours: SimplePolygon[] = [];
+  for (const subpath of pathToSubpaths(d, toleranceMm)) {
+    const cleaned = cleanContour(subpath.points);
+    if (cleaned) contours.push(cleaned);
+  }
   return contours;
+}
+
+/**
+ * Parse an SVG path d attribute and flatten it into open or closed polylines,
+ * keeping every subpath with at least two points (including the degenerate
+ * two-point lengths that draw a rounded dot when stroked). Used by stroke
+ * expansion, which needs the centrelines rather than filled contours.
+ */
+export function flattenPathToPolylines(
+  d: string,
+  toleranceMm: number = DEFAULT_CHORD_TOLERANCE_MM,
+): Subpath[] {
+  return pathToSubpaths(d, toleranceMm).filter((subpath) => subpath.points.length >= 2);
 }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { LABEL_ICONS, type LabelIcon } from '../engine/label/icons';
-import { validateCustomIcon } from '../engine/label/customIcon';
+import type { CustomIconValidation } from '../engine/label/customIcon';
+import { validateCustomIcon } from '../workerClient';
+import { fetchSvgText, isProbablyUrl } from '../svgSource';
 import { useCustomIcons } from '../stores/customIcons';
 
 /**
@@ -37,13 +39,52 @@ const customIconInput = ref('');
 const customIconName = ref('');
 const svgFileInput = ref<HTMLInputElement | null>(null);
 
-const customIconValidation = computed(() =>
-  customIconInput.value.trim() === '' ? null : validateCustomIcon(customIconInput.value),
-);
+// Validation runs in the worker (its union and stroke expansion need the
+// manifold WASM), so it is async: each input change starts a validation and a
+// later change supersedes an earlier one still in flight.
+const customIconValidation = ref<CustomIconValidation | null>(null);
+const validating = ref(false);
+let validationToken = 0;
+
+// Validate the current input under a token so a later change supersedes an
+// earlier one still in flight. When the input is an http(s) link the SVG source
+// is fetched first, then fed through the same normalize pipeline as pasted
+// markup; when it is markup or path data it goes straight to the worker.
+async function validateInput(value: string, token: number): Promise<void> {
+  let markup = value;
+  if (isProbablyUrl(value)) {
+    const fetched = await fetchSvgText(value.trim());
+    if (token !== validationToken) return;
+    if (!fetched.ok) {
+      customIconValidation.value = { ok: false, error: fetched.error };
+      validating.value = false;
+      return;
+    }
+    markup = fetched.text;
+  }
+  const result = await validateCustomIcon(markup);
+  if (token !== validationToken) return;
+  customIconValidation.value = result;
+  validating.value = false;
+}
+
+watch(customIconInput, (value) => {
+  const token = ++validationToken;
+  if (value.trim() === '') {
+    customIconValidation.value = null;
+    validating.value = false;
+    return;
+  }
+  validating.value = true;
+  void validateInput(value, token);
+});
 
 function openUpload(): void {
   customIconInput.value = '';
   customIconName.value = '';
+  customIconValidation.value = null;
+  validating.value = false;
+  validationToken++;
   uploadOpen.value = true;
 }
 
@@ -73,6 +114,7 @@ const customIconNameTaken = computed(() => {
 
 const canAddCustomIcon = computed(
   () =>
+    !validating.value &&
     customIconValidation.value?.ok === true &&
     customIconName.value.trim() !== '' &&
     !customIconNameTaken.value,
@@ -85,6 +127,25 @@ function addCustomIcon(): void {
   customIcons.add(name, validation.path, validation.viewBox);
   model.value = name;
   uploadOpen.value = false;
+}
+
+// Removing a custom icon: a confirm dialog holds the icon being removed. When
+// the removed icon is the one selected here, the selection clears so the
+// designer stops referencing an icon that no longer exists.
+const removeTarget = ref<{ id: string; name: string } | null>(null);
+
+function askRemove(icon: LabelIcon): void {
+  const stored = customIcons.iconByName(icon.name);
+  if (stored === null) return;
+  removeTarget.value = { id: stored.id, name: stored.name };
+}
+
+function confirmRemove(): void {
+  const target = removeTarget.value;
+  if (target === null) return;
+  customIcons.remove(target.id);
+  if (model.value === target.name) model.value = null;
+  removeTarget.value = null;
 }
 </script>
 
@@ -108,20 +169,35 @@ function addCustomIcon(): void {
         :key="group[0].category"
       >
         <span class="group-divider" aria-hidden="true" />
-        <v-btn
+        <span
           v-for="icon in group"
           :key="icon.name"
-          variant="outlined"
-          size="small"
-          class="icon-tile"
-          :color="model === icon.name ? 'primary' : undefined"
-          @click="model = icon.name"
+          class="icon-tile-wrap"
+          :class="{ 'icon-tile-wrap--removable': icon.category === 'custom' }"
         >
-          <svg width="24" height="24" :viewBox="icon.viewBox.join(' ')" aria-hidden="true">
-            <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
-          </svg>
-          <v-tooltip activator="parent" location="bottom">{{ icon.name }}</v-tooltip>
-        </v-btn>
+          <v-btn
+            variant="outlined"
+            size="small"
+            class="icon-tile"
+            :color="model === icon.name ? 'primary' : undefined"
+            @click="model = icon.name"
+          >
+            <svg width="24" height="24" :viewBox="icon.viewBox.join(' ')" aria-hidden="true">
+              <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
+            </svg>
+            <v-tooltip activator="parent" location="bottom">{{ icon.name }}</v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="icon.category === 'custom'"
+            icon="mdi-close"
+            size="x-small"
+            variant="flat"
+            color="surface-variant"
+            class="icon-remove"
+            :aria-label="`Remove the ${icon.name} icon`"
+            @click.stop="askRemove(icon)"
+          />
+        </span>
       </template>
       <v-btn variant="outlined" size="small" class="icon-tile" @click="openUpload">
         <v-icon icon="mdi-plus" size="18" />
@@ -135,10 +211,10 @@ function addCustomIcon(): void {
         <v-card-text>
           <v-textarea
             v-model="customIconInput"
-            label="SVG path data or a full <svg>"
+            label="SVG code, path data, or link to an .svg file"
             rows="3"
             density="compact"
-            hint="Use one filled shape; keep it simple and bold."
+            hint="Paste path data or a whole SVG, or paste a link to an .svg file and it will be fetched for you. Filled shapes and stroked outlines are merged into one silhouette, so most icons work as they are."
             persistent-hint
           />
           <input
@@ -157,8 +233,12 @@ function addCustomIcon(): void {
           >
             Upload SVG file
           </v-btn>
+          <div v-if="validating" class="d-flex align-center ga-2 mt-2">
+            <v-progress-circular indeterminate size="20" width="2" />
+            <span class="text-body-2">Checking this shape.</span>
+          </div>
           <v-alert
-            v-if="customIconValidation !== null && !customIconValidation.ok"
+            v-if="!validating && customIconValidation !== null && !customIconValidation.ok"
             type="warning"
             density="compact"
             variant="tonal"
@@ -166,7 +246,7 @@ function addCustomIcon(): void {
           >
             {{ customIconValidation.error }}
           </v-alert>
-          <template v-if="customIconValidation !== null && customIconValidation.ok">
+          <template v-if="!validating && customIconValidation !== null && customIconValidation.ok">
             <div class="d-flex align-center ga-2 mt-2">
               <v-icon icon="mdi-check-circle" color="success" size="20" />
               <svg
@@ -209,6 +289,21 @@ function addCustomIcon(): void {
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <v-dialog :model-value="removeTarget !== null" max-width="360" @update:model-value="removeTarget = null">
+      <v-card>
+        <v-card-title>Remove this icon</v-card-title>
+        <v-card-text>
+          Remove the {{ removeTarget?.name }} icon from your icons? Any queued bins that
+          still use it will print without an icon on the label.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="removeTarget = null">Cancel</v-btn>
+          <v-btn color="error" variant="flat" @click="confirmRemove">Remove</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -218,6 +313,28 @@ function addCustomIcon(): void {
   width: 40px;
   height: 40px;
   padding: 0;
+}
+
+.icon-tile-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.icon-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+.icon-tile-wrap--removable:hover .icon-remove,
+.icon-tile-wrap--removable:focus-within .icon-remove {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .group-divider {

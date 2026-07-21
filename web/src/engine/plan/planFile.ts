@@ -6,6 +6,7 @@ import {
   type BinPockets,
   type BinWithInsertProduct,
   type ConnectionClipProduct,
+  type CavityEdit,
   type CutoutModel,
   type LabelContent,
   type ModelPlacement,
@@ -16,6 +17,7 @@ import {
   type ScrewBin,
   type ScrewSpec,
   type TracePaper,
+  type Vec3Mm,
   type DividerWall,
   type Group,
   type GroupPayload,
@@ -24,6 +26,12 @@ import {
   type DrawerPlateOptions,
   assertNever,
 } from './types';
+import {
+  CAVITY_EDIT_RADIUS_MAX_MM,
+  CAVITY_EDIT_RADIUS_MIN_MM,
+  FLATTEN_HEIGHT_MAX_MM,
+  FLATTEN_HEIGHT_MIN_MM,
+} from '../cutout/cavityEdits';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
 import { PITCH } from '../gridfinity/constants';
 import {
@@ -430,6 +438,76 @@ export function validateCutoutModels(
   return null;
 }
 
+function isVec3Mm(value: unknown): value is Vec3Mm {
+  const p = value as Record<string, unknown> | null;
+  return (
+    typeof p === 'object' &&
+    p !== null &&
+    isFiniteNumber(p.xMm) &&
+    isFiniteNumber(p.yMm) &&
+    isFiniteNumber(p.zMm)
+  );
+}
+
+/**
+ * Validates a raw value as a cutout bin's list of cavity edits. Absent is
+ * valid: a plan written before version 9 has no edits at all.
+ */
+export function validateCavityEdits(raw: unknown, subject: string): string | null {
+  if (raw === undefined) return null;
+  if (!Array.isArray(raw)) {
+    return `${subject}: The cavity edits must be a list.`;
+  }
+  for (const rawEdit of raw) {
+    if (typeof rawEdit !== 'object' || rawEdit === null || Array.isArray(rawEdit)) {
+      return `${subject}: A cavity edit is not an object.`;
+    }
+    const edit = rawEdit as Record<string, unknown>;
+    if (
+      !isFiniteNumber(edit.radiusMm) ||
+      edit.radiusMm < CAVITY_EDIT_RADIUS_MIN_MM ||
+      edit.radiusMm > CAVITY_EDIT_RADIUS_MAX_MM
+    ) {
+      return (
+        `${subject}: A cavity edit's brush radius must be a number from ` +
+        `${CAVITY_EDIT_RADIUS_MIN_MM} to ${CAVITY_EDIT_RADIUS_MAX_MM} mm.`
+      );
+    }
+    if (edit.kind === 'add' || edit.kind === 'remove') {
+      if (!Array.isArray(edit.points) || edit.points.length === 0 || !edit.points.every(isVec3Mm)) {
+        return `${subject}: A brush stroke edit needs at least one point with finite x, y and z in mm.`;
+      }
+      continue;
+    }
+    if (edit.kind === 'flatten') {
+      if (!isVec3Mm(edit.centerMm)) {
+        return `${subject}: A flatten edit needs a centre with finite x, y and z in mm.`;
+      }
+      if (!isVec3Mm(edit.normalMm)) {
+        return `${subject}: A flatten edit needs a surface normal with finite x, y and z.`;
+      }
+      const n = edit.normalMm as Vec3Mm;
+      const lengthMm = Math.sqrt(n.xMm * n.xMm + n.yMm * n.yMm + n.zMm * n.zMm);
+      if (lengthMm < 0.99 || lengthMm > 1.01) {
+        return `${subject}: A flatten edit's surface normal must be a unit vector.`;
+      }
+      if (
+        !isFiniteNumber(edit.heightMm) ||
+        edit.heightMm < FLATTEN_HEIGHT_MIN_MM ||
+        edit.heightMm > FLATTEN_HEIGHT_MAX_MM
+      ) {
+        return (
+          `${subject}: A flatten edit's cut height must be a number from ` +
+          `${FLATTEN_HEIGHT_MIN_MM} to ${FLATTEN_HEIGHT_MAX_MM} mm.`
+        );
+      }
+      continue;
+    }
+    return `${subject}: A cavity edit's kind must be add, remove or flatten.`;
+  }
+  return null;
+}
+
 /**
  * Copies only the known CutoutModel fields from a validated raw bin. The
  * fields that were added after the first cutout bins could be written default
@@ -468,6 +546,28 @@ export function pickCutoutModels(raw: Record<string, unknown>): CutoutModel[] {
       // belongs to the import flow, not to the loader.
       sweepEnabled: (model.sweepEnabled as boolean | undefined) ?? false,
       draftAngleDeg: (model.draftAngleDeg as number | undefined) ?? DEFAULT_DRAFT_ANGLE_DEG,
+    };
+  });
+}
+
+/** Copies only the known CavityEdit fields; absent (pre-version-9) means none. */
+export function pickCavityEdits(raw: Record<string, unknown>): CavityEdit[] {
+  if (!Array.isArray(raw.edits)) return [];
+  return (raw.edits as Record<string, unknown>[]).map((edit): CavityEdit => {
+    const copyPoint = (p: Vec3Mm): Vec3Mm => ({ xMm: p.xMm, yMm: p.yMm, zMm: p.zMm });
+    if (edit.kind === 'flatten') {
+      return {
+        kind: 'flatten',
+        centerMm: copyPoint(edit.centerMm as Vec3Mm),
+        radiusMm: edit.radiusMm as number,
+        normalMm: copyPoint(edit.normalMm as Vec3Mm),
+        heightMm: edit.heightMm as number,
+      };
+    }
+    return {
+      kind: edit.kind as 'add' | 'remove',
+      points: (edit.points as Vec3Mm[]).map(copyPoint),
+      radiusMm: edit.radiusMm as number,
     };
   });
 }
@@ -707,7 +807,9 @@ function validateBin(raw: unknown, subject: string): string | null {
     ) {
       return `${subject}: A cutout bin cannot have divider walls.`;
     }
-    return validateCutoutModels(bin.models, subject, bin.gridX, bin.gridY);
+    const modelsProblem = validateCutoutModels(bin.models, subject, bin.gridX, bin.gridY);
+    if (modelsProblem !== null) return modelsProblem;
+    return validateCavityEdits(bin.edits, subject);
   }
   return `${subject}: The bin origin must be manual, screw, traced or cutout.`;
 }
@@ -730,7 +832,7 @@ function pickBin(raw: Record<string, unknown>): Bin {
     return bin;
   }
   if (raw.origin === 'cutout') {
-    return { ...envelope, origin: 'cutout', models: pickCutoutModels(raw) };
+    return { ...envelope, origin: 'cutout', models: pickCutoutModels(raw), edits: pickCavityEdits(raw) };
   }
   const walls = pickWalls(raw);
   if (raw.origin === 'screw') {
@@ -1755,9 +1857,11 @@ export function parsePlanFile(text: string): PlanParseResult {
   // bins, which no earlier version can contain, version 7 adds the per-model
   // sweep fields, absent in earlier versions and defaulted to off on pick, and
   // version 8 adds the baseplate and connection clip product kinds, which no
-  // earlier version can contain, and version 10 adds the group entity (a
-  // persistent drawer fill) and the baseplate product's optional group link,
-  // both absent from every earlier version, so nothing else changes.
+  // earlier version can contain. Version 9 adds the cavity edit list on
+  // cutout bins, absent in earlier versions and defaulted to an empty list
+  // on pick, and version 10 adds the group entity (a persistent drawer fill)
+  // and the baseplate product's optional group link, both absent from every
+  // earlier version, so nothing else changes.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];

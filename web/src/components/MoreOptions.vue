@@ -17,35 +17,39 @@ import DividerEditor from './divider/DividerEditor.vue';
  * the disclosure through the fields and after slots instead.
  */
 
-const props = defineProps<{
-  perBinFields: boolean;
-  quantity?: number;
-  /** Hides the divider fields; a pocket bin cannot have divider walls. */
-  hideDividers?: boolean;
-  /**
-   * Why the divider editor is unavailable for this entry, shown in its place.
-   * Set by a caller whose bin footprint is not a single known size, since a
-   * wall list is authored against one interior and means nothing without it.
-   */
-  dividerNotice?: string | null;
-  /**
-   * Hides every bin body option (dividers, magnet holes); an
-   * insert-only design has no bin body to configure.
-   */
-  insertOnly?: boolean;
-  /**
-   * Hides every field bound to the binDesigner store (second label line,
-   * dividers, magnet holes, notes); a caller designing a non-bin product
-   * supplies its own fields through the slots.
-   */
-  hideBinFields?: boolean;
-  /**
-   * Overrides the disclosure's open state. When given, the caller owns the
-   * state through update:open; when absent, the binDesigner store's
-   * moreOptionsOpen persists it across the bin tabs.
-   */
-  open?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    perBinFields: boolean;
+    quantity?: number;
+    /** Hides the divider fields; a pocket bin cannot have divider walls. */
+    hideDividers?: boolean;
+    /**
+     * Why the divider editor is unavailable for this entry, shown in its place.
+     * Set by a caller whose bin footprint is not a single known size, since a
+     * wall list is authored against one interior and means nothing without it.
+     */
+    dividerNotice?: string | null;
+    /**
+     * Hides every bin body option (dividers, magnet holes); an
+     * insert-only design has no bin body to configure.
+     */
+    insertOnly?: boolean;
+    /**
+     * Hides every field bound to the binDesigner store (second label line,
+     * dividers, magnet holes, notes); a caller designing a non-bin product
+     * supplies its own fields through the slots.
+     */
+    hideBinFields?: boolean;
+    /**
+     * Overrides the disclosure's open state. When given, the caller owns the
+     * state through update:open; when absent, the binDesigner store's
+     * moreOptionsOpen persists it across the bin tabs. The undefined default
+     * is what keeps an unbound prop caller-owned rather than store-owned.
+     */
+    open?: boolean;
+  }>(),
+  { open: undefined },
+);
 
 const emit = defineEmits<{
   'update:quantity': [value: number];

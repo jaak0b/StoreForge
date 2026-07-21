@@ -23,7 +23,7 @@ import {
   type DividerWall,
 } from './dividerModel';
 import type { LabelSpec } from '../label/placement';
-import { iconByName } from '../label/icons';
+import { findLabelIcon } from '../label/icons';
 import {
   BASE_TOP_RADIUS,
   binInteriorSizeMm,
@@ -642,6 +642,9 @@ export function labelSpecOf(content: InsertContentParams): LabelSpec {
   if (content.icon !== null) {
     // A custom icon's path is resolved on the UI side (the worker cannot
     // reach localStorage) and passed in iconPath; built-ins resolve here.
+    // A name that resolves to neither (a custom icon the user deleted while
+    // an entry still referenced it) leaves icon null, so the label renders
+    // without the icon rather than throwing.
     icon =
       content.iconPath !== undefined
         ? {
@@ -650,7 +653,7 @@ export function labelSpecOf(content: InsertContentParams): LabelSpec {
             viewBox: [0, 0, 100, 100] as [number, number, number, number],
             category: 'custom' as const,
           }
-        : iconByName(content.icon);
+        : findLabelIcon(content.icon);
   }
   return {
     text: content.text,

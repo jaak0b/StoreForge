@@ -10,12 +10,16 @@ import { signedArea } from './edit';
 export type MaskContourFailure = 'empty' | 'noContainingRegion';
 
 /**
- * The chosen region in rectified-image PIXEL coordinates: the same simplified
- * polygons as the mm `outline`, before the mm conversion. The worker rasterizes
- * these back to a pixel mask (outer filled, kept holes cleared) to tell mask
- * pixels that survive into the trace from stray regions that get dropped,
- * reusing this module's selection instead of recomputing it (see the coloring
- * and painted-area checks in the vision worker).
+ * The chosen region in rectified-image PIXEL coordinates, before the mm
+ * conversion. `pixelOutline` holds the same simplified polygons as the mm
+ * `outline`; `rawPixelOutline` holds the un-simplified contours straight from
+ * findContours (the same choice of outer loop and kept holes, just without the
+ * approxPolyDP pass). The worker rasterizes the RAW outline back to a pixel mask
+ * (outer filled, kept holes cleared) to tell mask pixels that survive into the
+ * trace from stray regions that get dropped: the raw contour follows the mask
+ * boundary pixel for pixel, so the fill has no simplification rim that would
+ * otherwise flag boundary paint as dropped (see the coloring and painted-area
+ * checks in the vision worker).
  */
 export interface PixelOutline {
   outer: PixelPoint[];
@@ -24,7 +28,7 @@ export interface PixelOutline {
 
 /** Discriminated result of maskToContour: an outline or a typed failure reason. */
 export type MaskContourResult =
-  | { ok: true; outline: TracedOutline; pixelOutline: PixelOutline }
+  | { ok: true; outline: TracedOutline; pixelOutline: PixelOutline; rawPixelOutline: PixelOutline }
   | { ok: false; reason: MaskContourFailure };
 
 /** Options for maskToContour. */
@@ -75,6 +79,15 @@ function contourToPixelPolygon(cv: Cv, contour: CvMat, epsilonPx: number): Pixel
   }
 }
 
+/** Read every vertex of a contour Mat as pixel points, without simplification. */
+function contourToRawPixelPolygon(contour: CvMat): PixelPoint[] {
+  const points: PixelPoint[] = [];
+  for (let i = 0; i < contour.rows; i += 1) {
+    points.push({ x: contour.data32S[i * 2], y: contour.data32S[i * 2 + 1] });
+  }
+  return points;
+}
+
 /** Scale a pixel polygon to millimeters, preserving vertex order and winding. */
 function pixelToMmPolygon(points: PixelPoint[], mmPerPixel: number): MmPoint[] {
   return points.map((p) => ({ x: p.x * mmPerPixel, y: p.y * mmPerPixel }));
@@ -94,16 +107,45 @@ function orient(points: PixelPoint[], positive: boolean): PixelPoint[] {
 }
 
 /**
+ * Denoise a segmentation mask (CV_8UC1, nonzero inside) in place with a
+ * morphological open followed by close, using a 3x3 ellipse kernel.
+ *
+ * The open removes speck islands and single-pixel whiskers; the close doubles
+ * as the smoothing step, rounding pixel stair-steps below the kernel radius
+ * before polygon approximation, while a vertex moving average would instead
+ * displace the true corners of straight tool edges, so closing is the better
+ * fit for hard-edged tool silhouettes.
+ *
+ * This runs on the camera segmentation only. It is a separate step from
+ * maskToContour so the worker can apply it BEFORE the user's brush strokes:
+ * morphology denoises the segmentation, but user strokes are deliberate input,
+ * not noise, so they must be added after denoising and never eroded by it. A
+ * thin add-stroke bridge that a morphological open would sever therefore
+ * survives into the trace.
+ *
+ * 3x3 is the minimal ellipse kernel: at the mask's working resolution
+ * (RECTIFIED_PX_PER_MM = 4 px/mm) its radius reaches about 0.75 mm, enough to
+ * remove single-pixel speckle without rounding off real tool corners that a
+ * larger kernel would erode.
+ */
+export function denoiseMask(cv: Cv, mask: CvMat): void {
+  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+  try {
+    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
+    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+  } finally {
+    kernel.delete();
+  }
+}
+
+/**
  * Extract a clean tool outline from a binary mask (CV_8UC1, nonzero inside).
  *
- * The mask is denoised with a morphological open (removes speck islands and
- * single-pixel whiskers) followed by close. The close doubles as the smoothing
- * step: it rounds pixel stair-steps below the kernel radius before polygon
- * approximation, while a vertex moving average would instead displace the true
- * corners of straight tool edges, so closing is the better fit for hard-edged
- * tool silhouettes.
+ * The mask is expected to already be denoised (see denoiseMask) and to already
+ * carry any user brush strokes; this function runs no morphology of its own, so
+ * a deliberate paint stroke bridging two regions is never eroded here.
  *
- * Selection follows a strict hierarchy over the denoised external contours
+ * Selection follows a strict hierarchy over the external contours
  * above the area floor. First, include clicks decide: the chosen contour
  * contains the most include clicks (pointPolygonTest >= 0), ties breaking to
  * the largest by area. Only when no contour contains any include click do
@@ -118,8 +160,8 @@ function orient(points: PixelPoint[], positive: boolean): PixelPoint[] {
  * holes above minHoleAreaMm2 are kept as children. There is no nearest-contour
  * fallback: a point that lands outside every contour contributes to no count.
  *
- * Returns { ok: false, reason } when no contour survives denoising ('empty')
- * or when contours survive but none contains any include point
+ * Returns { ok: false, reason } when no contour survives the area floor
+ * ('empty') or when contours survive but none contains any include point
  * ('noContainingRegion').
  */
 export function maskToContour(
@@ -137,25 +179,21 @@ export function maskToContour(
   const epsilonPx = toleranceMm / mmPerPixel;
   const minHoleAreaPx = minHoleAreaMm2 / (mmPerPixel * mmPerPixel);
 
-  // 3x3 is the minimal ellipse kernel: at the mask's working resolution
-  // (RECTIFIED_PX_PER_MM = 4 px/mm) its radius reaches about 0.75 mm, enough
-  // to remove single-pixel speckle without rounding off real tool corners
-  // that a larger kernel would erode.
-  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
-  const clean = new cv.Mat();
+  // findContours consumes its input, and the caller reuses the mask after this
+  // call (the worker tests painted pixels against the mask), so trace a clone.
+  const work = mask.clone();
   const contours = new cv.MatVector();
   const hierarchy = new cv.Mat();
   try {
-    cv.morphologyEx(mask, clean, cv.MORPH_OPEN, kernel);
-    cv.morphologyEx(clean, clean, cv.MORPH_CLOSE, kernel);
     // RETR_CCOMP yields a two-level hierarchy: external contours and the
     // holes directly inside them. Hierarchy rows are [next, prev, child, parent].
-    cv.findContours(clean, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
+    cv.findContours(work, contours, hierarchy, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
 
-    // Collect the external contours above the area floor once. The open pass
-    // removes small specks; this floor drops any leftover island too small to
-    // be a tool (reusing the hole threshold, since a real tool outline is
-    // orders of magnitude larger).
+    // Collect the external contours above the area floor once. This floor drops
+    // any island too small to be a tool (reusing the hole threshold, since a
+    // real tool outline is orders of magnitude larger). It also absorbs the
+    // small isolated specks an erase stroke can leave behind: morphology no
+    // longer runs after the strokes, so this area floor is what sweeps them.
     const eligible: { index: number; area: number }[] = [];
     for (let i = 0; i < contours.size(); i += 1) {
       if (hierarchy.data32S[i * 4 + 3] !== -1) {
@@ -212,10 +250,15 @@ export function maskToContour(
       return { ok: false, reason: eligible.length > 0 ? 'noContainingRegion' : 'empty' };
     }
 
+    // Keep both the simplified polygon (for the mm outline) and the raw contour
+    // (for the worker's dropped-paint check, which needs a fill that tracks the
+    // mask boundary pixel for pixel with no simplification rim).
     const outerContour = contours.get(chosen);
     let outerPx: PixelPoint[];
+    let outerRawPx: PixelPoint[];
     try {
       outerPx = orient(contourToPixelPolygon(cv, outerContour, epsilonPx), true);
+      outerRawPx = contourToRawPixelPolygon(outerContour);
     } finally {
       outerContour.delete();
     }
@@ -224,6 +267,7 @@ export function maskToContour(
     }
 
     const holesPx: PixelPoint[][] = [];
+    const holesRawPx: PixelPoint[][] = [];
     for (
       let child = hierarchy.data32S[chosen * 4 + 2];
       child !== -1;
@@ -237,6 +281,7 @@ export function maskToContour(
         const holePx = orient(contourToPixelPolygon(cv, holeContour, epsilonPx), false);
         if (holePx.length >= 3) {
           holesPx.push(holePx);
+          holesRawPx.push(contourToRawPixelPolygon(holeContour));
         }
       } finally {
         holeContour.delete();
@@ -248,10 +293,10 @@ export function maskToContour(
       ok: true,
       outline: { outer, holes },
       pixelOutline: { outer: outerPx, holes: holesPx },
+      rawPixelOutline: { outer: outerRawPx, holes: holesRawPx },
     };
   } finally {
-    kernel.delete();
-    clean.delete();
+    work.delete();
     contours.delete();
     hierarchy.delete();
   }

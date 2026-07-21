@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Top-down Gridfinity baseplate: a 2x2 grid of rounded cells. Three cells
+       are neutral-gray outlines that read on dark and light; the bottom-right
+       cell is filled with the app's primary orange. -->
+  <rect x="6" y="6" width="41" height="41" rx="10" fill="none" stroke="#8a8a8a" stroke-width="7" />
+  <rect x="53" y="6" width="41" height="41" rx="10" fill="none" stroke="#8a8a8a" stroke-width="7" />
+  <rect x="6" y="53" width="41" height="41" rx="10" fill="none" stroke="#8a8a8a" stroke-width="7" />
+  <rect x="53" y="53" width="41" height="41" rx="10" fill="#b8752a" />
+</svg>

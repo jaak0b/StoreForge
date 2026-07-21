@@ -17,7 +17,7 @@ import {
   prepareEncoderInput,
   selectMaskIndex,
 } from '../engine/trace/sam';
-import { maskToContour } from '../engine/trace/contour';
+import { denoiseMask, maskToContour } from '../engine/trace/contour';
 import type { MaskContourFailure } from '../engine/trace/contour';
 import { removeShadow } from '../engine/trace/shadow';
 import { applyStrokes } from '../engine/trace/strokeMask';
@@ -360,8 +360,13 @@ const api = {
       if (options.removeShadows === true) {
         removeShadow(cv, rectified, maskMat);
       }
-      // Painted pixels are applied after shadow removal so the shadow filter
-      // never removes user paint.
+      // Denoise the camera segmentation before the user's strokes are applied.
+      // Morphology treats the segmentation's specks and whiskers as noise, but
+      // brush strokes are deliberate input: applying strokes after denoising
+      // keeps a thin add-stroke bridge from being eroded by the open pass.
+      denoiseMask(cv, maskMat);
+      // Painted pixels are applied after shadow removal and denoising so neither
+      // the shadow filter nor morphology ever removes user paint.
       applyStrokes(cv, maskMat, strokes, rectifiedCalibration.mmPerPixel);
       const paintedIncludePoints = strokes
         .filter((stroke) => stroke.mode === 'add')
@@ -375,13 +380,17 @@ const api = {
         return { ok: false, error: messageForContourFailure(result.reason) };
       }
       const outline = result.outline;
-      const pixelOutline = result.pixelOutline;
+      const rawPixelOutline = result.rawPixelOutline;
       const maskPreview = new ImageData(maskWidth, maskHeight);
 
       // Rasterize the chosen region back to a pixel mask (outer filled, kept
       // holes cleared) so preview pixels can be split into kept (blue) and
       // dropped (red), and painted-but-dropped area can be detected. Reuses the
-      // selection maskToContour already made instead of recomputing it.
+      // selection maskToContour already made instead of recomputing it. The RAW
+      // (un-simplified) contour is used here on purpose: it follows the mask
+      // boundary pixel for pixel, so `kept` has no simplification rim that would
+      // otherwise leave boundary paint outside `kept` and falsely flag it as
+      // dropped.
       const kept = cv.Mat.zeros(maskHeight, maskWidth, cv.CV_8UC1);
       const notKept = new cv.Mat();
       const dropped = new cv.Mat();
@@ -389,8 +398,8 @@ const api = {
       const paintDropped = new cv.Mat();
       let paintedAreaDropped = false;
       try {
-        fillPolygon(cv, kept, pixelOutline.outer, 255);
-        for (const hole of pixelOutline.holes) {
+        fillPolygon(cv, kept, rawPixelOutline.outer, 255);
+        for (const hole of rawPixelOutline.holes) {
           fillPolygon(cv, kept, hole, 0);
         }
         // dropped = mask AND NOT kept: mask pixels the trace discards.

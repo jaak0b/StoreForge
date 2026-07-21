@@ -202,10 +202,42 @@ export interface CutoutModel {
  * bin tab. Like a traced bin it carries no divider walls: the interior is
  * filled solid for the carve, so walls have nothing to divide.
  */
+/** A point in bin-local mm, the same frame as ModelPlacement. */
+export interface Vec3Mm {
+  xMm: number;
+  yMm: number;
+  zMm: number;
+}
+
+/**
+ * A manual edit applied to a cutout bin's interior after the model carve, in
+ * the order the list holds them. Coordinates are bin-local mm, the same frame
+ * as ModelPlacement.
+ */
+export type CavityEdit =
+  /** Adds material back (fills cavity) along a brush stroke through points. */
+  | { kind: 'add'; points: Vec3Mm[]; radiusMm: number }
+  /** Removes material (carves cavity) along a brush stroke through points. */
+  | { kind: 'remove'; points: Vec3Mm[]; radiusMm: number }
+  /**
+   * Flattens along the clicked surface: everything protruding out of the
+   * tangent plane through centerMm (in the direction of normalMm), within
+   * radiusMm of centerMm and within heightMm of the plane along +normalMm,
+   * is removed. normalMm is the unit outward surface normal at the clicked
+   * point, in bin-local mm coordinates, so a floor click flattens
+   * horizontally, a wall click shaves flush with the wall, and a ramp click
+   * shaves flush with the ramp. heightMm bounds how far the cut reaches
+   * along the normal, so it never punches through unrelated geometry beyond
+   * the surface being flattened.
+   */
+  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm; heightMm: number };
+
 export interface CutoutBin extends BinEnvelope {
   origin: 'cutout';
   /** The models carved out of the interior. Empty means an uncarved solid interior. */
   models: CutoutModel[];
+  /** Manual cavity edits, applied in list order after the model carve. */
+  edits: CavityEdit[];
 }
 
 /** A bin body of any origin. Discriminated by origin, naming the tab that owns its interior features. */

@@ -93,7 +93,12 @@ function finishImport(mode: 'merge' | 'replace'): void {
     <!-- The bar reads as part of the page: page background, a hairline bottom
          border and no shadow, so no large area carries the accent colour. -->
     <v-app-bar color="background" density="comfortable" flat border="b">
-      <v-app-bar-title>StoreForge</v-app-bar-title>
+      <v-app-bar-title>
+        <span class="d-inline-flex align-center ga-2">
+          <img src="/favicon.svg" alt="" width="28" height="28" class="d-block" />
+          StoreForge
+        </span>
+      </v-app-bar-title>
       <template v-if="smAndDown">
         <v-btn icon variant="text" @click="openImportPicker">
           <v-icon icon="mdi-upload" />

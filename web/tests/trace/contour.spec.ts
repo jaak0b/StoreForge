@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { loadOpenCv } from '../../src/worker/opencvLoader';
-import { maskToContour } from '../../src/engine/trace/contour';
+import { denoiseMask, maskToContour } from '../../src/engine/trace/contour';
+import { applyStrokes } from '../../src/engine/trace/strokeMask';
 import type { Cv, CvMat } from '../../src/engine/trace/paper';
-import type { MmPoint } from '../../src/engine/trace/types';
+import type { BrushStroke, MmPoint, PixelPoint } from '../../src/engine/trace/types';
 
 // Synthetic ground truth throughout: masks are drawn at known pixel
 // coordinates and the expected mm figures are the drawing literals converted
@@ -136,6 +137,8 @@ describe('maskToContour', () => {
     // Single-pixel noise and a 2x2 speck far from the rectangle.
     fillRect(cv, mask, 230, 20, 231, 21);
     mask.data[10 * 256 + 220] = 255;
+    // Denoising is a separate step now; run it as the worker does before tracing.
+    denoiseMask(cv, mask);
     const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
       includePoints: [{ x: 60, y: 50 }],
@@ -156,6 +159,8 @@ describe('maskToContour', () => {
     const mask = emptyMask(cv);
     mask.data[50 * 256 + 100] = 255;
     mask.data[80 * 256 + 30] = 255;
+    // The morphological open in denoiseMask removes the single-pixel specks.
+    denoiseMask(cv, mask);
     const result = maskToContour(cv, mask, {
       mmPerPixel: MM_PER_PX,
       includePoints: [{ x: 100, y: 50 }],
@@ -422,5 +427,161 @@ describe('maskToContour', () => {
     }
     // The coarser tolerance must simplify to strictly fewer vertices.
     expect(looseOutline.outer.length).toBeLessThan(tightOutline.outer.length);
+  });
+});
+
+// The worker pipeline is: denoiseMask -> applyStrokes -> maskToContour. These
+// tests exercise that order and the raw-contour dropped-paint predicate, the
+// two halves of the fix for the false "painted area not connected" warning.
+
+/** Fill one pixel polygon into a CV_8UC1 target, mirroring the worker's fillPolygon. */
+function fillPoly(cv: Cv, target: CvMat, polygon: PixelPoint[], value: number): void {
+  const flat: number[] = [];
+  for (const point of polygon) {
+    flat.push(point.x, point.y);
+  }
+  const mat = cv.matFromArray(polygon.length, 1, cv.CV_32SC2, flat);
+  const vec = new cv.MatVector();
+  try {
+    vec.push_back(mat);
+    cv.fillPoly(target, vec, new cv.Scalar(value));
+  } finally {
+    mat.delete();
+    vec.delete();
+  }
+}
+
+/** Rasterize a chosen region (outer filled, holes cleared) as the worker's `kept`. */
+function fillKept(
+  cv: Cv,
+  rows: number,
+  cols: number,
+  outer: PixelPoint[],
+  holes: PixelPoint[][],
+): CvMat {
+  const kept = cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+  fillPoly(cv, kept, outer, 255);
+  for (const hole of holes) {
+    fillPoly(cv, kept, hole, 0);
+  }
+  return kept;
+}
+
+/** dropped = mask AND NOT kept, the worker's count of discarded mask pixels. */
+function droppedCount(cv: Cv, mask: CvMat, kept: CvMat): number {
+  const notKept = new cv.Mat();
+  const dropped = new cv.Mat();
+  try {
+    cv.bitwise_not(kept, notKept);
+    cv.bitwise_and(mask, notKept, dropped);
+    return cv.countNonZero(dropped);
+  } finally {
+    notKept.delete();
+    dropped.delete();
+  }
+}
+
+describe('trace pipeline: denoise then strokes then contour', () => {
+  it('keeps a thin add-stroke bridge that connects a painted blob to the clicked region', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    // The camera segmentation is only the left region; the click lands in it.
+    fillRect(cv, mask, 40, 60, 120, 100);
+    // Denoise the segmentation first, exactly as the worker does. The left
+    // region is thick and survives untouched.
+    denoiseMask(cv, mask);
+    // Then the user paints: a far-right blob plus a hair-thin bridge (2 px wide)
+    // joining it to the clicked region. Applied AFTER denoising, so the open
+    // pass can no longer erode the bridge (the bug this fix removes).
+    const strokes: BrushStroke[] = [
+      { mode: 'add', radiusMm: 5, points: [{ x: 200, y: 80 }] },
+      { mode: 'add', radiusMm: 0.3, points: [{ x: 120, y: 80 }, { x: 180, y: 80 }] },
+    ];
+    applyStrokes(cv, mask, strokes, MM_PER_PX);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 60, y: 80 }],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The bridge survives, so both blobs are one external contour reaching the
+    // painted blob's right edge near 220 px = 55 mm. A severed bridge would
+    // instead stop at the left region's 120 px = 30 mm edge.
+    const box = bounds(result.outline.outer);
+    expect(box.maxX).toBeGreaterThan(50);
+  });
+
+  it('does not flag boundary paint as dropped, but does flag a detached paint island', async () => {
+    const cv = await loadOpenCv();
+    const rows = 256;
+    const cols = 256;
+    const mask = new cv.Mat(rows, cols, cv.CV_8UC1, new cv.Scalar(0));
+    // A disc whose simplified polygon cuts every corner of the curve.
+    cv.circle(mask, new cv.Point(128, 128), 80, new cv.Scalar(255), -1);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 128, y: 128 }],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      mask.delete();
+      return;
+    }
+    // Filling the RAW contour reproduces the disc pixel for pixel, so nothing is
+    // dropped. Filling the SIMPLIFIED polygon leaves a rim of boundary pixels
+    // outside `kept`, which the old code miscounted as dropped paint.
+    const rawKept = fillKept(cv, rows, cols, result.rawPixelOutline.outer, result.rawPixelOutline.holes);
+    const simplifiedKept = fillKept(cv, rows, cols, result.pixelOutline.outer, result.pixelOutline.holes);
+    const rawDropped = droppedCount(cv, mask, rawKept);
+    const simplifiedDropped = droppedCount(cv, mask, simplifiedKept);
+    expect(rawDropped).toBe(0);
+    expect(simplifiedDropped).toBeGreaterThan(0);
+    rawKept.delete();
+    simplifiedKept.delete();
+
+    // A genuinely detached paint island (a separate component) still lands
+    // outside `kept` and still counts as dropped, so real disconnection warns.
+    cv.rectangle(mask, new cv.Point(20, 20), new cv.Point(50, 50), new cv.Scalar(255), -1);
+    const withIsland = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 128, y: 128 }],
+    });
+    expect(withIsland.ok).toBe(true);
+    if (withIsland.ok) {
+      const keptWithIsland = fillKept(
+        cv,
+        rows,
+        cols,
+        withIsland.rawPixelOutline.outer,
+        withIsland.rawPixelOutline.holes,
+      );
+      expect(droppedCount(cv, mask, keptWithIsland)).toBeGreaterThan(0);
+      keptWithIsland.delete();
+    }
+    mask.delete();
+  });
+
+  it('ignores an erase-created speck below the area floor (accepted regression)', async () => {
+    const cv = await loadOpenCv();
+    const mask = emptyMask(cv);
+    fillRect(cv, mask, 40, 30, 200, 130);
+    denoiseMask(cv, mask);
+    // An erase stroke runs after denoising, so morphology can no longer sweep
+    // the small isolated island it leaves behind. Simulate that leftover as a
+    // 4x4 px speck (16 px^2, below the 48 px^2 = 3 mm^2 area floor). The area
+    // floor in maskToContour absorbs it, so the trace is unaffected.
+    fillRect(cv, mask, 230, 20, 233, 23);
+    const result = maskToContour(cv, mask, {
+      mmPerPixel: MM_PER_PX,
+      includePoints: [{ x: 60, y: 50 }],
+    });
+    mask.delete();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Only the main rectangle comes back; the speck near 230 px = 57.5 mm never
+    // appears in the outline.
+    const box = bounds(result.outline.outer);
+    expect(box.maxX).toBeLessThan(51);
   });
 });

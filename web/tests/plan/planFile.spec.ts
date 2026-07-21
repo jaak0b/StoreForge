@@ -1388,6 +1388,7 @@ describe('cutout bins in plan files', () => {
       heightUnits: 6,
       magnetHoles: true,
       models: [cutoutModel()],
+      edits: [],
       ...overrides,
     };
   }
@@ -1706,5 +1707,155 @@ describe('a plan written by the previous build', () => {
       plan: { version: PLAN_FILE_VERSION, entries: [stored], batches: [], groups: [] },
       warnings: [],
     });
+  });
+});
+
+describe('cavity edits (plan version 9)', () => {
+  function cutoutEntry(edits: unknown): Record<string, unknown> {
+    return {
+      id: 'e1',
+      quantity: 1,
+      createdAt: '2026-07-21T00:00:00.000Z',
+      product: {
+        kind: 'bin',
+        labelSlot: true,
+        bin: {
+          origin: 'cutout',
+          gridX: 2,
+          gridY: 2,
+          heightUnits: 4,
+          magnetHoles: false,
+          models: [],
+          ...(edits === undefined ? {} : { edits }),
+        },
+      },
+    };
+  }
+  function planText(edits: unknown, version = 9): string {
+    return JSON.stringify({ version, entries: [cutoutEntry(edits)], batches: [] });
+  }
+
+  it('round-trips edits through serialize and parse', () => {
+    const edits = [
+      { kind: 'add', points: [{ xMm: 1, yMm: 2, zMm: 3 }], radiusMm: 2 },
+      { kind: 'remove', points: [{ xMm: 0, yMm: 0, zMm: 5 }, { xMm: 4, yMm: 0, zMm: 5 }], radiusMm: 1.5 },
+      {
+        kind: 'flatten',
+        centerMm: { xMm: 5, yMm: 5, zMm: 10 },
+        radiusMm: 6,
+        normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+        heightMm: 8,
+      },
+    ];
+    const result = parsePlanFile(planText(edits));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = (result.plan.entries[0].product as { bin: { edits: unknown } }).bin;
+    expect(bin.edits).toEqual(edits);
+    const reparsed = parsePlanFile(
+      serializePlanFile(result.plan.entries, result.plan.batches),
+    );
+    expect(reparsed.ok).toBe(true);
+    if (!reparsed.ok) return;
+    expect((reparsed.plan.entries[0].product as { bin: { edits: unknown } }).bin.edits).toEqual(edits);
+  });
+
+  it('loads a version 8 cutout bin with no edits field as an empty edit list', () => {
+    const result = parsePlanFile(planText(undefined, 8));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((result.plan.entries[0].product as { bin: { edits: unknown } }).bin.edits).toEqual([]);
+    expect(result.plan.version).toBe(10);
+  });
+
+  it('rejects an edit with a radius outside 0.2 to 50 mm', () => {
+    const result = parsePlanFile(
+      planText([{ kind: 'add', points: [{ xMm: 0, yMm: 0, zMm: 0 }], radiusMm: 0.1 }]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('brush radius');
+  });
+
+  it('rejects a stroke edit with no points', () => {
+    const result = parsePlanFile(planText([{ kind: 'remove', points: [], radiusMm: 2 }]));
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an edit with a non-finite coordinate', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: null },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+          heightMm: 5,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects a flatten edit whose normal is not a unit vector', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: 0 },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 2 },
+          heightMm: 5,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('unit vector');
+  });
+
+  it('rejects a flatten edit with a zero normal', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: 0 },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 0 },
+          heightMm: 5,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('unit vector');
+  });
+
+  it('rejects a flatten edit with a cut height outside 0.2 to 100 mm', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: 0 },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+          heightMm: 150,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('cut height');
+  });
+
+  it('merges an imported entry with edits over an existing one', () => {
+    const a = parsePlanFile(planText([]));
+    const b = parsePlanFile(
+      planText([{ kind: 'add', points: [{ xMm: 1, yMm: 1, zMm: 1 }], radiusMm: 3 }]),
+    );
+    if (!a.ok || !b.ok) throw new Error('setup failed');
+    const merged = mergeEntries(a.plan.entries, b.plan.entries);
+    expect(merged).toHaveLength(1);
+    expect((merged[0].product as { bin: { edits: unknown[] } }).bin.edits).toHaveLength(1);
   });
 });
