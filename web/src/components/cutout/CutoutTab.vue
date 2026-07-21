@@ -40,7 +40,9 @@ import {
   type CutoutModel,
   type Product,
   type QueueEntry,
+  type Vec3Mm,
 } from '../../engine/plan/types';
+import { CAVITY_EDIT_RADIUS_MIN_MM, CAVITY_EDIT_RADIUS_MAX_MM } from '../../engine/cutout/cavityEdits';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import CutoutViewport from './CutoutViewport.vue';
@@ -311,6 +313,88 @@ function onPlacementChange(moved: CutoutGhostMoved): void {
 function onPlacementCommit(moved: CutoutGhostMoved): void {
   onPlacementChange(moved);
 }
+
+// ---------------------------------------------------------------------------
+// Painting manual cavity edits
+// ---------------------------------------------------------------------------
+
+/** Draft value of the brush radius field, committed on blur or Enter. */
+const brushRadiusDraft = ref(cutout.brushRadiusMm);
+watch(
+  () => cutout.brushRadiusMm,
+  (radiusMm) => {
+    brushRadiusDraft.value = radiusMm;
+  },
+);
+
+/** Commits the brush radius draft, then resyncs in case the store clamped it. */
+function onCommitBrushRadius(): void {
+  cutout.setBrushRadius(brushRadiusDraft.value);
+  brushRadiusDraft.value = cutout.brushRadiusMm;
+}
+
+/** Text shown for the "Clear all edits" confirmation. */
+const clearEditsDialogOpen = ref(false);
+
+function onConfirmClearEdits(): void {
+  cutout.clearEdits();
+  clearEditsDialogOpen.value = false;
+}
+
+/** The error a rejected edit surfaced, shown as its own alert row. */
+const editError = ref<string | null>(null);
+/**
+ * The edit count expected once the carve that was just started lands, or null
+ * when no edit is waiting on a carve. Recorded before the edit is appended so
+ * the watch below knows which carve outcome to attribute to it.
+ */
+const pendingEditCount = ref<number | null>(null);
+
+function beginEditWatch(): void {
+  pendingEditCount.value = cutout.edits.length + 1;
+  editError.value = null;
+}
+
+/**
+ * Fires a paint stroke's add or remove edit. Ignored when the tool changed
+ * between the gesture starting and ending, which the viewport itself should
+ * not allow, but is checked here too since this is where the edit is appended.
+ */
+function onStrokeCommit(points: Vec3Mm[]): void {
+  if (cutout.activeTool !== 'add' && cutout.activeTool !== 'remove') return;
+  beginEditWatch();
+  cutout.appendEdit({ kind: cutout.activeTool, points, radiusMm: cutout.brushRadiusMm });
+}
+
+/** Fires a flatten click's edit. */
+function onFlattenCommit(centerMm: Vec3Mm, planeZMm: number): void {
+  if (cutout.activeTool !== 'flatten') return;
+  beginEditWatch();
+  cutout.appendEdit({ kind: 'flatten', centerMm, radiusMm: cutout.brushRadiusMm, planeZMm });
+}
+
+watch(
+  () => cutout.activeTool,
+  () => {
+    editError.value = null;
+  },
+);
+
+// A manual edit that makes the carve fail must not stay applied: it would sit
+// in the undo stack looking like a normal edit while the bin it produced is
+// gone. The rollback is keyed to the edit count the rejected carve was
+// started from, so an edit added while an earlier carve is still failing
+// never rolls back the wrong one.
+watch(generating, (isGenerating) => {
+  if (isGenerating) return;
+  if (pendingEditCount.value === null) return;
+  const expected = pendingEditCount.value;
+  pendingEditCount.value = null;
+  if (errorMessage.value !== null && cutout.edits.length === expected) {
+    cutout.rollbackEdit();
+    editError.value = errorMessage.value;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Importing models
@@ -888,6 +972,71 @@ function editingTitle(entry: QueueEntry): string {
 <template>
   <v-row>
     <v-col cols="12" md="7">
+      <div class="d-flex align-center flex-wrap ga-2 mb-2">
+        <v-btn-toggle v-model="cutout.activeTool" density="comfortable" divided>
+          <v-btn value="add" size="small">Add</v-btn>
+          <v-btn value="remove" size="small">Remove</v-btn>
+          <v-btn value="flatten" size="small">Flatten</v-btn>
+        </v-btn-toggle>
+        <v-text-field
+          v-model.number="brushRadiusDraft"
+          type="number"
+          label="Brush radius"
+          suffix="mm"
+          :min="CAVITY_EDIT_RADIUS_MIN_MM"
+          :max="CAVITY_EDIT_RADIUS_MAX_MM"
+          step="0.1"
+          density="compact"
+          hide-details
+          style="max-width: 160px"
+          @blur="onCommitBrushRadius"
+          @keydown.enter="onCommitBrushRadius"
+        />
+        <v-btn
+          variant="outlined"
+          size="small"
+          prepend-icon="mdi-undo"
+          :disabled="cutout.edits.length === 0"
+          @click="cutout.undoEdit()"
+        >
+          Undo
+        </v-btn>
+        <v-btn
+          variant="outlined"
+          size="small"
+          prepend-icon="mdi-redo"
+          :disabled="cutout.redoStack.length === 0"
+          @click="cutout.redoEdit()"
+        >
+          Redo
+        </v-btn>
+        <v-btn
+          variant="outlined"
+          size="small"
+          prepend-icon="mdi-delete-outline"
+          :disabled="cutout.edits.length === 0"
+          @click="clearEditsDialogOpen = true"
+        >
+          Clear all edits
+        </v-btn>
+      </div>
+
+      <v-dialog v-model="clearEditsDialogOpen" max-width="480">
+        <v-card>
+          <v-card-title>Clear all edits</v-card-title>
+          <v-card-text>
+            Remove all manual cavity edits from this bin? The models and their pockets are kept.
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn variant="text" @click="clearEditsDialogOpen = false">Cancel</v-btn>
+            <v-btn color="error" variant="flat" @click="onConfirmClearEdits">
+              Remove all edits
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
       <v-card variant="outlined" class="viewport-card">
         <CutoutViewport
           :meshes="carved?.meshes ?? null"
@@ -900,6 +1049,9 @@ function editingTitle(entry: QueueEntry): string {
           @placement-change="onPlacementChange"
           @placement-commit="onPlacementCommit"
           @bounds-change="onBoundsChange"
+          @stroke-commit="onStrokeCommit"
+          @flatten-commit="onFlattenCommit"
+          @exit-paint="cutout.setActiveTool(null)"
         />
       </v-card>
 
@@ -989,6 +1141,9 @@ function editingTitle(entry: QueueEntry): string {
         density="compact"
       >
         {{ previewRefusal ?? errorMessage }}
+      </v-alert>
+      <v-alert v-if="editError" type="error" class="mt-4" density="compact">
+        {{ editError }}
       </v-alert>
       <div class="d-flex ga-2 mt-4">
         <v-btn
