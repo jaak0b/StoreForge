@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { LABEL_ICONS, type LabelIcon } from '../engine/label/icons';
 import type { CustomIconValidation } from '../engine/label/customIcon';
 import { validateCustomIcon } from '../workerClient';
+import { fetchSvgText, isProbablyUrl } from '../svgSource';
 import { useCustomIcons } from '../stores/customIcons';
 
 /**
@@ -45,6 +46,28 @@ const customIconValidation = ref<CustomIconValidation | null>(null);
 const validating = ref(false);
 let validationToken = 0;
 
+// Validate the current input under a token so a later change supersedes an
+// earlier one still in flight. When the input is an http(s) link the SVG source
+// is fetched first, then fed through the same normalize pipeline as pasted
+// markup; when it is markup or path data it goes straight to the worker.
+async function validateInput(value: string, token: number): Promise<void> {
+  let markup = value;
+  if (isProbablyUrl(value)) {
+    const fetched = await fetchSvgText(value.trim());
+    if (token !== validationToken) return;
+    if (!fetched.ok) {
+      customIconValidation.value = { ok: false, error: fetched.error };
+      validating.value = false;
+      return;
+    }
+    markup = fetched.text;
+  }
+  const result = await validateCustomIcon(markup);
+  if (token !== validationToken) return;
+  customIconValidation.value = result;
+  validating.value = false;
+}
+
 watch(customIconInput, (value) => {
   const token = ++validationToken;
   if (value.trim() === '') {
@@ -53,11 +76,7 @@ watch(customIconInput, (value) => {
     return;
   }
   validating.value = true;
-  void validateCustomIcon(value).then((result) => {
-    if (token !== validationToken) return;
-    customIconValidation.value = result;
-    validating.value = false;
-  });
+  void validateInput(value, token);
 });
 
 function openUpload(): void {
@@ -192,10 +211,10 @@ function confirmRemove(): void {
         <v-card-text>
           <v-textarea
             v-model="customIconInput"
-            label="SVG path data or a full <svg>"
+            label="SVG code, path data, or link to an .svg file"
             rows="3"
             density="compact"
-            hint="Paste path data or a whole SVG. Filled shapes and stroked outlines are merged into one silhouette, so most icons work as they are."
+            hint="Paste path data or a whole SVG, or paste a link to an .svg file and it will be fetched for you. Filled shapes and stroked outlines are merged into one silhouette, so most icons work as they are."
             persistent-hint
           />
           <input
