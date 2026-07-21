@@ -44,6 +44,8 @@ const props = defineProps<{
   paintTool: 'add' | 'remove' | 'flatten' | null;
   /** Brush radius in mm, sizing the cursor and the ghost capsules. */
   brushRadiusMm: number;
+  /** Flatten cut height in mm, sizing the flatten cursor's preview cylinder. */
+  flattenHeightMm: number;
   /** Whether Ctrl+Z has an edit to undo, so the shortcut knows to claim the key. */
   canUndo: boolean;
   /** Whether Ctrl+Y has an edit to redo, so the shortcut knows to claim the key. */
@@ -185,6 +187,17 @@ const paintCylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 16);
 const paintDiscGeometry = new THREE.CylinderGeometry(1, 1, 0.2, 32);
 paintDiscGeometry.rotateX(Math.PI / 2);
 
+/**
+ * The flatten cut preview pillar: a unit cylinder pre-translated so its base
+ * sits at local origin instead of being centred on it, then rotated onto
+ * local Z the same way the disc is. Scaling it (radiusMm, radiusMm, heightMm)
+ * and giving it the disc's own position and orientation stands it on the
+ * disc, base on the tangent plane, growing along the hit normal.
+ */
+const paintFlattenCylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 16);
+paintFlattenCylinderGeometry.translate(0, 0.5, 0);
+paintFlattenCylinderGeometry.rotateX(Math.PI / 2);
+
 const paintCursorMaterial = createGhostMaterial(PRIMARY);
 const strokeAddMaterial = createGhostMaterial(INFO);
 const strokeRemoveMaterial = createGhostMaterial(ERROR);
@@ -195,6 +208,16 @@ const paintCursorMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMateri
   paintCursorMaterial,
 );
 paintCursorMesh.visible = false;
+
+/**
+ * The flatten cut preview pillar, shown alongside the disc only while the
+ * flatten tool is active: it shares the disc's material and its position and
+ * orientation on every update, so the two always read as one preview of the
+ * cut the click would make.
+ */
+const paintFlattenCylinderMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> =
+  new THREE.Mesh(paintFlattenCylinderGeometry, paintCursorMaterial);
+paintFlattenCylinderMesh.visible = false;
 
 const UNIT_Y = new THREE.Vector3(0, 1, 0);
 const UNIT_Z = new THREE.Vector3(0, 0, 1);
@@ -576,6 +599,7 @@ function wireGizmo(
 /** Hide the paint cursor. */
 function hidePaintCursor(): void {
   paintCursorMesh.visible = false;
+  paintFlattenCylinderMesh.visible = false;
 }
 
 /**
@@ -620,15 +644,25 @@ function showBrushCursor(hit: THREE.Vector3): void {
   paintCursorMesh.scale.setScalar(props.brushRadiusMm);
   paintCursorMesh.position.copy(hit);
   paintCursorMesh.visible = true;
+  paintFlattenCylinderMesh.visible = false;
 }
 
-/** Point the reused disc cursor at the hit, tilted flush with the clicked surface. */
+/**
+ * Point the reused disc cursor at the hit, tilted flush with the clicked
+ * surface, and stand the reused cut-height pillar on it along the same
+ * normal: together they preview exactly the material a flatten click there
+ * would remove.
+ */
 function showFlattenCursor(hit: THREE.Vector3): void {
   paintCursorMesh.geometry = paintDiscGeometry;
   paintCursorMesh.scale.set(props.brushRadiusMm, props.brushRadiusMm, 1);
   paintCursorMesh.position.copy(hit);
   paintCursorMesh.quaternion.setFromUnitVectors(UNIT_Z, paintLocalNormal);
   paintCursorMesh.visible = true;
+  paintFlattenCylinderMesh.scale.set(props.brushRadiusMm, props.brushRadiusMm, props.flattenHeightMm);
+  paintFlattenCylinderMesh.position.copy(hit);
+  paintFlattenCylinderMesh.quaternion.copy(paintCursorMesh.quaternion);
+  paintFlattenCylinderMesh.visible = true;
 }
 
 /** Remove and forget every ghost mesh drawn for the stroke in progress. */
@@ -907,6 +941,7 @@ const { context } = useThreeScene(container, {
     window.addEventListener('keyup', onKeyUp);
 
     ctx.modelRoot.add(paintCursorMesh);
+    ctx.modelRoot.add(paintFlattenCylinderMesh);
 
     syncBin(ctx);
     syncGhosts(ctx);
@@ -944,6 +979,7 @@ const { context } = useThreeScene(container, {
     ghostEntries.clear();
     clearStrokeGhosts(ctx);
     ctx.modelRoot.remove(paintCursorMesh);
+    ctx.modelRoot.remove(paintFlattenCylinderMesh);
     binMesh?.geometry.dispose();
     binLabelMesh?.geometry.dispose();
     bodyMaterial.dispose();
@@ -952,6 +988,7 @@ const { context } = useThreeScene(container, {
     paintSphereGeometry.dispose();
     paintCylinderGeometry.dispose();
     paintDiscGeometry.dispose();
+    paintFlattenCylinderGeometry.dispose();
     paintCursorMaterial.dispose();
     strokeAddMaterial.dispose();
     strokeRemoveMaterial.dispose();

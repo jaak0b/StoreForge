@@ -1740,6 +1740,7 @@ describe('cavity edits (plan version 9)', () => {
         centerMm: { xMm: 5, yMm: 5, zMm: 10 },
         radiusMm: 6,
         normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+        heightMm: 8,
       },
     ];
     const result = parsePlanFile(planText(edits));
@@ -1785,6 +1786,7 @@ describe('cavity edits (plan version 9)', () => {
           centerMm: { xMm: 0, yMm: 0, zMm: null },
           radiusMm: 2,
           normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+          heightMm: 5,
         },
       ]),
     );
@@ -1799,6 +1801,7 @@ describe('cavity edits (plan version 9)', () => {
           centerMm: { xMm: 0, yMm: 0, zMm: 0 },
           radiusMm: 2,
           normalMm: { xMm: 0, yMm: 0, zMm: 2 },
+          heightMm: 5,
         },
       ]),
     );
@@ -1815,12 +1818,30 @@ describe('cavity edits (plan version 9)', () => {
           centerMm: { xMm: 0, yMm: 0, zMm: 0 },
           radiusMm: 2,
           normalMm: { xMm: 0, yMm: 0, zMm: 0 },
+          heightMm: 5,
         },
       ]),
     );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain('unit vector');
+  });
+
+  it('rejects a flatten edit with a cut height outside 0.2 to 100 mm', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: 0 },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+          heightMm: 150,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('cut height');
   });
 
   it('merges an imported entry with edits over an existing one', () => {

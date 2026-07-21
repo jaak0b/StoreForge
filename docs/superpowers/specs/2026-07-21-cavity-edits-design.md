@@ -27,16 +27,19 @@ order). Discriminated union on `kind`, every branch ends in `assertNever`:
 type CavityEdit =
   | { kind: 'add';     points: Vec3Mm[]; radiusMm: number }
   | { kind: 'remove';  points: Vec3Mm[]; radiusMm: number }
-  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm }
+  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm; heightMm: number }
 ```
 
 Coordinates are bin-local mm, same frame as `ModelPlacement`. Flatten shaves along the clicked
 surface rather than only horizontally: `normalMm` is the unit outward surface normal at the
 clicked point (bin-local mm), so a floor click flattens horizontally, a wall click shaves flush
-with the wall, and a ramp click shaves flush with the ramp. Plan file version goes 8 to 9; loading
-a version 8 file defaults `edits` to `[]`. Validation: finite numbers, `radiusMm` within [0.2, 50],
-`points` non-empty for strokes, `normalMm` a unit vector (length within [0.99, 1.01]); violations
-produce the existing user-worded plan validation messages.
+with the wall, and a ramp click shaves flush with the ramp. `heightMm` is the cut height the user
+sets explicitly: the cut extends from the tangent plane along `+normalMm` by exactly `heightMm`,
+so it only removes the material the user intended and cannot punch through unrelated geometry
+further along the normal. Plan file version stays at 9 (unshipped, amended in place); loading a
+version 8 file defaults `edits` to `[]`. Validation: finite numbers, `radiusMm` within [0.2, 50],
+`heightMm` within [0.2, 100], `points` non-empty for strokes, `normalMm` a unit vector (length
+within [0.99, 1.01]); violations produce the existing user-worded plan validation messages.
 
 ## Engine: new module web/src/engine/cutout/cavityEdits.ts
 
@@ -47,11 +50,11 @@ Framework-agnostic, `ManifoldToplevel` injected, like every other engine module.
   sphere. Sphere circular resolution follows the existing preview facet convention in the cutout
   engine.
 - Flatten solid: a cylinder of radius `radiusMm`, its base disc lying on the tangent plane through
-  `centerMm` and its axis along `normalMm`, extending along +normal far enough to always clear the
-  bin (the length is the bounding-box diagonal of the bin envelope, an upper bound, not a tuned
-  constant). The cylinder is built standing along Z and rotated onto `normalMm` with the standard
-  two-angle axis alignment (Manifold's extrinsic x-y-z rotation, matching `placeCutter`); a
-  cylinder is symmetric about its own axis, so the rotation about the aligned axis is left at 0.
+  `centerMm` and its axis along `normalMm`, extending along +normal by exactly `heightMm`, the
+  height the user set on the tool. The cylinder is built standing along Z and rotated onto
+  `normalMm` with the standard two-angle axis alignment (Manifold's extrinsic x-y-z rotation,
+  matching `placeCutter`); a cylinder is symmetric about its own axis, so the rotation about the
+  aligned axis is left at 0.
 - `applyCavityEdits(m, body, binSolid, edits)`: folds edits in order. `remove` and `flatten`
   subtract their solid from the body. `add` unions the stroke solid intersected with `binSolid`
   (the un-carved solid bin body), so Add can only restore material the bin originally had and can
@@ -79,14 +82,17 @@ brush fidelity.
 ## UI (CutoutTab.vue, CutoutViewport.vue, stores/cutout.ts)
 
 - Toolbar in the cutout tab: Add, Remove, Flatten tool toggle buttons; brush radius as a mm number
-  box with steppers (consistent with the clearance box); Undo, Redo, and "Clear all edits" (opens
-  a confirm dialog) buttons.
+  box (consistent with the clearance box); while Flatten is active, a second "Cut height" mm
+  number box next to it, bound to the store's `flattenHeightMm`; Undo, Redo, and "Clear all edits"
+  (opens a confirm dialog) buttons.
 - While a tool is active the transform gizmos are detached and left-drag paints; right-drag and
   wheel keep orbiting the camera. Esc or clicking the active tool button leaves paint mode and
   restores the gizmo.
 - Cursor: a translucent sphere raycast onto the displayed bin mesh (three.js Raycaster), sized to
   the brush radius, so the affected region is visible before clicking. For Flatten the cursor is a
-  disc instead, tilted to lie flush with the clicked surface using that surface's hit normal.
+  disc instead, tilted to lie flush with the clicked surface using that surface's hit normal, with
+  a translucent cylinder of length `flattenHeightMm` standing on the disc along that same normal:
+  together they preview exactly the material the click would remove.
 - Add and Remove: pointer down starts a stroke; sampled hit points build the polyline; a ghost
   capsule chain renders on the main thread during the drag (no CSG); pointer up commits the
   stroke to the store, which triggers a worker recarve, same commit pattern as gizmo drag end.

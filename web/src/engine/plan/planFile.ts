@@ -19,7 +19,12 @@ import {
   type Vec3Mm,
   type DividerWall,
 } from './types';
-import { CAVITY_EDIT_RADIUS_MAX_MM, CAVITY_EDIT_RADIUS_MIN_MM } from '../cutout/cavityEdits';
+import {
+  CAVITY_EDIT_RADIUS_MAX_MM,
+  CAVITY_EDIT_RADIUS_MIN_MM,
+  FLATTEN_HEIGHT_MAX_MM,
+  FLATTEN_HEIGHT_MIN_MM,
+} from '../cutout/cavityEdits';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
 import {
   BASEPLATE_UNITS_MAX,
@@ -477,6 +482,16 @@ export function validateCavityEdits(raw: unknown, subject: string): string | nul
       if (lengthMm < 0.99 || lengthMm > 1.01) {
         return `${subject}: A flatten edit's surface normal must be a unit vector.`;
       }
+      if (
+        !isFiniteNumber(edit.heightMm) ||
+        edit.heightMm < FLATTEN_HEIGHT_MIN_MM ||
+        edit.heightMm > FLATTEN_HEIGHT_MAX_MM
+      ) {
+        return (
+          `${subject}: A flatten edit's cut height must be a number from ` +
+          `${FLATTEN_HEIGHT_MIN_MM} to ${FLATTEN_HEIGHT_MAX_MM} mm.`
+        );
+      }
       continue;
     }
     return `${subject}: A cavity edit's kind must be add, remove or flatten.`;
@@ -537,6 +552,7 @@ export function pickCavityEdits(raw: Record<string, unknown>): CavityEdit[] {
         centerMm: copyPoint(edit.centerMm as Vec3Mm),
         radiusMm: edit.radiusMm as number,
         normalMm: copyPoint(edit.normalMm as Vec3Mm),
+        heightMm: edit.heightMm as number,
       };
     }
     return {

@@ -219,13 +219,16 @@ export type CavityEdit =
   | { kind: 'remove'; points: Vec3Mm[]; radiusMm: number }
   /**
    * Flattens along the clicked surface: everything protruding out of the
-   * tangent plane through centerMm (in the direction of normalMm) within
-   * radiusMm is removed. normalMm is the unit outward surface normal at the
-   * clicked point, in bin-local mm coordinates, so a floor click flattens
+   * tangent plane through centerMm (in the direction of normalMm), within
+   * radiusMm of centerMm and within heightMm of the plane along +normalMm,
+   * is removed. normalMm is the unit outward surface normal at the clicked
+   * point, in bin-local mm coordinates, so a floor click flattens
    * horizontally, a wall click shaves flush with the wall, and a ramp click
-   * shaves flush with the ramp.
+   * shaves flush with the ramp. heightMm bounds how far the cut reaches
+   * along the normal, so it never punches through unrelated geometry beyond
+   * the surface being flattened.
    */
-  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm };
+  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm; heightMm: number };
 
 export interface CutoutBin extends BinEnvelope {
   origin: 'cutout';

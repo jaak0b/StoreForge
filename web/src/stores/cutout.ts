@@ -4,6 +4,8 @@ import type { MeshData } from '../engine/gridfinity/types';
 import {
   CAVITY_EDIT_RADIUS_MAX_MM,
   CAVITY_EDIT_RADIUS_MIN_MM,
+  FLATTEN_HEIGHT_MAX_MM,
+  FLATTEN_HEIGHT_MIN_MM,
 } from '../engine/cutout/cavityEdits';
 import type { UnitScaleProposal } from '../engine/cutout/unitScale';
 import { assertNever, type CavityEdit, type CutoutModel, type ModelPlacement } from '../engine/plan/types';
@@ -34,6 +36,7 @@ export function cloneEdit(edit: CavityEdit): CavityEdit {
         centerMm: { ...edit.centerMm },
         radiusMm: edit.radiusMm,
         normalMm: { ...edit.normalMm },
+        heightMm: edit.heightMm,
       };
     default:
       return assertNever(edit);
@@ -144,6 +147,8 @@ export const useCutout = defineStore('cutout', {
     activeTool: null as CavityTool | null,
     /** Brush radius in mm for the next stroke. Editor state. */
     brushRadiusMm: 3,
+    /** Flatten cut height in mm for the next flatten click. Editor state. */
+    flattenHeightMm: 5,
   }),
   getters: {
     modelById: (state) => (id: string): CutoutModel | null =>
@@ -188,6 +193,7 @@ export const useCutout = defineStore('cutout', {
       this.redoStack = [];
       this.activeTool = null;
       this.brushRadiusMm = 3;
+      this.flattenHeightMm = 5;
     },
     select(id: string | null) {
       this.selectedModelId = id !== null && this.modelById(id) !== null ? id : null;
@@ -305,6 +311,13 @@ export const useCutout = defineStore('cutout', {
       this.brushRadiusMm = Math.min(
         CAVITY_EDIT_RADIUS_MAX_MM,
         Math.max(CAVITY_EDIT_RADIUS_MIN_MM, radiusMm),
+      );
+    },
+    /** Clamped to the shared flatten cut height bounds. */
+    setFlattenHeight(heightMm: number) {
+      this.flattenHeightMm = Math.min(
+        FLATTEN_HEIGHT_MAX_MM,
+        Math.max(FLATTEN_HEIGHT_MIN_MM, heightMm),
       );
     },
     /** Pushes a completed edit and clears the redo stack. */

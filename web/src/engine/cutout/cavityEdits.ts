@@ -10,6 +10,10 @@ import { assertNever, type CavityEdit, type Vec3Mm } from '../plan/types';
 export const CAVITY_EDIT_RADIUS_MIN_MM = 0.2;
 export const CAVITY_EDIT_RADIUS_MAX_MM = 50;
 
+/** The flatten cut height bounds the plan validator and the height field enforce. */
+export const FLATTEN_HEIGHT_MIN_MM = 0.2;
+export const FLATTEN_HEIGHT_MAX_MM = 100;
+
 /**
  * The geometric error budget one stroke may spend, in mm: a quarter of its
  * own brush radius, the same quarter rule the clearance offset pipeline
@@ -123,24 +127,17 @@ function rotationAligningZTo(normalMm: Vec3Mm): [number, number, number] {
 /**
  * The solid one flatten click shaves away: a cylinder of the brush radius,
  * its base disc lying on the tangent plane through centerMm and its axis
- * along normalMm, extending along +normal far enough to always clear the
- * bin. The length is the bounding-box diagonal of `boundsSolid` (an upper
- * bound on any straight-line extent inside it, not a tuned constant), so the
- * cut provably reaches past every surface the bin could present, exactly the
- * property the earlier binTopZMm figure guaranteed for the horizontal case.
+ * along normalMm, extending along +normal by exactly edit.heightMm (a user
+ * chosen figure, bounded by FLATTEN_HEIGHT_MIN_MM/MAX_MM), so the cut only
+ * reaches the material the user intended it to and never punches through
+ * unrelated geometry further along the normal.
  */
 export function flattenSolid(
   m: ManifoldToplevel,
-  edit: { centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm },
-  boundsSolid: Manifold,
+  edit: { centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm; heightMm: number },
 ): Manifold {
-  const box = boundsSolid.boundingBox();
-  const dx = box.max[0] - box.min[0];
-  const dy = box.max[1] - box.min[1];
-  const dz = box.max[2] - box.min[2];
-  const heightMm = Math.sqrt(dx * dx + dy * dy + dz * dz);
   const cylinder = m.Manifold.cylinder(
-    heightMm,
+    edit.heightMm,
     edit.radiusMm,
     edit.radiusMm,
     circleSegments(edit.radiusMm, strokeToleranceMm(edit.radiusMm)),
@@ -182,7 +179,7 @@ function foldCavityEdit(
       return next;
     }
     case 'flatten': {
-      const cylinder = flattenSolid(m, edit, binSolid);
+      const cylinder = flattenSolid(m, edit);
       const next = current.subtract(cylinder);
       current.delete();
       cylinder.delete();

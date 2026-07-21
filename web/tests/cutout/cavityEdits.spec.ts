@@ -104,6 +104,7 @@ describe('applyCavityEdits', () => {
       centerMm: p(10, 10, 12),
       radiusMm: 5,
       normalMm: p(0, 0, 1),
+      heightMm: 10,
     };
     const after = applyCavityEdits(m, before, binSolid, [edit]);
     // Probe: intersect the result with the flatten cylinder region above the plane.
@@ -113,7 +114,7 @@ describe('applyCavityEdits', () => {
     // reporting a strictly empty mesh (a documented floating-point boolean
     // edge case for exactly coincident surfaces), so the meaningful check is
     // that no volume remains, not that the vertex list is empty.
-    const probe = flattenSolid(m, edit, binSolid);
+    const probe = flattenSolid(m, edit);
     const above = after.intersect(probe);
     expect(above.volume()).toBeLessThan(1e-6);
     above.delete();
@@ -149,11 +150,15 @@ describe('applyCavityEdits', () => {
       centerMm: p(30, 17, 7),
       radiusMm: 6,
       normalMm: p(-1, 0, 0),
+      // Comfortably past the bump's far face (the bump spans x in [22.5,
+      // 27.5], 7.5 mm from the plane at x=30 at its farthest), so the cut
+      // reaches the whole bump without needing the old unbounded length.
+      heightMm: 10,
     };
     const after = applyCavityEdits(m, before, binSolid, [edit]);
     // Probe the air-side half-space (x < 30, within the brush disc): the bump
     // is fully shaved away, nothing remains there.
-    const probe = flattenSolid(m, edit, binSolid);
+    const probe = flattenSolid(m, edit);
     const above = after.intersect(probe);
     expect(above.volume()).toBeLessThan(1e-6);
     above.delete();
@@ -166,6 +171,53 @@ describe('applyCavityEdits', () => {
     bumplessCavityVoid.delete();
     expect(Math.abs(after.volume() - baseline.volume())).toBeLessThan(1);
     baseline.delete();
+    after.delete();
+    binSolid.delete();
+  });
+
+  it('leaves material beyond heightMm along the normal untouched', () => {
+    const binSolid = box();
+    // A pillar standing on top of the envelope, z in [20, 30], and a second
+    // block further up, z in [35, 40], separated from the pillar by a 5 mm
+    // air gap. Both share the same 8x8 footprint, centred over the envelope.
+    const envelope = box();
+    const pillar = m.Manifold.cube([8, 8, 10], false).translate([16, 16, 20]);
+    const withPillar = envelope.add(pillar);
+    envelope.delete();
+    pillar.delete();
+    const farBlock = m.Manifold.cube([8, 8, 5], false).translate([16, 16, 35]);
+    const before = withPillar.add(farBlock);
+    withPillar.delete();
+    farBlock.delete();
+    const edit = {
+      kind: 'flatten' as const,
+      // Tangent plane z=20 (the pillar's base), outward normal +Z. The
+      // radius (6) covers the pillar's footprint (half-diagonal ~5.66) and
+      // heightMm (10) reaches exactly to the pillar's own top at z=30: far
+      // short of the block at z=35, which the old unbounded-length cylinder
+      // would have reached and removed too.
+      centerMm: p(20, 20, 20),
+      radiusMm: 6,
+      normalMm: p(0, 0, 1),
+      heightMm: 10,
+    };
+    const after = applyCavityEdits(m, before, binSolid, [edit]);
+    // The pillar is gone: the flattened body matches the envelope plus the
+    // untouched far block, volume for volume.
+    const envelopeBaseline = box();
+    const farBlockBaseline = m.Manifold.cube([8, 8, 5], false).translate([16, 16, 35]);
+    const baseline = envelopeBaseline.add(farBlockBaseline);
+    envelopeBaseline.delete();
+    farBlockBaseline.delete();
+    expect(Math.abs(after.volume() - baseline.volume())).toBeLessThan(1);
+    baseline.delete();
+    // Directly confirm the far block survives: probing its own volume against
+    // the result recovers (nearly) all of it.
+    const farBlockProbe = m.Manifold.cube([8, 8, 5], false).translate([16, 16, 35]);
+    const stillThere = after.intersect(farBlockProbe);
+    expect(stillThere.volume()).toBeGreaterThan(farBlockProbe.volume() * 0.99);
+    stillThere.delete();
+    farBlockProbe.delete();
     after.delete();
     binSolid.delete();
   });

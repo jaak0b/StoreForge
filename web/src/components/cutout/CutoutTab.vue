@@ -49,6 +49,8 @@ import {
 import {
   CAVITY_EDIT_RADIUS_MIN_MM,
   CAVITY_EDIT_RADIUS_MAX_MM,
+  FLATTEN_HEIGHT_MIN_MM,
+  FLATTEN_HEIGHT_MAX_MM,
   isCavityEditRejectionMessage,
 } from '../../engine/cutout/cavityEdits';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
@@ -351,6 +353,21 @@ function onCommitBrushRadius(): void {
   brushRadiusDraft.value = cutout.brushRadiusMm;
 }
 
+/** Draft value of the flatten cut height field, committed on blur or Enter. */
+const flattenHeightDraft = ref(cutout.flattenHeightMm);
+watch(
+  () => cutout.flattenHeightMm,
+  (heightMm) => {
+    flattenHeightDraft.value = heightMm;
+  },
+);
+
+/** Commits the flatten cut height draft, then resyncs in case the store clamped it. */
+function onCommitFlattenHeight(): void {
+  cutout.setFlattenHeight(flattenHeightDraft.value);
+  flattenHeightDraft.value = cutout.flattenHeightMm;
+}
+
 /** Text shown for the "Clear all edits" confirmation. */
 const clearEditsDialogOpen = ref(false);
 
@@ -424,7 +441,13 @@ function onStrokeCommit(points: Vec3Mm[]): void {
 function onFlattenCommit(centerMm: Vec3Mm, normalMm: Vec3Mm): void {
   if (cutout.activeTool !== 'flatten') return;
   editError.value = null;
-  cutout.appendEdit({ kind: 'flatten', centerMm, radiusMm: cutout.brushRadiusMm, normalMm });
+  cutout.appendEdit({
+    kind: 'flatten',
+    centerMm,
+    radiusMm: cutout.brushRadiusMm,
+    normalMm,
+    heightMm: cutout.flattenHeightMm,
+  });
 }
 
 watch(
@@ -1084,6 +1107,22 @@ function editingTitle(entry: QueueEntry): string {
           @blur="onCommitBrushRadius"
           @keydown.enter="onCommitBrushRadius"
         />
+        <v-text-field
+          v-if="cutout.activeTool === 'flatten'"
+          v-model.number="flattenHeightDraft"
+          type="number"
+          label="Cut height"
+          suffix="mm"
+          :min="FLATTEN_HEIGHT_MIN_MM"
+          :max="FLATTEN_HEIGHT_MAX_MM"
+          step="0.5"
+          density="compact"
+          hide-details
+          style="max-width: 130px"
+          class="ml-1"
+          @blur="onCommitFlattenHeight"
+          @keydown.enter="onCommitFlattenHeight"
+        />
         <v-btn
           icon
           size="small"
@@ -1170,6 +1209,7 @@ function editingTitle(entry: QueueEntry): string {
           :warned-model-ids="warnedModelIds"
           :paint-tool="cutout.activeTool"
           :brush-radius-mm="cutout.brushRadiusMm"
+          :flatten-height-mm="cutout.flattenHeightMm"
           :can-undo="cutout.edits.length > 0"
           :can-redo="cutout.redoStack.length > 0"
           :models-hidden-button="modelsHiddenButton"
