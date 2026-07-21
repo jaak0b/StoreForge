@@ -9,6 +9,7 @@ import {
   type BaseplateProduct,
   type Bin,
   type BinPockets,
+  type CavityEdit,
   type CutoutModel,
   type Product,
 } from './types';
@@ -27,6 +28,12 @@ export type PrintablePart =
       pockets?: BinPockets;
       /** The models carved out of the interior, for a cutout-origin bin. */
       models?: CutoutModel[];
+      /**
+       * Manual cavity edits carried on the interior, for a cutout-origin bin.
+       * Empty (never omitted) for every other origin, since the field is not
+       * optional: every export path folds it in regardless of origin.
+       */
+      edits: CavityEdit[];
       /** Display name source: the paired insert's text, for slicer object names. */
       labelText?: string;
     }
@@ -43,7 +50,7 @@ export type PrintableBinPart = Extract<PrintablePart, { part: 'bin' }>;
  * walls alone (which travel inside the bin's own geometry parameters).
  */
 export type BinInterior =
-  | { interior: 'models'; models: CutoutModel[] }
+  | { interior: 'models'; models: CutoutModel[]; edits: CavityEdit[] }
   | { interior: 'pockets'; pockets: BinPockets }
   | { interior: 'walls' };
 
@@ -56,7 +63,9 @@ export type BinInterior =
  * exported as an uncarved solid, which looks correct and wastes a real print.
  */
 export function binInteriorOf(part: PrintableBinPart): BinInterior {
-  if (part.models !== undefined) return { interior: 'models', models: part.models };
+  if (part.models !== undefined) {
+    return { interior: 'models', models: part.models, edits: part.edits };
+  }
   if (part.pockets !== undefined) return { interior: 'pockets', pockets: part.pockets };
   return { interior: 'walls' };
 }
@@ -68,15 +77,17 @@ export function binInteriorOf(part: PrintableBinPart): BinInterior {
  * single place a bin's interior features are read off its origin, so every
  * part a product expands into carries the same ones.
  */
-function interiorFeaturesOf(bin: Bin): { pockets?: BinPockets; models?: CutoutModel[] } {
+function interiorFeaturesOf(
+  bin: Bin,
+): { pockets?: BinPockets; models?: CutoutModel[]; edits: CavityEdit[] } {
   switch (bin.origin) {
     case 'traced':
-      return { pockets: bin.pockets };
+      return { pockets: bin.pockets, edits: [] };
     case 'cutout':
-      return { models: bin.models };
+      return { models: bin.models, edits: bin.edits };
     case 'manual':
     case 'screw':
-      return {};
+      return { edits: [] };
     default:
       return assertNever(bin);
   }

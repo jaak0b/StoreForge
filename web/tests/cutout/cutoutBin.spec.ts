@@ -5,6 +5,7 @@ import type { Font } from 'opentype.js';
 import { loadManifold } from '../helpers/manifold';
 import { loadLabelFont } from '../helpers/font';
 import { componentVolumes } from '../helpers/components';
+import { meshToManifold } from '../../src/engine/cutout/cutoutMesh';
 import {
   buildCutoutBinBody,
   cutoutModelKey,
@@ -1069,6 +1070,40 @@ describe('generateCutoutBin', () => {
     expect(result.meshes.label!.vertices.length).toBeGreaterThan(0);
 
     for (const model of models) model.solid.delete();
+  });
+
+  it('folds a non-empty edit list into the body, producing different geometry than none', () => {
+    // Download-shaped: no models, exactly what binDownloads.ts sends when the
+    // plan's cutout bin has manual edits but no imported models. A remove
+    // stroke through the interior must carve extra material out of the body,
+    // so the two carves cannot land on the same volume.
+    const withoutEdits = generateCutoutBin(m, font, params({ models: [] }));
+    const withoutSolid = meshToManifold(m, withoutEdits.meshes.body);
+    const withoutVolume = withoutSolid.volume();
+    withoutSolid.delete();
+
+    const withEdits = generateCutoutBin(
+      m,
+      font,
+      params({
+        models: [],
+        edits: [
+          {
+            kind: 'remove',
+            points: [
+              { xMm: -10, yMm: 0, zMm: INTERIOR_MID_Z },
+              { xMm: 10, yMm: 0, zMm: INTERIOR_MID_Z },
+            ],
+            radiusMm: 5,
+          },
+        ],
+      }),
+    );
+    const withSolid = meshToManifold(m, withEdits.meshes.body);
+    const withVolume = withSolid.volume();
+    withSolid.delete();
+
+    expect(withVolume).toBeLessThan(withoutVolume);
   });
 });
 

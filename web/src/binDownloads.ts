@@ -15,7 +15,13 @@ import { binOuterSizeMm } from './engine/gridfinity/constants';
 import { baseplateSpanMm, clipFootprintMm } from './engine/baseplate/generator';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
 import type { MeshData, PartMeshes } from './engine/gridfinity/types';
-import { assertNever, type BinPockets, type CutoutModel, type Product } from './engine/plan/types';
+import {
+  assertNever,
+  type BinPockets,
+  type CavityEdit,
+  type CutoutModel,
+  type Product,
+} from './engine/plan/types';
 import { binInteriorOf, partsOf, type PrintablePart } from './engine/plan/geometry';
 import { arrangeAutoPlate, type FootprintItem, type Placement } from './engine/plate/arranger';
 import { mergePlacedMeshes, type PlacedMesh } from './engine/plate/placement';
@@ -49,6 +55,12 @@ function plainModels(models: CutoutModel[]): CutoutModel[] {
   return JSON.parse(JSON.stringify(models)) as CutoutModel[];
 }
 
+// Cavity edits cross the same boundary and are deep-copied for the same
+// reason as the models they are folded onto.
+function plainEdits(edits: CavityEdit[]): CavityEdit[] {
+  return JSON.parse(JSON.stringify(edits)) as CavityEdit[];
+}
+
 /**
  * Where a generated part's placement warnings go. A cutout bin can be laid
  * out in ways that are legal but probably not what the user meant, and the
@@ -72,8 +84,7 @@ async function generatePartMeshes(
           const carve = await generateCutoutBin({
             ...part.bin,
             models: plainModels(interior.models),
-            // Wired to the plan's own cavity edits in a later task.
-            edits: [],
+            edits: plainEdits(interior.edits),
           });
           // The download has no model card to show a warning on, so the
           // sentence the carve wrote (which names the model) is what is shown.
@@ -114,8 +125,7 @@ async function generatePartUnion(
           const carve = await generateCutoutBinUnion({
             ...part.bin,
             models: plainModels(interior.models),
-            // Wired to the plan's own cavity edits in a later task.
-            edits: [],
+            edits: plainEdits(interior.edits),
           });
           for (const warning of carve.warnings) warn(warning.message);
           return carve.mesh;
