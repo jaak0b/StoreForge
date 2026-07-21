@@ -18,10 +18,9 @@
 import type { ExecutionContext, Manifold, ManifoldToplevel } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import {
-  buildInsertInSlotSolids,
+  finishBinPartMeshes,
+  finishBinUnionMesh,
   hasFusedShelf,
-  labelSpecOf,
-  manifoldToMeshData,
 } from '../gridfinity/binGenerator';
 import {
   buildCarvedBinBody,
@@ -30,7 +29,6 @@ import {
 } from '../gridfinity/carvedBin';
 import { binInteriorSizeMm } from '../gridfinity/constants';
 import { circleSegments } from '../geometry/circleSegments';
-import { buildFusedLabel } from '../label/slot';
 import type { MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 import { applyCavityEditsMemoized, type CavityEditedBodyMemo } from '../carve/cavityEdits';
 import {
@@ -749,31 +747,11 @@ export function generateCutoutBin(
   ctx?: ExecutionContext,
 ): CutoutCarveResult {
   const carve = buildCutoutBinBody(m, params, ctx);
-  let body = carve.body;
-  let label: Manifold | null = null;
-  try {
-    if (params.fusedLabel != null) {
-      label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
-    } else if (params.insert !== null) {
-      const placed = buildInsertInSlotSolids(m, font, params.insert, params);
-      const withPlate = m.Manifold.union([body, placed.plate]);
-      body.delete();
-      placed.plate.delete();
-      body = withPlate;
-      label = placed.label;
-    }
-    return {
-      meshes: {
-        body: manifoldToMeshData(body),
-        label: label ? manifoldToMeshData(label) : null,
-      },
-      warnings: carve.warnings,
-      footprints: carve.footprints,
-    };
-  } finally {
-    body.delete();
-    label?.delete();
-  }
+  return {
+    meshes: finishBinPartMeshes(m, font, carve.body, params),
+    warnings: carve.warnings,
+    footprints: carve.footprints,
+  };
 }
 
 /**
@@ -788,28 +766,9 @@ export function generateCutoutBinUnion(
   ctx?: ExecutionContext,
 ): CutoutUnionResult {
   const carve = buildCutoutBinBody(m, params, ctx);
-  let body = carve.body;
-  try {
-    if (params.fusedLabel != null) {
-      const label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
-      if (label !== null) {
-        const union = m.Manifold.union([body, label]);
-        body.delete();
-        label.delete();
-        if (union.status() !== 'NoError') {
-          const status = union.status();
-          union.delete();
-          throw new Error(`Fused cutout bin union produced an invalid solid: ${status}`);
-        }
-        body = union;
-      }
-    }
-    return {
-      mesh: manifoldToMeshData(body),
-      warnings: carve.warnings,
-      footprints: carve.footprints,
-    };
-  } finally {
-    body.delete();
-  }
+  return {
+    mesh: finishBinUnionMesh(m, font, carve.body, params, 'Fused cutout bin'),
+    warnings: carve.warnings,
+    footprints: carve.footprints,
+  };
 }

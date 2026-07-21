@@ -11,6 +11,9 @@ import {
 } from '../../src/engine/trace/pocketBin';
 import type { PocketBinParams } from '../../src/engine/trace/pocketBin';
 import { buildBinManifold } from '../../src/engine/gridfinity/binGenerator';
+import { primitiveOutline } from '../../src/engine/trace/edit';
+import { applyCavityEdits } from '../../src/engine/carve/cavityEdits';
+import type { CavityEdit } from '../../src/engine/plan/types';
 import type { TracedTool, ToolPlacement } from '../../src/engine/trace/types';
 
 let m: ManifoldToplevel;
@@ -93,6 +96,7 @@ const centeredL: ToolPlacement = {
   xMm: -15,
   yMm: -5.1,
   pocketDepthMm: 5,
+  draftAngleDeg: 0,
 };
 
 function params(overrides: Partial<PocketBinParams> = {}): PocketBinParams {
@@ -286,7 +290,7 @@ describe('buildPocketBinBody', () => {
     const tools = [lTool(), lTool({ id: 'l-2', name: 'Second wrench' })];
     const placements: ToolPlacement[] = [
       centeredL,
-      { toolId: 'l-2', xMm: -10, yMm: -5.1, pocketDepthMm: 5 },
+      { toolId: 'l-2', xMm: -10, yMm: -5.1, pocketDepthMm: 5, draftAngleDeg: 0 },
     ];
     expect(() => buildPocketBinBody(m, params({ tools, placements }))).toThrow(/overlap/);
   });
@@ -337,5 +341,183 @@ describe('validatePocketLayout', () => {
     const accepted = params({ placements: [{ ...centeredL, yMm: -5.1 }] });
     const placedAccepted = placeTools(m, accepted.tools, accepted.placements);
     expect(() => validatePocketLayout(m, accepted, placedAccepted)).not.toThrow();
+  });
+});
+
+/**
+ * A 20 mm diameter circular gauge tool, its outline centred on the tool-local
+ * origin, so a placement's (xMm, yMm) is the pocket's centre. A circle makes
+ * the drafted flare measurable as a radius: the pocket's cross-section area A
+ * at height z gives r(z) = sqrt(A / pi).
+ */
+function circleTool(overrides: Partial<TracedTool> = {}): TracedTool {
+  return lTool({
+    id: 'circle',
+    name: 'Round gauge',
+    outline: primitiveOutline('circle', { diameterMm: 20 }),
+    ...overrides,
+  });
+}
+
+/**
+ * The air (pocket) cross-section area at height z, inside an axis-aligned
+ * probe box centred at (cx, cy) spanning boxSize in X and Y: box volume minus
+ * the body material inside it, divided by the slab thickness. Valid where
+ * everything inside the box except the pocket is solid, which holds for the
+ * filled interior of a pocket bin.
+ */
+function pocketAreaAt(
+  body: Manifold,
+  cx: number,
+  cy: number,
+  z: number,
+  boxSize: number,
+): number {
+  const t = 0.4;
+  const probe = m.Manifold.cube([boxSize, boxSize, t], true).translate(cx, cy, z);
+  const solid = body.intersect(probe);
+  const area = (boxSize * boxSize * t - solid.volume()) / t;
+  probe.delete();
+  solid.delete();
+  return area;
+}
+
+/** Effective pocket radius at height z from the measured cross-section area. */
+function pocketRadiusAt(body: Manifold, cx: number, cy: number, z: number, boxSize: number): number {
+  return Math.sqrt(pocketAreaAt(body, cx, cy, z, boxSize) / Math.PI);
+}
+
+describe('drafted pocket walls', () => {
+  // Bin top 21 mm; a 5 mm pocket bottoms at 16 mm. The circle sits at bin
+  // (0, 7), clear of the label insert slot along the front (-Y) wall.
+  const circlePlacement: ToolPlacement = {
+    toolId: 'circle',
+    xMm: 0,
+    yMm: 7,
+    pocketDepthMm: 5,
+    draftAngleDeg: 0,
+  };
+
+  it('widens the rim over the base by tan(angle) times the height difference', () => {
+    const draftAngleDeg = 10;
+    const body = buildPocketBinBody(
+      m,
+      params({
+        tools: [circleTool()],
+        placements: [{ ...circlePlacement, draftAngleDeg }],
+      }),
+    );
+    expect(body.status()).toBe('NoError');
+    const r1 = pocketRadiusAt(body, 0, 7, 16.5, 24);
+    const r2 = pocketRadiusAt(body, 0, 7, 20.5, 24);
+    // Hand-calculated: a 10 degree draft over the 4 mm between the two probe
+    // heights flares the radius by tan(10 deg) * 4 mm = 0.7053 mm. The
+    // faceted sweep cone is inscribed in the true cone, so the measured flare
+    // dips slightly under nominal; 0.1 mm covers the faceting budget.
+    expect(Math.abs(r2 - r1 - 0.7053)).toBeLessThan(0.1);
+    // The drafted pocket removes more material than the straight one.
+    const straight = buildPocketBinBody(
+      m,
+      params({ tools: [circleTool()], placements: [circlePlacement] }),
+    );
+    expect(body.volume()).toBeLessThan(straight.volume());
+    body.delete();
+    straight.delete();
+  });
+
+  it('leaves the pocket walls straight at draft angle 0', () => {
+    const body = buildPocketBinBody(
+      m,
+      params({ tools: [circleTool()], placements: [circlePlacement] }),
+    );
+    expect(body.status()).toBe('NoError');
+    const r1 = pocketRadiusAt(body, 0, 7, 16.5, 24);
+    const r2 = pocketRadiusAt(body, 0, 7, 20.5, 24);
+    expect(Math.abs(r2 - r1)).toBeLessThan(0.02);
+    // The straight pocket is exactly the extruded 20 mm circle (its faceted
+    // polygon is inscribed in the true circle, just under 10 mm in radius).
+    expect(r1).toBeGreaterThan(9.9);
+    expect(r1).toBeLessThanOrEqual(10.01);
+    body.delete();
+  });
+
+  it('keeps finger holes straight while the outline pocket is drafted', () => {
+    const tool = circleTool({ fingerHoles: [{ x: 0, y: 0, diameterMm: 12 }] });
+    const body = buildPocketBinBody(
+      m,
+      params({
+        tools: [tool],
+        placements: [{ ...circlePlacement, draftAngleDeg: 20 }],
+      }),
+    );
+    expect(body.status()).toBe('NoError');
+    // Below the pocket bottom (16 mm) only the finger hole is cut; its
+    // radius is the same near the floor and near the pocket bottom.
+    const rLow = pocketRadiusAt(body, 0, 7, 9, 20);
+    const rHigh = pocketRadiusAt(body, 0, 7, 14, 20);
+    expect(Math.abs(rHigh - rLow)).toBeLessThan(0.02);
+    expect(rLow).toBeGreaterThan(5.9);
+    expect(rLow).toBeLessThanOrEqual(6.01);
+    body.delete();
+  });
+
+  it('rejects a pocket whose drafted rim reaches into the bin wall, naming the flare', () => {
+    // The 2x1 interior spans 39.6 mm in Y; the circle at y 9.5 keeps its edge
+    // at 19.5 mm, inside the 19.8 mm half-depth, so the base fits. A 20
+    // degree draft over 5 mm flares the rim by 1.82 mm, past the wall.
+    const rejected = params({
+      tools: [circleTool()],
+      placements: [{ ...circlePlacement, yMm: 9.5, draftAngleDeg: 20 }],
+    });
+    expect(() => buildPocketBinBody(m, rejected)).toThrow(/draft/);
+    const accepted = params({
+      tools: [circleTool()],
+      placements: [{ ...circlePlacement, yMm: 9.5, draftAngleDeg: 0 }],
+    });
+    expect(() => buildPocketBinBody(m, accepted)).not.toThrow();
+  });
+
+  it('rejects pockets whose drafted rims overlap, naming the flare', () => {
+    const tools = [circleTool(), circleTool({ id: 'circle-2', name: 'Second gauge' })];
+    // 1 mm apart at the base, but each rim flares 1.82 mm outward.
+    const placements: ToolPlacement[] = [
+      { ...circlePlacement, xMm: -10.5, draftAngleDeg: 20 },
+      { ...circlePlacement, toolId: 'circle-2', xMm: 10.5, draftAngleDeg: 20 },
+    ];
+    expect(() => buildPocketBinBody(m, params({ tools, placements }))).toThrow(
+      /draft flare/,
+    );
+    const apartAtZero: ToolPlacement[] = placements.map((p) => ({ ...p, draftAngleDeg: 0 }));
+    expect(() =>
+      buildPocketBinBody(m, params({ tools, placements: apartAtZero })),
+    ).not.toThrow();
+  });
+});
+
+describe('cavity edits in the pocket carve', () => {
+  const removeStroke: CavityEdit[] = [
+    { kind: 'remove', points: [{ xMm: 0, yMm: 5, zMm: 12 }], radiusMm: 4 },
+  ];
+
+  it('a remove edit changes the generated body and keeps it watertight', () => {
+    const withoutEdits = buildPocketBinBody(m, params());
+    const withEdits = buildPocketBinBody(m, params({ edits: removeStroke }));
+    expect(withEdits.status()).toBe('NoError');
+    expect(withEdits.volume()).toBeLessThan(withoutEdits.volume());
+    withoutEdits.delete();
+    withEdits.delete();
+  });
+
+  it('matches folding the same edits via applyCavityEdits directly', () => {
+    const viaParams = buildPocketBinBody(m, params({ edits: removeStroke }));
+    // Fold the identical edits by hand onto a fresh unedited carve. A remove
+    // edit never consults the bin envelope, so any solid serves as binSolid.
+    const unedited = buildPocketBinBody(m, params());
+    const envelope = buildPocketBinBody(m, params({ placements: [] }));
+    const direct = applyCavityEdits(m, unedited, envelope, removeStroke);
+    expect(direct.volume()).toBeCloseTo(viaParams.volume(), 6);
+    viaParams.delete();
+    direct.delete();
+    envelope.delete();
   });
 });

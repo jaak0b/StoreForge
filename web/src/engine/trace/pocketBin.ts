@@ -8,12 +8,11 @@
 import type { CrossSection, Manifold, ManifoldToplevel, SimplePolygon } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import type { FingerHole, MmPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
-import { fingerHoleOutline, resolvedToolOutline } from './edit';
+import { CHORDAL_TOLERANCE_MM, fingerHoleOutline, resolvedToolOutline } from './edit';
 import { FLOOR_TOP, HEIGHT_UNIT, LIP_HEIGHT } from '../gridfinity/constants';
 import {
-  buildInsertInSlotSolids,
-  labelSpecOf,
-  manifoldToMeshData,
+  finishBinPartMeshes,
+  finishBinUnionMesh,
 } from '../gridfinity/binGenerator';
 import {
   buildCarvedBinBody,
@@ -22,13 +21,26 @@ import {
   labelStructureStrip,
   maxCarveDepthMm,
 } from '../gridfinity/carvedBin';
-import { buildFusedLabel } from '../label/slot';
+import { circleSegments } from '../geometry/circleSegments';
+import { applyCavityEditsMemoized, type CavityEditedBodyMemo } from '../carve/cavityEdits';
+import { sweepCutterUpward, validateDraftAngleDeg } from '../carve/sweep';
+import type { CavityEdit } from '../plan/types';
 import type { BinParams, MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
 
 /** A slotted bin plus the tools whose pockets are sunk into its interior. */
 export interface PocketBinParams extends SlottedBinParams {
   tools: TracedTool[];
   placements: ToolPlacement[];
+  /** Manual cavity edits applied after the pocket carve, before the label stage. Absent means none. */
+  edits?: CavityEdit[];
+  /**
+   * Memo for the edited body, supplied by the worker so appending one edit to
+   * an unchanged carve reuses the previous edited body. Absent for direct
+   * callers, which fold every edit; the result is identical by construction.
+   */
+  editedMemo?: CavityEditedBodyMemo;
+  /** Identity of the carve the edits apply to, required when editedMemo is set. */
+  editedRecipeKey?: string;
 }
 
 /** A tool resolved and moved into bin-local mm, ready to cut as a pocket. */
@@ -39,6 +51,8 @@ export interface PlacedPocket {
   /** The tool's finger holes, translated into bin-local mm. */
   fingerHoles: FingerHole[];
   pocketDepthMm: number;
+  /** The placement's draft angle; 0 means straight vertical pocket walls. */
+  draftAngleDeg: number;
 }
 
 /**
@@ -80,6 +94,7 @@ export function placeTools(
           : {}),
       })),
       pocketDepthMm: placement.pocketDepthMm,
+      draftAngleDeg: placement.draftAngleDeg,
     };
   });
 }
@@ -93,12 +108,50 @@ function outlineSection(m: ManifoldToplevel, outline: TracedOutline): CrossSecti
 }
 
 /**
+ * How far a drafted pocket's walls flare outward at the rim, in mm: a wall
+ * leaning outward by the draft angle over the pocket's depth moves the rim
+ * out by tan(angle) times depth. 0 for a straight (angle 0) pocket.
+ */
+function draftFlareMm(placed: PlacedPocket): number {
+  if (placed.draftAngleDeg === 0) return 0;
+  return Math.tan((placed.draftAngleDeg * Math.PI) / 180) * placed.pocketDepthMm;
+}
+
+/**
+ * Cross-section of a placed pocket's outline at the rim: the base outline
+ * grown outward by the draft flare via CrossSection.offset with round joins
+ * (the same primitive and chordal budget the clearance offset in edit.ts
+ * spends). At draft angle 0 this is the base outline itself.
+ */
+function draftedOutlineSection(m: ManifoldToplevel, placed: PlacedPocket): CrossSection {
+  const base = outlineSection(m, placed.outline);
+  const flareMm = draftFlareMm(placed);
+  if (flareMm === 0) return base;
+  const grown = base.offset(
+    flareMm,
+    'Round',
+    undefined,
+    circleSegments(flareMm, CHORDAL_TOLERANCE_MM),
+  );
+  base.delete();
+  return grown;
+}
+
+/**
  * Cross-section of everything a placed tool cuts from the bin: its pocket
  * outline plus its finger-hole circles. Used for the wall-clearance check, so
- * a finger hole poking into the wall is caught like the outline itself.
+ * a finger hole poking into the wall is caught like the outline itself. With
+ * `atRim` the outline is taken at the drafted rim (its widest point); the
+ * finger holes are straight grab reliefs and never flare.
  */
-function placedCutSection(m: ManifoldToplevel, placed: PlacedPocket): CrossSection {
-  let section = outlineSection(m, placed.outline);
+function placedCutSection(
+  m: ManifoldToplevel,
+  placed: PlacedPocket,
+  atRim: boolean,
+): CrossSection {
+  let section = atRim
+    ? draftedOutlineSection(m, placed)
+    : outlineSection(m, placed.outline);
   for (const hole of placed.fingerHoles) {
     const circle = outlineSection(m, fingerHoleOutline(hole));
     const merged = section.add(circle);
@@ -143,6 +196,7 @@ export function validatePocketLayout(
   }
   const maxDepth = maxPocketDepthMm(params.heightUnits);
   for (const pocket of placed) {
+    validateDraftAngleDeg(pocket.draftAngleDeg);
     if (!(pocket.pocketDepthMm > 0)) {
       throw new Error(`The pocket for "${pocket.tool.name}" needs a depth greater than 0 mm.`);
     }
@@ -155,7 +209,9 @@ export function validatePocketLayout(
     }
   }
   const interior = interiorSection(m, params.gridX, params.gridY);
-  const cutSections = placed.map((pocket) => placedCutSection(m, pocket));
+  // The checks judge the drafted rim, the pocket's widest cross-section; at
+  // draft angle 0 it is the base outline itself.
+  const cutSections = placed.map((pocket) => placedCutSection(m, pocket, true));
   // The insert seat and its support structure cannot be cut into, so pockets
   // must stay clear of the label structure's plan strip. The strip and the
   // reasoning behind it belong to the shared carve stage, which every carve
@@ -164,34 +220,73 @@ export function validatePocketLayout(
   const slotStrip = structure?.section ?? null;
   const structureName = structure?.name ?? '';
   try {
+    // Whether a violation of a rim-level check disappears when the pocket's
+    // base outline is judged instead: then the draft flare alone is the cause,
+    // and the message says so.
+    const flareIsTheCause = (i: number, check: (section: CrossSection) => boolean): boolean => {
+      if (draftFlareMm(placed[i]) === 0) return false;
+      const base = placedCutSection(m, placed[i], false);
+      const baseViolates = check(base);
+      base.delete();
+      return !baseViolates;
+    };
     for (let i = 0; i < placed.length; i += 1) {
       const outside = cutSections[i].subtract(interior);
       const pokesOut = !outside.isEmpty();
       outside.delete();
       if (pokesOut) {
+        const flareCause = flareIsTheCause(i, (section) => {
+          const baseOutside = section.subtract(interior);
+          const violates = !baseOutside.isEmpty();
+          baseOutside.delete();
+          return violates;
+        });
         throw new Error(
-          `The pocket for "${placed[i].tool.name}" reaches into the bin wall. ` +
-            'Move it away from the walls or use a larger bin.',
+          flareCause
+            ? `The pocket for "${placed[i].tool.name}" fits at its base, but its draft ` +
+              'flare reaches into the bin wall at the rim. Reduce the draft angle, move ' +
+              'the pocket away from the walls, or use a larger bin.'
+            : `The pocket for "${placed[i].tool.name}" reaches into the bin wall. ` +
+              'Move it away from the walls or use a larger bin.',
         );
       }
       if (slotStrip !== null && sectionsOverlap(cutSections[i], slotStrip)) {
+        const flareCause = flareIsTheCause(i, (section) =>
+          sectionsOverlap(section, slotStrip),
+        );
         throw new Error(
-          `The pocket for "${placed[i].tool.name}" reaches under the ${structureName}. ` +
-            'Move it away from the front wall or use a deeper bin.',
+          flareCause
+            ? `The draft flare of the pocket for "${placed[i].tool.name}" reaches under ` +
+              `the ${structureName}. Reduce the draft angle or move the pocket away ` +
+              'from the front wall.'
+            : `The pocket for "${placed[i].tool.name}" reaches under the ${structureName}. ` +
+              'Move it away from the front wall or use a deeper bin.',
         );
       }
     }
     for (let i = 0; i < placed.length; i += 1) {
       for (let j = i + 1; j < placed.length; j += 1) {
-        const a = outlineSection(m, placed[i].outline);
-        const b = outlineSection(m, placed[j].outline);
+        const a = draftedOutlineSection(m, placed[i]);
+        const b = draftedOutlineSection(m, placed[j]);
         const overlapping = sectionsOverlap(a, b);
         a.delete();
         b.delete();
         if (overlapping) {
+          let flareCause = false;
+          if (draftFlareMm(placed[i]) > 0 || draftFlareMm(placed[j]) > 0) {
+            const baseA = outlineSection(m, placed[i].outline);
+            const baseB = outlineSection(m, placed[j].outline);
+            flareCause = !sectionsOverlap(baseA, baseB);
+            baseA.delete();
+            baseB.delete();
+          }
           throw new Error(
-            `The pockets for "${placed[i].tool.name}" and "${placed[j].tool.name}" overlap. ` +
-              'Move them apart.',
+            flareCause
+              ? `The pockets for "${placed[i].tool.name}" and "${placed[j].tool.name}" ` +
+                'overlap at the rim because of their draft flare. Move them apart or ' +
+                'reduce the draft angles.'
+              : `The pockets for "${placed[i].tool.name}" and "${placed[j].tool.name}" overlap. ` +
+                'Move them apart.',
           );
         }
       }
@@ -225,12 +320,23 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
   for (const pocket of placed) {
     const pocketBottom = bodyTop - pocket.pocketDepthMm;
     const section = outlineSection(m, pocket.outline);
-    cutters.push(
-      section
-        .extrude(solidTop + CARVE_OVERLAP_EPS - pocketBottom)
-        .translate(0, 0, pocketBottom),
-    );
+    const extruded = section
+      .extrude(solidTop + CARVE_OVERLAP_EPS - pocketBottom)
+      .translate(0, 0, pocketBottom);
     section.delete();
+    // A drafted pocket's cutter is swept upward at the draft angle, so its
+    // walls lean outward toward the rim. The zero-clearance branch of the
+    // sweep applies: the extruded outline is exact, so nothing is simplified
+    // and the sweep cone facets against its own radius.
+    cutters.push(
+      pocket.draftAngleDeg > 0
+        ? sweepCutterUpward(m, extruded, {
+            heightUnits: params.heightUnits,
+            draftAngleDeg: pocket.draftAngleDeg,
+            clearanceMm: 0,
+          })
+        : extruded,
+    );
     for (const hole of pocket.fingerHoles) {
       const circle = outlineSection(m, fingerHoleOutline(hole));
       cutters.push(
@@ -242,7 +348,25 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
     }
   }
 
-  return buildCarvedBinBody(m, params, cutters, 'Pocket bin');
+  let body = buildCarvedBinBody(m, params, cutters, 'Pocket bin');
+  const edits = params.edits ?? [];
+  if (edits.length > 0) {
+    // The un-carved solid bin body: the same carve stage with no cutters, so
+    // the Add clamp envelope is derived where the carve already derives it.
+    // buildCarvedBinBody only reads the CarvedBinParams fields it needs, so
+    // params (a superset, carrying edits and the memo fields too) is passed
+    // through a variable rather than an object literal to avoid an excess
+    // property error on fields it structurally ignores.
+    const makeBinSolid = (): Manifold => buildCarvedBinBody(m, params, [], 'Pocket bin');
+    body =
+      params.editedMemo !== undefined && params.editedRecipeKey !== undefined
+        ? applyCavityEditsMemoized(m, body, makeBinSolid, edits, {
+            store: params.editedMemo,
+            recipeKey: params.editedRecipeKey,
+          })
+        : applyCavityEditsMemoized(m, body, makeBinSolid, edits);
+  }
+  return body;
 }
 
 /**
@@ -255,31 +379,7 @@ export function generatePocketBin(
   font: Font,
   params: PocketBinParams,
 ): PartMeshes {
-  let body = buildPocketBinBody(m, params);
-  let label: Manifold | null = null;
-  try {
-    if (params.fusedLabel != null) {
-      // Fused: the pocket bin body carries no slot, and the label is raised on
-      // the top face as the second-filament mesh.
-      label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
-    } else if (params.insert !== null) {
-      // Like generateSlottedBin: the insert's plate joins the body mesh and
-      // only its raised label face keeps the label color.
-      const placed = buildInsertInSlotSolids(m, font, params.insert, params);
-      const withPlate = m.Manifold.union([body, placed.plate]);
-      body.delete();
-      placed.plate.delete();
-      body = withPlate;
-      label = placed.label;
-    }
-    return {
-      body: manifoldToMeshData(body),
-      label: label ? manifoldToMeshData(label) : null,
-    };
-  } finally {
-    body.delete();
-    label?.delete();
-  }
+  return finishBinPartMeshes(m, font, buildPocketBinBody(m, params), params);
 }
 
 /**
@@ -292,24 +392,11 @@ export function generatePocketBinUnion(
   font: Font,
   params: PocketBinParams,
 ): MeshData {
-  let body = buildPocketBinBody(m, params);
-  try {
-    if (params.fusedLabel != null) {
-      const label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
-      if (label !== null) {
-        const union = m.Manifold.union([body, label]);
-        body.delete();
-        label.delete();
-        if (union.status() !== 'NoError') {
-          const status = union.status();
-          union.delete();
-          throw new Error(`Fused pocket bin union produced an invalid solid: ${status}`);
-        }
-        body = union;
-      }
-    }
-    return manifoldToMeshData(body);
-  } finally {
-    body.delete();
-  }
+  return finishBinUnionMesh(
+    m,
+    font,
+    buildPocketBinBody(m, params),
+    params,
+    'Fused pocket bin',
+  );
 }

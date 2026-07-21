@@ -708,25 +708,24 @@ export function buildSlottedBinBody(
 }
 
 /**
- * Generate a bin as its body mesh plus, when the parameters carry the paired
- * insert's content, the insert resting in the slot. The insert's plate joins
- * the body mesh (it prints in the body filament) and only its raised label
- * face goes on the label mesh, so the preview colors match the printed
- * part. Exports generate the bin and the insert as separately placed parts
- * instead.
+ * The label stage every bin generator's two-mesh form ends in, extracted so
+ * the slotted, pocket and cutout generators share one implementation. When
+ * the parameters carry a fused label, the body already carries the fused
+ * shelf and the raised label becomes the second-filament mesh; when they
+ * carry the paired insert's content, the insert's plate joins the body mesh
+ * (it prints in the body filament) and only its raised label face keeps the
+ * label color. Takes ownership of `body`.
  */
-export function generateSlottedBin(
+export function finishBinPartMeshes(
   m: ManifoldToplevel,
   font: Font,
+  bodyIn: Manifold,
   params: SlottedBinParams,
 ): PartMeshes {
-  let body = buildSlottedBinBody(m, params);
+  let body = bodyIn;
   let label: Manifold | null = null;
   try {
     if (params.fusedLabel != null) {
-      // Fused: the body carries the solid fused shelf instead of the insert
-      // channel, and the label is raised on that shelf's top face as the
-      // second-filament mesh.
       label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
     } else if (params.insert !== null) {
       const placed = buildInsertInSlotSolids(m, font, params.insert, params);
@@ -747,16 +746,22 @@ export function generateSlottedBin(
 }
 
 /**
- * Generate a bin as one unioned solid for the STL download. A paired insert
- * never rides along (it is its own printable part), but a fused label is part
- * of the bin, so it is unioned into the single mesh.
+ * The label stage every bin generator's single-mesh form ends in, extracted
+ * so the slotted, pocket and cutout generators share one implementation. A
+ * paired insert never rides along (it is its own printable part), but a fused
+ * label is part of the bin, so it is unioned into the single mesh and the
+ * union's manifold status is checked. `partName` names the part in the
+ * failure message (for example "Fused pocket bin"). Takes ownership of
+ * `body`.
  */
-export function generateSlottedBinUnion(
+export function finishBinUnionMesh(
   m: ManifoldToplevel,
   font: Font,
+  bodyIn: Manifold,
   params: SlottedBinParams,
+  partName: string,
 ): MeshData {
-  let body = buildSlottedBinBody(m, params);
+  let body = bodyIn;
   try {
     if (params.fusedLabel != null) {
       const label = buildFusedLabel(m, font, labelSpecOf(params.fusedLabel), params);
@@ -767,7 +772,7 @@ export function generateSlottedBinUnion(
         if (union.status() !== 'NoError') {
           const status = union.status();
           union.delete();
-          throw new Error(`Fused bin union produced an invalid solid: ${status}`);
+          throw new Error(`${partName} union produced an invalid solid: ${status}`);
         }
         body = union;
       }
@@ -776,6 +781,32 @@ export function generateSlottedBinUnion(
   } finally {
     body.delete();
   }
+}
+
+/**
+ * Generate a bin as its body mesh plus, when the parameters carry the paired
+ * insert's content, the insert resting in the slot; see finishBinPartMeshes
+ * for how the two meshes split. Exports generate the bin and the insert as
+ * separately placed parts instead.
+ */
+export function generateSlottedBin(
+  m: ManifoldToplevel,
+  font: Font,
+  params: SlottedBinParams,
+): PartMeshes {
+  return finishBinPartMeshes(m, font, buildSlottedBinBody(m, params), params);
+}
+
+/**
+ * Generate a bin as one unioned solid for the STL download; see
+ * finishBinUnionMesh for how a fused label joins the mesh.
+ */
+export function generateSlottedBinUnion(
+  m: ManifoldToplevel,
+  font: Font,
+  params: SlottedBinParams,
+): MeshData {
+  return finishBinUnionMesh(m, font, buildSlottedBinBody(m, params), params, 'Fused bin');
 }
 
 /**
