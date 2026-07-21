@@ -495,6 +495,8 @@ function syncSelection(): void {
   if (!entry || props.paintTool !== null) {
     translateControls?.detach();
     rotateControls?.detach();
+    // Not attached: leave the marker empty so leaving paint mode reattaches.
+    attachedId = null;
     return;
   }
   translateControls?.attach(entry.mesh);
