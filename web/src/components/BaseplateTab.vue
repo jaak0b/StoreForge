@@ -736,42 +736,54 @@ function editingTitle(entry: QueueEntry): string {
         @update:quantity="quantity = $event"
       >
         <template #fields>
-          <v-text-field
-            v-model.number="store.brimLeftMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim left (mm)"
-            density="comfortable"
-            hide-details
-          />
-          <v-text-field
-            v-model.number="store.brimRightMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim right (mm)"
-            density="comfortable"
-            hide-details
-          />
-          <v-text-field
-            v-model.number="store.brimFrontMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim front (mm)"
-            density="comfortable"
-            hide-details
-          />
-          <v-text-field
-            v-model.number="store.brimBackMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim back (mm)"
-            density="comfortable"
-            hide-details
-          />
+          <div class="brim-fields-row">
+            <v-row dense>
+              <v-col cols="6">
+                <v-text-field
+                  v-model.number="store.brimLeftMm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  label="Brim left (mm)"
+                  density="comfortable"
+                  hide-details
+                />
+              </v-col>
+              <v-col cols="6">
+                <v-text-field
+                  v-model.number="store.brimRightMm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  label="Brim right (mm)"
+                  density="comfortable"
+                  hide-details
+                />
+              </v-col>
+              <v-col cols="6">
+                <v-text-field
+                  v-model.number="store.brimFrontMm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  label="Brim front (mm)"
+                  density="comfortable"
+                  hide-details
+                />
+              </v-col>
+              <v-col cols="6">
+                <v-text-field
+                  v-model.number="store.brimBackMm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  label="Brim back (mm)"
+                  density="comfortable"
+                  hide-details
+                />
+              </v-col>
+            </v-row>
+          </div>
         </template>
         <template #after>
           <v-textarea
@@ -914,6 +926,10 @@ function editingTitle(entry: QueueEntry): string {
 <style scoped>
 .preview-card {
   min-height: 320px;
+}
+.brim-fields-row {
+  grid-column: 1 / -1;
+  order: -1;
 }
 .drawer-fill-preview {
   width: 100%;
