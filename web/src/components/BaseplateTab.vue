@@ -721,42 +721,64 @@ function editingTitle(entry: QueueEntry): string {
         @update:quantity="quantity = $event"
       >
         <template #fields>
-          <v-text-field
-            v-model.number="store.brimLeftMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim left (mm)"
-            density="comfortable"
-            hide-details
-          />
-          <v-text-field
-            v-model.number="store.brimRightMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim right (mm)"
-            density="comfortable"
-            hide-details
-          />
-          <v-text-field
-            v-model.number="store.brimFrontMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim front (mm)"
-            density="comfortable"
-            hide-details
-          />
-          <v-text-field
-            v-model.number="store.brimBackMm"
-            type="number"
-            min="0"
-            step="0.1"
-            label="Brim back (mm)"
-            density="comfortable"
-            hide-details
-          />
+          <div class="text-caption text-medium-emphasis mb-1">Brim (mm)</div>
+          <div class="brim-box">
+            <div class="brim-box__edge brim-box__edge--back">
+              <span class="brim-box__caption">back</span>
+              <v-text-field
+                v-model.number="store.brimBackMm"
+                type="number"
+                min="0"
+                step="0.1"
+                density="compact"
+                variant="outlined"
+                hide-details
+                class="brim-box__input"
+              />
+            </div>
+            <div class="brim-box__middle">
+              <div class="brim-box__edge brim-box__edge--left">
+                <span class="brim-box__caption">left</span>
+                <v-text-field
+                  v-model.number="store.brimLeftMm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  class="brim-box__input"
+                />
+              </div>
+              <div class="brim-box__plate">{{ store.unitsX }} x {{ store.unitsY }}</div>
+              <div class="brim-box__edge brim-box__edge--right">
+                <span class="brim-box__caption">right</span>
+                <v-text-field
+                  v-model.number="store.brimRightMm"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  class="brim-box__input"
+                />
+              </div>
+            </div>
+            <div class="brim-box__edge brim-box__edge--front">
+              <span class="brim-box__caption">front</span>
+              <v-text-field
+                v-model.number="store.brimFrontMm"
+                type="number"
+                min="0"
+                step="0.1"
+                density="compact"
+                variant="outlined"
+                hide-details
+                class="brim-box__input"
+              />
+            </div>
+          </div>
         </template>
         <template #after>
           <v-textarea
@@ -928,5 +950,45 @@ function editingTitle(entry: QueueEntry): string {
 .drawer-fill-readout td {
   padding: 2px 8px 2px 0;
   vertical-align: top;
+}
+.brim-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.brim-box__middle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brim-box__edge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.brim-box__caption {
+  font-size: 0.6875rem;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+.brim-box__input {
+  width: 72px;
+  flex: none;
+}
+.brim-box__input :deep(input) {
+  text-align: center;
+}
+.brim-box__plate {
+  width: 96px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
 }
 </style>
