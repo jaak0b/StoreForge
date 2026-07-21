@@ -5,6 +5,7 @@ import {
   type Bin,
   type BinPockets,
   type BinWithInsertProduct,
+  type ConnectionClipProduct,
   type CutoutModel,
   type LabelContent,
   type ModelPlacement,
@@ -920,12 +921,31 @@ function validateGroupLink(raw: unknown, subject: string): string | null {
   return null;
 }
 
+/**
+ * Validates a connection clip's optional drawer-group backlink: absent (a
+ * hand-added clip) or an object whose groupId is a non-empty string. Unlike the
+ * baseplate link it carries no plate ids, since a drawer's clips have no
+ * per-clip identity. Only the shape is checked; a dangling link is repaired at
+ * the plan level, following the baseplate-link precedent.
+ */
+function validateClipGroupLink(raw: unknown, subject: string): string | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: the group link must be an object`;
+  }
+  const link = raw as Record<string, unknown>;
+  if (typeof link.groupId !== 'string' || link.groupId.length === 0) {
+    return `${subject}: the group link's groupId must be text that is not empty`;
+  }
+  return null;
+}
+
 /** Validates the fields of a raw connection clip product. */
 function validateClip(raw: Record<string, unknown>, subject: string): string | null {
   if (!isNumberInRange(raw.toleranceMm, CLIP_TOLERANCE_MIN, CLIP_TOLERANCE_MAX)) {
     return `${subject}: toleranceMm must be a number from ${CLIP_TOLERANCE_MIN} to ${CLIP_TOLERANCE_MAX}`;
   }
-  return null;
+  return validateClipGroupLink(raw.group, subject);
 }
 
 /**
@@ -955,7 +975,12 @@ function pickBaseplate(raw: Record<string, unknown>): BaseplateProduct {
 
 /** Copies only the known ConnectionClipProduct fields from a validated raw object. */
 function pickClip(raw: Record<string, unknown>): Product {
-  return { kind: 'clip', toleranceMm: raw.toleranceMm as number };
+  const product: Product = { kind: 'clip', toleranceMm: raw.toleranceMm as number };
+  if (raw.group !== undefined) {
+    const link = raw.group as Record<string, unknown>;
+    product.group = { groupId: link.groupId as string };
+  }
+  return product;
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,6 +1035,29 @@ function validateDrawerOptions(raw: unknown, subject: string): string | null {
   }
   if (typeof options.connectable !== 'boolean') {
     return `${subject}: connectable must be true or false`;
+  }
+  return null;
+}
+
+/**
+ * Validates a drawer group's optional connection-clip plan: absent (not
+ * connectable, or no clips needed) or an object with a whole clip count of at
+ * least 1 and a tolerance in the clip's own bounds. count is not cross-checked
+ * against the plates here (like a plate's brim geometry, consistency is a
+ * generation-time concern): the store recomputes it from drawerFillClipCount on
+ * every re-plan, so a stale count only ever survives until the next edit.
+ */
+function validateDrawerClips(raw: unknown, subject: string): string | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: The connection clip plan must be an object.`;
+  }
+  const clips = raw as Record<string, unknown>;
+  if (!isPositiveInteger(clips.count, 1)) {
+    return `${subject}: The clip count must be a whole number of at least 1.`;
+  }
+  if (!isNumberInRange(clips.toleranceMm, CLIP_TOLERANCE_MIN, CLIP_TOLERANCE_MAX)) {
+    return `${subject}: The clip tolerance must be a number from ${CLIP_TOLERANCE_MIN} to ${CLIP_TOLERANCE_MAX}.`;
   }
   return null;
 }
@@ -1094,7 +1142,7 @@ export function validateGroup(raw: unknown, subject: string): string | null {
         return `${subject}: The done plate id ${doneId} is not one of the group's plates.`;
       }
     }
-    return null;
+    return validateDrawerClips(payload.clips, subject);
   }
   return `${subject}: The group payload kind must be drawer.`;
 }
@@ -1145,6 +1193,10 @@ export function pickGroup(raw: Record<string, unknown>): Group {
         plates,
         donePlateIds: (rawPayload.donePlateIds as string[]).filter((id) => plateIds.has(id)),
       };
+      if (rawPayload.clips !== undefined) {
+        const rawClips = rawPayload.clips as Record<string, number>;
+        drawer.clips = { count: rawClips.count, toleranceMm: rawClips.toleranceMm };
+      }
       payload = drawer;
       break;
     }
@@ -1809,10 +1861,33 @@ function repairBaseplateLink(
 }
 
 /**
- * Repairs every baseplate group link across the queue entries and batch items.
- * Runs after every array is picked on load, and again after an import merge,
- * since a merge can drop a group an imported plate pointed at. A queue entry's
- * quantity and a batch item's count are the plate-set sizes kept in step.
+ * Repairs a connection clip's group link against the plan's groups: a link whose
+ * group is no longer in the plan is removed, leaving a plain hand-added clip row
+ * (the clip is still a perfectly good clip). No quantity change: a clip row has
+ * no plate-set invariant, so its count stands on its own. Mutates the product in
+ * place and appends a user-worded warning.
+ */
+function repairClipLink(
+  product: ConnectionClipProduct,
+  groupIds: Set<string>,
+  subject: string,
+  warnings: string[],
+): void {
+  const link = product.group;
+  if (link === undefined) return;
+  if (groupIds.has(link.groupId)) return;
+  delete product.group;
+  warnings.push(
+    `${subject} was linked to a drawer group that is no longer in the plan; the link was removed and the clip kept as a standalone row.`,
+  );
+}
+
+/**
+ * Repairs every baseplate and connection-clip group link across the queue
+ * entries and batch items. Runs after every array is picked on load, and again
+ * after an import merge, since a merge can drop a group a linked plate or clip
+ * pointed at. A queue entry's quantity and a batch item's count are the plate-set
+ * sizes kept in step for a baseplate; a clip's count is left untouched.
  */
 export function repairGroupLinks(
   entries: QueueEntry[],
@@ -1823,6 +1898,7 @@ export function repairGroupLinks(
   const platesByGroup = new Map<string, Set<string>>(
     groups.map((group) => [group.id, new Set(group.payload.plates.map((plate) => plate.id))]),
   );
+  const groupIds = new Set(groups.map((group) => group.id));
   for (const entry of entries) {
     if (entry.product.kind === 'baseplate') {
       repairBaseplateLink(
@@ -1834,6 +1910,8 @@ export function repairGroupLinks(
         `Entry ${entry.id}`,
         warnings,
       );
+    } else if (entry.product.kind === 'clip') {
+      repairClipLink(entry.product, groupIds, `Entry ${entry.id}`, warnings);
     }
   }
   for (const batch of batches) {
@@ -1848,6 +1926,8 @@ export function repairGroupLinks(
           `Batch ${batch.id} item ${item.id}`,
           warnings,
         );
+      } else if (item.product.kind === 'clip') {
+        repairClipLink(item.product, groupIds, `Batch ${batch.id} item ${item.id}`, warnings);
       }
     }
   }

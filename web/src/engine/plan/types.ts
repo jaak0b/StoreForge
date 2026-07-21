@@ -347,6 +347,21 @@ export interface ConnectionClipProduct {
    * prints too tight to push into the joint.
    */
   toleranceMm: number;
+  /**
+   * Backlink to the drawer group that auto-queued this clip row, or absent for
+   * a clip added by hand on the Connection clips card. Unlike the baseplate
+   * link this carries only the groupId and no plate ids: a drawer's clips have
+   * no per-clip identity, so the row is an ordinary quantity row (its quantity
+   * is the drawer's clip count) that the group owns as a whole. The group's
+   * payload records the clip plan (count and tolerance); this link only lets the
+   * store find and re-stamp or remove the row when the drawer is re-planned, its
+   * connectable option is turned off, or the drawer is deleted. Confirming or
+   * failing the row is therefore ordinary quantity bookkeeping: the group keeps
+   * no record of which individual clips printed. A dangling link (its group is
+   * gone) is repaired away on load, leaving a plain hand-added clip row, so
+   * consumers may treat a present link as resolvable.
+   */
+  group?: { groupId: string };
 }
 
 /**
@@ -554,6 +569,17 @@ export interface DrawerGroup {
   plates: DrawerPlate[];
   /** Ids of plates confirmed printed; each must be a plate in plates. */
   donePlateIds: string[];
+  /**
+   * The connection clips the drawer needs, or absent when the drawer is not
+   * connectable or its single plate needs none. count is the number of clips,
+   * a cached mirror of drawerFillClipCount over the plates (kept in step on
+   * every re-plan and options change, never an independent figure), and
+   * toleranceMm is the clip fit the drawer prints them at. When present, one
+   * linked ConnectionClipProduct row of quantity count stands for them in the
+   * queue; the clips have no per-clip identity, so confirm and fail are ordinary
+   * quantity bookkeeping and progress stays plate-based.
+   */
+  clips?: { count: number; toleranceMm: number };
 }
 
 /** The payload of a group, discriminated by kind. Grows as generator kinds are added. */

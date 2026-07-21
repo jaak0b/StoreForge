@@ -10,6 +10,7 @@ import {
 import { describeGroup } from '../../src/engine/plan/rowDescriptor';
 import type {
   BaseplateProduct,
+  ConnectionClipProduct,
   DrawerPlate,
   Group,
   PrintBatch,
@@ -59,7 +60,12 @@ function linkedPlateProduct(groupId: string, ...plateIds: string[]): BaseplatePr
   };
 }
 
-function entry(id: string, product: BaseplateProduct): QueueEntry {
+/** A connection clip linked to a group, as a drawer auto-queues it. */
+function linkedClipProduct(groupId: string): ConnectionClipProduct {
+  return { kind: 'clip', toleranceMm: 0.1, group: { groupId } };
+}
+
+function entry(id: string, product: BaseplateProduct | ConnectionClipProduct): QueueEntry {
   return { id, quantity: 1, createdAt: '2026-07-21T10:00:00.000Z', product };
 }
 
@@ -139,6 +145,24 @@ describe('validateGroup', () => {
     g.payload.donePlateIds = ['ghost'];
     expect(validateGroup(g, 'group g1')).toMatch(/done plate id ghost is not one of/);
   });
+
+  it('accepts a well-formed clip plan', () => {
+    const g = drawerGroup();
+    g.payload.clips = { count: 5, toleranceMm: 0.1 };
+    expect(validateGroup(g, 'group g1')).toBeNull();
+  });
+
+  it('rejects a clip plan with a non-positive count', () => {
+    const g = drawerGroup();
+    g.payload.clips = { count: 0, toleranceMm: 0.1 };
+    expect(validateGroup(g, 'group g1')).toMatch(/clip count must be a whole number/);
+  });
+
+  it('rejects a clip plan with an out-of-range tolerance', () => {
+    const g = drawerGroup();
+    g.payload.clips = { count: 5, toleranceMm: 1 };
+    expect(validateGroup(g, 'group g1')).toMatch(/clip tolerance must be a number/);
+  });
 });
 
 describe('pickGroup', () => {
@@ -200,6 +224,25 @@ describe('repairGroupLinks', () => {
     expect(merged.quantity).toBe(1);
     expect(warnings).toHaveLength(1);
   });
+
+  it('strips a clip link that resolves to no group but keeps the clip and its quantity', () => {
+    const clip = entry('e1', linkedClipProduct('ghost'));
+    clip.quantity = 5;
+    const warnings: string[] = [];
+    repairGroupLinks([clip], [], [drawerGroup()], warnings);
+    expect((clip.product as ConnectionClipProduct).group).toBeUndefined();
+    expect(clip.product.kind).toBe('clip');
+    expect(clip.quantity).toBe(5);
+    expect(warnings[0]).toMatch(/Entry e1 was linked to a drawer group/);
+  });
+
+  it('keeps a clip link that resolves to an existing group', () => {
+    const clip = entry('e1', linkedClipProduct('g1'));
+    const warnings: string[] = [];
+    repairGroupLinks([clip], [], [drawerGroup()], warnings);
+    expect((clip.product as ConnectionClipProduct).group).toEqual({ groupId: 'g1' });
+    expect(warnings).toHaveLength(0);
+  });
 });
 
 describe('plan file v10 groups', () => {
@@ -222,6 +265,28 @@ describe('plan file v10 groups', () => {
     expect((result.plan.entries[0].product as BaseplateProduct).group).toEqual({
       groupId: 'g1',
       plateIds: ['p2'],
+    });
+  });
+
+  it('round-trips a connectable group with its clip plan and linked clip row', () => {
+    const group = drawerGroup({
+      payload: {
+        kind: 'drawer',
+        input: { drawerWidthMm: 470, drawerDepthMm: 300, plateWidthMm: 470, plateDepthMm: 300 },
+        options: { magnets: null, screwHoles: false, connectable: true },
+        plates: [plate({ id: 'p1' }), plate({ id: 'p2', column: 1 })],
+        donePlateIds: [],
+        clips: { count: 7, toleranceMm: 0.15 },
+      },
+    });
+    const clip = entry('c1', linkedClipProduct('g1'));
+    clip.quantity = 7;
+    const result = parsePlanFile(serializePlanFile([clip], [], [group]));
+    if (!result.ok) throw new Error(result.error);
+    expect(result.warnings).toEqual([]);
+    expect(result.plan.groups[0].payload.clips).toEqual({ count: 7, toleranceMm: 0.15 });
+    expect((result.plan.entries[0].product as ConnectionClipProduct).group).toEqual({
+      groupId: 'g1',
     });
   });
 

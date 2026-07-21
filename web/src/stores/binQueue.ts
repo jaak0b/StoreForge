@@ -21,8 +21,12 @@ import {
   validateGroup,
   validateProduct,
 } from '../engine/plan/planFile';
-import { planDrawerFill, type DrawerFillPlate } from '../engine/baseplate/drawerFill';
-import type { BaseplateBrim } from '../engine/baseplate/constants';
+import {
+  drawerFillClipCount,
+  planDrawerFill,
+  type DrawerFillPlate,
+} from '../engine/baseplate/drawerFill';
+import { CLIP_TOLERANCE_DEFAULT, type BaseplateBrim } from '../engine/baseplate/constants';
 import {
   confirmBatchItem,
   createBatch,
@@ -125,6 +129,33 @@ function linkedEntriesForPlates(
     createdAt: now,
     product: baseplateProductForPlates(specPlates, options, groupId),
   }));
+}
+
+/**
+ * The connection-clip plan for a drawer's plates: the clip count (from the
+ * shared connector-slot rule, never a local guess) and the linked clip row that
+ * stands for it, or nulls when the drawer is not connectable or its plates need
+ * no clips. The single place a drawer's clips become a queue row, so the initial
+ * queueing and every re-plan agree.
+ */
+function planDrawerClips(
+  plates: DrawerPlate[],
+  connectable: boolean,
+  toleranceMm: number,
+  groupId: string,
+  now: string,
+): { clips: { count: number; toleranceMm: number } | null; entry: QueueEntry | null } {
+  const count = connectable ? drawerFillClipCount(plates) : 0;
+  if (count === 0) return { clips: null, entry: null };
+  return {
+    clips: { count, toleranceMm },
+    entry: {
+      id: crypto.randomUUID(),
+      quantity: count,
+      createdAt: now,
+      product: { kind: 'clip', toleranceMm, group: { groupId } },
+    },
+  };
 }
 
 /** Whether two drawer-fill inputs differ on any of their four mm fields. */
@@ -349,7 +380,15 @@ export const useBinQueue = defineStore('binQueue', {
       const source = this.entryById(id);
       if (source === null) return null;
       const product = JSON.parse(JSON.stringify(source.product)) as Product;
-      if (product.kind === 'baseplate' && product.group !== undefined) delete product.group;
+      // A drawer-linked plate or clip duplicates to an unlinked standalone copy:
+      // a duplicate has no place in the drawer plan, so it keeps the geometry but
+      // drops the group link.
+      if (
+        (product.kind === 'baseplate' || product.kind === 'clip') &&
+        product.group !== undefined
+      ) {
+        delete product.group;
+      }
       const copy: QueueEntry = {
         ...source,
         product,
@@ -488,8 +527,10 @@ export const useBinQueue = defineStore('binQueue', {
       options: DrawerPlateOptions,
       plannerPlates: DrawerFillPlate[],
       name: string,
+      clipToleranceMm: number = CLIP_TOLERANCE_DEFAULT,
     ): string | null {
       const groupId = crypto.randomUUID();
+      const now = new Date().toISOString();
       const plates: DrawerPlate[] = plannerPlates.map((plate) => ({
         id: crypto.randomUUID(),
         unitsX: plate.unitsX,
@@ -498,21 +539,30 @@ export const useBinQueue = defineStore('binQueue', {
         column: plate.column,
         row: plate.row,
       }));
+      // Plan the clips before building the payload, so the group is stored with
+      // its clip plan and the linked clip row is validated with the plates.
+      const clipPlan = planDrawerClips(plates, options.connectable, clipToleranceMm, groupId, now);
       const group: Group = {
         id: groupId,
         name,
-        createdAt: new Date().toISOString(),
+        createdAt: now,
         payload: { kind: 'drawer', input, options, plates, donePlateIds: [] },
       };
+      if (clipPlan.clips !== null) group.payload.clips = clipPlan.clips;
       const groupProblem = validateGroup(group, `group ${groupId}`);
       if (groupProblem !== null) return groupProblem;
-      const entries = linkedEntriesForPlates(plates, options, groupId, new Date().toISOString());
+      const entries = linkedEntriesForPlates(plates, options, groupId, now);
       for (const entry of entries) {
         const problem = validateProduct(entry.product, 'A planned plate');
         if (problem !== null) return problem;
       }
+      if (clipPlan.entry !== null) {
+        const clipProblem = validateProduct(clipPlan.entry.product, 'The drawer connection clips');
+        if (clipProblem !== null) return clipProblem;
+      }
       this.groups.push(group);
       this.entries.push(...entries);
+      if (clipPlan.entry !== null) this.entries.push(clipPlan.entry);
       this.persist();
       return null;
     },
@@ -531,14 +581,42 @@ export const useBinQueue = defineStore('binQueue', {
      * groupProgress before calling. All or nothing: nothing changes when the
      * re-plan fails or a new product is refused. Returns null on success or the
      * user-worded problem.
+     *
+     * Connection clips ride along: a structural re-plan recomputes the clip count
+     * from the new plates and re-stamps the queued clip row; a non-structural
+     * options change that turns connectable off removes the clip row and clears
+     * the clip plan, and a clip-tolerance change re-stamps the queued clip row's
+     * tolerance. The clip count comes from drawerFillClipCount, never a local
+     * figure.
      */
     updateDrawerGroup(
       id: string,
-      changes: { name?: string; options?: DrawerPlateOptions; input?: DrawerFillInput },
+      changes: {
+        name?: string;
+        options?: DrawerPlateOptions;
+        input?: DrawerFillInput;
+        clipToleranceMm?: number;
+      },
     ): string | null {
       const group = this.groupById(id);
       if (group === null) return null;
       const payload = group.payload;
+      // A bad clip tolerance is refused before anything is mutated, so a
+      // structural or options apply never lands with the clip plan half-updated.
+      if (changes.clipToleranceMm !== undefined) {
+        const problem = validateProduct(
+          { kind: 'clip', toleranceMm: changes.clipToleranceMm },
+          'The drawer connection clips',
+        );
+        if (problem !== null) return problem;
+      }
+      const clipToleranceMm =
+        changes.clipToleranceMm ?? payload.clips?.toleranceMm ?? CLIP_TOLERANCE_DEFAULT;
+      // Captured before the options re-stamp below overwrites payload.options,
+      // so the non-structural clip sync can tell a fresh turn-on (add a clip row)
+      // from an already-connectable drawer whose clips are all on a build plate
+      // (add nothing).
+      const wasConnectable = payload.options.connectable;
       const structural =
         changes.input !== undefined && inputChanged(payload.input, changes.input);
       if (structural) {
@@ -546,6 +624,7 @@ export const useBinQueue = defineStore('binQueue', {
         const options = changes.options ?? payload.options;
         const outcome = planDrawerFill(input);
         if ('error' in outcome) return outcome.error;
+        const now = new Date().toISOString();
         const newPlates: DrawerPlate[] = outcome.plates.map((plate) => ({
           id: crypto.randomUUID(),
           unitsX: plate.unitsX,
@@ -554,21 +633,34 @@ export const useBinQueue = defineStore('binQueue', {
           column: plate.column,
           row: plate.row,
         }));
-        const newEntries = linkedEntriesForPlates(newPlates, options, id, new Date().toISOString());
+        const newEntries = linkedEntriesForPlates(newPlates, options, id, now);
         for (const entry of newEntries) {
           const problem = validateProduct(entry.product, 'A planned plate');
           if (problem !== null) return problem;
         }
+        const clipPlan = planDrawerClips(newPlates, options.connectable, clipToleranceMm, id, now);
+        if (clipPlan.entry !== null) {
+          const problem = validateProduct(clipPlan.entry.product, 'The drawer connection clips');
+          if (problem !== null) return problem;
+        }
+        // Drop every still-queued row this group owns (its plates and its clips),
+        // then re-queue from the fresh plan; batched rows are left alone.
         this.entries = this.entries.filter(
           (entry) =>
-            !(entry.product.kind === 'baseplate' && entry.product.group?.groupId === id),
+            !(
+              (entry.product.kind === 'baseplate' || entry.product.kind === 'clip') &&
+              entry.product.group?.groupId === id
+            ),
         );
         payload.input = input;
         payload.options = options;
         payload.plates = newPlates;
         payload.donePlateIds = [];
+        if (clipPlan.clips !== null) payload.clips = clipPlan.clips;
+        else delete payload.clips;
         if (changes.name !== undefined) group.name = changes.name;
         this.entries.push(...newEntries);
+        if (clipPlan.entry !== null) this.entries.push(clipPlan.entry);
         this.persist();
         return null;
       }
@@ -594,6 +686,44 @@ export const useBinQueue = defineStore('binQueue', {
         }
         payload.options = options;
         for (const { entry, product } of restamped) entry.product = product;
+      }
+      // Sync the clips whenever the options or the clip tolerance were touched.
+      // The plates do not change here, so the count is stable: turning connectable
+      // off removes the clip row, turning it on adds one at the full count, and a
+      // tolerance change re-stamps the queued row without disturbing its quantity
+      // (which a batch may have already reduced).
+      if (changes.options !== undefined || changes.clipToleranceMm !== undefined) {
+        const connectable = payload.options.connectable;
+        const count = connectable ? drawerFillClipCount(payload.plates) : 0;
+        const queuedClips = this.entries.filter(
+          (entry) => entry.product.kind === 'clip' && entry.product.group?.groupId === id,
+        );
+        if (count === 0) {
+          this.entries = this.entries.filter(
+            (entry) => !(entry.product.kind === 'clip' && entry.product.group?.groupId === id),
+          );
+          delete payload.clips;
+        } else {
+          payload.clips = { count, toleranceMm: clipToleranceMm };
+          if (queuedClips.length > 0) {
+            for (const entry of queuedClips) {
+              if (entry.product.kind === 'clip') {
+                entry.product = { ...entry.product, toleranceMm: clipToleranceMm };
+              }
+            }
+          } else if (!wasConnectable) {
+            // Connectable was just turned on, so no clip row existed anywhere:
+            // add a fresh full-count row. When it was already on but no row is
+            // queued (every clip is on a build plate), nothing is added: those
+            // clips are already accounted for in a batch.
+            this.entries.push({
+              id: crypto.randomUUID(),
+              quantity: count,
+              createdAt: new Date().toISOString(),
+              product: { kind: 'clip', toleranceMm: clipToleranceMm, group: { groupId: id } },
+            });
+          }
+        }
       }
       if (changes.name !== undefined) group.name = changes.name;
       this.persist();
@@ -671,7 +801,11 @@ export const useBinQueue = defineStore('binQueue', {
     removeGroup(id: string) {
       this.groups = this.groups.filter((g) => g.id !== id);
       this.entries = this.entries.filter(
-        (entry) => !(entry.product.kind === 'baseplate' && entry.product.group?.groupId === id),
+        (entry) =>
+          !(
+            (entry.product.kind === 'baseplate' || entry.product.kind === 'clip') &&
+            entry.product.group?.groupId === id
+          ),
       );
       this.persist();
     },
