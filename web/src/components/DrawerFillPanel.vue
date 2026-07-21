@@ -589,11 +589,12 @@ function deleteGroup(): void {
           <v-btn
             variant="outlined"
             color="error"
-            size="large"
-            prepend-icon="mdi-delete-outline"
+            class="delete-btn"
+            aria-label="Delete drawer"
             @click="deleteConfirmOpen = true"
           >
-            Delete drawer
+            <v-icon icon="mdi-close" size="20" />
+            <v-tooltip activator="parent" location="bottom">Delete drawer</v-tooltip>
           </v-btn>
         </div>
       </div>
@@ -663,6 +664,16 @@ function deleteGroup(): void {
 .edit-actions {
   display: flex;
   gap: 12px;
+}
+.edit-actions > * {
+  flex: 1 1 auto;
+}
+.edit-actions > .delete-btn {
+  flex: 0 0 auto;
+  min-width: 48px;
+  width: 48px;
+  height: 44px;
+  padding: 0;
 }
 
 .drawer-fill-preview {
