@@ -813,9 +813,9 @@ function pickMagnets(raw: Record<string, unknown> | null): BaseplateMagnets | nu
  * plain plate) or an object whose four sides are each a finite number from
  * 0 up to but not including PITCH, matching BaseplateBrim's own contract in
  * baseplate/constants.ts (a brim is always less than one pitch, by
- * construction of the drawer-fill planner). The brim is only an anti-wobble
- * shim, so a side that reaches a full pitch is refused rather than silently
- * capped: the user must choose a larger plate instead.
+ * construction of the drawer-fill planner). A side that reaches a full pitch
+ * is refused rather than silently capped: at that size the user should add a
+ * grid unit instead, which the message points at.
  */
 function validateBrim(raw: unknown, subject: string): string | null {
   if (raw === undefined) return null;

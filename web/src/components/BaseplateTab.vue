@@ -300,7 +300,8 @@ const drawerFillPreviewRects = computed<DrawerFillPreviewRect[]>(() => {
 /**
  * Whether the current plate is small enough to regenerate on every change.
  * Counts the generated cells including the brim's partial cells
- * (baseplateCellCount).
+ * (baseplateCellCount), so a brimmed plate loaded for editing is gated by
+ * the workload it actually generates.
  */
 const livePreview = computed(() => baseplateCellCount(store.params) <= LIVE_PREVIEW_MAX_CELLS);
 

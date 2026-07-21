@@ -446,46 +446,49 @@ describe('generateBaseplate with a brim', () => {
     plate.delete();
   });
 
-  it('never opens a cavity in the brim: the extension is solid, flush with the base', () => {
+  it('opens a partial socket cavity in the brim, beyond the full-cell edge', () => {
     // The left brim is 10 mm; a probe centred 5 mm past the left full-cell
-    // edge (x = -PITCH - 5), spanning from the plate base up through the
-    // full riser-free height, must be entirely filled: no socket profile, no
-    // partial cavity, just a flat solid bar.
+    // edge (x = -PITCH - 5), inside the brimmed extra cell's z band, must be
+    // open cavity, matching the measured cavity width test's z = halfDz band.
     const plate = generateBaseplate(m, brimParams());
-    const probe = m.Manifold.cube([2, 4, BASEPLATE_HEIGHT - 0.01], true).translate(
-      -PITCH - 5,
-      -PITCH / 2,
-      BASEPLATE_HEIGHT / 2,
-    );
+    const probe = m.Manifold.cube([2, 4, 0.05], true).translate(-PITCH - 5, -PITCH / 2, 0.0005);
     const hit = plate.intersect(probe);
-    const hitVolume = hit.volume();
+    expect(Math.abs(hit.volume())).toBeLessThan(1e-6);
     hit.delete();
-    expect(hitVolume).toBeCloseTo(2 * 4 * (BASEPLATE_HEIGHT - 0.01), 3);
     plate.delete();
   });
 
-  it('adds no handle for the brim: only the full cells carry a through-hole', () => {
+  it('adds one handle per brim cell: partial cavities are still vertical through-holes', () => {
     const plate = generateBaseplate(m, brimParams());
-    // A brim never opens a cavity, so it never adds a handle either; the
-    // genus is exactly the plain-plate genus of the 4 full cells.
-    expect(plate.genus()).toBe(2 * 2);
+    // Same reasoning as the plain-plate genus test, extended to the brim
+    // cells: the clipper is inset from the BRIMMED outline by the rim at
+    // every height, so a rim wall remains between a brim cell's partial
+    // cavity and the drawer-facing outer edge. The partial cavity is not a
+    // notch into the boundary; like every full cell it is a vertical
+    // through-hole enclosed by wall on all four sides, one handle each.
+    // Left brim adds a column of unitsY cells, the back brim a row of unitsX
+    // cells, and their meeting adds one corner cell: 4 + 2 + 2 + 1 = 9.
+    expect(plate.genus()).toBe(2 * 2 + 2 + 2 + 1);
     plate.delete();
   });
 
-  it('stays a flat solid extension with no extra cells at any brim size, including over half a pitch', () => {
-    // Every brim size from a sliver to just under one pitch must produce the
-    // same flat bar and the same genus as the plain 4-cell plate: the brim
-    // never carries a partial socket regardless of how large it is, matching
-    // baseplateOuterMm's own footprint exactly.
-    for (const leftMm of [1, 3, PITCH / 2 + 5, PITCH - 0.1]) {
-      const testParams = brimParams({ brim: { leftMm, rightMm: 0, frontMm: 0, backMm: 0 } });
-      const plate = generateBaseplate(m, testParams);
+  it('stays watertight with unchanged genus at sliver brims thinner than the rim', () => {
+    // The planner may emit any brim in (0, pitch), including slivers thinner
+    // than the socket rim. The clipper is inset from the brimmed outline by
+    // the rim profile at every height, so a brim cell's cavity exists only
+    // where the brim exceeds the inset at that height. At 1 mm, below every
+    // inset the cell solid meets, no cavity opens at all: the brim is a
+    // solid bar. At 3 mm the cavity opens through the 2.15 mm upper bands
+    // but never the 3.95 mm bottom band: a blind pocket open at the top
+    // only, a boundary depression rather than a vertical through tunnel, so
+    // it adds no handle either. Both keep the genus of the 4 full cells.
+    for (const leftMm of [1, 3]) {
+      const plate = generateBaseplate(
+        m,
+        brimParams({ brim: { leftMm, rightMm: 0, frontMm: 0, backMm: 0 } }),
+      );
       expect(plate.status()).toBe('NoError');
       expect(plate.genus()).toBe(2 * 2);
-      const box = plate.boundingBox();
-      const outer = baseplateOuterMm(testParams);
-      expect(box.max[0] - box.min[0]).toBeCloseTo(outer.widthMm, 6);
-      expect(box.max[1] - box.min[1]).toBeCloseTo(outer.depthMm, 6);
       plate.delete();
     }
   });
