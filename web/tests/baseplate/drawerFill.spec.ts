@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { evenSplit, planDrawerFill } from '../../src/engine/baseplate/drawerFill';
+import {
+  drawerFillClipCount,
+  drawerFillLayoutRects,
+  evenSplit,
+  planDrawerFill,
+  type DrawerFillPlate,
+} from '../../src/engine/baseplate/drawerFill';
+import { connectorSlotCentres } from '../../src/engine/baseplate/generator';
 import { PITCH } from '../../src/engine/gridfinity/constants';
 import { BASEPLATE_UNITS_MAX } from '../../src/engine/baseplate/constants';
 
@@ -162,5 +169,106 @@ describe('planDrawerFill', () => {
       ...overrides,
     });
     expect('error' in result).toBe(true);
+  });
+});
+
+describe('drawerFillClipCount', () => {
+  /** Plans a drawer and returns its plates, failing the test on a plan error. */
+  function plates(input: {
+    drawerWidthMm: number;
+    drawerDepthMm: number;
+    plateWidthMm: number;
+    plateDepthMm: number;
+  }): DrawerFillPlate[] {
+    const result = planDrawerFill(input);
+    if ('error' in result) throw new Error(result.error);
+    return result.plates;
+  }
+
+  it('needs no clips for a single plate filling the drawer', () => {
+    expect(
+      drawerFillClipCount(
+        plates({ drawerWidthMm: 470, drawerDepthMm: 300, plateWidthMm: 470, plateDepthMm: 300 }),
+      ),
+    ).toBe(0);
+  });
+
+  it('counts one clip per slot on the single shared edge of two side-by-side plates', () => {
+    // 2 columns, 1 row; both plates are 7 cells deep, so the shared vertical
+    // edge carries connectorSlotCentres(7) slots and that many clips.
+    const layout = plates({
+      drawerWidthMm: 470,
+      drawerDepthMm: 300,
+      plateWidthMm: 260,
+      plateDepthMm: 300,
+    });
+    expect(layout).toHaveLength(2);
+    expect(drawerFillClipCount(layout)).toBe(connectorSlotCentres(7).length);
+  });
+
+  it('sums the interior edges of a 2x2 grid and ignores the brimmed outer edges', () => {
+    // Columns split 6+5, rows split 6+5. Vertical interior edges: row 0 (unitsY
+    // 6) and row 1 (unitsY 5). Horizontal interior edges: column 0 (unitsX 6)
+    // and column 1 (unitsX 5). The outer edges carry brim and no clips.
+    const layout = plates({
+      drawerWidthMm: 468,
+      drawerDepthMm: 468,
+      plateWidthMm: 260,
+      plateDepthMm: 260,
+    });
+    expect(layout).toHaveLength(4);
+    const expected =
+      connectorSlotCentres(6).length +
+      connectorSlotCentres(5).length +
+      connectorSlotCentres(6).length +
+      connectorSlotCentres(5).length;
+    expect(drawerFillClipCount(layout)).toBe(expected);
+  });
+});
+
+describe('drawerFillLayoutRects', () => {
+  /** One plate with a back and left brim, front-most and left-most in the grid. */
+  function singlePlate(): DrawerFillPlate {
+    return {
+      unitsX: 2,
+      unitsY: 1,
+      brim: { leftMm: 4, rightMm: 0, frontMm: 0, backMm: 6 },
+      column: 0,
+      row: 0,
+    };
+  }
+
+  it('emits one square cell per full socket, at PITCH spacing', () => {
+    const rects = drawerFillLayoutRects([singlePlate()], 100);
+    const cells = rects.filter((r) => !r.brim);
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) {
+      expect(cell.width).toBe(PITCH);
+      expect(cell.height).toBe(PITCH);
+    }
+    // The cells start after the left brim (4 mm), one PITCH apart along X.
+    expect(cells.map((c) => c.x).sort((a, b) => a - b)).toEqual([4, 4 + PITCH]);
+  });
+
+  it('places the left brim strip outside the cells and the back strip along the far edge', () => {
+    const rects = drawerFillLayoutRects([singlePlate()], 100);
+    const left = rects.find((r) => r.brim && r.width === 4);
+    const back = rects.find((r) => r.brim && r.height === 6);
+    expect(left).toBeDefined();
+    expect(back).toBeDefined();
+    // Left brim spans the plate's depth (1 cell) and sits at x = 0 (before the cells).
+    expect(left!.x).toBe(0);
+    expect(left!.width).toBe(4);
+    // The back brim strip spans the plate's width (2 cells).
+    expect(back!.width).toBe(2 * PITCH);
+  });
+
+  it('flips Y so the back wall is at the top of the drawer box', () => {
+    // The back brim strip (nearest the back wall) lands at the top (y = 0)
+    // after the flip within the drawer depth.
+    const depthMm = PITCH + 6; // one cell plus the back brim.
+    const rects = drawerFillLayoutRects([singlePlate()], depthMm);
+    const back = rects.find((r) => r.brim && r.height === 6);
+    expect(back!.y).toBeCloseTo(0, 6);
   });
 });

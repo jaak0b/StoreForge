@@ -6,8 +6,12 @@ import {
   type Bin,
   type BinEnvelope,
   type CutoutBin,
+  type DrawerPlate,
+  type Group,
   type ManualBin,
+  type PrintBatch,
   type Product,
+  type QueueEntry,
   type TracedBin,
 } from './types';
 
@@ -232,6 +236,102 @@ export function describeProduct(
     caption,
     missingModels,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Group status derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * One plate's place in the print cycle, most-advanced first: it has printed
+ * successfully (done), it is in an open print batch (printing), it is still a
+ * queue row waiting to be batched (queued), or it exists only in the group's
+ * plan with no plate ordered yet (planned). The four are mutually exclusive
+ * and derived in this precedence.
+ */
+export type GroupPlateStatus = 'done' | 'printing' | 'queued' | 'planned';
+
+/** One plate of a group with the status derived for it. */
+export interface GroupPlateDescriptor {
+  plate: DrawerPlate;
+  status: GroupPlateStatus;
+}
+
+/** A group's plates with their statuses and the roll-up counts per status. */
+export interface GroupDescriptor {
+  /** The group's display name. */
+  name: string;
+  /** Each plate with its derived status, in the group's plate order. */
+  plates: GroupPlateDescriptor[];
+  /** How many plates fall in each status, plus the total. */
+  counts: { done: number; printing: number; queued: number; planned: number; total: number };
+  /**
+   * Summed quantity of the group's still-queued linked connection clip rows.
+   * Zero when the drawer is not connectable or its clip row was already
+   * batched or confirmed.
+   */
+  queuedClipCount: number;
+}
+
+/** Whether a product is a linked baseplate that stands for the given plate in the given group. */
+function isPlateProduct(product: Product, groupId: string, plateId: string): boolean {
+  return (
+    product.kind === 'baseplate' &&
+    product.group !== undefined &&
+    product.group.groupId === groupId &&
+    product.group.plateIds.includes(plateId)
+  );
+}
+
+/**
+ * Derives the status of every plate in a group and the roll-up counts, from the
+ * group's own done list and the plan's queue entries and batches. Precedence is
+ * done, then printing (a linked batch item exists), then queued (a linked queue
+ * entry exists), then planned. Framework-agnostic: the queue and group views
+ * both read their status here rather than each deriving it.
+ */
+export function describeGroup(
+  group: Group,
+  entries: QueueEntry[],
+  batches: PrintBatch[],
+): GroupDescriptor {
+  const payload = group.payload;
+  switch (payload.kind) {
+    case 'drawer': {
+      const done = new Set(payload.donePlateIds);
+      const counts = { done: 0, printing: 0, queued: 0, planned: 0, total: payload.plates.length };
+      const plates = payload.plates.map((plate): GroupPlateDescriptor => {
+        let status: GroupPlateStatus;
+        if (done.has(plate.id)) {
+          status = 'done';
+        } else if (
+          batches.some((batch) =>
+            batch.items.some((item) => isPlateProduct(item.product, group.id, plate.id)),
+          )
+        ) {
+          status = 'printing';
+        } else if (
+          entries.some((entry) => isPlateProduct(entry.product, group.id, plate.id))
+        ) {
+          status = 'queued';
+        } else {
+          status = 'planned';
+        }
+        counts[status] += 1;
+        return { plate, status };
+      });
+      const queuedClipCount = entries.reduce(
+        (sum, entry) =>
+          entry.product.kind === 'clip' && entry.product.group?.groupId === group.id
+            ? sum + entry.quantity
+            : sum,
+        0,
+      );
+      return { name: group.name, plates, counts, queuedClipCount };
+    }
+    default:
+      return assertNever(payload.kind);
+  }
 }
 
 /** The download menu's per-kind strings: two subtitles and the 3MF entry's title. */

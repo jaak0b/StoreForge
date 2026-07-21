@@ -3,8 +3,10 @@ import type { DividerWall } from '../gridfinity/dividerModel';
 import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
 import type { BaseplateBrim, BaseplateMagnets } from '../baseplate/constants';
+import type { DrawerFillInput } from '../baseplate/drawerFill';
 
 export type { DividerWall, ModelPlacement, SizeMm };
+export type { DrawerFillInput };
 
 /**
  * Tool pockets sunk into a bin's interior, as designed on the Tool trace tab.
@@ -345,6 +347,27 @@ export interface BaseplateProduct {
    * no brim field at all.
    */
   brim?: BaseplateBrim;
+  /**
+   * Backlink to the drawer group this plate belongs to, or absent for a plain
+   * standalone plate. groupId names the Group; plateIds names the DrawerPlates
+   * within it that this one queue entry stands for. Identical plates (same
+   * units, brim and options) are interchangeable, so they merge into a single
+   * entry whose quantity always equals plateIds.length; the invariant is
+   * enforced everywhere the quantity or the plate set changes (queue edits,
+   * batching, confirm and fail). plateIds is non-empty and its ids are unique
+   * and all resolve to plates of the group. Kept on the product (not the queue
+   * entry) so a batch item's snapshot carries the link too, letting
+   * confirmBatchItem mark exactly its plates done from a batched row. A dangling
+   * link is repaired on load per plate id (unresolvable ids are dropped, the
+   * link removed entirely when none remain), so consumers may treat a present
+   * link as fully resolvable.
+   *
+   * The group-derived product fields (unitsX, unitsY, brim, magnets, screwHoles,
+   * connectable) are a cache of the group's plates and options, rebuilt from the
+   * group on load by resyncLinkedPlateProducts; never treat them as authoritative
+   * row-local state that outranks the group.
+   */
+  group?: { groupId: string; plateIds: string[] };
 }
 
 /**
@@ -361,6 +384,25 @@ export interface ConnectionClipProduct {
    * prints too tight to push into the joint.
    */
   toleranceMm: number;
+  /**
+   * Backlink to the drawer group that auto-queued this clip row, or absent for
+   * a clip added by hand on the Connection clips card. Unlike the baseplate
+   * link this carries only the groupId and no plate ids: a drawer's clips have
+   * no per-clip identity, so the row is an ordinary quantity row (its quantity
+   * is the drawer's clip count) that the group owns as a whole. The group's
+   * payload records the clip plan (count and tolerance); this link only lets the
+   * store find and re-stamp or remove the row when the drawer is re-planned, its
+   * connectable option is turned off, or the drawer is deleted. Confirming or
+   * failing the row is therefore ordinary quantity bookkeeping: the group keeps
+   * no record of which individual clips printed. A dangling link (its group is
+   * gone) is repaired away on load, leaving a plain hand-added clip row, so
+   * consumers may treat a present link as resolvable.
+   *
+   * toleranceMm on a linked clip is a cache of the group's clip plan, rebuilt
+   * from it on load by resyncLinkedPlateProducts; never treat it as authoritative
+   * row-local state that outranks the group.
+   */
+  group?: { groupId: string };
 }
 
 /**
@@ -512,22 +554,111 @@ export interface PrintBatch {
   createdAt: string;
 }
 
+// ---------------------------------------------------------------------------
+// Groups: a persistent generator (a drawer's baseplate fill) whose plates are
+// tracked together across queue, batch and confirmation.
+// ---------------------------------------------------------------------------
+
+/**
+ * The shared baseplate options a whole drawer group's plates are generated
+ * with: every plate in the group inherits these for its full cells, so a
+ * group edit that changes them re-stamps all of the group's still-queued
+ * plates at once. The brim is not here: it is per-plate (each edge plate
+ * carries its own), and lives on DrawerPlate.
+ */
+export interface DrawerPlateOptions {
+  magnets: BaseplateMagnets | null;
+  screwHoles: boolean;
+  connectable: boolean;
+}
+
+/**
+ * One plate of a drawer group, with a stable id so the queue entry, the batch
+ * snapshot and the done list can all refer to the same plate across edits.
+ * The brim is required here (unlike the optional brim on a plain
+ * BaseplateProduct) because a drawer plate is always planned with its edge
+ * extension, even when every side is zero.
+ */
+export interface DrawerPlate {
+  /** Stable unique identifier within the group (UUID). */
+  id: string;
+  /** Cells along X, integer 1 to BASEPLATE_UNITS_MAX. */
+  unitsX: number;
+  /** Cells along Y, integer 1 to BASEPLATE_UNITS_MAX. */
+  unitsY: number;
+  /** The plate's edge extension, always present (all-zero for an interior plate). */
+  brim: BaseplateBrim;
+  /** 0-based column, leftmost is 0. */
+  column: number;
+  /** 0-based row, front-most (drawer opening) is 0. */
+  row: number;
+}
+
+/**
+ * A drawer-filling baseplate group: the drawer and build-plate mm inputs it
+ * was planned from, the shared plate options, the planned plates, and which of
+ * them have printed successfully. Discriminated by kind so future generator
+ * kinds join GroupPayload with their own payload and an assertNever switch.
+ */
+export interface DrawerGroup {
+  kind: 'drawer';
+  /** The four mm inputs the drawer-fill planner ran on. */
+  input: DrawerFillInput;
+  /** The shared baseplate options every plate inherits. */
+  options: DrawerPlateOptions;
+  /** The planned plates, one per stored BaseplateProduct. Non-empty. */
+  plates: DrawerPlate[];
+  /** Ids of plates confirmed printed; each must be a plate in plates. */
+  donePlateIds: string[];
+  /**
+   * The connection clips the drawer needs, or absent when the drawer is not
+   * connectable or its single plate needs none. count is the number of clips,
+   * a cached mirror of drawerFillClipCount over the plates (kept in step on
+   * every re-plan and options change, never an independent figure), and
+   * toleranceMm is the clip fit the drawer prints them at. When present, one
+   * linked ConnectionClipProduct row of quantity count stands for them in the
+   * queue; the clips have no per-clip identity, so confirm and fail are ordinary
+   * quantity bookkeeping and progress stays plate-based.
+   */
+  clips?: { count: number; toleranceMm: number };
+}
+
+/** The payload of a group, discriminated by kind. Grows as generator kinds are added. */
+export type GroupPayload = DrawerGroup;
+
+/**
+ * A named, persistent generator whose output plates are tracked together. The
+ * group survives its plates leaving the queue for a batch and being confirmed,
+ * so the plan can show how much of a drawer is printed and re-plan the rest.
+ */
+export interface Group {
+  /** Stable unique identifier (UUID). */
+  id: string;
+  /** User-editable display name. */
+  name: string;
+  /** ISO 8601 timestamp of when the group was created. */
+  createdAt: string;
+  /** What the group generates. */
+  payload: GroupPayload;
+}
+
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 9, which is version 8 plus two additive
-   * changes: the baseplate product's optional brim field (drawer-fill edge
-   * plates) and the cavity edit list on cutout bins. The change is purely
-   * additive: no field of an earlier version changes meaning, so versions 1 to
-   * 8 are read exactly as they were before; a version 8 file simply contains no
-   * brimmed baseplate and no cavity edits.
+   * Envelope format version. Currently 10, which is version 9 plus the group
+   * entity (a persistent drawer fill) and the baseplate product's optional
+   * group backlink. The change is additive: no field of an earlier version
+   * changes meaning, so versions 1 to 9 read exactly as before; they simply
+   * contain no group and no linked baseplate.
    */
-  version: 9;
+  version: 10;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
   batches: PrintBatch[];
+  /** All persistent groups (drawer fills). */
+  groups: Group[];
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 9;
+export const PLAN_FILE_VERSION = 10;

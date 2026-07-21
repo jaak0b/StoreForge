@@ -30,16 +30,22 @@ const TAB_OF_KIND: Record<ProductOrigin, TabName> = {
   clip: 'baseplate',
 };
 
-// Editing a queue entry lands on its owning tab; Ctrl+N lands on Manual.
+// Editing a queue entry lands on its owning tab; opening a drawer lands on the
+// Baseplate tab (its detail view lives there); Ctrl+N lands on Manual.
 watch(
   () => app.focusAddSeq,
   () => {
-    tab.value = app.editingKind !== null ? TAB_OF_KIND[app.editingKind] : 'manual';
+    if (app.viewingDrawerId !== null) tab.value = 'baseplate';
+    else tab.value = app.editingKind !== null ? TAB_OF_KIND[app.editingKind] : 'manual';
   },
 );
 
-/** While editing, only the owning tab stays enabled. */
+/**
+ * While editing an entry, only its owning tab stays enabled; while a drawer's
+ * detail view is open, only the Baseplate tab (which holds it) stays enabled.
+ */
 function tabDisabled(name: TabName): boolean {
+  if (app.viewingDrawerId !== null) return name !== 'baseplate';
   return app.editingKind !== null && TAB_OF_KIND[app.editingKind] !== name;
 }
 </script>

@@ -165,6 +165,29 @@ function cellCentre(i: number, spanMm: number, pitchMm: number): number {
   return -spanMm / 2 + pitchMm * i + pitchMm / 2;
 }
 
+/**
+ * The along-edge centre offsets, in mm from the edge midpoint, of the connector
+ * slots on one straight outer edge of a plate that spans `units` full cells.
+ * The single source of the connector-slot placement rule: stage 9 of
+ * generateBaseplate consumes these offsets to cut the slots on every edge, and
+ * the drawer-fill clip planner consumes the list length to count the clips a
+ * shared interior edge needs, so the two can never disagree about where a slot
+ * is. A slot exists at a cell centre only when its full CONNECTOR_SLOT_LENGTH
+ * lies on the straight part of the edge, clear of the OUTER_CORNER_RADIUS corner
+ * arcs.
+ */
+export function connectorSlotCentres(units: number, pitchMm: number = PITCH): number[] {
+  const span = units * pitchMm;
+  const centres: number[] = [];
+  for (let i = 0; i < units; i++) {
+    const centre = cellCentre(i, span, pitchMm);
+    if (Math.abs(centre) + CONNECTOR_SLOT_LENGTH / 2 <= span / 2 - OUTER_CORNER_RADIUS) {
+      centres.push(centre);
+    }
+  }
+  return centres;
+}
+
 /** Axis-aligned box from opposite corners, spanning z 0 to height. */
 function boxBetween(
   m: ManifoldToplevel,
@@ -431,21 +454,15 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   // its full length lies on the straight part of the edge, clear of the
   // corner arcs.
   if (params.connectable) {
-    const slotFits = (centre: number, spanMm: number): boolean =>
-      Math.abs(centre) + CONNECTOR_SLOT_LENGTH / 2 <= spanMm / 2 - OUTER_CORNER_RADIUS;
     const canonical = slotCutter(m, height);
     const slots: Manifold[] = [];
-    for (let ix = 0; ix < params.unitsX; ix++) {
-      const cx = cellCentre(ix, width, pitch);
-      if (!slotFits(cx, width)) continue;
+    for (const cx of connectorSlotCentres(params.unitsX, pitch)) {
       if (brim.backMm === 0) slots.push(canonical.translate(cx, depth / 2, 0));
       if (brim.frontMm === 0) {
         slots.push(canonical.rotate(0, 0, 180).translate(cx, -depth / 2, 0));
       }
     }
-    for (let iy = 0; iy < params.unitsY; iy++) {
-      const cy = cellCentre(iy, depth, pitch);
-      if (!slotFits(cy, depth)) continue;
+    for (const cy of connectorSlotCentres(params.unitsY, pitch)) {
       if (brim.rightMm === 0) {
         slots.push(canonical.rotate(0, 0, -90).translate(width / 2, cy, 0));
       }
