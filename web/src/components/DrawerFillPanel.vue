@@ -4,10 +4,12 @@ import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
 import { useBaseplateDesigner, type HoleMode } from '../stores/baseplateDesigner';
 import {
+  CLIP_TOLERANCE_DEFAULT,
   MAGNET_DIAMETER_DEFAULT,
   MAGNET_HEIGHT_DEFAULT,
 } from '../engine/baseplate/constants';
 import {
+  drawerFillClipCount,
   drawerFillLayoutRects,
   planDrawerFill,
   type DrawerFillInput,
@@ -17,6 +19,7 @@ import { groupDrawerFillPlanRows } from '../engine/baseplate/drawerFillPlan';
 import { describeGroup, type GroupPlateStatus } from '../engine/plan/rowDescriptor';
 import type { DrawerPlateOptions } from '../engine/plan/types';
 import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
+import ConnectionClipCard from './ConnectionClipCard.vue';
 
 /**
  * The one fill-a-drawer view, in create or edit mode. Create mode (groupId
@@ -86,7 +89,14 @@ const localMagnetMode = ref<HoleMode>('none');
 const localMagnetDiameterMm = ref(MAGNET_DIAMETER_DEFAULT);
 const localMagnetHeightMm = ref(MAGNET_HEIGHT_DEFAULT);
 const localScrewHoleMode = ref<HoleMode>('none');
-const localConnectable = ref(false);
+// Connectable is local in both modes and defaults on: filling a drawer wall to
+// wall is exactly the case connecting plates is for, so a new drawer starts
+// connectable (the single-plate designer keeps its own separate default). Edit
+// mode overwrites this from the saved group below.
+const localConnectable = ref(true);
+// The clip fit the drawer prints its connection clips at, local in both modes.
+// Edit mode seeds it from the group's stored clip plan below.
+const clipToleranceMm = ref(CLIP_TOLERANCE_DEFAULT);
 
 watch(
   () => (group.value === null ? null : group.value.payload.options),
@@ -97,6 +107,18 @@ watch(
     localMagnetHeightMm.value = options.magnets?.heightMm ?? MAGNET_HEIGHT_DEFAULT;
     localScrewHoleMode.value = options.screwHoles ? 'full' : 'none';
     localConnectable.value = options.connectable;
+  },
+  { immediate: true, deep: true },
+);
+
+// The clip tolerance seeds from the group's stored clip plan in edit mode; a
+// group with no plan (not connectable, or a single plate) falls back to the
+// default so turning connectable on starts from the nominal fit.
+watch(
+  () => (group.value === null ? null : group.value.payload),
+  (payload) => {
+    if (payload === null || payload.kind !== 'drawer') return;
+    clipToleranceMm.value = payload.clips?.toleranceMm ?? CLIP_TOLERANCE_DEFAULT;
   },
   { immediate: true, deep: true },
 );
@@ -130,10 +152,9 @@ const screwHoleMode = computed<HoleMode>({
   },
 });
 const connectable = computed<boolean>({
-  get: () => (isEdit.value ? localConnectable.value : store.connectable),
+  get: () => localConnectable.value,
   set: (v) => {
-    if (isEdit.value) localConnectable.value = v;
-    else store.connectable = v;
+    localConnectable.value = v;
   },
 });
 
@@ -206,6 +227,16 @@ const layoutRects = computed(() =>
 
 /** The plan-table rows (identical plates grouped with a count), from the shared helper. */
 const planRows = computed(() => groupDrawerFillPlanRows(previewPlates.value));
+
+/**
+ * How many connection clips the current layout needs, from the shared
+ * connector-slot rule (drawerFillClipCount), or 0 when the drawer is not
+ * connectable. Both modes read the previewed plates, so the readout tracks the
+ * live plan in create mode and the saved plates in edit mode.
+ */
+const clipCount = computed(() =>
+  connectable.value ? drawerFillClipCount(previewPlates.value) : 0,
+);
 
 // --- Edit-mode status coloring and requeue --------------------------------
 
@@ -288,6 +319,7 @@ function addPlates(): void {
     editedOptions.value,
     plannedPlates.value,
     name,
+    clipToleranceMm.value,
   );
 }
 
@@ -327,8 +359,17 @@ const optionsDirty = computed(() => {
   );
 });
 
+/** Whether the clip tolerance differs from the group's saved plan (edit mode). */
+const toleranceDirty = computed(() => {
+  if (group.value === null || !connectable.value) return false;
+  const stored = group.value.payload.clips?.toleranceMm ?? CLIP_TOLERANCE_DEFAULT;
+  return clipToleranceMm.value !== stored;
+});
+
 /** Whether the apply action has anything to apply (edit mode). */
-const editDirty = computed(() => inputDirty.value || optionsDirty.value);
+const editDirty = computed(
+  () => inputDirty.value || optionsDirty.value || toleranceDirty.value,
+);
 
 const resizeConfirmOpen = ref(false);
 
@@ -353,6 +394,7 @@ function commitEdit(): void {
   actionError.value = queue.updateDrawerGroup(group.value.id, {
     input: filledInput.value,
     options: editedOptions.value,
+    clipToleranceMm: clipToleranceMm.value,
   });
 }
 
@@ -478,6 +520,16 @@ function deleteGroup(): void {
           v-model:magnet-height-mm="magnetHeightMm"
           v-model:screw-hole-mode="screwHoleMode"
           v-model:connectable="connectable"
+          class="mt-4"
+        />
+
+        <!-- Connection clips: the drawer queues the right number automatically,
+             so the card shows the count and the fit, with no quantity or add
+             button (the same component the single-plate flow uses). -->
+        <ConnectionClipCard
+          v-if="connectable"
+          v-model:tolerance-mm="clipToleranceMm"
+          :count="clipCount"
           class="mt-4"
         />
       </div>

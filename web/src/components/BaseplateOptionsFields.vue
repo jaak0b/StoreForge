@@ -90,8 +90,7 @@ const connectable = defineModel<boolean>('connectable', { required: true });
       label="Connectable"
       color="primary"
       density="compact"
-      hint="The plate's edges get the mating features a connection clip bridges."
-      persistent-hint
+      hide-details
       class="mt-2"
     />
   </div>

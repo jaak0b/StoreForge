@@ -20,6 +20,7 @@ import { baseplateCellCount } from '../engine/baseplate/generator';
 import { validateProduct } from '../engine/plan/planFile';
 import BinViewport from './BinViewport.vue';
 import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
+import ConnectionClipCard from './ConnectionClipCard.vue';
 import MoreOptions from './MoreOptions.vue';
 import DrawerFillPanel from './DrawerFillPanel.vue';
 
@@ -461,69 +462,22 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
     </v-col>
   </v-row>
 
-  <!-- The connection clip card: shown while designing a connectable plate, or
-       alone when a clip row routes here for editing. -->
-  <v-card
-    v-if="(editingEntry === null && store.connectable) || clipEditingEntry !== null"
-    variant="tonal"
+  <!-- The connection clip card: shown while designing a single connectable
+       plate, or alone when a clip row routes here for editing. In fill-a-drawer
+       mode the DrawerFillPanel owns the clip control (tolerance only, no
+       quantity), so this card stays hidden there. -->
+  <ConnectionClipCard
+    v-if="(editingEntry === null && store.connectable && !fillMode) || clipEditingEntry !== null"
+    v-model:tolerance-mm="clipToleranceMm"
+    v-model:quantity="clipQuantity"
+    show-quantity
+    :submit-label="clipEditingEntry !== null ? 'Save changes' : 'Add clips to queue'"
+    :show-cancel="clipEditingEntry !== null"
+    :error="clipSaveError"
     class="mt-4"
-    density="compact"
-  >
-    <v-card-item>
-      <v-card-title>Connection clips</v-card-title>
-    </v-card-item>
-    <v-card-text>
-      <p class="text-body-2 text-medium-emphasis mb-4">
-        A connection clip bridges two connectable baseplates. It prints as
-        its own part, so it is queued as a separate row.
-      </p>
-      <v-slider
-        v-model="clipToleranceMm"
-        :min="CLIP_TOLERANCE_MIN"
-        :max="CLIP_TOLERANCE_MAX"
-        step="0.05"
-        thumb-label="always"
-        label="Clip tolerance (mm)"
-        hint="The clearance is added to the clip only, so a clip printed with a larger tolerance still fits a plate you have already printed. Raise it when the clip is too tight to push into the joint."
-        persistent-hint
-        class="mt-4"
-      >
-        <template #append>
-          <v-text-field
-            v-model.number="clipToleranceMm"
-            type="number"
-            :min="CLIP_TOLERANCE_MIN"
-            :max="CLIP_TOLERANCE_MAX"
-            step="0.05"
-            density="compact"
-            hide-details
-            style="width: 90px"
-          />
-        </template>
-      </v-slider>
-      <div class="d-flex align-center ga-2 mt-4">
-        <v-text-field
-          v-model.number="clipQuantity"
-          type="number"
-          min="1"
-          step="1"
-          label="Quantity"
-          density="comfortable"
-          hide-details
-          style="max-width: 140px"
-        />
-        <v-btn variant="outlined" @click="addClips">
-          {{ clipEditingEntry !== null ? 'Save changes' : 'Add clips to queue' }}
-        </v-btn>
-        <v-btn v-if="clipEditingEntry !== null" variant="outlined" @click="cancelClipEdit">
-          Cancel edit
-        </v-btn>
-      </div>
-      <v-alert v-if="clipSaveError" type="error" class="mt-4" density="compact">
-        {{ clipSaveError }}
-      </v-alert>
-    </v-card-text>
-  </v-card>
+    @submit="addClips"
+    @cancel="cancelClipEdit"
+  />
   </template>
 </template>
 
