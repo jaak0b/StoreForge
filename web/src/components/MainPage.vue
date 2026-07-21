@@ -17,6 +17,7 @@ import type { LabelIcon } from '../engine/label/icons';
 import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
+import DeleteDrawerDialog from './DeleteDrawerDialog.vue';
 import CountStepper from './CountStepper.vue';
 
 /**
@@ -176,6 +177,20 @@ async function downloadRow(entry: QueueEntry, format: 'stl' | '3mf'): Promise<vo
   }
 }
 
+// Deleting a drawer group from its header row runs the shared confirm dialog
+// first; confirming removes the group and its still-queued plate rows.
+const deleteTarget = ref<{ groupId: string; descriptor: GroupDescriptor } | null>(null);
+
+function askDeleteGroup(group: Group, descriptor: GroupDescriptor): void {
+  deleteTarget.value = { groupId: group.id, descriptor };
+}
+
+function confirmDeleteGroup(): void {
+  if (deleteTarget.value === null) return;
+  queue.removeGroup(deleteTarget.value.groupId);
+  deleteTarget.value = null;
+}
+
 function removeRow(entry: QueueEntry): void {
   if (app.editingEntryId === entry.id) app.stopEditing();
   const nextIds = new Set(selectedIds.value);
@@ -245,6 +260,18 @@ function removeRow(entry: QueueEntry): void {
           {{ row.descriptor.counts.done }} / {{ row.descriptor.counts.total }} printed
         </v-chip>
         <v-icon icon="mdi-chevron-right" size="20" class="text-medium-emphasis" />
+        <div class="row-actions d-flex ga-1 justify-end" @click.stop>
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            color="error"
+            @click="askDeleteGroup(row.group, row.descriptor)"
+          >
+            <v-icon icon="mdi-close" size="18" />
+            <v-tooltip activator="parent" location="bottom">Delete drawer</v-tooltip>
+          </v-btn>
+        </div>
       </div>
       <div
         v-else
@@ -350,6 +377,14 @@ function removeRow(entry: QueueEntry): void {
       </template>
     </div>
 
+    <DeleteDrawerDialog
+      :model-value="deleteTarget !== null"
+      :queued-count="deleteTarget?.descriptor.counts.queued ?? 0"
+      :done-count="deleteTarget?.descriptor.counts.done ?? 0"
+      @update:model-value="(open: boolean) => { if (!open) deleteTarget = null; }"
+      @confirm="confirmDeleteGroup"
+    />
+
     <div v-if="selectedEntries.length > 0" class="create-plate-bar">
       <span class="text-body-2 mr-3">
         <b>{{ selectedEntries.length }}
@@ -432,13 +467,16 @@ function removeRow(entry: QueueEntry): void {
   background: rgba(var(--v-theme-primary), 0.08);
 }
 
-.qrow .row-actions {
+.qrow .row-actions,
+.group-header .row-actions {
   opacity: 0;
   transition: opacity 0.1s;
 }
 
 .qrow:hover .row-actions,
-.qrow:focus-within .row-actions {
+.qrow:focus-within .row-actions,
+.group-header:hover .row-actions,
+.group-header:focus-within .row-actions {
   opacity: 1;
 }
 

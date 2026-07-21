@@ -19,6 +19,7 @@ import { describeGroup, type GroupPlateStatus } from '../engine/plan/rowDescript
 import type { DrawerPlateOptions } from '../engine/plan/types';
 import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
 import ConnectionClipCard from './ConnectionClipCard.vue';
+import DeleteDrawerDialog from './DeleteDrawerDialog.vue';
 
 /**
  * The one fill-a-drawer view, in create or edit mode. Create mode (groupId
@@ -413,6 +414,9 @@ const deleteConfirmOpen = ref(false);
 /** How many still-queued plate rows a delete would also remove. */
 const queuedCount = computed(() => descriptor.value?.counts.queued ?? 0);
 
+/** How many plates already printed, whose record a delete would lose. */
+const doneCount = computed(() => descriptor.value?.counts.done ?? 0);
+
 function deleteGroup(): void {
   if (group.value === null) return;
   deleteConfirmOpen.value = false;
@@ -657,21 +661,12 @@ function deleteGroup(): void {
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="deleteConfirmOpen" max-width="440">
-      <v-card>
-        <v-card-title>Delete this drawer?</v-card-title>
-        <v-card-text>
-          Deleting the drawer also removes its {{ queuedCount }}
-          {{ queuedCount === 1 ? 'queued plate row' : 'queued plate rows' }} from
-          the queue. Plates already on a build plate are left alone.
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="deleteConfirmOpen = false">Cancel</v-btn>
-          <v-btn color="error" variant="flat" @click="deleteGroup">Delete</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+    <DeleteDrawerDialog
+      v-model="deleteConfirmOpen"
+      :queued-count="queuedCount"
+      :done-count="doneCount"
+      @confirm="deleteGroup"
+    />
   </div>
 </template>
 
