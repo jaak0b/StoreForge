@@ -132,12 +132,16 @@ function createPlate(): void {
   plateCounts.value = new Map();
 }
 
-// Row click: a drawer-linked plate row opens its drawer's detail view (editing
-// one plate of a planned layout in isolation would break the fill), and every
-// other row loads into the tab that owns its origin for editing.
+// Row click: a drawer-linked plate or clip row opens its drawer's detail view
+// (editing one plate of a planned layout, or the clip row's quantity, in
+// isolation would desync the group), and every other row loads into the tab
+// that owns its origin for editing.
 function editRow(entry: QueueEntry): void {
   const product = entry.product;
-  if (product.kind === 'baseplate' && product.group !== undefined) {
+  if (
+    (product.kind === 'baseplate' || product.kind === 'clip') &&
+    product.group !== undefined
+  ) {
     app.openDrawer(product.group.groupId);
   } else {
     app.editEntry(entry.id, originOf(product));

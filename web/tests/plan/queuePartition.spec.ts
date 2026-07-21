@@ -21,6 +21,10 @@ function plateProduct(groupId: string, plateId: string): Product {
   };
 }
 
+function clipProduct(groupId: string): Product {
+  return { kind: 'clip', toleranceMm: 0, group: { groupId } };
+}
+
 function looseBaseplate(): Product {
   return { kind: 'baseplate', unitsX: 3, unitsY: 3, magnets: null, screwHoles: false, connectable: false };
 }
@@ -66,5 +70,23 @@ describe('partitionQueue', () => {
     const result = partitionQueue(entries, []);
     expect(result.groups).toEqual([]);
     expect(result.loose.map((e) => e.id)).toEqual(['a']);
+  });
+
+  it('nests a linked clip row under its group, after the plate rows', () => {
+    const g = group('g1');
+    const entries = [
+      entry('a', plateProduct('g1', 'p1')),
+      entry('c', clipProduct('g1')),
+      entry('b', looseBaseplate()),
+    ];
+    const result = partitionQueue(entries, [g]);
+    expect(result.groups[0].entries.map((e) => e.id)).toEqual(['a', 'c']);
+    expect(result.loose.map((e) => e.id)).toEqual(['b']);
+  });
+
+  it('renders a linked clip loose when its group is gone', () => {
+    const result = partitionQueue([entry('c', clipProduct('missing'))], []);
+    expect(result.groups).toEqual([]);
+    expect(result.loose.map((e) => e.id)).toEqual(['c']);
   });
 });

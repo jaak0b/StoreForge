@@ -23,11 +23,12 @@ export interface QueuePartition {
 
 /**
  * Splits entries into group sections and loose entries. An entry belongs to a
- * group when it is a baseplate carrying a group link whose group still exists;
- * a link to a group that is gone renders the entry loose, matching the plan's
- * load-time repair. Every group gets a section even when it has no queued plate
- * left (all of them batched or printed), so its header still opens the drawer
- * view.
+ * group when it is a baseplate or a connection clip carrying a group link whose
+ * group still exists; a link to a group that is gone renders the entry loose,
+ * matching the plan's load-time repair. Entries keep their queue order within a
+ * section, so a group's clip row (auto-queued after its plates) renders below
+ * the plate rows. Every group gets a section even when it has no queued row left
+ * (all of them batched or printed), so its header still opens the drawer view.
  */
 export function partitionQueue(entries: QueueEntry[], groups: Group[]): QueuePartition {
   const sections = new Map<string, QueueGroupSection>();
@@ -36,7 +37,7 @@ export function partitionQueue(entries: QueueEntry[], groups: Group[]): QueuePar
   for (const entry of entries) {
     const product = entry.product;
     const section =
-      product.kind === 'baseplate' && product.group !== undefined
+      (product.kind === 'baseplate' || product.kind === 'clip') && product.group !== undefined
         ? sections.get(product.group.groupId)
         : undefined;
     if (section !== undefined) section.entries.push(entry);
