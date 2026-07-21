@@ -329,6 +329,11 @@ export interface BaseplateProduct {
    * link is repaired on load per plate id (unresolvable ids are dropped, the
    * link removed entirely when none remain), so consumers may treat a present
    * link as fully resolvable.
+   *
+   * The group-derived product fields (unitsX, unitsY, brim, magnets, screwHoles,
+   * connectable) are a cache of the group's plates and options, rebuilt from the
+   * group on load by resyncLinkedPlateProducts; never treat them as authoritative
+   * row-local state that outranks the group.
    */
   group?: { groupId: string; plateIds: string[] };
 }
@@ -360,6 +365,10 @@ export interface ConnectionClipProduct {
    * no record of which individual clips printed. A dangling link (its group is
    * gone) is repaired away on load, leaving a plain hand-added clip row, so
    * consumers may treat a present link as resolvable.
+   *
+   * toleranceMm on a linked clip is a cache of the group's clip plan, rebuilt
+   * from it on load by resyncLinkedPlateProducts; never treat it as authoritative
+   * row-local state that outranks the group.
    */
   group?: { groupId: string };
 }

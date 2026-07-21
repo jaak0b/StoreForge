@@ -1821,6 +1821,10 @@ export function parsePlanFile(text: string): PlanParseResult {
   // batch snapshot) that resolves to no group or plate is repaired away, never
   // rejected, following the screw-bin repair precedent.
   repairGroupLinks(entries, batches, groups, warnings);
+  // With every link now resolvable, re-derive each linked row's product from its
+  // group, so an edit made to the group's options while a stale product cache
+  // lingered on the row heals on load rather than persisting a divergent plate.
+  resyncLinkedPlateProducts(entries, groups);
   return { ok: true, plan: { version: PLAN_FILE_VERSION, entries, batches, groups }, warnings };
 }
 
@@ -1928,6 +1932,89 @@ export function repairGroupLinks(
         );
       } else if (item.product.kind === 'clip') {
         repairClipLink(item.product, groupIds, `Batch ${batch.id} item ${item.id}`, warnings);
+      }
+    }
+  }
+}
+
+/**
+ * Builds the BaseplateProduct that stands for a set of interchangeable drawer
+ * plates: the group's shared options for the full cells, the shared brim and
+ * cell size (the plates all share a spec), and the backlink carrying every
+ * plate's id. The single place plates become a product, so the store's initial
+ * queueing, a later options re-stamp, a requeue and the load-time resync below
+ * all derive it identically (rule 10). plates is non-empty and every plate
+ * shares a spec key.
+ */
+export function baseplateProductForPlates(
+  plates: DrawerPlate[],
+  options: DrawerPlateOptions,
+  groupId: string,
+): BaseplateProduct {
+  const spec = plates[0];
+  return {
+    kind: 'baseplate',
+    unitsX: spec.unitsX,
+    unitsY: spec.unitsY,
+    magnets: options.magnets,
+    screwHoles: options.screwHoles,
+    connectable: options.connectable,
+    brim: spec.brim,
+    group: { groupId, plateIds: plates.map((plate) => plate.id) },
+  };
+}
+
+/**
+ * Re-derives every still-queued linked row's product from its group, healing a
+ * plan whose group state drifted from a stale product cache lingering on the
+ * row (an options edit applied through an older build, a hand-edited file). A
+ * linked baseplate's cell size, brim and shared options are rebuilt from the
+ * plates its plateIds name and the group's options; a linked clip's toleranceMm
+ * is rebuilt from the group's clip plan. The row's id, createdAt, notes,
+ * quantity and plateIds are all preserved: the product's group-derived fields
+ * are a cache of the group, never authoritative row-local state.
+ *
+ * Runs after repairGroupLinks, so every present link is already resolvable; a
+ * link that still fails to resolve (its group or a plate id is gone) is skipped
+ * rather than touched. Batch items are deliberately left alone: a batch snapshot
+ * is frozen at batch time by design. Exhaustive over the group payload kind
+ * through assertNever, so a new kind must decide how its rows resync.
+ */
+export function resyncLinkedPlateProducts(entries: QueueEntry[], groups: Group[]): void {
+  const groupsById = new Map(groups.map((group) => [group.id, group]));
+  for (const entry of entries) {
+    const product = entry.product;
+    if (product.kind === 'baseplate' && product.group !== undefined) {
+      const group = groupsById.get(product.group.groupId);
+      if (group === undefined) continue;
+      switch (group.payload.kind) {
+        case 'drawer': {
+          const platesById = new Map(group.payload.plates.map((plate) => [plate.id, plate]));
+          const plates = product.group.plateIds.map((id) => platesById.get(id));
+          if (plates.length === 0 || plates.some((plate) => plate === undefined)) continue;
+          entry.product = baseplateProductForPlates(
+            plates as DrawerPlate[],
+            group.payload.options,
+            group.id,
+          );
+          break;
+        }
+        default:
+          assertNever(group.payload.kind);
+      }
+    } else if (product.kind === 'clip' && product.group !== undefined) {
+      const group = groupsById.get(product.group.groupId);
+      if (group === undefined) continue;
+      switch (group.payload.kind) {
+        case 'drawer': {
+          const clips = group.payload.clips;
+          if (clips !== undefined) {
+            entry.product = { ...product, toleranceMm: clips.toleranceMm };
+          }
+          break;
+        }
+        default:
+          assertNever(group.payload.kind);
       }
     }
   }

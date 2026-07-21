@@ -4,6 +4,7 @@ import {
   parsePlanFile,
   pickGroup,
   repairGroupLinks,
+  resyncLinkedPlateProducts,
   serializePlanFile,
   validateGroup,
 } from '../../src/engine/plan/planFile';
@@ -304,6 +305,62 @@ describe('plan file v10 groups', () => {
     if (!result.ok) throw new Error(result.error);
     expect((result.plan.entries[0].product as BaseplateProduct).group).toBeUndefined();
     expect(result.warnings).toHaveLength(1);
+  });
+});
+
+describe('resyncLinkedPlateProducts', () => {
+  it('rebuilds a stale linked plate product from the group on load', () => {
+    const group = drawerGroup({
+      payload: {
+        kind: 'drawer',
+        input: { drawerWidthMm: 470, drawerDepthMm: 300, plateWidthMm: 470, plateDepthMm: 300 },
+        options: { magnets: { diameterMm: 6, heightMm: 2 }, screwHoles: true, connectable: true },
+        plates: [plate({ id: 'p1' }), plate({ id: 'p2', column: 1 })],
+        donePlateIds: [],
+      },
+    });
+    // linkedPlateProduct's cached options (no magnets, no screw holes) predate the
+    // group's current options: reloading must heal the row back to the group.
+    const stale = entry('e1', linkedPlateProduct('g1', 'p1'));
+    const result = parsePlanFile(serializePlanFile([stale], [], [group]));
+    if (!result.ok) throw new Error(result.error);
+    const product = result.plan.entries[0].product as BaseplateProduct;
+    expect(product.magnets).toEqual({ diameterMm: 6, heightMm: 2 });
+    expect(product.screwHoles).toBe(true);
+    expect(product.connectable).toBe(true);
+    // Identity and plate set are preserved.
+    expect(result.plan.entries[0].id).toBe('e1');
+    expect(product.group).toEqual({ groupId: 'g1', plateIds: ['p1'] });
+  });
+
+  it('rebuilds a stale linked clip tolerance from the group clip plan', () => {
+    const group = drawerGroup({
+      payload: {
+        kind: 'drawer',
+        input: { drawerWidthMm: 470, drawerDepthMm: 300, plateWidthMm: 470, plateDepthMm: 300 },
+        options: { magnets: null, screwHoles: false, connectable: true },
+        plates: [plate({ id: 'p1' }), plate({ id: 'p2', column: 1 })],
+        donePlateIds: [],
+        clips: { count: 7, toleranceMm: 0.3 },
+      },
+    });
+    // linkedClipProduct's cached tolerance is 0.1; the group's plan says 0.3.
+    const stale = entry('c1', linkedClipProduct('g1'));
+    stale.quantity = 7;
+    const result = parsePlanFile(serializePlanFile([stale], [], [group]));
+    if (!result.ok) throw new Error(result.error);
+    const product = result.plan.entries[0].product as ConnectionClipProduct;
+    expect(product.toleranceMm).toBe(0.3);
+    expect(product.group).toEqual({ groupId: 'g1' });
+    expect(result.plan.entries[0].quantity).toBe(7);
+  });
+
+  it('leaves a row whose group is gone untouched', () => {
+    // A link that does not resolve is skipped, not thrown on: repairGroupLinks
+    // would normally strip it first, but resync must be safe on its own.
+    const stale = entry('e1', linkedPlateProduct('ghost', 'p1'));
+    resyncLinkedPlateProducts([stale], [drawerGroup()]);
+    expect((stale.product as BaseplateProduct).group).toEqual({ groupId: 'ghost', plateIds: ['p1'] });
   });
 });
 
