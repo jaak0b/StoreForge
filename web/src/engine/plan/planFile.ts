@@ -474,33 +474,18 @@ export function validateCavityEdits(raw: unknown, subject: string): string | nul
       if (!isVec3Mm(edit.centerMm)) {
         return `${subject}: A flatten edit needs a centre with finite x, y and z in mm.`;
       }
-      // The flatten shape evolved twice within unreleased version 9: it
-      // started as a vertical cut plane (planeZMm), then gained an arbitrary
-      // surface normal (normalMm) in place of planeZMm, then gained a
-      // bounded cut height (heightMm) alongside the normal. Plans already on
-      // disk from earlier in version 9 can carry either older shape, so both
-      // are accepted here and converted deterministically in pickCavityEdits
-      // rather than rejected outright.
-      const hasPlaneZ = isFiniteNumber(edit.planeZMm);
-      const hasNormal = isVec3Mm(edit.normalMm);
-      if (!hasPlaneZ && !hasNormal) {
+      if (!isVec3Mm(edit.normalMm)) {
         return `${subject}: A flatten edit needs a surface normal with finite x, y and z.`;
       }
-      if (hasNormal) {
-        const n = edit.normalMm as Vec3Mm;
-        const lengthMm = Math.sqrt(n.xMm * n.xMm + n.yMm * n.yMm + n.zMm * n.zMm);
-        if (lengthMm < 0.99 || lengthMm > 1.01) {
-          return `${subject}: A flatten edit's surface normal must be a unit vector.`;
-        }
+      const n = edit.normalMm as Vec3Mm;
+      const lengthMm = Math.sqrt(n.xMm * n.xMm + n.yMm * n.yMm + n.zMm * n.zMm);
+      if (lengthMm < 0.99 || lengthMm > 1.01) {
+        return `${subject}: A flatten edit's surface normal must be a unit vector.`;
       }
-      // heightMm is absent on both legacy shapes (the old cut was
-      // unbounded); it is filled in with the max bound during conversion, so
-      // only validate it here when present.
       if (
-        edit.heightMm !== undefined &&
-        (!isFiniteNumber(edit.heightMm) ||
-          edit.heightMm < FLATTEN_HEIGHT_MIN_MM ||
-          edit.heightMm > FLATTEN_HEIGHT_MAX_MM)
+        !isFiniteNumber(edit.heightMm) ||
+        edit.heightMm < FLATTEN_HEIGHT_MIN_MM ||
+        edit.heightMm > FLATTEN_HEIGHT_MAX_MM
       ) {
         return (
           `${subject}: A flatten edit's cut height must be a number from ` +
@@ -562,28 +547,12 @@ export function pickCavityEdits(raw: Record<string, unknown>): CavityEdit[] {
   return (raw.edits as Record<string, unknown>[]).map((edit): CavityEdit => {
     const copyPoint = (p: Vec3Mm): Vec3Mm => ({ xMm: p.xMm, yMm: p.yMm, zMm: p.zMm });
     if (edit.kind === 'flatten') {
-      // Convert the two legacy flatten shapes (see the comment in
-      // validateCavityEdits) to the current one. A plan with planeZMm and no
-      // normalMm predates the surface normal: its cut was always vertical,
-      // and the plane height it recorded becomes the centre's z. A plan with
-      // normalMm but no heightMm predates the bounded cut height: its cut
-      // was unbounded upward, so the max bound is the closest legal
-      // equivalent. Both legacy shapes get the same unbounded-equivalent
-      // heightMm for that reason.
-      const hasNormal = isVec3Mm(edit.normalMm);
-      const centerMm = copyPoint(edit.centerMm as Vec3Mm);
-      const normalMm: Vec3Mm = hasNormal
-        ? copyPoint(edit.normalMm as Vec3Mm)
-        : { xMm: 0, yMm: 0, zMm: 1 };
-      if (!hasNormal) {
-        centerMm.zMm = edit.planeZMm as number;
-      }
       return {
         kind: 'flatten',
-        centerMm,
+        centerMm: copyPoint(edit.centerMm as Vec3Mm),
         radiusMm: edit.radiusMm as number,
-        normalMm,
-        heightMm: (edit.heightMm as number | undefined) ?? FLATTEN_HEIGHT_MAX_MM,
+        normalMm: copyPoint(edit.normalMm as Vec3Mm),
+        heightMm: edit.heightMm as number,
       };
     }
     return {
