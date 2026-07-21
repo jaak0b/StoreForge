@@ -30,6 +30,10 @@ import {
   restingPlacementMm,
 } from '../../engine/cutout/binEnvelope';
 import { proposeUnitScale } from '../../engine/cutout/unitScale';
+import {
+  cavityEditRollbackCount,
+  clampLastGoodEditCount,
+} from '../../engine/cutout/cavityEditRollback';
 import { modelNotStoredMessage, relinkCutoutModel } from '../../engine/plan/missingModels';
 import { MIN_HEIGHT_UNITS } from '../../engine/gridfinity/constants';
 import type { SlottedBinParams } from '../../engine/gridfinity/types';
@@ -249,9 +253,15 @@ watch(previewResult, (result) => {
       carved.value = result;
       stale.value = false;
       // This carve reached the worker and produced a bin, so every edit it was
-      // built from is good: nothing at or below this count can be rolled back
-      // by a later failure.
-      lastGoodEditCount.value = Math.max(lastGoodEditCount.value, result.editCount);
+      // built from is good: assigned directly, not folded into a running max,
+      // because useBinPreview only ever lands the latest ticket's outcome
+      // (regenerate's `ticket > displayedTicket` guard), so this always is the
+      // most recent landed carve. An undo can still shrink the live edit list
+      // below the count this carve was built from before its result arrives,
+      // so the count is clamped to the live length: nothing above it could be
+      // rolled back anyway, and leaving it too high would make a later
+      // rejection under-roll-back.
+      lastGoodEditCount.value = clampLastGoodEditCount(result.editCount, cutout.edits.length);
       return;
     case 'superseded':
       // A newer request replaced this one before it finished. Not a failure,
@@ -346,17 +356,24 @@ const clearEditsDialogOpen = ref(false);
 
 function onConfirmClearEdits(): void {
   cutout.clearEdits();
+  // No edits left to be suspect of.
+  lastGoodEditCount.value = 0;
   clearEditsDialogOpen.value = false;
 }
 
 /** The error a rejected edit surfaced, shown as its own alert row. */
 const editError = ref<string | null>(null);
 /**
- * The number of edits the most recently landed carve was built from, whether
- * that carve is still running or has already finished. Every edit at or below
- * this count is known good: some carve has folded it in without failing.
- * Starts at whatever the plan already had (opening a saved cutout bin does
- * not need those edits re-proven).
+ * The number of edits the most recently LANDED successful carve was built
+ * from. Every edit at or below this count is known good: some carve has
+ * folded it in without failing. This is not a running maximum: it is
+ * reassigned on every landed carve, because a running maximum only ever
+ * grows, so undoing an edit and then painting a bad one could leave the live
+ * edit count back at an old high-water mark and the rejection rollback below
+ * would never fire. Starts at whatever the plan already had (opening a saved
+ * cutout bin does not need those edits re-proven), and is reset the same way
+ * whenever the edit list is replaced wholesale (loading another entry,
+ * clearing all edits).
  */
 const lastGoodEditCount = ref(cutout.edits.length);
 
@@ -403,7 +420,8 @@ watch(generating, (isGenerating) => {
   if (isGenerating) return;
   const message = errorMessage.value;
   if (message === null || !isCavityEditRejectionMessage(message)) return;
-  while (cutout.edits.length > lastGoodEditCount.value) {
+  let toRollBack = cavityEditRollbackCount(cutout.edits.length, lastGoodEditCount.value);
+  while (toRollBack-- > 0) {
     cutout.rollbackEdit();
   }
   editError.value = message;
@@ -836,6 +854,9 @@ function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
   cutout.gridX = bin.gridX;
   cutout.gridY = bin.gridY;
   cutout.setEdits(bin.edits);
+  // These edits were carved successfully when the bin was saved, so they do
+  // not need re-proving; the running count starts fresh at the loaded length.
+  lastGoodEditCount.value = cutout.edits.length;
   boundsById.value = {};
   const models = JSON.parse(JSON.stringify(bin.models)) as CutoutModel[];
   for (const model of models) {
