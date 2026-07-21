@@ -264,14 +264,16 @@ async function addToQueue(): Promise<void> {
     product = { kind: 'bin', bin, labelSlot: params.labelSlot };
   }
   if (props.editingEntry !== null) {
-    queue.update(props.editingEntry.id, {
+    addError.value = queue.update(props.editingEntry.id, {
       product,
       quantity: quantity.value,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
+    if (addError.value !== null) return;
     app.stopEditing();
   } else {
-    queue.add(product, quantity.value, cleanNotes);
+    addError.value = queue.add(product, quantity.value, cleanNotes);
+    if (addError.value !== null) return;
   }
   trace.reset();
   quantity.value = 1;

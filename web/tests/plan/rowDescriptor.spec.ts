@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeProduct } from '../../src/engine/plan/rowDescriptor';
+import { describeProduct, downloadSubtitles } from '../../src/engine/plan/rowDescriptor';
 import { evenDividerWalls } from '../../src/engine/gridfinity/dividerModel';
 import type {
   BinPockets,
@@ -325,6 +325,31 @@ describe('describeProduct captions', () => {
     expect(loosened.caption).toBe('connection clip · tolerance 0.2 mm');
     expect(loosened.titlePlaceholder).toBe(false);
     expect(loosened.iconName).toBe(null);
+  });
+
+  it('titles the 3MF download entry with two filaments only for labeled kinds', () => {
+    const labeled = downloadSubtitles({
+      kind: 'binWithInsert',
+      bin: manualBin(),
+      insert: content(),
+    });
+    expect(labeled.threeMfTitle).toBe('3MF, two filaments');
+    expect(labeled.threeMf).toBe('Body and label slots for toolchanger printing.');
+
+    const plate = downloadSubtitles({
+      kind: 'baseplate',
+      unitsX: 2,
+      unitsY: 2,
+      magnets: null,
+      screwHoles: false,
+      connectable: false,
+    });
+    expect(plate.threeMfTitle).toBe('3MF');
+    expect(plate.threeMf).toBe('Single filament; a baseplate has no label.');
+
+    const clipText = downloadSubtitles({ kind: 'clip', toleranceMm: 0 });
+    expect(clipText.threeMfTitle).toBe('3MF');
+    expect(clipText.threeMf).toBe('Single filament; a connection clip has no label.');
   });
 
   it('sizes a screw insert by its cell width alone', () => {

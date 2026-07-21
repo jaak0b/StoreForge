@@ -147,11 +147,11 @@ describe('partsOf for a baseplate and a clip', () => {
   });
 
   it('expands a clip into exactly one part carrying its tolerance', () => {
-    const parts = partsOf({ kind: 'clip', toleranceMm: 0.35 });
+    const parts = partsOf({ kind: 'clip', toleranceMm: 0.25 });
     expect(parts).toHaveLength(1);
     const part = parts[0];
     if (part.part !== 'clip') throw new Error('expected clip part');
-    expect(part.clip.toleranceMm).toBe(0.35);
+    expect(part.clip.toleranceMm).toBe(0.25);
   });
 });
 

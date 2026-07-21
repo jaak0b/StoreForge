@@ -78,8 +78,8 @@ describe('baseplate round trip', () => {
   });
 
   it('round-trips clips at the nominal and at a raised tolerance exactly', () => {
-    const back = roundTrip([entry('c1', clip(0)), entry('c2', clip(0.35))]);
-    expect(back.map((e) => e.product)).toEqual([clip(0), clip(0.35)]);
+    const back = roundTrip([entry('c1', clip(0)), entry('c2', clip(0.25))]);
+    expect(back.map((e) => e.product)).toEqual([clip(0), clip(0.25)]);
   });
 
   it('keeps all five product kinds in order through a round trip', () => {
@@ -138,11 +138,12 @@ describe('baseplate and clip validation messages', () => {
 
   it.each([
     [-0.1],
+    [0.35],
     [0.6],
     ['0.2'],
   ])('rejects a clip whose toleranceMm is %j', (toleranceMm) => {
     const bad = entry('a1', { kind: 'clip', toleranceMm } as unknown as Product);
-    expect(validateEntry(bad)).toBe('entry a1: toleranceMm must be a number from 0 to 0.5');
+    expect(validateEntry(bad)).toBe('entry a1: toleranceMm must be a number from 0 to 0.3');
   });
 
   it.each([
@@ -156,7 +157,7 @@ describe('baseplate and clip validation messages', () => {
     expect(validateEntry(baseplateEntry(overrides))).toBeNull();
   });
 
-  it.each([[0], [0.5]])('accepts the inclusive clip tolerance boundary %d', (toleranceMm) => {
+  it.each([[0], [0.3]])('accepts the inclusive clip tolerance boundary %d', (toleranceMm) => {
     expect(validateEntry(entry('a1', clip(toleranceMm)))).toBeNull();
   });
 

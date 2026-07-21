@@ -149,18 +149,23 @@ function designedProduct(): Product {
   return { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
 }
 
+// The queue's refusal of an invalid design, shown beside the save button.
+const saveError = ref<string | null>(null);
+
 function saveEntry(): void {
   const cleanNotes = notes.value.trim();
   const product = designedProduct();
   if (editingEntry.value !== null) {
-    queue.update(editingEntry.value.id, {
+    saveError.value = queue.update(editingEntry.value.id, {
       product,
       quantity: quantity.value,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
+    if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    queue.add(product, quantity.value, cleanNotes);
+    saveError.value = queue.add(product, quantity.value, cleanNotes);
+    if (saveError.value !== null) return;
   }
   resetForm();
 }
@@ -269,6 +274,9 @@ const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generate
 
       <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">
         {{ errorMessage }}
+      </v-alert>
+      <v-alert v-if="saveError" type="error" class="mt-4" density="compact">
+        {{ saveError }}
       </v-alert>
 
       <div class="d-flex ga-2 mt-4">

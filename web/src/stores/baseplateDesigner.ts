@@ -5,7 +5,6 @@ import {
   type BaseplateMagnets,
   type BaseplateParams,
 } from '../engine/baseplate/constants';
-import { baseplateSpanMm } from '../engine/baseplate/generator';
 import { baseplateParamsOf } from '../engine/plan/geometry';
 import type { BaseplateProduct } from '../engine/plan/types';
 
@@ -53,14 +52,6 @@ export const useBaseplateDesigner = defineStore('baseplateDesigner', {
     /** The geometry parameters, derived from the product, never built alongside it. */
     params(): BaseplateParams {
       return baseplateParamsOf(this.product);
-    },
-    /** Total plate width in mm, for the size readout. */
-    widthMm(state): number {
-      return baseplateSpanMm(state.unitsX);
-    },
-    /** Total plate depth in mm, for the size readout. */
-    depthMm(state): number {
-      return baseplateSpanMm(state.unitsY);
     },
   },
   actions: {

@@ -307,6 +307,17 @@ describe('generateConnectionClip', () => {
     clip.delete();
   });
 
+  // Regression for the CLIP_TOLERANCE_MAX bound: past the flank/groove
+  // crossover the profile self-intersects, which manifold absorbed into a
+  // genus -4 solid while status stayed NoError. The genus assertion is
+  // therefore the one that matters: a single shell has genus 0.
+  it('stays a single genus-0 shell at the maximum tolerance', () => {
+    const clip = generateConnectionClip(m, { toleranceMm: CLIP_TOLERANCE_MAX });
+    expect(clip.status()).toBe('NoError');
+    expect(clip.genus()).toBe(0);
+    clip.delete();
+  });
+
   // 4.12/16 (first half): the tolerance shrinks the clip per mating face and
   // never leaks into the plate, whose slot is byte-identical either way
   // because the plate generator does not even accept a tolerance.

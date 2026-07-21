@@ -417,25 +417,30 @@ const formValid = computed(() => pending.value.batches.length > 0 && wallProblem
 
 const addedSnackbar = ref(false);
 const addedText = ref('');
+// The queue's refusal of an invalid entry, shown beside the add button.
+const saveError = ref<string | null>(null);
 
 function addToQueue(): void {
   if (!formValid.value) return;
+  saveError.value = null;
   const cleanNotes = store.notes.trim();
   const editing = editingEntry.value;
   if (editing !== null) {
     const { product, quantity } = pending.value.batches[0];
-    queue.update(editing.id, {
+    saveError.value = queue.update(editing.id, {
       product,
       quantity,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
+    if (saveError.value !== null) return;
     addedText.value = `Updated ${productLabelText(product)} in the queue.`;
     addedSnackbar.value = true;
     app.stopEditing();
     return;
   }
   for (const { product, quantity } of pending.value.batches) {
-    queue.add(product, quantity, cleanNotes);
+    saveError.value = queue.add(product, quantity, cleanNotes);
+    if (saveError.value !== null) return;
   }
   const n = pending.value.batches.length;
   addedText.value =
@@ -625,6 +630,9 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       </div>
       <v-alert v-if="wallProblem" type="warning" variant="tonal" density="compact" class="mt-2">
         {{ wallProblem }}
+      </v-alert>
+      <v-alert v-if="saveError" type="error" density="compact" class="mt-2">
+        {{ saveError }}
       </v-alert>
       <v-alert
         v-if="editingEntry !== null"

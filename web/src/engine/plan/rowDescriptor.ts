@@ -228,33 +228,47 @@ export function describeProduct(
   };
 }
 
+/** The download menu's per-kind strings: two subtitles and the 3MF entry's title. */
+export interface DownloadMenuText {
+  /** Subtitle of the STL entry. */
+  stl: string;
+  /** Title of the 3MF entry: names the filament count honestly per kind. */
+  threeMfTitle: string;
+  /** Subtitle of the 3MF entry. */
+  threeMf: string;
+}
+
 /**
- * The two download-menu subtitles of a row, derived per product kind: the
+ * The download-menu strings of a row, derived per product kind: the two-slot
  * bin wording is false on a part that has no label, so the strings live here
  * beside the row's other user-facing text rather than hardcoded in a
  * template.
  */
-export function downloadSubtitles(product: Product): { stl: string; threeMf: string } {
+export function downloadSubtitles(product: Product): DownloadMenuText {
   switch (product.kind) {
     case 'bin':
     case 'binWithInsert':
       return {
         stl: 'One mesh, label merged into the bin.',
+        threeMfTitle: '3MF, two filaments',
         threeMf: 'Body and label slots for toolchanger printing.',
       };
     case 'insert':
       return {
         stl: 'One mesh, label merged into the insert.',
+        threeMfTitle: '3MF, two filaments',
         threeMf: 'Body and label slots for toolchanger printing.',
       };
     case 'baseplate':
       return {
         stl: 'One mesh.',
+        threeMfTitle: '3MF',
         threeMf: 'Single filament; a baseplate has no label.',
       };
     case 'clip':
       return {
         stl: 'One mesh.',
+        threeMfTitle: '3MF',
         threeMf: 'Single filament; a connection clip has no label.',
       };
     default:

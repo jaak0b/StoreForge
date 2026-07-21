@@ -249,16 +249,20 @@ function removeRow(entry: QueueEntry): void {
               </v-btn>
             </template>
             <v-list density="comfortable">
-              <v-list-item
-                title="STL"
-                :subtitle="downloadSubtitles(entry.product).stl"
-                @click="downloadRow(entry, 'stl')"
-              />
-              <v-list-item
-                title="3MF, two filaments"
-                :subtitle="downloadSubtitles(entry.product).threeMf"
-                @click="downloadRow(entry, '3mf')"
-              />
+              <!-- One-element v-for: derives the menu text object once per
+                   row instead of calling downloadSubtitles per binding. -->
+              <template v-for="menuText in [downloadSubtitles(entry.product)]" :key="entry.id">
+                <v-list-item
+                  title="STL"
+                  :subtitle="menuText.stl"
+                  @click="downloadRow(entry, 'stl')"
+                />
+                <v-list-item
+                  :title="menuText.threeMfTitle"
+                  :subtitle="menuText.threeMf"
+                  @click="downloadRow(entry, '3mf')"
+                />
+              </template>
             </v-list>
           </v-menu>
           <v-btn icon size="small" variant="text" @click="queue.duplicate(entry.id)">

@@ -34,7 +34,14 @@ export const MAGNET_HEIGHT_DEFAULT = MAGNET_HOLE_DEPTH;
 
 /** Connection clip tolerance bounds and default, in mm per mating face. */
 export const CLIP_TOLERANCE_MIN = 0;
-export const CLIP_TOLERANCE_MAX = 0.5;
+/**
+ * Upper bound derived from the clip cross-section itself: the clip body flank
+ * half-width is CLIP_HALF_WIDTH - t (2.15 - t) and the groove half-width
+ * CONNECTOR_GROOVE_HALF + t (1.45 + t); they meet at t = 0.35, where the
+ * cross-section degenerates. The bound stays one 0.05 slider step below that
+ * crossover, leaving a 0.1 mm groove wall.
+ */
+export const CLIP_TOLERANCE_MAX = 0.3;
 export const CLIP_TOLERANCE_DEFAULT = 0;
 
 /*

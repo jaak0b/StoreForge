@@ -302,9 +302,10 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   cellUnion.delete();
   clipper.delete();
 
-  // Stage 5: the plate is the outline minus the cavity.
+  // Stage 5: the plate is the outline minus the cavity. The outline solid
+  // stays alive until after the boss-clipping stage below, which reuses it
+  // instead of extruding the identical prism a second time.
   let plate = outline.subtract(cavity);
-  outline.delete();
   cavity.delete();
 
   // Stages 6 to 8: bosses, screw holes and magnet pockets, at every magnet
@@ -318,13 +319,8 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
     const bossUnion = m.Manifold.union(parts);
     // Clip to the outline so a boss at a rounded plate corner merges into the
     // wall instead of poking outside the plate.
-    const outlineSolid = m.Manifold.extrude(
-      [roundedRectPolygon(width, depth, OUTER_CORNER_RADIUS)],
-      height,
-    );
-    const bosses = bossUnion.intersect(outlineSolid);
+    const bosses = bossUnion.intersect(outline);
     bossUnion.delete();
-    outlineSolid.delete();
     const withBosses = plate.add(bosses);
     plate.delete();
     bosses.delete();
@@ -363,6 +359,7 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
       plate = pocketed;
     }
   }
+  outline.delete();
 
   // Stage 9: connector slots, one per cell per outer edge, centred on the
   // cell centre. A slot is emitted only when its full length lies on the

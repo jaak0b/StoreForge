@@ -125,7 +125,7 @@ watch(
     if (entryId === null) return;
     const entry = queue.entryById(entryId);
     if (entry === null || entry.product.kind !== 'clip') return;
-    clipToleranceMm.value = entry.product.toleranceMm;
+    clipToleranceMm.value = quantizeClipTolerance(entry.product.toleranceMm);
     clipQuantity.value = entry.quantity;
   },
   { immediate: true },
@@ -146,18 +146,23 @@ const editingEntry = computed<QueueEntry | null>(() => {
   return entry !== null && originOf(entry.product) === 'baseplate' ? entry : null;
 });
 
+// The queue's refusal of an invalid design, shown beside the save button.
+const saveError = ref<string | null>(null);
+
 function saveEntry(): void {
   const cleanNotes = store.notes.trim();
   const product = store.product;
   if (editingEntry.value !== null) {
-    queue.update(editingEntry.value.id, {
+    saveError.value = queue.update(editingEntry.value.id, {
       product,
       quantity: quantity.value,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
+    if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    queue.add(product, quantity.value, cleanNotes);
+    saveError.value = queue.add(product, quantity.value, cleanNotes);
+    if (saveError.value !== null) return;
   }
   resetForm();
 }
@@ -178,18 +183,41 @@ const clipEditingEntry = computed<QueueEntry | null>(() => {
 });
 
 /**
+ * Rounds a clip tolerance to two decimals: the 0.05 slider step quantizes
+ * exactly at two decimals, so filenames and captions render clean instead of
+ * carrying float artifacts like 0.30000000000000004. The single source of the
+ * stored tolerance value; render sites never re-format it.
+ */
+function quantizeClipTolerance(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/**
  * Queues clip rows, or saves the clip row being edited. Leaves the baseplate
- * form untouched, so clips can be added before or after the plate itself.
+ * form untouched, so clips can be added before or after the plate itself. The
+ * two fields are clamped to their exported bounds on commit; the queue's own
+ * validation stays the backstop.
  */
 function addClips(): void {
+  clipToleranceMm.value = quantizeClipTolerance(
+    Math.min(CLIP_TOLERANCE_MAX, Math.max(CLIP_TOLERANCE_MIN, clipToleranceMm.value)),
+  );
+  clipQuantity.value = Math.max(1, Math.round(clipQuantity.value));
   const product = { kind: 'clip', toleranceMm: clipToleranceMm.value } as const;
   if (clipEditingEntry.value !== null) {
-    queue.update(clipEditingEntry.value.id, { product, quantity: clipQuantity.value });
+    clipSaveError.value = queue.update(clipEditingEntry.value.id, {
+      product,
+      quantity: clipQuantity.value,
+    });
+    if (clipSaveError.value !== null) return;
     app.stopEditing();
   } else {
-    queue.add(product, clipQuantity.value);
+    clipSaveError.value = queue.add(product, clipQuantity.value);
   }
 }
+
+// The queue's refusal of an invalid clip row, shown beside the clip button.
+const clipSaveError = ref<string | null>(null);
 
 function cancelClipEdit(): void {
   app.stopEditing();
@@ -332,6 +360,9 @@ function editingTitle(entry: QueueEntry): string {
       <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">
         {{ errorMessage }}
       </v-alert>
+      <v-alert v-if="saveError" type="error" class="mt-4" density="compact">
+        {{ saveError }}
+      </v-alert>
 
       <div class="d-flex ga-2 mt-4">
         <v-btn color="primary" variant="flat" size="large" class="flex-grow-1" @click="saveEntry">
@@ -408,6 +439,9 @@ function editingTitle(entry: QueueEntry): string {
               Cancel edit
             </v-btn>
           </div>
+          <v-alert v-if="clipSaveError" type="error" class="mt-4" density="compact">
+            {{ clipSaveError }}
+          </v-alert>
         </v-card-text>
       </v-card>
     </v-col>

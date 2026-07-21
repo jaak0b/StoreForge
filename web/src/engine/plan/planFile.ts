@@ -69,7 +69,8 @@ export type PlanParseResult =
   | { ok: true; plan: PlanFile; warnings: string[] }
   | { ok: false; error: string };
 
-function isPositiveInteger(value: unknown, min: number): value is number {
+/** Exported so the queue store validates an interactive quantity with the file format's own rule. */
+export function isPositiveInteger(value: unknown, min: number): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= min;
 }
 

@@ -2,19 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useBaseplateDesigner } from '../../src/stores/baseplateDesigner';
 import { validateProduct } from '../../src/engine/plan/planFile';
-import { PITCH } from '../../src/engine/gridfinity/constants';
 
 describe('baseplateDesigner store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-  });
-
-  it('derives the size readout from the cell counts at the full pitch', () => {
-    const store = useBaseplateDesigner();
-    expect(store.widthMm).toBe(2 * PITCH);
-    store.unitsX = 4;
-    expect(store.widthMm).toBe(4 * PITCH);
-    expect(store.depthMm).toBe(2 * PITCH);
   });
 
   it('collapses the magnets to null when the mode is none despite non-default dimensions', () => {
