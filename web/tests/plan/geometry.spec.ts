@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { baseplateParamsOf, partsOf, previewBinParams } from '../../src/engine/plan/geometry';
+import {
+  baseplateParamsOf,
+  binInteriorOf,
+  partsOf,
+  previewBinParams,
+} from '../../src/engine/plan/geometry';
 import type {
   BaseplateProduct,
   BinWithInsertProduct,
+  CavityEdit,
   CutoutBin,
   CutoutModel,
   ManualBin,
@@ -52,6 +58,7 @@ function cutoutBin(overrides: Partial<CutoutBin> = {}): CutoutBin {
     heightUnits: 6,
     magnetHoles: false,
     models: [cutoutModel()],
+    edits: [],
     ...overrides,
   };
 }
@@ -96,6 +103,24 @@ describe('partsOf for a cutout bin', () => {
     const bin = parts[0];
     if (bin.part !== 'bin') throw new Error('expected bin part');
     expect(bin.bin.walls).toEqual([]);
+  });
+
+  it('carries the manual cavity edits through on a bin ordered alone', () => {
+    const edits: CavityEdit[] = [
+      { kind: 'remove', points: [{ xMm: 0, yMm: 0, zMm: 10 }], radiusMm: 3 },
+    ];
+    const parts = partsOf({ kind: 'bin', bin: cutoutBin({ edits }), labelSlot: true });
+    const bin = parts[0];
+    if (bin.part !== 'bin') throw new Error('expected bin part');
+    expect(bin.edits).toEqual(edits);
+    expect(binInteriorOf(bin)).toEqual({ interior: 'models', models: [cutoutModel()], edits });
+  });
+
+  it('gives every non-cutout origin an empty edit list, never an omitted one', () => {
+    const parts = partsOf({ kind: 'bin', bin: manualBin(), labelSlot: true });
+    const bin = parts[0];
+    if (bin.part !== 'bin') throw new Error('expected bin part');
+    expect(bin.edits).toEqual([]);
   });
 });
 

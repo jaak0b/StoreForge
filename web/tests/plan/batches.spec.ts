@@ -397,6 +397,7 @@ describe('cutout models in batches', () => {
       ...base,
       origin: 'cutout',
       models: [model(), model({ id: 'm2', name: 'socket-22.stl', modelSourceId: 'src-2', clearanceMm: 0.8 })],
+      edits: [],
     };
   }
 

@@ -1,8 +1,47 @@
 import { defineStore } from 'pinia';
 import { markRaw } from 'vue';
 import type { MeshData } from '../engine/gridfinity/types';
+import {
+  CAVITY_EDIT_RADIUS_MAX_MM,
+  CAVITY_EDIT_RADIUS_MIN_MM,
+  FLATTEN_HEIGHT_MAX_MM,
+  FLATTEN_HEIGHT_MIN_MM,
+} from '../engine/cutout/cavityEdits';
 import type { UnitScaleProposal } from '../engine/cutout/unitScale';
-import type { CutoutModel, ModelPlacement } from '../engine/plan/types';
+import { assertNever, type CavityEdit, type CutoutModel, type ModelPlacement } from '../engine/plan/types';
+
+/** The active paint tool for cavity edits, or none while the gizmo owns the pointer. */
+export type CavityTool = 'add' | 'remove' | 'flatten';
+
+/**
+ * Deep copies one cavity edit. Vue's reactive proxies do not survive the
+ * worker's structured clone (the same reason the model records are copied
+ * on the way to the worker), so every read of `edits` bound for the plan or
+ * the worker goes through this. The switch ends in assertNever so a new
+ * CavityEdit variant fails to compile here too. Defined once here and
+ * reused by the tab, so the copy logic has one home (rule 10).
+ */
+export function cloneEdit(edit: CavityEdit): CavityEdit {
+  switch (edit.kind) {
+    case 'add':
+    case 'remove':
+      return {
+        kind: edit.kind,
+        points: edit.points.map((point) => ({ ...point })),
+        radiusMm: edit.radiusMm,
+      };
+    case 'flatten':
+      return {
+        kind: 'flatten',
+        centerMm: { ...edit.centerMm },
+        radiusMm: edit.radiusMm,
+        normalMm: { ...edit.normalMm },
+        heightMm: edit.heightMm,
+      };
+    default:
+      return assertNever(edit);
+  }
+}
 
 /**
  * What the Cutout bin tab is designing: the imported models, where each of them
@@ -100,6 +139,16 @@ export const useCutout = defineStore('cutout', {
     gridY: 1,
     /** Editor-only state per model id. Never saved. */
     editorState: {} as Record<string, ModelEditorState>,
+    /** Manual cavity edits, in application order. Plan data. */
+    edits: [] as CavityEdit[],
+    /** Edits undone and available for redo. Editor state, never saved. */
+    redoStack: [] as CavityEdit[],
+    /** The active paint tool, or null when the gizmo owns the pointer. Editor state. */
+    activeTool: null as CavityTool | null,
+    /** Brush radius in mm for the next stroke. Editor state. */
+    brushRadiusMm: 3,
+    /** Flatten cut height in mm for the next flatten click. Editor state. */
+    flattenHeightMm: 5,
   }),
   getters: {
     modelById: (state) => (id: string): CutoutModel | null =>
@@ -140,6 +189,11 @@ export const useCutout = defineStore('cutout', {
       this.gridX = 1;
       this.gridY = 1;
       this.editorState = {};
+      this.edits = [];
+      this.redoStack = [];
+      this.activeTool = null;
+      this.brushRadiusMm = 3;
+      this.flattenHeightMm = 5;
     },
     select(id: string | null) {
       this.selectedModelId = id !== null && this.modelById(id) !== null ? id : null;
@@ -247,6 +301,53 @@ export const useCutout = defineStore('cutout', {
     /** Rebuilds the editor state of a model loaded back from a plan. */
     trackLoadedModel(model: CutoutModel) {
       this.editorState[model.id] = freshState(model.clearanceMm, model.draftAngleDeg);
+    },
+    /** Toggling the active tool off passes null. */
+    setActiveTool(tool: CavityTool | null) {
+      this.activeTool = tool;
+    },
+    /** Clamped to the shared cavity edit radius bounds. */
+    setBrushRadius(radiusMm: number) {
+      this.brushRadiusMm = Math.min(
+        CAVITY_EDIT_RADIUS_MAX_MM,
+        Math.max(CAVITY_EDIT_RADIUS_MIN_MM, radiusMm),
+      );
+    },
+    /** Clamped to the shared flatten cut height bounds. */
+    setFlattenHeight(heightMm: number) {
+      this.flattenHeightMm = Math.min(
+        FLATTEN_HEIGHT_MAX_MM,
+        Math.max(FLATTEN_HEIGHT_MIN_MM, heightMm),
+      );
+    },
+    /** Pushes a completed edit and clears the redo stack. */
+    appendEdit(edit: CavityEdit) {
+      this.edits.push(cloneEdit(edit));
+      this.redoStack = [];
+    },
+    /** Pops the last edit WITHOUT pushing redo: a rejected carve. */
+    rollbackEdit() {
+      this.edits.pop();
+    },
+    /** Moves the last edit onto the redo stack. */
+    undoEdit() {
+      const edit = this.edits.pop();
+      if (edit !== undefined) this.redoStack.push(edit);
+    },
+    /** Moves the last undone edit back onto the list. */
+    redoEdit() {
+      const edit = this.redoStack.pop();
+      if (edit !== undefined) this.edits.push(edit);
+    },
+    /** Empties the edit list and the redo stack. */
+    clearEdits() {
+      this.edits = [];
+      this.redoStack = [];
+    },
+    /** Loads an edit list from a plan: deep copies, clears the redo stack. */
+    setEdits(edits: CavityEdit[]) {
+      this.edits = edits.map(cloneEdit);
+      this.redoStack = [];
     },
   },
 });
