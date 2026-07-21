@@ -2,7 +2,7 @@ import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trac
 import type { DividerWall } from '../gridfinity/dividerModel';
 import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
-import type { BaseplateMagnets } from '../baseplate/constants';
+import type { BaseplateBrim, BaseplateMagnets } from '../baseplate/constants';
 
 export type { DividerWall, ModelPlacement, SizeMm };
 
@@ -338,6 +338,13 @@ export interface BaseplateProduct {
   magnets: BaseplateMagnets | null;
   screwHoles: boolean;
   connectable: boolean;
+  /**
+   * Edge extension for a drawer-fill edge plate, or absent for a plain
+   * plate. Absent, not zeroed, so a plan written before drawer fill existed
+   * (and every plain plate designed on the Baseplate tab) round-trips with
+   * no brim field at all.
+   */
+  brim?: BaseplateBrim;
 }
 
 /**
@@ -508,10 +515,12 @@ export interface PrintBatch {
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 9, which is version 8 plus the cavity
-   * edit list on cutout bins. The change is purely additive: no field of an
-   * earlier version changes meaning, so versions 1 to 8 are read exactly as
-   * they were before; a version 8 file simply contains no edits.
+   * Envelope format version. Currently 9, which is version 8 plus two additive
+   * changes: the baseplate product's optional brim field (drawer-fill edge
+   * plates) and the cavity edit list on cutout bins. The change is purely
+   * additive: no field of an earlier version changes meaning, so versions 1 to
+   * 8 are read exactly as they were before; a version 8 file simply contains no
+   * brimmed baseplate and no cavity edits.
    */
   version: 9;
   /** All queue entries. */

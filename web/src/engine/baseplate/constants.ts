@@ -127,6 +127,21 @@ export interface BaseplateMagnets {
   heightMm: number;
 }
 
+/**
+ * Brim extension per edge, in mm: the four edge plates of a drawer-filling
+ * baseplate grid grow toward the drawer wall by this much, carrying a
+ * partial row/column of sockets rather than a solid bar. Each side is
+ * always less than one pitch, so a brimmed edge never grows a full extra
+ * socket. The planner in drawerFill.ts is the only place that computes these
+ * values; the generator only ever consumes them.
+ */
+export interface BaseplateBrim {
+  leftMm: number;
+  rightMm: number;
+  frontMm: number;
+  backMm: number;
+}
+
 export interface BaseplateParams {
   /** Cells along X, integer 1 to BASEPLATE_UNITS_MAX. */
   unitsX: number;
@@ -144,6 +159,13 @@ export interface BaseplateParams {
   screwHoles: boolean;
   /** Connector slots on all four outer edges, one per cell per edge. */
   connectable: boolean;
+  /**
+   * Edge extension for filling a drawer wall to wall, or absent for a plain
+   * plate (equivalent to all four sides zero). Magnets, screw holes and
+   * connector slots apply only to the full unitsX by unitsY cells; a brimmed
+   * edge never gets connector slots, since it sits against the drawer wall.
+   */
+  brim?: BaseplateBrim;
 }
 
 export interface ConnectionClipParams {

@@ -12,7 +12,7 @@ import {
 } from './workerClient';
 import { meshToStlBlob } from './engine/gridfinity/stlExport';
 import { binOuterSizeMm } from './engine/gridfinity/constants';
-import { baseplateSpanMm, clipFootprintMm } from './engine/baseplate/generator';
+import { baseplateOuterMm, clipFootprintMm } from './engine/baseplate/generator';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
 import type { MeshData, PartMeshes } from './engine/gridfinity/types';
 import {
@@ -168,10 +168,7 @@ export function partFootprint(part: PrintablePart): { widthMm: number; depthMm: 
     // here: a locally derived outer size could silently overlap plates in a
     // batch export.
     case 'baseplate':
-      return {
-        widthMm: baseplateSpanMm(part.baseplate.unitsX),
-        depthMm: baseplateSpanMm(part.baseplate.unitsY),
-      };
+      return baseplateOuterMm(part.baseplate);
     case 'clip':
       return clipFootprintMm(part.clip);
     default:
@@ -231,8 +228,22 @@ export function fileStem(product: Product): string {
       const bin = product.bin;
       return `gridfinity_bin_${bin.gridX}x${bin.gridY}x${bin.heightUnits}`;
     }
-    case 'baseplate':
-      return `gridfinity_baseplate_${product.unitsX}x${product.unitsY}`;
+    case 'baseplate': {
+      // A brimmed plate carries its outer mm size (from baseplateOuterMm, the
+      // single outer-size source) so it never downloads over the plain plate
+      // of the same unit count. Decimal points become p, like the clip stem.
+      const stem = `gridfinity_baseplate_${product.unitsX}x${product.unitsY}`;
+      const brim = product.brim;
+      if (
+        brim === undefined ||
+        brim.leftMm + brim.rightMm + brim.frontMm + brim.backMm === 0
+      ) {
+        return stem;
+      }
+      const outer = baseplateOuterMm(product);
+      const mm = (value: number): string => value.toFixed(1).replace('.', 'p');
+      return `${stem}_outer${mm(outer.widthMm)}x${mm(outer.depthMm)}mm`;
+    }
     case 'clip': {
       // The decimal point becomes p so the stem stays a single dotless token.
       const tol =

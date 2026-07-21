@@ -127,6 +127,7 @@ export function baseplateParamsOf(product: BaseplateProduct): BaseplateParams {
     magnets: product.magnets === null ? null : { ...product.magnets },
     screwHoles: product.screwHoles,
     connectable: product.connectable,
+    brim: product.brim === undefined ? undefined : { ...product.brim },
   };
 }
 
