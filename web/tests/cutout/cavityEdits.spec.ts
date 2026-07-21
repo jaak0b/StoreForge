@@ -4,6 +4,7 @@ import { loadManifold } from '../helpers/manifold';
 import {
   applyCavityEdits,
   cavityEditsKey,
+  isCavityEditRejectionMessage,
   simplifyStroke,
   strokeSolid,
   flattenSolid,
@@ -138,6 +139,47 @@ describe('applyCavityEdits', () => {
       ], 20),
     ).toThrow(/entire bin/);
     binSolid.delete();
+  });
+
+  it('throws a message isCavityEditRejectionMessage recognizes', () => {
+    const binSolid = box();
+    const before = box();
+    let thrown: unknown;
+    try {
+      applyCavityEdits(m, before, binSolid, [
+        { kind: 'remove', points: [p(20, 20, 10)], radiusMm: 50 },
+      ], 20);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(isCavityEditRejectionMessage((thrown as Error).message)).toBe(true);
+    binSolid.delete();
+  });
+});
+
+describe('isCavityEditRejectionMessage', () => {
+  it('recognizes the emptied-bin and invalid-solid messages', () => {
+    expect(
+      isCavityEditRejectionMessage(
+        'The cavity edits removed the entire bin, so the last edit was not applied.',
+      ),
+    ).toBe(true);
+    expect(
+      isCavityEditRejectionMessage('Applying the cavity edits produced an invalid solid (NonManifoldEdge).'),
+    ).toBe(true);
+  });
+
+  it('rejects unrelated carve failures so an unrelated failure never rolls back a good edit', () => {
+    expect(isCavityEditRejectionMessage('The model "widget.stl" is no longer stored on this device.')).toBe(
+      false,
+    );
+    expect(
+      isCavityEditRejectionMessage(
+        'Cutout models cannot be combined with divider walls. Remove the dividers to add models.',
+      ),
+    ).toBe(false);
+    expect(isCavityEditRejectionMessage('Generating the preview failed.')).toBe(false);
   });
 });
 

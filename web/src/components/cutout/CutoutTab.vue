@@ -42,7 +42,11 @@ import {
   type QueueEntry,
   type Vec3Mm,
 } from '../../engine/plan/types';
-import { CAVITY_EDIT_RADIUS_MIN_MM, CAVITY_EDIT_RADIUS_MAX_MM } from '../../engine/cutout/cavityEdits';
+import {
+  CAVITY_EDIT_RADIUS_MIN_MM,
+  CAVITY_EDIT_RADIUS_MAX_MM,
+  isCavityEditRejectionMessage,
+} from '../../engine/cutout/cavityEdits';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import CutoutViewport from './CutoutViewport.vue';
@@ -183,7 +187,7 @@ const carveModelIds = computed(() => cutout.carvableModels.map((model) => model.
  * result lands, and its footprints and warnings would map onto the wrong rows.
  * Travelling with the result, the ids always match the carve they describe.
  */
-type CarveResultWithIds = CutoutPreviewResult & { modelIds: string[] };
+type CarveResultWithIds = CutoutPreviewResult & { modelIds: string[]; editCount: number };
 
 /**
  * Carves the preview, or refuses because a model's file is not on this device.
@@ -204,7 +208,7 @@ async function carvePreview(request: CutoutBinRequest): Promise<CarveResultWithI
   // result, so which carve they belong to is never in doubt.
   const modelIds = carveModelIds.value;
   const result = await generateCutoutBinPreview(request);
-  return Object.assign(result, { modelIds });
+  return Object.assign(result, { modelIds, editCount: request.edits.length });
 }
 
 /** Why no bin can be carved right now, or null. */
@@ -244,6 +248,10 @@ watch(previewResult, (result) => {
     case 'carved':
       carved.value = result;
       stale.value = false;
+      // This carve reached the worker and produced a bin, so every edit it was
+      // built from is good: nothing at or below this count can be rolled back
+      // by a later failure.
+      lastGoodEditCount.value = Math.max(lastGoodEditCount.value, result.editCount);
       return;
     case 'superseded':
       // A newer request replaced this one before it finished. Not a failure,
@@ -344,16 +352,13 @@ function onConfirmClearEdits(): void {
 /** The error a rejected edit surfaced, shown as its own alert row. */
 const editError = ref<string | null>(null);
 /**
- * The edit count expected once the carve that was just started lands, or null
- * when no edit is waiting on a carve. Recorded before the edit is appended so
- * the watch below knows which carve outcome to attribute to it.
+ * The number of edits the most recently landed carve was built from, whether
+ * that carve is still running or has already finished. Every edit at or below
+ * this count is known good: some carve has folded it in without failing.
+ * Starts at whatever the plan already had (opening a saved cutout bin does
+ * not need those edits re-proven).
  */
-const pendingEditCount = ref<number | null>(null);
-
-function beginEditWatch(): void {
-  pendingEditCount.value = cutout.edits.length + 1;
-  editError.value = null;
-}
+const lastGoodEditCount = ref(cutout.edits.length);
 
 /**
  * Fires a paint stroke's add or remove edit. Ignored when the tool changed
@@ -362,14 +367,14 @@ function beginEditWatch(): void {
  */
 function onStrokeCommit(points: Vec3Mm[]): void {
   if (cutout.activeTool !== 'add' && cutout.activeTool !== 'remove') return;
-  beginEditWatch();
+  editError.value = null;
   cutout.appendEdit({ kind: cutout.activeTool, points, radiusMm: cutout.brushRadiusMm });
 }
 
 /** Fires a flatten click's edit. */
 function onFlattenCommit(centerMm: Vec3Mm, planeZMm: number): void {
   if (cutout.activeTool !== 'flatten') return;
-  beginEditWatch();
+  editError.value = null;
   cutout.appendEdit({ kind: 'flatten', centerMm, radiusMm: cutout.brushRadiusMm, planeZMm });
 }
 
@@ -382,18 +387,26 @@ watch(
 
 // A manual edit that makes the carve fail must not stay applied: it would sit
 // in the undo stack looking like a normal edit while the bin it produced is
-// gone. The rollback is keyed to the edit count the rejected carve was
-// started from, so an edit added while an earlier carve is still failing
-// never rolls back the wrong one.
+// gone. Every edit above the last known-good count is suspect, not just the
+// one most recently appended: the debounce can coalesce two edits into one
+// carve, or a second edit can be painted while an earlier carve is still in
+// flight, and either way a single failure means none of those edits are
+// proven. All of them are rolled back together, down to the last count that
+// did carve successfully.
+//
+// Only an edit rejection (the carve reached the worker and the folded edits
+// themselves were bad) rolls edits back. Any other failure, a missing model
+// file or divider walls on a cutout bin, is not the edit's fault, so it is
+// surfaced without touching cutout.edits: rolling back would silently drop a
+// perfectly good edit because something unrelated to it failed.
 watch(generating, (isGenerating) => {
   if (isGenerating) return;
-  if (pendingEditCount.value === null) return;
-  const expected = pendingEditCount.value;
-  pendingEditCount.value = null;
-  if (errorMessage.value !== null && cutout.edits.length === expected) {
+  const message = errorMessage.value;
+  if (message === null || !isCavityEditRejectionMessage(message)) return;
+  while (cutout.edits.length > lastGoodEditCount.value) {
     cutout.rollbackEdit();
-    editError.value = errorMessage.value;
   }
+  editError.value = message;
 });
 
 // ---------------------------------------------------------------------------

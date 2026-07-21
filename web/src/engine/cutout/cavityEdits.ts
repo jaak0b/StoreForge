@@ -161,14 +161,36 @@ function foldCavityEdit(
   }
 }
 
+const EDITS_EMPTIED_BIN_MESSAGE =
+  'The cavity edits removed the entire bin, so the last edit was not applied.';
+
+function editsProducedInvalidSolidMessage(status: string): string {
+  return `Applying the cavity edits produced an invalid solid (${status}).`;
+}
+
+/**
+ * True when `message` is one of the user-worded failures finishCavityEdits
+ * throws: the carve reached the worker and failed specifically because the
+ * folded edits themselves are bad (emptied the bin, or left an invalid
+ * solid). Callers use this to tell an edit rejection apart from every other
+ * carve failure (a missing model file, divider walls on a cutout bin, a bad
+ * STL), which must not roll an edit back because the edit was not at fault.
+ */
+export function isCavityEditRejectionMessage(message: string): boolean {
+  return (
+    message === EDITS_EMPTIED_BIN_MESSAGE ||
+    /^Applying the cavity edits produced an invalid solid \(.+\)\.$/.test(message)
+  );
+}
+
 /** Status-checks and empties-checks the final folded body, or throws a user-worded error. */
 function finishCavityEdits(current: Manifold): Manifold {
   if (current.isEmpty()) {
-    throw new Error('The cavity edits removed the entire bin, so the last edit was not applied.');
+    throw new Error(EDITS_EMPTIED_BIN_MESSAGE);
   }
   const status = current.status();
   if (status !== 'NoError') {
-    throw new Error(`Applying the cavity edits produced an invalid solid (${status}).`);
+    throw new Error(editsProducedInvalidSolidMessage(status));
   }
   return current;
 }
