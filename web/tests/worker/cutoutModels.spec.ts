@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ManifoldToplevel } from 'manifold-3d';
 import { loadManifold } from '../helpers/manifold';
 import {
-  CavityEditedBodyCache,
   CutoutModelCache,
   CutoutSweptCache,
   importCutoutModel,
@@ -13,6 +12,7 @@ import {
   type CutoutModelKeySpec,
   type CutoutModelRequest,
 } from '../../src/worker/cutoutModels';
+import { CavityEditedBodyCache } from '../../src/worker/cavityEditedBodyCache';
 import {
   DEFAULT_CUTOUT_CLEARANCE_MM,
   buildCutoutBinBody,

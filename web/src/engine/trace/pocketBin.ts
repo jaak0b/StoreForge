@@ -5,7 +5,13 @@
 // subtracted from the bin top down to its pocket depth, with vertical
 // finger-hole reliefs so the tool can be lifted out. Framework-agnostic; the
 // ManifoldToplevel and Font are injected as everywhere else in the engine.
-import type { CrossSection, Manifold, ManifoldToplevel, SimplePolygon } from 'manifold-3d';
+import type {
+  CrossSection,
+  ExecutionContext,
+  Manifold,
+  ManifoldToplevel,
+  SimplePolygon,
+} from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import type { FingerHole, MmPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
 import { CHORDAL_TOLERANCE_MM, fingerHoleOutline, resolvedToolOutline } from './edit';
@@ -308,8 +314,17 @@ export function validatePocketLayout(
  * are grab reliefs, not through-holes: the floor plate under them stays
  * intact. The cutters reach past the solid top so a pocket is always open at
  * the top, which is this flow's own property and not the shared stage's.
+ *
+ * `ctx` is handed straight to the shared carve stage, which attaches it to the
+ * one eager operation of the carve. A preview passes the context it can cancel
+ * when the user supersedes it; an export passes nothing, exactly as the cutout
+ * flow does.
  */
-export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams): Manifold {
+export function buildPocketBinBody(
+  m: ManifoldToplevel,
+  params: PocketBinParams,
+  ctx?: ExecutionContext,
+): Manifold {
   const placed = placeTools(m, params.tools, params.placements);
   validatePocketLayout(m, params, placed);
 
@@ -348,7 +363,7 @@ export function buildPocketBinBody(m: ManifoldToplevel, params: PocketBinParams)
     }
   }
 
-  let body = buildCarvedBinBody(m, params, cutters, 'Pocket bin');
+  let body = buildCarvedBinBody(m, params, cutters, 'Pocket bin', ctx);
   const edits = params.edits ?? [];
   if (edits.length > 0) {
     // The un-carved solid bin body: the same carve stage with no cutters, so
@@ -378,8 +393,9 @@ export function generatePocketBin(
   m: ManifoldToplevel,
   font: Font,
   params: PocketBinParams,
+  ctx?: ExecutionContext,
 ): PartMeshes {
-  return finishBinPartMeshes(m, font, buildPocketBinBody(m, params), params);
+  return finishBinPartMeshes(m, font, buildPocketBinBody(m, params, ctx), params);
 }
 
 /**
