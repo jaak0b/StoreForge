@@ -2,7 +2,7 @@ import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trac
 import type { DividerWall } from '../gridfinity/dividerModel';
 import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
-import type { BaseplateMagnets } from '../baseplate/constants';
+import type { BaseplateBrim, BaseplateMagnets } from '../baseplate/constants';
 
 export type { DividerWall, ModelPlacement, SizeMm };
 
@@ -306,6 +306,13 @@ export interface BaseplateProduct {
   magnets: BaseplateMagnets | null;
   screwHoles: boolean;
   connectable: boolean;
+  /**
+   * Edge extension for a drawer-fill edge plate, or absent for a plain
+   * plate. Absent, not zeroed, so a plan written before drawer fill existed
+   * (and every plain plate designed on the Baseplate tab) round-trips with
+   * no brim field at all.
+   */
+  brim?: BaseplateBrim;
 }
 
 /**
@@ -476,13 +483,13 @@ export interface PrintBatch {
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 8, which is version 7 plus the
-   * baseplate and connection clip product kinds. The change is purely
-   * additive: no field of an earlier version changes meaning, so versions 1
-   * to 7 are read exactly as they were before; they simply contain no
-   * baseplate or clip rows.
+   * Envelope format version. Currently 9, which is version 8 plus the
+   * baseplate product's optional brim field (drawer-fill edge plates). The
+   * change is purely additive: no field of an earlier version changes
+   * meaning, so versions 1 to 8 are read exactly as they were before; they
+   * simply contain no brimmed baseplate.
    */
-  version: 8;
+  version: 9;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -490,4 +497,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 8;
+export const PLAN_FILE_VERSION = 9;
