@@ -300,8 +300,7 @@ const drawerFillPreviewRects = computed<DrawerFillPreviewRect[]>(() => {
 /**
  * Whether the current plate is small enough to regenerate on every change.
  * Counts the generated cells including the brim's partial cells
- * (baseplateCellCount), so a brimmed plate loaded for editing is gated by
- * the workload it actually generates.
+ * (baseplateCellCount).
  */
 const livePreview = computed(() => baseplateCellCount(store.params) <= LIVE_PREVIEW_MAX_CELLS);
 
@@ -507,32 +506,93 @@ function editingTitle(entry: QueueEntry): string {
 
       <template v-if="sizeMode === 'single' || editingEntry !== null">
       <div class="text-caption text-medium-emphasis mb-1">
-        Baseplate size (grid units of 42 mm)
+        Baseplate size (grid units of 42 mm) and brim (mm)
       </div>
-      <div class="d-flex align-center ga-2">
-        <v-text-field
-          ref="widthField"
-          v-model.number="store.unitsX"
-          type="number"
-          min="1"
-          :max="BASEPLATE_UNITS_MAX"
-          step="1"
-          label="Width"
-          density="comfortable"
-          hide-details
-        />
-        <span class="text-medium-emphasis">x</span>
-        <v-text-field
-          v-model.number="store.unitsY"
-          type="number"
-          min="1"
-          :max="BASEPLATE_UNITS_MAX"
-          step="1"
-          label="Depth"
-          density="comfortable"
-          hide-details
-        />
+      <div class="brim-box">
+        <div class="brim-box__edge brim-box__edge--back">
+          <span class="brim-box__caption">back</span>
+          <v-text-field
+            v-model.number="store.brimBackMm"
+            type="number"
+            min="0"
+            step="0.1"
+            density="compact"
+            variant="outlined"
+            hide-details
+            class="brim-box__input"
+          />
+        </div>
+        <div class="brim-box__middle">
+          <div class="brim-box__edge brim-box__edge--left">
+            <span class="brim-box__caption">left</span>
+            <v-text-field
+              v-model.number="store.brimLeftMm"
+              type="number"
+              min="0"
+              step="0.1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              class="brim-box__input"
+            />
+          </div>
+          <div class="brim-box__plate brim-box__plate--editable">
+            <v-text-field
+              ref="widthField"
+              v-model.number="store.unitsX"
+              type="number"
+              min="1"
+              :max="BASEPLATE_UNITS_MAX"
+              step="1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              class="brim-box__unit-input"
+            />
+            <span class="text-medium-emphasis">x</span>
+            <v-text-field
+              v-model.number="store.unitsY"
+              type="number"
+              min="1"
+              :max="BASEPLATE_UNITS_MAX"
+              step="1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              class="brim-box__unit-input"
+            />
+          </div>
+          <div class="brim-box__edge brim-box__edge--right">
+            <span class="brim-box__caption">right</span>
+            <v-text-field
+              v-model.number="store.brimRightMm"
+              type="number"
+              min="0"
+              step="0.1"
+              density="compact"
+              variant="outlined"
+              hide-details
+              class="brim-box__input"
+            />
+          </div>
+        </div>
+        <div class="brim-box__edge brim-box__edge--front">
+          <span class="brim-box__caption">front</span>
+          <v-text-field
+            v-model.number="store.brimFrontMm"
+            type="number"
+            min="0"
+            step="0.1"
+            density="compact"
+            variant="outlined"
+            hide-details
+            class="brim-box__input"
+          />
+        </div>
       </div>
+      <v-alert v-if="brimCapError" type="error" density="compact" class="mt-2">
+        {{ brimCapError }}
+      </v-alert>
       </template>
 
       <template v-else>
@@ -725,76 +785,18 @@ function editingTitle(entry: QueueEntry): string {
       />
 
       <template v-if="sizeMode === 'single' || editingEntry !== null">
-      <MoreOptions
-        v-model:open="moreOptionsOpen"
-        per-bin-fields
-        hide-bin-fields
-        :quantity="quantity"
-        @update:quantity="quantity = $event"
-      >
-        <template #fields>
-          <div class="text-caption text-medium-emphasis mb-1">Brim (mm)</div>
-          <div class="brim-box">
-            <div class="brim-box__edge brim-box__edge--back">
-              <span class="brim-box__caption">back</span>
-              <v-text-field
-                v-model.number="store.brimBackMm"
-                type="number"
-                min="0"
-                step="0.1"
-                density="compact"
-                variant="outlined"
-                hide-details
-                class="brim-box__input"
-              />
-            </div>
-            <div class="brim-box__middle">
-              <div class="brim-box__edge brim-box__edge--left">
-                <span class="brim-box__caption">left</span>
-                <v-text-field
-                  v-model.number="store.brimLeftMm"
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  class="brim-box__input"
-                />
-              </div>
-              <div class="brim-box__plate">{{ store.unitsX }} x {{ store.unitsY }}</div>
-              <div class="brim-box__edge brim-box__edge--right">
-                <span class="brim-box__caption">right</span>
-                <v-text-field
-                  v-model.number="store.brimRightMm"
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  class="brim-box__input"
-                />
-              </div>
-            </div>
-            <div class="brim-box__edge brim-box__edge--front">
-              <span class="brim-box__caption">front</span>
-              <v-text-field
-                v-model.number="store.brimFrontMm"
-                type="number"
-                min="0"
-                step="0.1"
-                density="compact"
-                variant="outlined"
-                hide-details
-                class="brim-box__input"
-              />
-            </div>
-          </div>
-          <v-alert v-if="brimCapError" type="error" density="compact" class="mt-2">
-            {{ brimCapError }}
-          </v-alert>
-        </template>
+      <v-text-field
+        v-model.number="quantity"
+        type="number"
+        min="1"
+        step="1"
+        label="Quantity"
+        density="comfortable"
+        hide-details
+        class="mt-4 quantity-field"
+      />
+
+      <MoreOptions v-model:open="moreOptionsOpen" :per-bin-fields="false" hide-bin-fields>
         <template #after>
           <v-textarea
             v-model="store.notes"
@@ -1005,5 +1007,19 @@ function editingTitle(entry: QueueEntry): string {
   border-radius: 8px;
   font-size: 0.75rem;
   color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+.brim-box__plate--editable {
+  gap: 4px;
+}
+.brim-box__unit-input {
+  width: 36px;
+  flex: none;
+}
+.brim-box__unit-input :deep(input) {
+  text-align: center;
+  padding: 0;
+}
+.quantity-field {
+  max-width: 140px;
 }
 </style>
