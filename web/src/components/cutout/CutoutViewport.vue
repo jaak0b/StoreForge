@@ -1031,6 +1031,7 @@ watch(
     // ghost that lost the selection and the one that gained it both change
     // colour, and neither changed the ghost list that syncGhosts repaints from.
     paintGhosts();
+    applyGhostVisibility();
   },
 );
 watch(
