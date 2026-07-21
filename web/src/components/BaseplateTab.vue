@@ -13,13 +13,11 @@ import {
   CLIP_TOLERANCE_DEFAULT,
   CLIP_TOLERANCE_MAX,
   CLIP_TOLERANCE_MIN,
-  CUSTOM_SPAN_MIN,
   MAGNET_DIAMETER_MAX,
   MAGNET_DIAMETER_MIN,
   MAGNET_HEIGHT_MAX,
   MAGNET_HEIGHT_MIN,
 } from '../engine/baseplate/constants';
-import { PITCH } from '../engine/gridfinity/constants';
 import { originOf, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import BinViewport from './BinViewport.vue';
@@ -236,47 +234,6 @@ function editingTitle(entry: QueueEntry): string {
         />
       </div>
 
-      <v-switch
-        v-model="store.customSize"
-        label="Custom size"
-        color="primary"
-        density="compact"
-        hide-details
-        class="mt-2"
-      />
-      <v-expand-transition>
-        <div v-if="store.customSize">
-          <v-text-field
-            v-model.number="store.customXMm"
-            type="number"
-            :min="CUSTOM_SPAN_MIN"
-            :max="PITCH"
-            step="0.1"
-            label="Last column width (mm)"
-            hint="The last column is shortened to this width; every other column keeps the full 42 mm pitch."
-            density="comfortable"
-            class="mt-2"
-          />
-          <v-text-field
-            v-model.number="store.customYMm"
-            type="number"
-            :min="CUSTOM_SPAN_MIN"
-            :max="PITCH"
-            step="0.1"
-            label="Last row depth (mm)"
-            hint="The last row is shortened to this depth; every other row keeps the full 42 mm pitch."
-            density="comfortable"
-            class="mt-2"
-          />
-          <div class="readout mt-1">
-            <span class="text-caption text-medium-emphasis">Total width</span>
-            <span class="text-caption">{{ store.widthMm.toFixed(1) }} mm</span>
-            <span class="text-caption text-medium-emphasis">Total depth</span>
-            <span class="text-caption">{{ store.depthMm.toFixed(1) }} mm</span>
-          </div>
-        </div>
-      </v-expand-transition>
-
       <div class="text-caption text-medium-emphasis mb-1 mt-4">Base magnets</div>
       <v-btn-toggle
         v-model="store.magnetMode"
@@ -487,12 +444,5 @@ function editingTitle(entry: QueueEntry): string {
 <style scoped>
 .preview-card {
   min-height: 320px;
-}
-
-.readout {
-  display: grid;
-  grid-template-columns: max-content max-content;
-  column-gap: 16px;
-  row-gap: 2px;
 }
 </style>
