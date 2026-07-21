@@ -1,5 +1,10 @@
 import { defineStore } from 'pinia';
 import type {
+  BaseplateProduct,
+  DrawerFillInput,
+  DrawerPlate,
+  DrawerPlateOptions,
+  Group,
   PrintBatch,
   Product,
   QueueEntry,
@@ -9,10 +14,14 @@ import {
   isPositiveInteger,
   mergeBatches,
   mergeEntries,
+  mergeGroups,
   parsePlanFile,
+  repairGroupLinks,
   serializePlanFile,
+  validateGroup,
   validateProduct,
 } from '../engine/plan/planFile';
+import { planDrawerFill, type DrawerFillPlate } from '../engine/baseplate/drawerFill';
 import {
   confirmBatchItem,
   createBatch,
@@ -43,22 +52,59 @@ function validateQueueMutation(product: Product, quantity: number): string | nul
   return validateProduct(product, 'This design');
 }
 
-function loadPlan(): { entries: QueueEntry[]; batches: PrintBatch[] } {
+/**
+ * Builds the BaseplateProduct one drawer plate is queued as: the group's
+ * shared options for the full cells, the plate's own planned brim, and the
+ * backlink to its group. The single place a plate becomes a product, so the
+ * initial queueing and a later options re-stamp agree.
+ */
+function baseplateProductForPlate(
+  plate: DrawerPlate,
+  options: DrawerPlateOptions,
+  groupId: string,
+): BaseplateProduct {
+  return {
+    kind: 'baseplate',
+    unitsX: plate.unitsX,
+    unitsY: plate.unitsY,
+    magnets: options.magnets,
+    screwHoles: options.screwHoles,
+    connectable: options.connectable,
+    brim: plate.brim,
+    group: { groupId, plateId: plate.id },
+  };
+}
+
+/** Whether two drawer-fill inputs differ on any of their four mm fields. */
+function inputChanged(a: DrawerFillInput, b: DrawerFillInput): boolean {
+  return (
+    a.drawerWidthMm !== b.drawerWidthMm ||
+    a.drawerDepthMm !== b.drawerDepthMm ||
+    a.plateWidthMm !== b.plateWidthMm ||
+    a.plateDepthMm !== b.plateDepthMm
+  );
+}
+
+function loadPlan(): { entries: QueueEntry[]; batches: PrintBatch[]; groups: Group[] } {
   let text: string | null = null;
   try {
     text = localStorage.getItem(STORAGE_KEY);
   } catch (error) {
     console.error('Reading the stored plan failed.', error);
-    return { entries: [], batches: [] };
+    return { entries: [], batches: [], groups: [] };
   }
-  if (text === null) return { entries: [], batches: [] };
+  if (text === null) return { entries: [], batches: [], groups: [] };
   const result = parsePlanFile(text);
   if (!result.ok) {
     console.error(`The stored plan could not be read: ${result.error}`);
-    return { entries: [], batches: [] };
+    return { entries: [], batches: [], groups: [] };
   }
   for (const warning of result.warnings) console.warn(warning);
-  return { entries: result.plan.entries, batches: result.plan.batches };
+  return {
+    entries: result.plan.entries,
+    batches: result.plan.batches,
+    groups: result.plan.groups,
+  };
 }
 
 /** The print plan: queue entries and print batches, persisted to localStorage. */
@@ -86,6 +132,16 @@ export const useBinQueue = defineStore('binQueue', {
     queuedCount: (state) => state.entries.length,
     entryById: (state) => (id: string) => state.entries.find((e) => e.id === id) ?? null,
     batchById: (state) => (id: string) => state.batches.find((b) => b.id === id) ?? null,
+    groupById: (state) => (id: string) => state.groups.find((g) => g.id === id) ?? null,
+    /**
+     * A group's print progress as done and total plate counts, derived from
+     * its donePlateIds against its plates. Null when no such group exists.
+     */
+    groupProgress: (state) => (id: string): { done: number; total: number } | null => {
+      const group = state.groups.find((g) => g.id === id);
+      if (group === undefined) return null;
+      return { done: group.payload.donePlateIds.length, total: group.payload.plates.length };
+    },
     /**
      * The stored cutout model ids as a set for row descriptions, or undefined
      * while the model store has not been read.
@@ -96,7 +152,10 @@ export const useBinQueue = defineStore('binQueue', {
   actions: {
     persist() {
       try {
-        localStorage.setItem(STORAGE_KEY, serializePlanFile(this.entries, this.batches));
+        localStorage.setItem(
+          STORAGE_KEY,
+          serializePlanFile(this.entries, this.batches, this.groups),
+        );
       } catch (error) {
         console.error('Saving the plan failed.', error);
       }
@@ -258,16 +317,40 @@ export const useBinQueue = defineStore('binQueue', {
     confirmBatchItem(batchId: string, itemId: string, amount: number) {
       const batch = this.batchById(batchId);
       if (batch === null) return;
+      const item = batch.items.find((i) => i.id === itemId);
       const updated = confirmBatchItem(batch, itemId, amount);
       this.batches = updated === null
         ? this.batches.filter((b) => b.id !== batchId)
         : this.batches.map((b) => (b.id === batchId ? updated : b));
+      // A confirmed plate that belongs to a drawer group counts toward that
+      // group's progress; the helper is a no-op for any other product.
+      if (item !== undefined) this.markGroupPlateDone(item.product);
       this.persist();
     },
     /** Confirms every item of a batch as fully printed; the batch disappears. */
     confirmAll(batchId: string) {
+      const batch = this.batchById(batchId);
+      if (batch !== null) {
+        for (const item of batch.items) this.markGroupPlateDone(item.product);
+      }
       this.batches = this.batches.filter((b) => b.id !== batchId);
       this.persist();
+    },
+    /**
+     * Records that a confirmed baseplate plate belongs to a drawer group and
+     * has printed, by adding its plate id to the group's done list. Idempotent
+     * and a no-op for any product that is not a group-linked baseplate, or when
+     * the group or plate no longer exists.
+     */
+    markGroupPlateDone(product: Product) {
+      if (product.kind !== 'baseplate' || product.group === undefined) return;
+      const group = this.groupById(product.group.groupId);
+      if (group === null) return;
+      const { plateId } = product.group;
+      if (!group.payload.plates.some((plate) => plate.id === plateId)) return;
+      if (!group.payload.donePlateIds.includes(plateId)) {
+        group.payload.donePlateIds.push(plateId);
+      }
     },
     /**
      * Marks a batch item as failed: its amount returns to the main queue
@@ -286,7 +369,7 @@ export const useBinQueue = defineStore('binQueue', {
     },
     /** Serializes the whole plan for the JSON export. */
     exportJson(): string {
-      return serializePlanFile(this.entries, this.batches);
+      return serializePlanFile(this.entries, this.batches, this.groups);
     },
     /**
      * Imports a plan from JSON text. Merge keeps existing entries and batches
@@ -300,12 +383,169 @@ export const useBinQueue = defineStore('binQueue', {
       if (mode === 'replace') {
         this.entries = result.plan.entries;
         this.batches = result.plan.batches;
+        this.groups = result.plan.groups;
       } else {
         this.entries = mergeEntries(this.entries, result.plan.entries);
         this.batches = mergeBatches(this.batches, result.plan.batches);
+        this.groups = mergeGroups(this.groups, result.plan.groups);
+        // A merge can drop or replace a group an existing or imported plate
+        // pointed at; repair the dangling links rather than leave them.
+        const warnings: string[] = [];
+        repairGroupLinks(this.entries, this.batches, this.groups, warnings);
+        for (const warning of warnings) console.warn(warning);
       }
       this.persist();
       return null;
+    },
+    /**
+     * Adds a drawer group and queues one baseplate per planned plate. All or
+     * nothing: the group and every plate product are validated first, and the
+     * store is left untouched if any is refused, so a rejected plate never
+     * leaves the drawer partially queued. Returns the new group id on success
+     * or the user-worded problem. plannerPlates come from planDrawerFill; each
+     * plate's brim is the planner's own, never recomputed here.
+     */
+    addDrawerGroup(
+      input: DrawerFillInput,
+      options: DrawerPlateOptions,
+      plannerPlates: DrawerFillPlate[],
+      name: string,
+    ): string | null {
+      const groupId = crypto.randomUUID();
+      const plates: DrawerPlate[] = plannerPlates.map((plate) => ({
+        id: crypto.randomUUID(),
+        unitsX: plate.unitsX,
+        unitsY: plate.unitsY,
+        brim: plate.brim,
+        column: plate.column,
+        row: plate.row,
+      }));
+      const group: Group = {
+        id: groupId,
+        name,
+        createdAt: new Date().toISOString(),
+        payload: { kind: 'drawer', input, options, plates, donePlateIds: [] },
+      };
+      const groupProblem = validateGroup(group, `group ${groupId}`);
+      if (groupProblem !== null) return groupProblem;
+      const entries: QueueEntry[] = plates.map((plate) => ({
+        id: crypto.randomUUID(),
+        quantity: 1,
+        createdAt: new Date().toISOString(),
+        product: baseplateProductForPlate(plate, options, groupId),
+      }));
+      for (const entry of entries) {
+        const problem = validateProduct(entry.product, 'A planned plate');
+        if (problem !== null) return problem;
+      }
+      this.groups.push(group);
+      this.entries.push(...entries);
+      this.persist();
+      return groupId;
+    },
+    /**
+     * Applies changes to a drawer group. A name or options change is
+     * non-structural: the name is set and an options change re-stamps every
+     * still-queued linked plate's product with the new options (its brim and
+     * group link unchanged). A change to any of the four mm inputs is
+     * structural: the fill is re-planned, the plates are replaced with fresh
+     * ids, every still-queued linked entry is removed and the new plates are
+     * re-queued.
+     *
+     * A structural edit is allowed even when some plates have already printed,
+     * but it CLEARS the done list, because the old plate ids no longer exist:
+     * progress resets to zero. The caller that wants to warn first reads
+     * groupProgress before calling. All or nothing: nothing changes when the
+     * re-plan fails or a new product is refused. Returns null on success or the
+     * user-worded problem.
+     */
+    updateDrawerGroup(
+      id: string,
+      changes: { name?: string; options?: DrawerPlateOptions; input?: DrawerFillInput },
+    ): string | null {
+      const group = this.groupById(id);
+      if (group === null) return null;
+      const payload = group.payload;
+      const structural =
+        changes.input !== undefined && inputChanged(payload.input, changes.input);
+      if (structural) {
+        const input = changes.input!;
+        const options = changes.options ?? payload.options;
+        const outcome = planDrawerFill(input);
+        if ('error' in outcome) return outcome.error;
+        const newPlates: DrawerPlate[] = outcome.plates.map((plate) => ({
+          id: crypto.randomUUID(),
+          unitsX: plate.unitsX,
+          unitsY: plate.unitsY,
+          brim: plate.brim,
+          column: plate.column,
+          row: plate.row,
+        }));
+        const newEntries: QueueEntry[] = newPlates.map((plate) => ({
+          id: crypto.randomUUID(),
+          quantity: 1,
+          createdAt: new Date().toISOString(),
+          product: baseplateProductForPlate(plate, options, id),
+        }));
+        for (const entry of newEntries) {
+          const problem = validateProduct(entry.product, 'A planned plate');
+          if (problem !== null) return problem;
+        }
+        this.entries = this.entries.filter(
+          (entry) =>
+            !(entry.product.kind === 'baseplate' && entry.product.group?.groupId === id),
+        );
+        payload.input = input;
+        payload.options = options;
+        payload.plates = newPlates;
+        payload.donePlateIds = [];
+        if (changes.name !== undefined) group.name = changes.name;
+        this.entries.push(...newEntries);
+        this.persist();
+        return null;
+      }
+      // Non-structural: build any re-stamped products first, validate them all,
+      // and only then apply, so a refused options change leaves the group as it
+      // was.
+      if (changes.options !== undefined) {
+        const options = changes.options;
+        const restamped: { entry: QueueEntry; product: BaseplateProduct }[] = [];
+        for (const entry of this.entries) {
+          if (entry.product.kind !== 'baseplate' || entry.product.group?.groupId !== id) continue;
+          const plateId = entry.product.group.plateId;
+          const plate = payload.plates.find((pl) => pl.id === plateId);
+          if (plate === undefined) continue;
+          const product = baseplateProductForPlate(plate, options, id);
+          const problem = validateProduct(product, 'A planned plate');
+          if (problem !== null) return problem;
+          restamped.push({ entry, product });
+        }
+        payload.options = options;
+        for (const { entry, product } of restamped) entry.product = product;
+      }
+      if (changes.name !== undefined) group.name = changes.name;
+      this.persist();
+      return null;
+    },
+    /** Renames a group. */
+    renameGroup(id: string, name: string) {
+      const group = this.groupById(id);
+      if (group === null) return;
+      group.name = name;
+      this.persist();
+    },
+    /**
+     * Removes a group and every still-queued plate that belongs to it. Batch
+     * items are left alone: a plate already sent to a printer keeps its
+     * snapshot, and its group link simply stops resolving, which the load-time
+     * repair strips the next time the plan is read.
+     */
+    removeGroup(id: string) {
+      this.groups = this.groups.filter((g) => g.id !== id);
+      this.entries = this.entries.filter(
+        (entry) => !(entry.product.kind === 'baseplate' && entry.product.group?.groupId === id),
+      );
+      this.persist();
     },
   },
 });

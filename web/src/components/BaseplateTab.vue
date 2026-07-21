@@ -21,10 +21,13 @@ import {
 } from '../engine/baseplate/constants';
 import { originOf, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
-import { planDrawerFill, type DrawerFillPlate } from '../engine/baseplate/drawerFill';
+import {
+  drawerFillLayoutRects,
+  planDrawerFill,
+  type DrawerFillPlate,
+} from '../engine/baseplate/drawerFill';
 import { baseplateCellCount, baseplateOuterMm } from '../engine/baseplate/generator';
 import { validateProduct } from '../engine/plan/planFile';
-import { PITCH } from '../engine/gridfinity/constants';
 import type { BaseplateProduct } from '../engine/plan/types';
 import BinViewport from './BinViewport.vue';
 import MoreOptions from './MoreOptions.vue';
@@ -205,97 +208,14 @@ function addDrawerFillPlates(): void {
   }
 }
 
-/** One rectangle of the SVG drawer-fill preview: a full cell or a shaded brim strip. */
-interface DrawerFillPreviewRect {
-  key: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  brim: boolean;
-}
-
 /**
- * The full set of preview rectangles for every planned plate: one rect per
- * full cell (square, PITCH by PITCH) plus, for each brimmed side, one
- * shaded strip spanning that plate's full outer edge. Built directly from
- * the plan's own unitsX/unitsY/brim/column/row fields and PITCH, the same
- * inputs the plan itself is built from; no size is recomputed independently.
+ * The full set of preview rectangles for every planned plate, from the shared
+ * drawer-fill layout function (the single source of the top-down layout, Y-flip
+ * included), so the SVG preview and any other top-down view agree.
  */
-const drawerFillPreviewRects = computed<DrawerFillPreviewRect[]>(() => {
-  const rects: DrawerFillPreviewRect[] = [];
-  // Running left/front-edge offsets per column/row, since columns and rows
-  // can have different unit counts (the near-even split).
-  const colOffsets: number[] = [];
-  // The cell grid starts after the left brim, so every rectangle (including
-  // the leftmost plate's brim strip) lands inside the 0-based viewBox.
-  let runningX = drawerFillPlates.value[0]?.brim.leftMm ?? 0;
-  for (const plate of drawerFillPlates.value) {
-    if (plate.row === 0) {
-      colOffsets[plate.column] = runningX;
-      runningX += plate.unitsX * PITCH;
-    }
-  }
-  const rowOffsets: number[] = [];
-  let runningY = 0;
-  for (const plate of drawerFillPlates.value) {
-    if (plate.column === 0) {
-      rowOffsets[plate.row] = runningY;
-      runningY += plate.unitsY * PITCH;
-    }
-  }
-  for (const plate of drawerFillPlates.value) {
-    const originX = colOffsets[plate.column];
-    const originY = rowOffsets[plate.row];
-    for (let cx = 0; cx < plate.unitsX; cx++) {
-      for (let cy = 0; cy < plate.unitsY; cy++) {
-        rects.push({
-          key: `cell-${plate.column}-${plate.row}-${cx}-${cy}`,
-          x: originX + cx * PITCH,
-          y: originY + cy * PITCH,
-          width: PITCH,
-          height: PITCH,
-          brim: false,
-        });
-      }
-    }
-    if (plate.brim.leftMm > 0) {
-      rects.push({
-        key: `brim-left-${plate.column}-${plate.row}`,
-        x: originX - plate.brim.leftMm,
-        y: originY,
-        width: plate.brim.leftMm,
-        height: plate.unitsY * PITCH,
-        brim: true,
-      });
-    }
-    if (plate.brim.rightMm > 0) {
-      rects.push({
-        key: `brim-right-${plate.column}-${plate.row}`,
-        x: originX + plate.unitsX * PITCH,
-        y: originY,
-        width: plate.brim.rightMm,
-        height: plate.unitsY * PITCH,
-        brim: true,
-      });
-    }
-    if (plate.brim.backMm > 0) {
-      rects.push({
-        key: `brim-back-${plate.column}-${plate.row}`,
-        x: originX,
-        y: originY + plate.unitsY * PITCH,
-        width: plate.unitsX * PITCH,
-        height: plate.brim.backMm,
-        brim: true,
-      });
-    }
-  }
-  // The plan's Y runs front to back (row 0 at the drawer opening), but the
-  // top-down view shows the back wall at the top, so flip every rectangle's
-  // Y within the drawer depth. The X mapping is unmirrored.
-  const depthMm = drawerDepthMm.value ?? 0;
-  return rects.map((rect) => ({ ...rect, y: depthMm - rect.y - rect.height }));
-});
+const drawerFillPreviewRects = computed(() =>
+  drawerFillLayoutRects(drawerFillPlates.value, drawerDepthMm.value ?? 0),
+);
 
 /**
  * Whether the current plate is small enough to regenerate on every change.

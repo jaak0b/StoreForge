@@ -16,6 +16,12 @@ import {
   type ScrewSpec,
   type TracePaper,
   type DividerWall,
+  type Group,
+  type GroupPayload,
+  type DrawerGroup,
+  type DrawerPlate,
+  type DrawerPlateOptions,
+  assertNever,
 } from './types';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
 import { PITCH } from '../gridfinity/constants';
@@ -876,6 +882,30 @@ function validateBaseplate(raw: Record<string, unknown>, subject: string): strin
   }
   const brimProblem = validateBrim(raw.brim, subject);
   if (brimProblem !== null) return brimProblem;
+  const linkProblem = validateGroupLink(raw.group, subject);
+  if (linkProblem !== null) return linkProblem;
+  return null;
+}
+
+/**
+ * Validates a baseplate product's optional group backlink: absent (a plain
+ * plate) or an object whose groupId and plateId are both non-empty strings.
+ * Only the shape is checked here, never whether the ids resolve: a dangling
+ * link is repaired at the plan level (parsePlanFile), after every group and
+ * product has been picked, following the screw-bin repair precedent.
+ */
+function validateGroupLink(raw: unknown, subject: string): string | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: the group link must be an object`;
+  }
+  const link = raw as Record<string, unknown>;
+  if (typeof link.groupId !== 'string' || link.groupId.length === 0) {
+    return `${subject}: the group link's groupId must be text that is not empty`;
+  }
+  if (typeof link.plateId !== 'string' || link.plateId.length === 0) {
+    return `${subject}: the group link's plateId must be text that is not empty`;
+  }
   return null;
 }
 
@@ -893,7 +923,7 @@ function validateClip(raw: Record<string, unknown>, subject: string): string | n
  * carried into localStorage.
  */
 function pickBaseplate(raw: Record<string, unknown>): BaseplateProduct {
-  return {
+  const product: BaseplateProduct = {
     kind: 'baseplate',
     unitsX: raw.unitsX as number,
     unitsY: raw.unitsY as number,
@@ -902,11 +932,217 @@ function pickBaseplate(raw: Record<string, unknown>): BaseplateProduct {
     connectable: raw.connectable as boolean,
     brim: pickBrim(raw.brim),
   };
+  if (raw.group !== undefined) {
+    const link = raw.group as Record<string, unknown>;
+    product.group = { groupId: link.groupId as string, plateId: link.plateId as string };
+  }
+  return product;
 }
 
 /** Copies only the known ConnectionClipProduct fields from a validated raw object. */
 function pickClip(raw: Record<string, unknown>): Product {
   return { kind: 'clip', toleranceMm: raw.toleranceMm as number };
+}
+
+// ---------------------------------------------------------------------------
+// Groups (version 10): a persistent drawer fill and its tracked plates.
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates a required brim: a drawer plate always carries its edge extension,
+ * so an absent brim is a defect here (unlike a plain baseplate's optional
+ * brim). Delegates the per-side bounds to validateBrim once present.
+ */
+function validateBrimRequired(raw: unknown, subject: string): string | null {
+  if (raw === undefined) {
+    return `${subject}: brim must be an object`;
+  }
+  return validateBrim(raw, subject);
+}
+
+/** The four drawer-fill mm inputs, named as the form shows them. */
+const DRAWER_INPUT_FIELDS = [
+  ['drawerWidthMm', 'drawer width'],
+  ['drawerDepthMm', 'drawer depth'],
+  ['plateWidthMm', 'build plate width'],
+  ['plateDepthMm', 'build plate depth'],
+] as const;
+
+/** Validates a drawer group's four mm inputs: each a positive finite number. */
+function validateDrawerInput(raw: unknown, subject: string): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: The drawer-fill input must be an object.`;
+  }
+  const input = raw as Record<string, unknown>;
+  for (const [key, name] of DRAWER_INPUT_FIELDS) {
+    const value = input[key];
+    if (!isFiniteNumber(value) || value <= 0) {
+      return `${subject}: The ${name} must be a positive number of millimetres.`;
+    }
+  }
+  return null;
+}
+
+/** Validates a drawer group's shared plate options: magnets plus two booleans. */
+function validateDrawerOptions(raw: unknown, subject: string): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: The plate options must be an object.`;
+  }
+  const options = raw as Record<string, unknown>;
+  const magnetsProblem = validateMagnets(options.magnets, subject);
+  if (magnetsProblem !== null) return magnetsProblem;
+  if (typeof options.screwHoles !== 'boolean') {
+    return `${subject}: screwHoles must be true or false`;
+  }
+  if (typeof options.connectable !== 'boolean') {
+    return `${subject}: connectable must be true or false`;
+  }
+  return null;
+}
+
+/** Validates one plate of a drawer group. */
+function validateDrawerPlate(raw: unknown, subject: string): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: A plate is not an object.`;
+  }
+  const plate = raw as Record<string, unknown>;
+  if (typeof plate.id !== 'string' || plate.id.length === 0) {
+    return `${subject}: A plate is missing its id.`;
+  }
+  if (!isPositiveInteger(plate.unitsX, 1) || (plate.unitsX as number) > BASEPLATE_UNITS_MAX) {
+    return `${subject}: plate ${plate.id}: unitsX must be an integer from 1 to ${BASEPLATE_UNITS_MAX}`;
+  }
+  if (!isPositiveInteger(plate.unitsY, 1) || (plate.unitsY as number) > BASEPLATE_UNITS_MAX) {
+    return `${subject}: plate ${plate.id}: unitsY must be an integer from 1 to ${BASEPLATE_UNITS_MAX}`;
+  }
+  if (!isPositiveInteger(plate.column, 0)) {
+    return `${subject}: plate ${plate.id}: the column must be a whole number of at least 0`;
+  }
+  if (!isPositiveInteger(plate.row, 0)) {
+    return `${subject}: plate ${plate.id}: the row must be a whole number of at least 0`;
+  }
+  return validateBrimRequired(plate.brim, `${subject}: plate ${plate.id}`);
+}
+
+/**
+ * Validates a raw value as a Group. Returns null when valid, otherwise a
+ * user-worded message prefixed with the subject "group <id>". Cross-array
+ * concerns (a duplicate group id, a baseplate link that resolves to no plate)
+ * are not checked here: the parse loop checks group-id uniqueness, and dangling
+ * product links are repaired at the plan level after every array is picked.
+ */
+export function validateGroup(raw: unknown, subject: string): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: A group is not an object.`;
+  }
+  const group = raw as Record<string, unknown>;
+  if (typeof group.id !== 'string' || group.id.length === 0) {
+    return 'A group is missing its id.';
+  }
+  if (typeof group.name !== 'string') {
+    return `${subject}: The group name must be text.`;
+  }
+  if (!isIsoTimestamp(group.createdAt)) {
+    return `${subject}: The creation time must be an ISO 8601 timestamp.`;
+  }
+  const payload = group.payload as Record<string, unknown> | null | undefined;
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return `${subject}: The group payload must be an object.`;
+  }
+  // Exhaustive over the payload kind: a new generator kind must add its own
+  // branch here rather than fall through to a wrong but plausible read.
+  if (payload.kind === 'drawer') {
+    const inputProblem = validateDrawerInput(payload.input, subject);
+    if (inputProblem !== null) return inputProblem;
+    const optionsProblem = validateDrawerOptions(payload.options, subject);
+    if (optionsProblem !== null) return optionsProblem;
+    if (!Array.isArray(payload.plates) || payload.plates.length === 0) {
+      return `${subject}: The group must have at least one plate.`;
+    }
+    const plateIds = new Set<string>();
+    for (const rawPlate of payload.plates) {
+      const plateProblem = validateDrawerPlate(rawPlate, subject);
+      if (plateProblem !== null) return plateProblem;
+      const plateId = (rawPlate as Record<string, unknown>).id as string;
+      if (plateIds.has(plateId)) {
+        return `${subject}: The plate id ${plateId} appears twice.`;
+      }
+      plateIds.add(plateId);
+    }
+    if (!Array.isArray(payload.donePlateIds)) {
+      return `${subject}: The done plates must be a list.`;
+    }
+    for (const doneId of payload.donePlateIds) {
+      if (typeof doneId !== 'string') {
+        return `${subject}: A done plate id must be text.`;
+      }
+      if (!plateIds.has(doneId)) {
+        return `${subject}: The done plate id ${doneId} is not one of the group's plates.`;
+      }
+    }
+    return null;
+  }
+  return `${subject}: The group payload kind must be drawer.`;
+}
+
+/** Copies only the known DrawerPlate fields from a validated raw plate. */
+function pickDrawerPlate(raw: Record<string, unknown>): DrawerPlate {
+  return {
+    id: raw.id as string,
+    unitsX: raw.unitsX as number,
+    unitsY: raw.unitsY as number,
+    brim: pickBrim(raw.brim) as BaseplateBrim,
+    column: raw.column as number,
+    row: raw.row as number,
+  };
+}
+
+/**
+ * Copies only the known Group fields from a validated raw object, field by
+ * field. donePlateIds is filtered to the ids the group actually holds, so a
+ * stray done id that somehow passed cannot survive into the plan. Exhaustive
+ * over the payload kind through assertNever, so a new kind fails to compile
+ * here until it is picked.
+ */
+export function pickGroup(raw: Record<string, unknown>): Group {
+  const rawPayload = raw.payload as Record<string, unknown>;
+  const kind = rawPayload.kind as GroupPayload['kind'];
+  let payload: GroupPayload;
+  switch (kind) {
+    case 'drawer': {
+      const rawInput = rawPayload.input as Record<string, number>;
+      const rawOptions = rawPayload.options as Record<string, unknown>;
+      const plates = (rawPayload.plates as Record<string, unknown>[]).map(pickDrawerPlate);
+      const plateIds = new Set(plates.map((plate) => plate.id));
+      const options: DrawerPlateOptions = {
+        magnets: pickMagnets(rawOptions.magnets as Record<string, unknown> | null),
+        screwHoles: rawOptions.screwHoles as boolean,
+        connectable: rawOptions.connectable as boolean,
+      };
+      const drawer: DrawerGroup = {
+        kind: 'drawer',
+        input: {
+          drawerWidthMm: rawInput.drawerWidthMm,
+          drawerDepthMm: rawInput.drawerDepthMm,
+          plateWidthMm: rawInput.plateWidthMm,
+          plateDepthMm: rawInput.plateDepthMm,
+        },
+        options,
+        plates,
+        donePlateIds: (rawPayload.donePlateIds as string[]).filter((id) => plateIds.has(id)),
+      };
+      payload = drawer;
+      break;
+    }
+    default:
+      return assertNever(kind);
+  }
+  return {
+    id: raw.id as string,
+    name: raw.name as string,
+    createdAt: raw.createdAt as string,
+    payload,
+  };
 }
 
 /** Validates a raw value as a Product. */
@@ -1453,7 +1689,9 @@ export function parsePlanFile(text: string): PlanParseResult {
   // bins, which no earlier version can contain, version 7 adds the per-model
   // sweep fields, absent in earlier versions and defaulted to off on pick, and
   // version 8 adds the baseplate and connection clip product kinds, which no
-  // earlier version can contain, so nothing else changes.
+  // earlier version can contain, and version 10 adds the group entity (a
+  // persistent drawer fill) and the baseplate product's optional group link,
+  // both absent from every earlier version, so nothing else changes.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];
@@ -1493,12 +1731,91 @@ export function parsePlanFile(text: string): PlanParseResult {
       batches.push(batch);
     }
   }
-  return { ok: true, plan: { version: PLAN_FILE_VERSION, entries, batches }, warnings };
+  // Groups are absent from versions 1 to 9, so an omitted list means none.
+  const groups: Group[] = [];
+  if (envelope.groups !== undefined) {
+    if (!Array.isArray(envelope.groups)) {
+      return { ok: false, error: 'The plan is missing its groups list.' };
+    }
+    const seenGroupIds = new Set<string>();
+    for (const item of envelope.groups) {
+      const problem = validateGroup(item, `group ${String((item as Record<string, unknown>)?.id)}`);
+      if (problem !== null) {
+        return { ok: false, error: `The plan is invalid: ${problem}` };
+      }
+      const group = pickGroup(item as Record<string, unknown>);
+      if (seenGroupIds.has(group.id)) {
+        return { ok: false, error: `The plan is invalid: group id ${group.id} appears twice.` };
+      }
+      seenGroupIds.add(group.id);
+      groups.push(group);
+    }
+  }
+  // Plan-level referential integrity: a baseplate link (in a queue entry or a
+  // batch snapshot) that resolves to no group or plate is repaired away, never
+  // rejected, following the screw-bin repair precedent.
+  repairGroupLinks(entries, batches, groups, warnings);
+  return { ok: true, plan: { version: PLAN_FILE_VERSION, entries, batches, groups }, warnings };
+}
+
+/** Every baseplate product across the queue entries and batch items, for link repair. */
+function baseplateProductsOf(
+  entries: QueueEntry[],
+  batches: PrintBatch[],
+): { product: BaseplateProduct; subject: string }[] {
+  const found: { product: BaseplateProduct; subject: string }[] = [];
+  for (const entry of entries) {
+    if (entry.product.kind === 'baseplate') {
+      found.push({ product: entry.product, subject: `Entry ${entry.id}` });
+    }
+  }
+  for (const batch of batches) {
+    for (const item of batch.items) {
+      if (item.product.kind === 'baseplate') {
+        found.push({ product: item.product, subject: `Batch ${batch.id} item ${item.id}` });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Strips a baseplate product's group link when it resolves to no group or to
+ * no plate within that group, leaving the plate as a valid standalone plate
+ * and appending a user-worded warning. Mutates the products in place. Runs
+ * after every array is picked on load, and again after an import merge, since
+ * a merge can drop the group an imported plate pointed at. A dangling link is
+ * repaired, never rejected: the plate is still a perfectly good baseplate.
+ */
+export function repairGroupLinks(
+  entries: QueueEntry[],
+  batches: PrintBatch[],
+  groups: Group[],
+  warnings: string[],
+): void {
+  const platesByGroup = new Map<string, Set<string>>(
+    groups.map((group) => [group.id, new Set(group.payload.plates.map((plate) => plate.id))]),
+  );
+  for (const { product, subject } of baseplateProductsOf(entries, batches)) {
+    const link = product.group;
+    if (link === undefined) continue;
+    const plateIds = platesByGroup.get(link.groupId);
+    if (plateIds === undefined || !plateIds.has(link.plateId)) {
+      delete product.group;
+      warnings.push(
+        `${subject} was linked to a drawer group that is no longer in the plan; the link was removed and the plate kept as a standalone baseplate.`,
+      );
+    }
+  }
 }
 
 /** Serializes a plan to pretty-printed JSON for export or persistence. */
-export function serializePlanFile(entries: QueueEntry[], batches: PrintBatch[]): string {
-  const plan: PlanFile = { version: PLAN_FILE_VERSION, entries, batches };
+export function serializePlanFile(
+  entries: QueueEntry[],
+  batches: PrintBatch[],
+  groups: Group[] = [],
+): string {
+  const plan: PlanFile = { version: PLAN_FILE_VERSION, entries, batches, groups };
   return JSON.stringify(plan, null, 2);
 }
 
@@ -1527,6 +1844,23 @@ export function mergeBatches(existing: PrintBatch[], imported: PrintBatch[]): Pr
   const existingIds = new Set(existing.map((batch) => batch.id));
   for (const batch of imported) {
     if (!existingIds.has(batch.id)) merged.push(batch);
+  }
+  return merged;
+}
+
+/**
+ * Merges imported groups into existing ones, by the same rule as entries and
+ * batches: an imported group with the same id replaces the existing one whole,
+ * all others are appended in file order. The caller re-runs repairGroupLinks
+ * afterwards, since a replaced or dropped group can leave a plate's link
+ * dangling.
+ */
+export function mergeGroups(existing: Group[], imported: Group[]): Group[] {
+  const importedById = new Map(imported.map((group) => [group.id, group]));
+  const merged = existing.map((group) => importedById.get(group.id) ?? group);
+  const existingIds = new Set(existing.map((group) => group.id));
+  for (const group of imported) {
+    if (!existingIds.has(group.id)) merged.push(group);
   }
   return merged;
 }

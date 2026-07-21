@@ -3,8 +3,10 @@ import type { DividerWall } from '../gridfinity/dividerModel';
 import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
 import type { BaseplateBrim, BaseplateMagnets } from '../baseplate/constants';
+import type { DrawerFillInput } from '../baseplate/drawerFill';
 
 export type { DividerWall, ModelPlacement, SizeMm };
+export type { DrawerFillInput };
 
 /**
  * Tool pockets sunk into a bin's interior, as designed on the Tool trace tab.
@@ -313,6 +315,16 @@ export interface BaseplateProduct {
    * no brim field at all.
    */
   brim?: BaseplateBrim;
+  /**
+   * Backlink to the drawer group this plate belongs to, or absent for a plain
+   * standalone plate. Both halves are always present together: groupId names
+   * the Group and plateId names the DrawerPlate within it. Kept on the product
+   * (not the queue entry) so a batch item's snapshot carries the link too,
+   * letting confirmBatchItem mark the plate done from a batched row. A dangling
+   * link (its group or plate no longer resolves) is repaired away on load, so
+   * consumers may treat a present link as resolvable.
+   */
+  group?: { groupId: string; plateId: string };
 }
 
 /**
@@ -480,21 +492,100 @@ export interface PrintBatch {
   createdAt: string;
 }
 
+// ---------------------------------------------------------------------------
+// Groups: a persistent generator (a drawer's baseplate fill) whose plates are
+// tracked together across queue, batch and confirmation.
+// ---------------------------------------------------------------------------
+
+/**
+ * The shared baseplate options a whole drawer group's plates are generated
+ * with: every plate in the group inherits these for its full cells, so a
+ * group edit that changes them re-stamps all of the group's still-queued
+ * plates at once. The brim is not here: it is per-plate (each edge plate
+ * carries its own), and lives on DrawerPlate.
+ */
+export interface DrawerPlateOptions {
+  magnets: BaseplateMagnets | null;
+  screwHoles: boolean;
+  connectable: boolean;
+}
+
+/**
+ * One plate of a drawer group, with a stable id so the queue entry, the batch
+ * snapshot and the done list can all refer to the same plate across edits.
+ * The brim is required here (unlike the optional brim on a plain
+ * BaseplateProduct) because a drawer plate is always planned with its edge
+ * extension, even when every side is zero.
+ */
+export interface DrawerPlate {
+  /** Stable unique identifier within the group (UUID). */
+  id: string;
+  /** Cells along X, integer 1 to BASEPLATE_UNITS_MAX. */
+  unitsX: number;
+  /** Cells along Y, integer 1 to BASEPLATE_UNITS_MAX. */
+  unitsY: number;
+  /** The plate's edge extension, always present (all-zero for an interior plate). */
+  brim: BaseplateBrim;
+  /** 0-based column, leftmost is 0. */
+  column: number;
+  /** 0-based row, front-most (drawer opening) is 0. */
+  row: number;
+}
+
+/**
+ * A drawer-filling baseplate group: the drawer and build-plate mm inputs it
+ * was planned from, the shared plate options, the planned plates, and which of
+ * them have printed successfully. Discriminated by kind so future generator
+ * kinds join GroupPayload with their own payload and an assertNever switch.
+ */
+export interface DrawerGroup {
+  kind: 'drawer';
+  /** The four mm inputs the drawer-fill planner ran on. */
+  input: DrawerFillInput;
+  /** The shared baseplate options every plate inherits. */
+  options: DrawerPlateOptions;
+  /** The planned plates, one per stored BaseplateProduct. Non-empty. */
+  plates: DrawerPlate[];
+  /** Ids of plates confirmed printed; each must be a plate in plates. */
+  donePlateIds: string[];
+}
+
+/** The payload of a group, discriminated by kind. Grows as generator kinds are added. */
+export type GroupPayload = DrawerGroup;
+
+/**
+ * A named, persistent generator whose output plates are tracked together. The
+ * group survives its plates leaving the queue for a batch and being confirmed,
+ * so the plan can show how much of a drawer is printed and re-plan the rest.
+ */
+export interface Group {
+  /** Stable unique identifier (UUID). */
+  id: string;
+  /** User-editable display name. */
+  name: string;
+  /** ISO 8601 timestamp of when the group was created. */
+  createdAt: string;
+  /** What the group generates. */
+  payload: GroupPayload;
+}
+
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 9, which is version 8 plus the
-   * baseplate product's optional brim field (drawer-fill edge plates). The
-   * change is purely additive: no field of an earlier version changes
-   * meaning, so versions 1 to 8 are read exactly as they were before; they
-   * simply contain no brimmed baseplate.
+   * Envelope format version. Currently 10, which is version 9 plus the group
+   * entity (a persistent drawer fill) and the baseplate product's optional
+   * group backlink. The change is additive: no field of an earlier version
+   * changes meaning, so versions 1 to 9 read exactly as before; they simply
+   * contain no group and no linked baseplate.
    */
-  version: 9;
+  version: 10;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
   batches: PrintBatch[];
+  /** All persistent groups (drawer fills). */
+  groups: Group[];
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 9;
+export const PLAN_FILE_VERSION = 10;

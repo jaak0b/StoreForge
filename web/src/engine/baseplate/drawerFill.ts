@@ -1,5 +1,5 @@
 import { PITCH } from '../gridfinity/constants';
-import { BASEPLATE_UNITS_MAX } from './constants';
+import { BASEPLATE_UNITS_MAX, type BaseplateBrim } from './constants';
 
 /**
  * Pure math turning a drawer's mm size and a printer's build plate mm size
@@ -15,13 +15,13 @@ export interface DrawerFillInput {
   plateDepthMm: number;
 }
 
-/** Brim extension per edge, in mm, matching BaseplateParams['brim'] in baseplate/constants.ts. */
-export interface DrawerFillBrim {
-  leftMm: number;
-  rightMm: number;
-  frontMm: number;
-  backMm: number;
-}
+/**
+ * Brim extension per edge, in mm. The one brim shape in the codebase: a plate's
+ * planned brim is exactly the brim its stored BaseplateProduct carries, so this
+ * is BaseplateBrim itself (declared in baseplate/constants.ts) rather than a
+ * parallel copy that could drift from it.
+ */
+export type { BaseplateBrim };
 
 /**
  * One planned plate. column and row are 0-based grid positions for preview
@@ -33,7 +33,7 @@ export interface DrawerFillBrim {
 export interface DrawerFillPlate {
   unitsX: number;
   unitsY: number;
-  brim: DrawerFillBrim;
+  brim: BaseplateBrim;
   column: number;
   row: number;
 }
@@ -178,4 +178,104 @@ export function planDrawerFill(input: DrawerFillInput): DrawerFillOutcome {
     }
   }
   return { plates };
+}
+
+/**
+ * One rectangle of the top-down drawer-fill layout: a full socket cell or a
+ * shaded brim strip, in drawer-local mm. brim is false for a full cell and true
+ * for a brim strip, so a renderer can style the two differently.
+ */
+export interface DrawerFillLayoutRect {
+  key: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  brim: boolean;
+}
+
+/**
+ * The top-down layout rectangles for a planned plate grid, in drawer-local mm:
+ * one square cell (PITCH by PITCH) per full socket, plus one shaded strip per
+ * brimmed side spanning that plate's outer edge. Built only from the plates'
+ * own unitsX/unitsY/brim/column/row fields and PITCH, the same inputs the plan
+ * itself is built from, so no size is recomputed independently.
+ *
+ * The plan's Y runs front to back (row 0 at the drawer opening), but a top-down
+ * view shows the back wall at the top, so every rectangle's Y is flipped within
+ * drawerDepthMm. The X mapping is unmirrored. The single source of this layout;
+ * the Baseplate tab's SVG preview consumes it rather than recomputing it.
+ */
+export function drawerFillLayoutRects(
+  plates: DrawerFillPlate[],
+  drawerDepthMm: number,
+): DrawerFillLayoutRect[] {
+  const rects: DrawerFillLayoutRect[] = [];
+  // Running left/front-edge offsets per column/row, since columns and rows
+  // can have different unit counts (the near-even split). The cell grid starts
+  // after the left brim, so every rectangle (including the leftmost plate's
+  // brim strip) lands inside the 0-based drawer box.
+  const colOffsets: number[] = [];
+  let runningX = plates[0]?.brim.leftMm ?? 0;
+  for (const plate of plates) {
+    if (plate.row === 0) {
+      colOffsets[plate.column] = runningX;
+      runningX += plate.unitsX * PITCH;
+    }
+  }
+  const rowOffsets: number[] = [];
+  let runningY = 0;
+  for (const plate of plates) {
+    if (plate.column === 0) {
+      rowOffsets[plate.row] = runningY;
+      runningY += plate.unitsY * PITCH;
+    }
+  }
+  for (const plate of plates) {
+    const originX = colOffsets[plate.column];
+    const originY = rowOffsets[plate.row];
+    for (let cx = 0; cx < plate.unitsX; cx++) {
+      for (let cy = 0; cy < plate.unitsY; cy++) {
+        rects.push({
+          key: `cell-${plate.column}-${plate.row}-${cx}-${cy}`,
+          x: originX + cx * PITCH,
+          y: originY + cy * PITCH,
+          width: PITCH,
+          height: PITCH,
+          brim: false,
+        });
+      }
+    }
+    if (plate.brim.leftMm > 0) {
+      rects.push({
+        key: `brim-left-${plate.column}-${plate.row}`,
+        x: originX - plate.brim.leftMm,
+        y: originY,
+        width: plate.brim.leftMm,
+        height: plate.unitsY * PITCH,
+        brim: true,
+      });
+    }
+    if (plate.brim.rightMm > 0) {
+      rects.push({
+        key: `brim-right-${plate.column}-${plate.row}`,
+        x: originX + plate.unitsX * PITCH,
+        y: originY,
+        width: plate.brim.rightMm,
+        height: plate.unitsY * PITCH,
+        brim: true,
+      });
+    }
+    if (plate.brim.backMm > 0) {
+      rects.push({
+        key: `brim-back-${plate.column}-${plate.row}`,
+        x: originX,
+        y: originY + plate.unitsY * PITCH,
+        width: plate.unitsX * PITCH,
+        height: plate.brim.backMm,
+        brim: true,
+      });
+    }
+  }
+  return rects.map((rect) => ({ ...rect, y: drawerDepthMm - rect.y - rect.height }));
 }
