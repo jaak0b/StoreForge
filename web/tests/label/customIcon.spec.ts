@@ -9,6 +9,10 @@ import { iconByName } from '../../src/engine/label/icons';
 
 const SQUARE = 'M10 10L90 10L90 90L10 90Z';
 
+// validateCustomIcon is the synchronous revalidation of an already normalized,
+// stored path (a single filled d string). The SVG-document handling, shape
+// union and stroke expansion live in normalizeCustomIcon (see its spec), which
+// needs the manifold WASM and runs in the worker.
 describe('validateCustomIcon', () => {
   it('accepts bare path data and reports its bounding box', () => {
     const result = validateCustomIcon(SQUARE);
@@ -19,41 +23,9 @@ describe('validateCustomIcon', () => {
     }
   });
 
-  it('accepts a full SVG document with exactly one path', () => {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="${SQUARE}" fill="black"/></svg>`;
-    const result = validateCustomIcon(svg);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.path).toBe(SQUARE);
-  });
-
   it('accepts a multi-contour path (a shape with a hole)', () => {
     const result = validateCustomIcon(iconByName('washer').path);
     expect(result.ok).toBe(true);
-  });
-
-  it('rejects an SVG with more than one path', () => {
-    const svg = `<svg><path d="${SQUARE}"/><path d="M0 0L1 0L1 1Z"/></svg>`;
-    const result = validateCustomIcon(svg);
-    expect(result).toEqual({
-      ok: false,
-      error:
-        'This SVG has more than one shape. Combine it into a single filled path ' +
-        'before uploading, or trace it in a vector tool with a boolean union.',
-    });
-  });
-
-  it('rejects an SVG mixing a path with another shape element', () => {
-    const svg = `<svg><rect x="0" y="0" width="10" height="10"/><path d="${SQUARE}"/></svg>`;
-    const result = validateCustomIcon(svg);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('more than one shape');
-  });
-
-  it('rejects an SVG without any path', () => {
-    expect(validateCustomIcon('<svg><g/></svg>')).toEqual({
-      ok: false,
-      error: 'No path data found in this file.',
-    });
   });
 
   it('rejects empty input and unreadable path data', () => {
@@ -67,16 +39,10 @@ describe('validateCustomIcon', () => {
     });
   });
 
-  it('rejects a path whose outline is not closed', () => {
-    const result = validateCustomIcon('M10 10L90 10L90 90L10 90');
+  it('rejects a path that encloses no area', () => {
+    const result = validateCustomIcon('M10 10L90 10');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('unclosed');
-  });
-
-  it('rejects a path where only one of several subpaths is unclosed', () => {
-    const result = validateCustomIcon(`${SQUARE}M95 95L99 95L99 99`);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('unclosed');
+    if (!result.ok) expect(result.error).toBe('No path data found in this file.');
   });
 });
 
