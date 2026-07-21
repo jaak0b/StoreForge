@@ -23,7 +23,7 @@ import type {
 } from './engine/gridfinity/types';
 import type { PocketBinParams } from './engine/trace/pocketBin';
 import type {
-  PocketBinPreviewResult,
+  PocketPreviewResult,
   PocketBinRequest,
 } from './worker/pocketModels';
 import type {
@@ -40,7 +40,7 @@ export type {
   CutoutPreviewResult,
 } from './worker/cutoutModels';
 export type {
-  PocketBinPreviewResult,
+  PocketPreviewResult,
   PocketBinRequest,
 } from './worker/pocketModels';
 export type { CutoutCarveResult, CutoutUnionResult } from './engine/cutout/cutoutBin';
@@ -108,7 +108,7 @@ export async function generatePocketBinUnion(params: PocketBinParams): Promise<M
  */
 export async function generatePocketBinPreview(
   request: PocketBinRequest,
-): Promise<PocketBinPreviewResult> {
+): Promise<PocketPreviewResult> {
   return getWorker().generatePocketBinPreview(withResolvedBinInsert(request));
 }
 

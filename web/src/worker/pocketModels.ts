@@ -40,7 +40,7 @@ export interface PocketBinRequest extends SlottedBinParams {
  * failure. A superseded preview is not a failure and must never reach the user
  * as one.
  */
-export type PocketBinPreviewResult =
+export type PocketPreviewResult =
   | { outcome: 'carved'; meshes: PartMeshes }
   | { outcome: 'superseded' };
 
@@ -53,7 +53,7 @@ export type PocketBinPreviewResult =
  * same pattern cutoutCarveRecipeKey follows, through the same shared
  * carveRecipeKey so the exclude-edits invariant lives in one place.
  */
-export function pocketBinRecipeKey(request: PocketBinRequest): string {
+export function pocketCarveRecipeKey(request: PocketBinRequest): string {
   const { tools, placements, edits: _edits, ...bin } = request;
   return carveRecipeKey({ bin, tools, placements });
 }

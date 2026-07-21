@@ -137,11 +137,6 @@ export const useCutout = defineStore('cutout', () => {
       return editor !== undefined && !editor.missing && editor.prepared;
     }),
   );
-  /** True when this device is missing the file of at least one model. */
-  const hasMissingModel = computed<boolean>(() =>
-    models.value.some((model) => editorState.value[model.id]?.missing === true),
-  );
-
   /** Clears the tab back to a new, empty cutout bin. */
   function reset(): void {
     models.value = [];
@@ -274,7 +269,6 @@ export const useCutout = defineStore('cutout', () => {
     selectedModel,
     stateOf,
     carvableModels,
-    hasMissingModel,
     reset,
     select,
     addModel,

@@ -3,7 +3,7 @@ import type { ExecutionContext, ManifoldToplevel } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import { loadManifold } from '../helpers/manifold';
 import { loadLabelFont } from '../helpers/font';
-import { pocketBinRecipeKey, type PocketBinRequest } from '../../src/worker/pocketModels';
+import { pocketCarveRecipeKey, type PocketBinRequest } from '../../src/worker/pocketModels';
 import { CavityEditedBodyCache } from '../../src/worker/cavityEditedBodyCache';
 import { generatePocketBin } from '../../src/engine/trace/pocketBin';
 import {
@@ -76,42 +76,42 @@ function request(overrides: Partial<PocketBinRequest> = {}): PocketBinRequest {
 const e1: CavityEdit = { kind: 'remove', points: [{ xMm: -10, yMm: -1.5, zMm: 18 }], radiusMm: 3 };
 const e2: CavityEdit = { kind: 'remove', points: [{ xMm: -8, yMm: 0, zMm: 18 }], radiusMm: 3 };
 
-describe('pocketBinRecipeKey', () => {
+describe('pocketCarveRecipeKey', () => {
   it('is stable when only the edits change, so appending one edit is a memo hit', () => {
     // The edits are excluded from the carve identity by construction: that is
     // the whole reason painting one more stroke onto an unchanged carve reuses
     // the previous body instead of missing on every keystroke.
-    const base = pocketBinRecipeKey(request({ edits: [] }));
-    expect(pocketBinRecipeKey(request({ edits: [e1] }))).toBe(base);
-    expect(pocketBinRecipeKey(request({ edits: [e1, e2] }))).toBe(base);
+    const base = pocketCarveRecipeKey(request({ edits: [] }));
+    expect(pocketCarveRecipeKey(request({ edits: [e1] }))).toBe(base);
+    expect(pocketCarveRecipeKey(request({ edits: [e1, e2] }))).toBe(base);
   });
 
   it('changes with a placement move, a pocket depth, or a draft angle', () => {
-    const base = pocketBinRecipeKey(request());
-    expect(pocketBinRecipeKey(request({ placements: [{ ...centeredL, xMm: -12 }] }))).not.toBe(base);
+    const base = pocketCarveRecipeKey(request());
+    expect(pocketCarveRecipeKey(request({ placements: [{ ...centeredL, xMm: -12 }] }))).not.toBe(base);
     expect(
-      pocketBinRecipeKey(request({ placements: [{ ...centeredL, pocketDepthMm: 8 }] })),
+      pocketCarveRecipeKey(request({ placements: [{ ...centeredL, pocketDepthMm: 8 }] })),
     ).not.toBe(base);
     expect(
-      pocketBinRecipeKey(request({ placements: [{ ...centeredL, draftAngleDeg: 6 }] })),
+      pocketCarveRecipeKey(request({ placements: [{ ...centeredL, draftAngleDeg: 6 }] })),
     ).not.toBe(base);
   });
 
   it('changes with the tool geometry and with the bin envelope', () => {
-    const base = pocketBinRecipeKey(request());
-    expect(pocketBinRecipeKey(request({ tools: [lTool({ offsetMm: 1 })] }))).not.toBe(base);
-    expect(pocketBinRecipeKey(request({ heightUnits: 4 }))).not.toBe(base);
-    expect(pocketBinRecipeKey(request({ gridX: 3 }))).not.toBe(base);
+    const base = pocketCarveRecipeKey(request());
+    expect(pocketCarveRecipeKey(request({ tools: [lTool({ offsetMm: 1 })] }))).not.toBe(base);
+    expect(pocketCarveRecipeKey(request({ heightUnits: 4 }))).not.toBe(base);
+    expect(pocketCarveRecipeKey(request({ gridX: 3 }))).not.toBe(base);
   });
 });
 
-describe('the pocket flow edited-body memo keyed by pocketBinRecipeKey', () => {
+describe('the pocket flow edited-body memo keyed by pocketCarveRecipeKey', () => {
   it('reuses the memoized body when appending one edit, and rebuilds on any other prefix', () => {
     // The pocket flow instantiates its own CavityEditedBodyCache; feeding it the
     // pocket recipe key exercises the same append-reuse contract the cutout flow
     // relies on, but proves the pocket key drives it.
     const cache = new CavityEditedBodyCache();
-    const recipeKey = pocketBinRecipeKey(request());
+    const recipeKey = pocketCarveRecipeKey(request());
     const freshBody = (): ReturnType<typeof m.Manifold.cube> => m.Manifold.cube([40, 40, 20], false);
     let binSolidBuilds = 0;
     const makeBinSolid = (): ReturnType<typeof m.Manifold.cube> => {
@@ -139,7 +139,7 @@ describe('the pocket flow edited-body memo keyed by pocketBinRecipeKey', () => {
     expect(Math.abs(undone.volume() - first.volume())).toBeLessThan(1e-6);
 
     // A placement change gives a different recipe key: the memo misses.
-    const movedKey = pocketBinRecipeKey(request({ placements: [{ ...centeredL, xMm: -12 }] }));
+    const movedKey = pocketCarveRecipeKey(request({ placements: [{ ...centeredL, xMm: -12 }] }));
     const moved = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1, e2], {
       store: cache,
       recipeKey: movedKey,
@@ -160,7 +160,7 @@ describe('the pocket flow edited-body memo keyed by pocketBinRecipeKey', () => {
     // one leaves the other's warm body untouched.
     const cutoutCache = new CavityEditedBodyCache();
     const pocketCache = new CavityEditedBodyCache();
-    const recipeKey = pocketBinRecipeKey(request());
+    const recipeKey = pocketCarveRecipeKey(request());
 
     applyCavityEditsMemoized(m, m.Manifold.cube([40, 40, 20], false), () => m.Manifold.cube([40, 40, 20], false), [e1], {
       store: pocketCache,

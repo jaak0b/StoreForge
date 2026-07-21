@@ -8,7 +8,7 @@ import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
 import {
   generatePocketBinPreview,
-  type PocketBinPreviewResult,
+  type PocketPreviewResult,
 } from '../../workerClient';
 import { cloneEdit } from '../../stores/cavityEditSession';
 import type { CavityPaintBinding } from '../../composables/useCavityPaint';
@@ -185,7 +185,7 @@ const pocketParams = computed<PocketBinParams>(() => {
  * reason the cutout carve carries its model ids: a newer request can have
  * changed the live edit list by the time an older result lands.
  */
-type PocketResultWithMeta = PocketBinPreviewResult & { editCount: number };
+type PocketResultWithMeta = PocketPreviewResult & { editCount: number };
 
 /**
  * Carves the preview through the cancellable pocket-preview call, recording

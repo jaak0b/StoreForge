@@ -54,8 +54,8 @@ import {
 } from './cutoutModels';
 import { CavityEditedBodyCache } from './cavityEditedBodyCache';
 import {
-  pocketBinRecipeKey,
-  type PocketBinPreviewResult,
+  pocketCarveRecipeKey,
+  type PocketPreviewResult,
   type PocketBinRequest,
 } from './pocketModels';
 import { cutoutModelKey, type CutoutBinParams } from '../engine/cutout/cutoutBin';
@@ -291,7 +291,7 @@ const api = {
    */
   async generatePocketBinPreview(
     request: PocketBinRequest,
-  ): Promise<PocketBinPreviewResult> {
+  ): Promise<PocketPreviewResult> {
     // Before the first await, so the predecessor is asked to stop at the
     // earliest moment this request can ask anything at all.
     activePreviewContext?.cancel();
@@ -305,11 +305,11 @@ const api = {
         {
           ...request,
           editedMemo: pocketEdited,
-          editedRecipeKey: pocketBinRecipeKey(request),
+          editedRecipeKey: pocketCarveRecipeKey(request),
         },
         ctx,
       );
-      const result: PocketBinPreviewResult = { outcome: 'carved', meshes };
+      const result: PocketPreviewResult = { outcome: 'carved', meshes };
       return Comlink.transfer(result, partBuffers(meshes));
     } catch (error) {
       if (error instanceof CarveCancelledError) return { outcome: 'superseded' };

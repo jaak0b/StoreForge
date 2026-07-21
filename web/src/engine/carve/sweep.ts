@@ -218,7 +218,8 @@ export function trimSweptCutter(swept: Manifold, reachZ: number): Manifold {
 /**
  * Sweep an already placed cutter straight up and out of the bin, as one call:
  * the sweep step over the derived minimum length, then the trim. The direct,
- * uncached form of what buildCutoutBinBody assembles from the same parts; the
+ * uncached form of what the carved-bin assemblers (buildCutoutBinBody,
+ * buildPocketBinBody) assemble from the same parts; the
  * tests hold the two equal. Takes ownership of `placed`.
  */
 export function sweepCutterUpward(

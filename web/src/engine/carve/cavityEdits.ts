@@ -202,7 +202,7 @@ function editsProducedInvalidSolidMessage(status: string): string {
  * throws: the carve reached the worker and failed specifically because the
  * folded edits themselves are bad (emptied the bin, or left an invalid
  * solid). Callers use this to tell an edit rejection apart from every other
- * carve failure (a missing model file, divider walls on a cutout bin, a bad
+ * carve failure (a missing model file, divider walls on a carved bin, a bad
  * STL), which must not roll an edit back because the edit was not at fault.
  */
 export function isCavityEditRejectionMessage(message: string): boolean {

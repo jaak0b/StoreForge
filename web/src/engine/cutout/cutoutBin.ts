@@ -75,7 +75,7 @@ export const DEFAULT_CUTOUT_SWEEP_ENABLED = true;
  * minutes still takes ten minutes. What the ceiling buys is that the app says
  * what happened and what to do about it, instead of appearing to hang forever.
  */
-export const CLEARANCE_OFFSET_CEILING_MS = 120_000;
+const CLEARANCE_OFFSET_CEILING_MS = 120_000;
 
 /** Where one imported model sits in the bin, in bin-local millimetres. */
 export interface ModelPlacement {

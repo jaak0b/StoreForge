@@ -19,7 +19,7 @@ import { createCavityEditSession } from './cavityEditSession';
  * Community shadow boards use a finger relief around 25 mm across; that
  * comfortably fits a fingertip reaching under a tool.
  */
-export const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
+const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
 
 /**
  * Pocket clearance presets in mm around a traced outline, from a snug fit to
