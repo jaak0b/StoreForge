@@ -530,6 +530,7 @@ function deleteGroup(): void {
             Click a plate that is not queued to add it to the queue again.
           </p>
 
+          <div class="plan-table-scroll">
           <table class="plan-table">
             <thead>
               <tr>
@@ -554,6 +555,7 @@ function deleteGroup(): void {
               </tr>
             </tbody>
           </table>
+          </div>
         </template>
         <div v-else class="fill-preview-empty text-body-2 text-medium-emphasis">
           Enter all four sizes to plan the plates.
@@ -646,6 +648,7 @@ function deleteGroup(): void {
 }
 .fill-layout > * {
   flex: 1 1 100%;
+  min-width: 0;
 }
 @media (min-width: 960px) {
   .fill-layout > * {
@@ -663,6 +666,7 @@ function deleteGroup(): void {
 }
 .edit-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 .edit-actions > * {
@@ -678,6 +682,8 @@ function deleteGroup(): void {
 
 .drawer-fill-preview {
   width: 100%;
+  max-width: 100%;
+  height: auto;
   max-height: 320px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
@@ -764,6 +770,9 @@ function deleteGroup(): void {
   padding: 16px;
 }
 
+.plan-table-scroll {
+  overflow-x: auto;
+}
 .plan-table {
   width: 100%;
   border-collapse: collapse;
