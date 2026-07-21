@@ -209,7 +209,15 @@ export const useBinQueue = defineStore('binQueue', {
       state.storedModelIds === null ? undefined : new Set(state.storedModelIds),
   },
   actions: {
+    /**
+     * Saves the plan to localStorage. Every plan mutation runs through here,
+     * so before serializing it re-derives the cached product fields of every
+     * group-linked row from its group (cheap idempotent array walk); drift
+     * between a row and its group can therefore never be observed, even
+     * mid-session.
+     */
     persist() {
+      resyncLinkedPlateProducts(this.entries, this.groups);
       try {
         localStorage.setItem(
           STORAGE_KEY,
