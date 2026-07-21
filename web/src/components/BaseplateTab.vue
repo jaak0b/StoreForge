@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBaseplateDesigner } from '../stores/baseplateDesigner';
@@ -66,7 +66,7 @@ const livePreview = computed(() => store.unitsX * store.unitsY <= LIVE_PREVIEW_M
  * when the Generate preview button is pressed, so a large plate never queues
  * uncancellable worker runs on every keystroke.
  */
-const requestedParams = ref<BaseplateParams | null>(null);
+const requestedParams = shallowRef<BaseplateParams | null>(null);
 
 watch(
   () => store.params,
