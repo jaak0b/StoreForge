@@ -401,8 +401,8 @@ export const useBinQueue = defineStore('binQueue', {
      * Adds a drawer group and queues one baseplate per planned plate. All or
      * nothing: the group and every plate product are validated first, and the
      * store is left untouched if any is refused, so a rejected plate never
-     * leaves the drawer partially queued. Returns the new group id on success
-     * or the user-worded problem. plannerPlates come from planDrawerFill; each
+     * leaves the drawer partially queued. Returns null on success or the
+     * user-worded problem. plannerPlates come from planDrawerFill; each
      * plate's brim is the planner's own, never recomputed here.
      */
     addDrawerGroup(
@@ -441,7 +441,7 @@ export const useBinQueue = defineStore('binQueue', {
       this.groups.push(group);
       this.entries.push(...entries);
       this.persist();
-      return groupId;
+      return null;
     },
     /**
      * Applies changes to a drawer group. A name or options change is

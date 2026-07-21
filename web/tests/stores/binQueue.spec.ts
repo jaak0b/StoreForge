@@ -72,11 +72,12 @@ describe('binQueue drawer groups', () => {
 
   it('adds a drawer group and queues one linked plate per planned plate', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer');
-    expect(id).not.toBeNull();
+    const problem = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer');
+    expect(problem).toBeNull();
     expect(store.groups).toHaveLength(1);
     expect(store.entries).toHaveLength(2);
-    const group = store.groupById(id!)!;
+    const id = store.groups[0].id;
+    const group = store.groupById(id)!;
     expect(group.payload.plates).toHaveLength(2);
     // Every queued entry links back to a real plate of the group.
     for (const entry of store.entries) {
@@ -101,7 +102,8 @@ describe('binQueue drawer groups', () => {
 
   it('marks a plate done when its batch item is confirmed', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     const firstEntry = store.entries[0];
     const plateId = linkOf(firstEntry.product)!.plateId;
     const batchId = store.createBatch([{ entryId: firstEntry.id, count: 1 }], 'Printer')!;
@@ -113,7 +115,8 @@ describe('binQueue drawer groups', () => {
 
   it('marks every plate of a batch done on confirmAll', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     const batchId = store.createBatch(
       store.entries.map((e) => ({ entryId: e.id, count: 1 })),
       'Printer',
@@ -125,7 +128,8 @@ describe('binQueue drawer groups', () => {
 
   it('returns a failed plate to the queue with its group link intact', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     const firstEntry = store.entries[0];
     const plateId = linkOf(firstEntry.product)!.plateId;
     const batchId = store.createBatch([{ entryId: firstEntry.id, count: 1 }], 'Printer')!;
@@ -140,7 +144,8 @@ describe('binQueue drawer groups', () => {
 
   it('removeGroup removes still-queued linked entries but not batch items', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     const firstEntry = store.entries[0];
     const batchId = store.createBatch([{ entryId: firstEntry.id, count: 1 }], 'Printer')!;
     store.removeGroup(id);
@@ -152,7 +157,8 @@ describe('binQueue drawer groups', () => {
 
   it('re-stamps still-queued plate products on a non-structural options change', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     const newOptions: DrawerPlateOptions = {
       magnets: { diameterMm: 6, heightMm: 2 },
       screwHoles: true,
@@ -174,7 +180,8 @@ describe('binQueue drawer groups', () => {
 
   it('clears progress and re-queues fresh plates on a structural edit', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     // Confirm one plate so there is progress to clear.
     const firstEntry = store.entries[0];
     const batchId = store.createBatch([{ entryId: firstEntry.id, count: 1 }], 'Printer')!;
@@ -199,7 +206,8 @@ describe('binQueue drawer groups', () => {
 
   it('requeues a single planned plate as a fresh linked entry', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     // Batch both plates so the queue is empty and every plate is "planned".
     const batchId = store.createBatch(
       store.entries.map((e) => ({ entryId: e.id, count: 1 })),
@@ -223,7 +231,8 @@ describe('binQueue drawer groups', () => {
 
   it('requeues nothing for a group or plate that does not exist', () => {
     const store = useBinQueue();
-    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
     expect(store.requeueGroupPlate('no-such-group', 'x')).toBeNull();
     expect(store.requeueGroupPlate(id, 'no-such-plate')).toBeNull();
     // Neither call queued anything beyond the original two plates.
