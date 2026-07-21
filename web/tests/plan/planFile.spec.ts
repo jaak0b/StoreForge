@@ -130,7 +130,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     const entries = [entry(), entry({ id: 'b2', notes: 'reprint in PETG' })];
     const batches = [batch()];
     const result = parsePlanFile(serializePlanFile(entries, batches));
-    expect(result).toEqual({ ok: true, plan: { version: 8, entries, batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 9, entries, batches }, warnings: [] });
   });
 
   it('rejects text that is not JSON', () => {
@@ -145,12 +145,12 @@ describe('serializePlanFile / parsePlanFile', () => {
   });
 
   it('rejects an envelope version newer than this build reads', () => {
-    const result = parsePlanFile('{"version":9,"entries":[],"batches":[]}');
+    const result = parsePlanFile('{"version":10,"entries":[],"batches":[]}');
     // The exact string catches the guard being hardcoded instead of derived
     // from the version constant.
     expect(result).toEqual({
       ok: false,
-      error: 'The file has plan version 9, but this app reads versions 1 to 8.',
+      error: 'The file has plan version 10, but this app reads versions 1 to 9.',
     });
   });
 
@@ -215,7 +215,7 @@ describe('serializePlanFile / parsePlanFile', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [entry()], batches: [] },
+      plan: { version: 9, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -254,7 +254,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 9, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -269,7 +269,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [queued, printed] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 9, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -282,7 +282,7 @@ describe('version-1 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 1, entries: [legacy] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [plainBinEntry()], batches: [] },
+      plan: { version: 9, entries: [plainBinEntry()], batches: [] },
       warnings: [],
     });
   });
@@ -305,7 +305,7 @@ describe('version-3 migration', () => {
     const result = parsePlanFile(JSON.stringify({ version: 3, entries: [raw], batches: [] }));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [entry()], batches: [] },
+      plan: { version: 9, entries: [entry()], batches: [] },
       warnings: [],
     });
   });
@@ -322,7 +322,7 @@ describe('version-3 migration', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [], batches: [batch()] },
+      plan: { version: 9, entries: [], batches: [batch()] },
       warnings: [],
     });
   });
@@ -352,7 +352,7 @@ describe('divider walls migration', () => {
     const result = parsePlanFile(serializePlanFile([withWalls], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [withWalls], batches: [] },
+      plan: { version: 9, entries: [withWalls], batches: [] },
       warnings: [],
     });
   });
@@ -495,7 +495,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([imperial, lengthless], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [imperial, lengthless], batches: [] },
+      plan: { version: 9, entries: [imperial, lengthless], batches: [] },
       warnings: [],
     });
   });
@@ -505,7 +505,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [traced], batches: [] },
+      plan: { version: 9, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -527,7 +527,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSnapshots]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [], batches: [withSnapshots] },
+      plan: { version: 9, entries: [], batches: [withSnapshots] },
       warnings: [],
     });
   });
@@ -552,7 +552,7 @@ describe('bin entry kinds in plan files', () => {
     const result = parsePlanFile(serializePlanFile([fused], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [fused], batches: [] },
+      plan: { version: 9, entries: [fused], batches: [] },
       warnings: [],
     });
   });
@@ -636,7 +636,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [traced], batches: [] },
+      plan: { version: 9, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -725,7 +725,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [traced], batches: [] },
+      plan: { version: 9, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -742,7 +742,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [traced], batches: [] },
+      plan: { version: 9, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -859,7 +859,7 @@ describe('trace sources in plan files', () => {
     const result = parsePlanFile(serializePlanFile([], [withSource]));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [], batches: [withSource] },
+      plan: { version: 9, entries: [], batches: [withSource] },
       warnings: [],
     });
   });
@@ -930,7 +930,7 @@ describe('pockets in plan files', () => {
     const result = parsePlanFile(serializePlanFile([traced], []));
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [traced], batches: [] },
+      plan: { version: 9, entries: [traced], batches: [] },
       warnings: [],
     });
   });
@@ -1314,7 +1314,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 8, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 9, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1335,7 +1335,7 @@ describe('divider walls survive a save and reload', () => {
 
       const result = parsePlanFile(serializePlanFile(entries, []));
 
-      expect(result).toEqual({ ok: true, plan: { version: 8, entries, batches: [] }, warnings: [] });
+      expect(result).toEqual({ ok: true, plan: { version: 9, entries, batches: [] }, warnings: [] });
     },
   );
 
@@ -1354,7 +1354,7 @@ describe('divider walls survive a save and reload', () => {
 
     const result = parsePlanFile(serializePlanFile([], batches));
 
-    expect(result).toEqual({ ok: true, plan: { version: 8, entries: [], batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 9, entries: [], batches }, warnings: [] });
   });
 });
 
@@ -1384,6 +1384,7 @@ describe('cutout bins in plan files', () => {
       heightUnits: 6,
       magnetHoles: true,
       models: [cutoutModel()],
+      edits: [],
       ...overrides,
     };
   }
@@ -1422,7 +1423,7 @@ describe('cutout bins in plan files', () => {
 
     const result = parsePlanFile(serializePlanFile(entries, []));
 
-    expect(result).toEqual({ ok: true, plan: { version: 8, entries, batches: [] }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 9, entries, batches: [] }, warnings: [] });
   });
 
   it('round-trips a cutout bin inside a print batch', () => {
@@ -1434,7 +1435,7 @@ describe('cutout bins in plan files', () => {
 
     const result = parsePlanFile(serializePlanFile([], batches));
 
-    expect(result).toEqual({ ok: true, plan: { version: 8, entries: [], batches }, warnings: [] });
+    expect(result).toEqual({ ok: true, plan: { version: 9, entries: [], batches }, warnings: [] });
   });
 
   it('keeps two models in one bin on their own clearances', () => {
@@ -1699,8 +1700,93 @@ describe('a plan written by the previous build', () => {
 
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [stored], batches: [] },
+      plan: { version: 9, entries: [stored], batches: [] },
       warnings: [],
     });
+  });
+});
+
+describe('cavity edits (plan version 9)', () => {
+  function cutoutEntry(edits: unknown): Record<string, unknown> {
+    return {
+      id: 'e1',
+      quantity: 1,
+      createdAt: '2026-07-21T00:00:00.000Z',
+      product: {
+        kind: 'bin',
+        labelSlot: true,
+        bin: {
+          origin: 'cutout',
+          gridX: 2,
+          gridY: 2,
+          heightUnits: 4,
+          magnetHoles: false,
+          models: [],
+          ...(edits === undefined ? {} : { edits }),
+        },
+      },
+    };
+  }
+  function planText(edits: unknown, version = 9): string {
+    return JSON.stringify({ version, entries: [cutoutEntry(edits)], batches: [] });
+  }
+
+  it('round-trips edits through serialize and parse', () => {
+    const edits = [
+      { kind: 'add', points: [{ xMm: 1, yMm: 2, zMm: 3 }], radiusMm: 2 },
+      { kind: 'remove', points: [{ xMm: 0, yMm: 0, zMm: 5 }, { xMm: 4, yMm: 0, zMm: 5 }], radiusMm: 1.5 },
+      { kind: 'flatten', centerMm: { xMm: 5, yMm: 5, zMm: 10 }, radiusMm: 6, planeZMm: 9 },
+    ];
+    const result = parsePlanFile(planText(edits));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = (result.plan.entries[0].product as { bin: { edits: unknown } }).bin;
+    expect(bin.edits).toEqual(edits);
+    const reparsed = parsePlanFile(
+      serializePlanFile(result.plan.entries, result.plan.batches),
+    );
+    expect(reparsed.ok).toBe(true);
+    if (!reparsed.ok) return;
+    expect((reparsed.plan.entries[0].product as { bin: { edits: unknown } }).bin.edits).toEqual(edits);
+  });
+
+  it('loads a version 8 cutout bin with no edits field as an empty edit list', () => {
+    const result = parsePlanFile(planText(undefined, 8));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((result.plan.entries[0].product as { bin: { edits: unknown } }).bin.edits).toEqual([]);
+    expect(result.plan.version).toBe(9);
+  });
+
+  it('rejects an edit with a radius outside 0.2 to 50 mm', () => {
+    const result = parsePlanFile(
+      planText([{ kind: 'add', points: [{ xMm: 0, yMm: 0, zMm: 0 }], radiusMm: 0.1 }]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('brush radius');
+  });
+
+  it('rejects a stroke edit with no points', () => {
+    const result = parsePlanFile(planText([{ kind: 'remove', points: [], radiusMm: 2 }]));
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an edit with a non-finite coordinate', () => {
+    const result = parsePlanFile(
+      planText([{ kind: 'flatten', centerMm: { xMm: 0, yMm: 0, zMm: null }, radiusMm: 2, planeZMm: 1 }]),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('merges an imported entry with edits over an existing one', () => {
+    const a = parsePlanFile(planText([]));
+    const b = parsePlanFile(
+      planText([{ kind: 'add', points: [{ xMm: 1, yMm: 1, zMm: 1 }], radiusMm: 3 }]),
+    );
+    if (!a.ok || !b.ok) throw new Error('setup failed');
+    const merged = mergeEntries(a.plan.entries, b.plan.entries);
+    expect(merged).toHaveLength(1);
+    expect((merged[0].product as { bin: { edits: unknown[] } }).bin.edits).toHaveLength(1);
   });
 });

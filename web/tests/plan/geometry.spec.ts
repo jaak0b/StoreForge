@@ -52,6 +52,7 @@ function cutoutBin(overrides: Partial<CutoutBin> = {}): CutoutBin {
     heightUnits: 6,
     magnetHoles: false,
     models: [cutoutModel()],
+    edits: [],
     ...overrides,
   };
 }

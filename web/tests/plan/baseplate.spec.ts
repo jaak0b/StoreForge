@@ -178,7 +178,7 @@ describe('baseplate and clip validation messages', () => {
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [entry('a1', plainBaseplate())], batches: [] },
+      plan: { version: 9, entries: [entry('a1', plainBaseplate())], batches: [] },
       warnings: [],
     });
   });

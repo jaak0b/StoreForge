@@ -85,7 +85,7 @@ function cutoutBin(...modelSourceIds: string[]): CutoutBin {
   const { walls, origin, ...base } = manualBin();
   void walls;
   void origin;
-  return { ...base, origin: 'cutout', models: modelSourceIds.map(cutoutModel) };
+  return { ...base, origin: 'cutout', models: modelSourceIds.map(cutoutModel), edits: [] };
 }
 
 function manualEntry(id: string): QueueEntry {

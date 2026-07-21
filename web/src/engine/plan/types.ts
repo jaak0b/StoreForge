@@ -200,10 +200,32 @@ export interface CutoutModel {
  * bin tab. Like a traced bin it carries no divider walls: the interior is
  * filled solid for the carve, so walls have nothing to divide.
  */
+/** A point in bin-local mm, the same frame as ModelPlacement. */
+export interface Vec3Mm {
+  xMm: number;
+  yMm: number;
+  zMm: number;
+}
+
+/**
+ * A manual edit applied to a cutout bin's interior after the model carve, in
+ * the order the list holds them. Coordinates are bin-local mm, the same frame
+ * as ModelPlacement.
+ */
+export type CavityEdit =
+  /** Adds material back (fills cavity) along a brush stroke through points. */
+  | { kind: 'add'; points: Vec3Mm[]; radiusMm: number }
+  /** Removes material (carves cavity) along a brush stroke through points. */
+  | { kind: 'remove'; points: Vec3Mm[]; radiusMm: number }
+  /** Flattens the cavity floor to planeZMm within radiusMm of centerMm. */
+  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; planeZMm: number };
+
 export interface CutoutBin extends BinEnvelope {
   origin: 'cutout';
   /** The models carved out of the interior. Empty means an uncarved solid interior. */
   models: CutoutModel[];
+  /** Manual cavity edits, applied in list order after the model carve. */
+  edits: CavityEdit[];
 }
 
 /** A bin body of any origin. Discriminated by origin, naming the tab that owns its interior features. */
@@ -476,13 +498,12 @@ export interface PrintBatch {
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 8, which is version 7 plus the
-   * baseplate and connection clip product kinds. The change is purely
-   * additive: no field of an earlier version changes meaning, so versions 1
-   * to 7 are read exactly as they were before; they simply contain no
-   * baseplate or clip rows.
+   * Envelope format version. Currently 9, which is version 8 plus the cavity
+   * edit list on cutout bins. The change is purely additive: no field of an
+   * earlier version changes meaning, so versions 1 to 8 are read exactly as
+   * they were before; a version 8 file simply contains no edits.
    */
-  version: 8;
+  version: 9;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -490,4 +511,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 8;
+export const PLAN_FILE_VERSION = 9;

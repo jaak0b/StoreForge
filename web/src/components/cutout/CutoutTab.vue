@@ -836,6 +836,7 @@ function designedProduct(): Product {
     heightUnits: designer.heightUnits,
     magnetHoles: designer.magnetHoles,
     models: JSON.parse(JSON.stringify(cutout.models)) as CutoutModel[],
+    edits: [], // Filled by the cavity edit tools task.
   };
   const params = binParams.value;
   if (params.fusedLabel != null) {

@@ -214,6 +214,7 @@ describe('releasing cached solids', () => {
           gridY: 1,
           heightUnits: 3,
           magnetHoles: false,
+          edits: [],
           models: [
             {
               id: 'record-queued',

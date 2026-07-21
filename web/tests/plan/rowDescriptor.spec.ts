@@ -109,6 +109,7 @@ function cutoutBin(modelCount: number, overrides: Partial<CutoutBin> = {}): Cuto
     heightUnits: 4,
     magnetHoles: false,
     models: cutoutModels(modelCount),
+    edits: [],
     ...overrides,
   };
 }
