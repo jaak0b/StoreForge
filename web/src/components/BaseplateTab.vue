@@ -219,7 +219,11 @@ const drawerFillPreviewRects = computed<DrawerFillPreviewRect[]>(() => {
       });
     }
   }
-  return rects;
+  // The plan's Y runs front to back (row 0 at the drawer opening), but the
+  // top-down view shows the back wall at the top, so flip every rectangle's
+  // Y within the drawer depth. The X mapping is unmirrored.
+  const depthMm = drawerDepthMm.value ?? 0;
+  return rects.map((rect) => ({ ...rect, y: depthMm - rect.y - rect.height }));
 });
 
 /** Whether the current plate is small enough to regenerate on every change. */
@@ -506,7 +510,7 @@ function editingTitle(entry: QueueEntry): string {
               <td>{{ drawerFillPlates.length }}</td>
             </tr>
             <tr v-for="plate in drawerFillPlates" :key="`${plate.column}-${plate.row}`">
-              <td>Plate col {{ plate.column }}, row {{ plate.row }}</td>
+              <td>Plate column {{ plate.column }}, row {{ plate.row }}</td>
               <td>
                 {{ plate.unitsX }}×{{ plate.unitsY }} units,
                 {{ drawerFillOuterMm(plate).widthMm.toFixed(1) }}×{{
