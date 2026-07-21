@@ -1,5 +1,6 @@
 import { PITCH } from '../gridfinity/constants';
 import { BASEPLATE_UNITS_MAX, type BaseplateBrim } from './constants';
+import { connectorSlotCentres } from './generator';
 
 /**
  * Pure math turning a drawer's mm size and a printer's build plate mm size
@@ -178,6 +179,38 @@ export function planDrawerFill(input: DrawerFillInput): DrawerFillOutcome {
     }
   }
   return { plates };
+}
+
+/**
+ * Counts the connection clips a planned drawer layout needs, derived from the
+ * exact connector-slot placement rule the generator uses (connectorSlotCentres),
+ * never a separate guess. A clip joins one matching slot pair on an interior
+ * edge where two plates meet: for each pair of horizontally adjacent plates the
+ * shared vertical edge carries connectorSlotCentres(unitsY) slots (plates in one
+ * row share unitsY), and for each pair of vertically adjacent plates the shared
+ * horizontal edge carries connectorSlotCentres(unitsX) slots (plates in one
+ * column share unitsX). Drawer-wall (outer) edges and brimmed edges sit against
+ * no neighbour and so contribute no clips: only interior shared edges are
+ * counted, each exactly once. Returns 0 for a single-plate layout.
+ */
+export function drawerFillClipCount(plates: DrawerFillPlate[]): number {
+  const byPosition = new Map<string, DrawerFillPlate>();
+  for (const plate of plates) byPosition.set(`${plate.column},${plate.row}`, plate);
+  let clips = 0;
+  for (const plate of plates) {
+    // The right neighbour shares this plate's vertical edge; its slots run along
+    // Y over the shared unitsY. Counted from the left plate so each interior
+    // edge is counted once.
+    if (byPosition.has(`${plate.column + 1},${plate.row}`)) {
+      clips += connectorSlotCentres(plate.unitsY).length;
+    }
+    // The back neighbour shares this plate's horizontal edge; its slots run along
+    // X over the shared unitsX. Counted from the front plate.
+    if (byPosition.has(`${plate.column},${plate.row + 1}`)) {
+      clips += connectorSlotCentres(plate.unitsX).length;
+    }
+  }
+  return clips;
 }
 
 /**

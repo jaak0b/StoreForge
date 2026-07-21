@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  drawerFillClipCount,
   drawerFillLayoutRects,
   evenSplit,
   planDrawerFill,
   type DrawerFillPlate,
 } from '../../src/engine/baseplate/drawerFill';
+import { connectorSlotCentres } from '../../src/engine/baseplate/generator';
 import { PITCH } from '../../src/engine/gridfinity/constants';
 import { BASEPLATE_UNITS_MAX } from '../../src/engine/baseplate/constants';
 
@@ -167,6 +169,60 @@ describe('planDrawerFill', () => {
       ...overrides,
     });
     expect('error' in result).toBe(true);
+  });
+});
+
+describe('drawerFillClipCount', () => {
+  /** Plans a drawer and returns its plates, failing the test on a plan error. */
+  function plates(input: {
+    drawerWidthMm: number;
+    drawerDepthMm: number;
+    plateWidthMm: number;
+    plateDepthMm: number;
+  }): DrawerFillPlate[] {
+    const result = planDrawerFill(input);
+    if ('error' in result) throw new Error(result.error);
+    return result.plates;
+  }
+
+  it('needs no clips for a single plate filling the drawer', () => {
+    expect(
+      drawerFillClipCount(
+        plates({ drawerWidthMm: 470, drawerDepthMm: 300, plateWidthMm: 470, plateDepthMm: 300 }),
+      ),
+    ).toBe(0);
+  });
+
+  it('counts one clip per slot on the single shared edge of two side-by-side plates', () => {
+    // 2 columns, 1 row; both plates are 7 cells deep, so the shared vertical
+    // edge carries connectorSlotCentres(7) slots and that many clips.
+    const layout = plates({
+      drawerWidthMm: 470,
+      drawerDepthMm: 300,
+      plateWidthMm: 260,
+      plateDepthMm: 300,
+    });
+    expect(layout).toHaveLength(2);
+    expect(drawerFillClipCount(layout)).toBe(connectorSlotCentres(7).length);
+  });
+
+  it('sums the interior edges of a 2x2 grid and ignores the brimmed outer edges', () => {
+    // Columns split 6+5, rows split 6+5. Vertical interior edges: row 0 (unitsY
+    // 6) and row 1 (unitsY 5). Horizontal interior edges: column 0 (unitsX 6)
+    // and column 1 (unitsX 5). The outer edges carry brim and no clips.
+    const layout = plates({
+      drawerWidthMm: 468,
+      drawerDepthMm: 468,
+      plateWidthMm: 260,
+      plateDepthMm: 260,
+    });
+    expect(layout).toHaveLength(4);
+    const expected =
+      connectorSlotCentres(6).length +
+      connectorSlotCentres(5).length +
+      connectorSlotCentres(6).length +
+      connectorSlotCentres(5).length;
+    expect(drawerFillClipCount(layout)).toBe(expected);
   });
 });
 
