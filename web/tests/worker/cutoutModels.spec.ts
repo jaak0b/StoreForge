@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ManifoldToplevel } from 'manifold-3d';
 import { loadManifold } from '../helpers/manifold';
 import {
+  CavityEditedBodyCache,
   CutoutModelCache,
   CutoutSweptCache,
   importCutoutModel,
@@ -22,8 +23,12 @@ import {
   type PreparedCutoutModel,
   type SweptSolidMemo,
 } from '../../src/engine/cutout/cutoutBin';
+import {
+  applyCavityEdits,
+  applyCavityEditsMemoized,
+} from '../../src/engine/cutout/cavityEdits';
 import { referencedCutoutModelKeySpecs } from '../../src/engine/plan/storedAssets';
-import type { QueueEntry } from '../../src/engine/plan/types';
+import type { CavityEdit, QueueEntry } from '../../src/engine/plan/types';
 
 let m: ManifoldToplevel;
 
@@ -214,6 +219,7 @@ describe('releasing cached solids', () => {
           gridY: 1,
           heightUnits: 3,
           magnetHoles: false,
+          edits: [],
           models: [
             {
               id: 'record-queued',
@@ -735,5 +741,38 @@ describe('a carve through the swept cache', () => {
     rotated.body.delete();
     cache.release([]);
     prepared.delete();
+  });
+});
+
+describe('CavityEditedBodyCache and applyCavityEditsMemoized', () => {
+  it('appending one edit reuses the memoized body; any other prefix rebuilds', async () => {
+    const cache = new CavityEditedBodyCache();
+    const recipeKey = 'recipe';
+    const freshBody = () => m.Manifold.cube([40, 40, 20], false);
+    let binSolidBuilds = 0;
+    const makeBinSolid = () => {
+      binSolidBuilds += 1;
+      return m.Manifold.cube([40, 40, 20], false);
+    };
+    const e1: CavityEdit = { kind: 'remove', points: [{ xMm: 5, yMm: 5, zMm: 18 }], radiusMm: 3 };
+    const e2: CavityEdit = { kind: 'remove', points: [{ xMm: 30, yMm: 30, zMm: 18 }], radiusMm: 3 };
+    const first = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1], {
+      store: cache, recipeKey,
+    });
+    expect(cache.size).toBe(1);
+    const second = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1, e2], {
+      store: cache, recipeKey,
+    });
+    // The appended-edit path never rebuilds e1, so its result equals the full fold.
+    const full = applyCavityEdits(m, freshBody(), makeBinSolid(), [e1, e2]);
+    expect(Math.abs(second.volume() - full.volume())).toBeLessThan(1e-6);
+    // An undo (shorter list) is a full rebuild, not a crash and not a stale hit.
+    const undone = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1], {
+      store: cache, recipeKey,
+    });
+    expect(Math.abs(undone.volume() - first.volume())).toBeLessThan(1e-6);
+    first.delete(); second.delete(); full.delete(); undone.delete();
+    cache.clear();
+    expect(binSolidBuilds).toBeGreaterThan(0);
   });
 });

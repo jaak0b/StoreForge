@@ -25,7 +25,7 @@ function model(overrides: Partial<CutoutModel> = {}): CutoutModel {
 }
 
 function cutoutBin(models: CutoutModel[]): CutoutBin {
-  return { origin: 'cutout', gridX: 2, gridY: 1, heightUnits: 6, magnetHoles: false, models };
+  return { origin: 'cutout', gridX: 2, gridY: 1, heightUnits: 6, magnetHoles: false, models, edits: [] };
 }
 
 describe('missingCutoutModels', () => {
