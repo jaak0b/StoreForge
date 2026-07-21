@@ -395,7 +395,7 @@ function editingTitle(entry: QueueEntry): string {
       </v-alert>
       </template>
 
-      <v-card variant="tonal" class="mt-4" density="compact">
+      <v-card v-if="editingEntry === null" variant="tonal" class="mt-4" density="compact">
         <v-card-item>
           <v-card-title>Connection clips</v-card-title>
         </v-card-item>
