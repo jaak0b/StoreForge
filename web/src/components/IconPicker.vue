@@ -109,6 +109,25 @@ function addCustomIcon(): void {
   model.value = name;
   uploadOpen.value = false;
 }
+
+// Removing a custom icon: a confirm dialog holds the icon being removed. When
+// the removed icon is the one selected here, the selection clears so the
+// designer stops referencing an icon that no longer exists.
+const removeTarget = ref<{ id: string; name: string } | null>(null);
+
+function askRemove(icon: LabelIcon): void {
+  const stored = customIcons.iconByName(icon.name);
+  if (stored === null) return;
+  removeTarget.value = { id: stored.id, name: stored.name };
+}
+
+function confirmRemove(): void {
+  const target = removeTarget.value;
+  if (target === null) return;
+  customIcons.remove(target.id);
+  if (model.value === target.name) model.value = null;
+  removeTarget.value = null;
+}
 </script>
 
 <template>
@@ -131,20 +150,35 @@ function addCustomIcon(): void {
         :key="group[0].category"
       >
         <span class="group-divider" aria-hidden="true" />
-        <v-btn
+        <span
           v-for="icon in group"
           :key="icon.name"
-          variant="outlined"
-          size="small"
-          class="icon-tile"
-          :color="model === icon.name ? 'primary' : undefined"
-          @click="model = icon.name"
+          class="icon-tile-wrap"
+          :class="{ 'icon-tile-wrap--removable': icon.category === 'custom' }"
         >
-          <svg width="24" height="24" :viewBox="icon.viewBox.join(' ')" aria-hidden="true">
-            <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
-          </svg>
-          <v-tooltip activator="parent" location="bottom">{{ icon.name }}</v-tooltip>
-        </v-btn>
+          <v-btn
+            variant="outlined"
+            size="small"
+            class="icon-tile"
+            :color="model === icon.name ? 'primary' : undefined"
+            @click="model = icon.name"
+          >
+            <svg width="24" height="24" :viewBox="icon.viewBox.join(' ')" aria-hidden="true">
+              <path :d="icon.path" fill="currentColor" fill-rule="evenodd" />
+            </svg>
+            <v-tooltip activator="parent" location="bottom">{{ icon.name }}</v-tooltip>
+          </v-btn>
+          <v-btn
+            v-if="icon.category === 'custom'"
+            icon="mdi-close"
+            size="x-small"
+            variant="flat"
+            color="surface-variant"
+            class="icon-remove"
+            :aria-label="`Remove the ${icon.name} icon`"
+            @click.stop="askRemove(icon)"
+          />
+        </span>
       </template>
       <v-btn variant="outlined" size="small" class="icon-tile" @click="openUpload">
         <v-icon icon="mdi-plus" size="18" />
@@ -236,6 +270,21 @@ function addCustomIcon(): void {
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <v-dialog :model-value="removeTarget !== null" max-width="360" @update:model-value="removeTarget = null">
+      <v-card>
+        <v-card-title>Remove this icon</v-card-title>
+        <v-card-text>
+          Remove the {{ removeTarget?.name }} icon from your icons? Any queued bins that
+          still use it will print without an icon on the label.
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="removeTarget = null">Cancel</v-btn>
+          <v-btn color="error" variant="flat" @click="confirmRemove">Remove</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -245,6 +294,28 @@ function addCustomIcon(): void {
   width: 40px;
   height: 40px;
   padding: 0;
+}
+
+.icon-tile-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.icon-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+.icon-tile-wrap--removable:hover .icon-remove,
+.icon-tile-wrap--removable:focus-within .icon-remove {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .group-divider {
