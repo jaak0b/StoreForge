@@ -9,6 +9,7 @@ import { useBinPreview } from '../../composables/useBinPreview';
 import { generatePocketBin } from '../../workerClient';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import {
+  binOf,
   insertOf,
   type BinPockets,
   type Product,
@@ -237,9 +238,7 @@ async function addToQueue(): Promise<void> {
   // the entry's stored trace-source fields carry over.
   const source = await storeTraceSource();
   const editingProductBin =
-    props.editingEntry !== null && props.editingEntry.product.kind !== 'insert'
-      ? props.editingEntry.product.bin
-      : null;
+    props.editingEntry !== null ? binOf(props.editingEntry.product) : null;
   const editingBin =
     editingProductBin !== null && editingProductBin.origin === 'traced'
       ? editingProductBin
@@ -265,14 +264,16 @@ async function addToQueue(): Promise<void> {
     product = { kind: 'bin', bin, labelSlot: params.labelSlot };
   }
   if (props.editingEntry !== null) {
-    queue.update(props.editingEntry.id, {
+    addError.value = queue.update(props.editingEntry.id, {
       product,
       quantity: quantity.value,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
+    if (addError.value !== null) return;
     app.stopEditing();
   } else {
-    queue.add(product, quantity.value, cleanNotes);
+    addError.value = queue.add(product, quantity.value, cleanNotes);
+    if (addError.value !== null) return;
   }
   trace.reset();
   quantity.value = 1;
@@ -284,7 +285,10 @@ function editingTitle(entry: QueueEntry): string {
   const insert = insertOf(entry.product);
   if (insert !== null && insert.content.text !== '') return insert.content.text;
   if (entry.product.kind === 'insert') return `${entry.product.cells}u label insert`;
-  const bin = entry.product.bin;
+  const bin = binOf(entry.product);
+  // Only bin-bearing entries are edited on this tab, so a binless product
+  // (a baseplate or a clip) never arrives here.
+  if (bin === null) return '';
   return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
 }
 

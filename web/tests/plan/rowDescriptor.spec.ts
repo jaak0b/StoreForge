@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeProduct } from '../../src/engine/plan/rowDescriptor';
+import { describeProduct, downloadSubtitles } from '../../src/engine/plan/rowDescriptor';
 import { evenDividerWalls } from '../../src/engine/gridfinity/dividerModel';
 import type {
   BinPockets,
@@ -279,6 +279,77 @@ describe('describeProduct captions', () => {
     expect(
       describeProduct({ kind: 'insert', origin: 'manual', cells: 3, content: content() }).caption,
     ).toBe('insert · 3 cells · manual');
+  });
+
+  it('describes a plain baseplate by kind and two-dimension size alone', () => {
+    const row = describeProduct({
+      kind: 'baseplate',
+      unitsX: 4,
+      unitsY: 2,
+      magnets: null,
+      screwHoles: false,
+      connectable: false,
+    });
+    expect(row.title).toBe('Baseplate');
+    expect(row.caption).toBe('baseplate · 4×2');
+    expect(row.titleLine2).toBe('');
+    expect(row.titlePlaceholder).toBe(false);
+    expect(row.iconName).toBe(null);
+  });
+
+  it('lists the three feature flags of a fully optioned baseplate in the caption', () => {
+    const row = describeProduct({
+      kind: 'baseplate',
+      unitsX: 4,
+      unitsY: 2,
+      magnets: { diameterMm: 6.5, heightMm: 2.4 },
+      screwHoles: true,
+      connectable: true,
+    });
+    expect(row.title).toBe('Baseplate');
+    expect(row.caption).toBe('baseplate · 4×2 · magnets · screw holes · connectable');
+    expect(row.titlePlaceholder).toBe(false);
+    expect(row.iconName).toBe(null);
+  });
+
+  it('shows a clip tolerance token only when the tolerance is non-zero', () => {
+    const nominal = describeProduct({ kind: 'clip', toleranceMm: 0 });
+    expect(nominal.title).toBe('Connection clip');
+    expect(nominal.caption).toBe('connection clip');
+    expect(nominal.titleLine2).toBe('');
+    expect(nominal.titlePlaceholder).toBe(false);
+    expect(nominal.iconName).toBe(null);
+
+    const loosened = describeProduct({ kind: 'clip', toleranceMm: 0.2 });
+    expect(loosened.title).toBe('Connection clip');
+    expect(loosened.caption).toBe('connection clip · tolerance 0.2 mm');
+    expect(loosened.titlePlaceholder).toBe(false);
+    expect(loosened.iconName).toBe(null);
+  });
+
+  it('titles the 3MF download entry with two filaments only for labeled kinds', () => {
+    const labeled = downloadSubtitles({
+      kind: 'binWithInsert',
+      bin: manualBin(),
+      insert: content(),
+    });
+    expect(labeled.threeMfTitle).toBe('3MF, two filaments');
+    expect(labeled.threeMf).toBe('Body and label slots for toolchanger printing.');
+
+    const plate = downloadSubtitles({
+      kind: 'baseplate',
+      unitsX: 2,
+      unitsY: 2,
+      magnets: null,
+      screwHoles: false,
+      connectable: false,
+    });
+    expect(plate.threeMfTitle).toBe('3MF');
+    expect(plate.threeMf).toBe('Single filament; a baseplate has no label.');
+
+    const clipText = downloadSubtitles({ kind: 'clip', toleranceMm: 0 });
+    expect(clipText.threeMfTitle).toBe('3MF');
+    expect(clipText.threeMf).toBe('Single filament; a connection clip has no label.');
   });
 
   it('sizes a screw insert by its cell width alone', () => {

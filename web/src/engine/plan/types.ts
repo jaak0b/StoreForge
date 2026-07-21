@@ -2,6 +2,7 @@ import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trac
 import type { DividerWall } from '../gridfinity/dividerModel';
 import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
+import type { BaseplateMagnets } from '../baseplate/constants';
 
 export type { DividerWall, ModelPlacement, SizeMm };
 
@@ -288,15 +289,57 @@ export interface ScrewInsertProduct {
 export type InsertProduct = ManualInsertProduct | ScrewInsertProduct;
 
 /**
+ * A queue row that orders a Gridfinity baseplate, the tray a bin's feet drop
+ * into. Sized in whole grid units.
+ */
+export interface BaseplateProduct {
+  kind: 'baseplate';
+  /** Cells along X, integer 1 to BASEPLATE_UNITS_MAX. */
+  unitsX: number;
+  /** Cells along Y, integer 1 to BASEPLATE_UNITS_MAX. */
+  unitsY: number;
+  /**
+   * Magnet pocket dimensions, imported from the baseplate module so they
+   * travel with their bounds, or null when the plate has none: a plate
+   * without magnets carries no dimensions at all rather than dead ones.
+   */
+  magnets: BaseplateMagnets | null;
+  screwHoles: boolean;
+  connectable: boolean;
+}
+
+/**
+ * A queue row that orders the printed clip joining two connectable baseplates
+ * edge to edge. The clip's geometry does not depend on any baseplate option:
+ * its own tolerance parameter is the whole of its configurability.
+ */
+export interface ConnectionClipProduct {
+  kind: 'clip';
+  /**
+   * Extra clearance in mm applied per mating face to the clip only, never to
+   * the plate's slot. Valid CLIP_TOLERANCE_MIN to CLIP_TOLERANCE_MAX;
+   * CLIP_TOLERANCE_DEFAULT (0) is the nominal fit. Raise it when the clip
+   * prints too tight to push into the joint.
+   */
+  toleranceMm: number;
+}
+
+/**
  * What one queue row orders: a bin with an empty slot, a bin with its
  * matching insert, or a standalone insert for a bin that already exists.
  * Two orthogonal axes are folded into this single discriminated union: the
  * product kind ('bin' vs 'binWithInsert' vs 'insert') and, independently,
  * the origin tab that designed the bin or sized the insert ('manual',
  * 'screw', 'traced' or 'cutout', carried on Bin.origin for the first two kinds and on
- * the insert product itself for the third).
+ * the insert product itself for the third). A baseplate and a connection clip
+ * carry no bin at all; their kind alone implies their origin tab.
  */
-export type Product = BinProduct | BinWithInsertProduct | InsertProduct;
+export type Product =
+  | BinProduct
+  | BinWithInsertProduct
+  | InsertProduct
+  | BaseplateProduct
+  | ConnectionClipProduct;
 
 /**
  * Returns the insert a product prints, or null when the product has no
@@ -311,6 +354,9 @@ export function insertOf(product: Product): { cells: number; content: LabelConte
       return { cells: product.bin.gridX, content: product.insert };
     case 'insert':
       return { cells: product.cells, content: product.content };
+    case 'baseplate':
+    case 'clip':
+      return null;
     default:
       return assertNever(product);
   }
@@ -323,14 +369,20 @@ export function binOf(product: Product): Bin | null {
     case 'binWithInsert':
       return product.bin;
     case 'insert':
+    case 'baseplate':
+    case 'clip':
       return null;
     default:
       return assertNever(product);
   }
 }
 
-/** The origin tab of a product: the tab that created it and owns its edit. */
-export type ProductOrigin = 'manual' | 'screw' | 'traced' | 'cutout';
+/**
+ * The origin tab of a product: the tab that created it and owns its edit. A
+ * baseplate and a connection clip are both edited on the Baseplate tab, which
+ * the tab mapping collapses.
+ */
+export type ProductOrigin = 'manual' | 'screw' | 'traced' | 'cutout' | 'baseplate' | 'clip';
 
 /**
  * Returns the origin tab of any product, for routing an edit to the tab that
@@ -344,6 +396,10 @@ export function originOf(product: Product): ProductOrigin {
       return product.bin.origin;
     case 'insert':
       return product.origin;
+    case 'baseplate':
+      return 'baseplate';
+    case 'clip':
+      return 'clip';
     default:
       return assertNever(product);
   }
@@ -420,12 +476,13 @@ export interface PrintBatch {
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 7, which is version 6 plus the per-model
-   * sweepEnabled and draftAngleDeg fields on cutout models. The change is
-   * purely additive: no field of an earlier version changes meaning, so
-   * versions 1 to 6 are read exactly as they were before, with the sweep off.
+   * Envelope format version. Currently 8, which is version 7 plus the
+   * baseplate and connection clip product kinds. The change is purely
+   * additive: no field of an earlier version changes meaning, so versions 1
+   * to 7 are read exactly as they were before; they simply contain no
+   * baseplate or clip rows.
    */
-  version: 7;
+  version: 8;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -433,4 +490,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 7;
+export const PLAN_FILE_VERSION = 8;

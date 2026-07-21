@@ -8,6 +8,7 @@ import { useBinQueue } from '../stores/binQueue';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { previewBinParams } from '../engine/plan/geometry';
 import {
+  binOf,
   originOf,
   type LabelContent,
   type Product,
@@ -169,7 +170,9 @@ function productFor(
 
 function productSizeText(product: Product): string {
   if (product.kind === 'insert') return `${product.cells}u insert`;
-  const bin = product.bin;
+  const bin = binOf(product);
+  // This tab only ever composes insert and bin-bearing products.
+  if (bin === null) return '';
   return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
 }
 
@@ -276,7 +279,8 @@ const editingScrew = computed<ScrewSpec | null>(() => {
   if (entry === null) return null;
   const product = entry.product;
   if (product.kind === 'insert') return product.origin === 'screw' ? product.screw : null;
-  return product.bin.origin === 'screw' ? product.bin.screw : null;
+  const bin = binOf(product);
+  return bin !== null && bin.origin === 'screw' ? bin.screw : null;
 });
 
 /**
@@ -299,14 +303,15 @@ watch(
     const entry = queue.entryById(entryId);
     if (entry === null || originOf(entry.product) !== 'screw') return;
     const product = entry.product;
+    const bin = binOf(product);
     const screw =
       product.kind === 'insert'
         ? (product.origin === 'screw' ? product.screw : null)
-        : product.bin.origin === 'screw'
-          ? product.bin.screw
+        : bin !== null && bin.origin === 'screw'
+          ? bin.screw
           : null;
     if (screw === null) return;
-    if (product.kind !== 'insert') heightUnits.value = product.bin.heightUnits;
+    if (bin !== null) heightUnits.value = bin.heightUnits;
     shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
     const patch: Record<string, unknown> = {
       // The tab offers only these two choices, and a stored screw bin without
@@ -315,11 +320,11 @@ watch(
       fused: product.kind === 'binWithInsert' ? product.fused ?? false : false,
       notes: entry.notes ?? '',
     };
-    if (product.kind !== 'insert' && product.bin.origin === 'screw') {
-      patch.magnetHoles = product.bin.magnetHoles;
+    if (bin !== null && bin.origin === 'screw') {
+      patch.magnetHoles = bin.magnetHoles;
       // The loaded entry's walls become the editor's walls, so editing a screw
       // bin that has dividers shows them rather than starting from empty.
-      patch.walls = product.bin.walls.map((wall: DividerWall) => ({ ...wall }));
+      patch.walls = bin.walls.map((wall: DividerWall) => ({ ...wall }));
       patch.selectedWallIndex = null;
     }
     store.$patch(patch);
@@ -374,7 +379,7 @@ const pending = computed<{
 const pendingFootprints = computed<number[]>(() => [
   ...new Set(
     pending.value.batches
-      .map(({ product }) => (product.kind === 'insert' ? null : product.bin.gridX))
+      .map(({ product }) => binOf(product)?.gridX ?? null)
       .filter((cells): cells is number => cells !== null),
   ),
 ]);
@@ -499,25 +504,30 @@ const formValid = computed(() => pending.value.batches.length > 0 && wallProblem
 
 const addedSnackbar = ref(false);
 const addedText = ref('');
+// The queue's refusal of an invalid entry, shown beside the add button.
+const saveError = ref<string | null>(null);
 
 function addToQueue(): void {
   if (!formValid.value) return;
+  saveError.value = null;
   const cleanNotes = store.notes.trim();
   const editing = editingEntry.value;
   if (editing !== null) {
     const { product, quantity } = pending.value.batches[0];
-    queue.update(editing.id, {
+    saveError.value = queue.update(editing.id, {
       product,
       quantity,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
+    if (saveError.value !== null) return;
     addedText.value = `Updated ${productLabelText(product)} in the queue.`;
     addedSnackbar.value = true;
     app.stopEditing();
     return;
   }
   for (const { product, quantity } of pending.value.batches) {
-    queue.add(product, quantity, cleanNotes);
+    saveError.value = queue.add(product, quantity, cleanNotes);
+    if (saveError.value !== null) return;
   }
   const n = pending.value.batches.length;
   addedText.value =
@@ -706,6 +716,9 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       </div>
       <v-alert v-if="wallProblem" type="warning" variant="tonal" density="compact" class="mt-2">
         {{ wallProblem }}
+      </v-alert>
+      <v-alert v-if="saveError" type="error" density="compact" class="mt-2">
+        {{ saveError }}
       </v-alert>
       <v-alert
         v-if="editingEntry !== null"

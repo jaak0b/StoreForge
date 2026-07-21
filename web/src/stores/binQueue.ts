@@ -6,10 +6,12 @@ import type {
   QueueEntryUpdate,
 } from '../engine/plan/types';
 import {
+  isPositiveInteger,
   mergeBatches,
   mergeEntries,
   parsePlanFile,
   serializePlanFile,
+  validateProduct,
 } from '../engine/plan/planFile';
 import {
   confirmBatchItem,
@@ -28,6 +30,18 @@ import { releaseCutoutModels } from '../workerClient';
 import { useCutout } from './cutout';
 
 const STORAGE_KEY = 'storeforge.plan';
+
+/**
+ * Checks a product and quantity with the plan file's own validators before an
+ * interactive queue mutation. Returns null when valid, otherwise the
+ * user-worded message the mutation hands back to the form.
+ */
+function validateQueueMutation(product: Product, quantity: number): string | null {
+  if (!isPositiveInteger(quantity, 1)) {
+    return 'The quantity must be a whole number of at least 1.';
+  }
+  return validateProduct(product, 'This design');
+}
 
 function loadPlan(): { entries: QueueEntry[]; batches: PrintBatch[] } {
   let text: string | null = null;
@@ -159,8 +173,17 @@ export const useBinQueue = defineStore('binQueue', {
     releaseModel(id: string) {
       this.protectedModelIds = this.protectedModelIds.filter((held) => held !== id);
     },
-    /** Adds a new queued entry ordering the given product. Returns its id. */
-    add(product: Product, quantity = 1, notes?: string): string {
+    /**
+     * Adds a new queued entry ordering the given product. Every interactive
+     * add lands here, so this is the single place an invalid product or
+     * quantity is refused before it can be persisted; the file importer's
+     * validator is reused so the queue and the file format cannot disagree.
+     * Returns null on success or the user-worded problem, in which case the
+     * queue is not touched.
+     */
+    add(product: Product, quantity = 1, notes?: string): string | null {
+      const problem = validateQueueMutation(product, quantity);
+      if (problem !== null) return problem;
       const entry: QueueEntry = {
         id: crypto.randomUUID(),
         quantity,
@@ -170,18 +193,23 @@ export const useBinQueue = defineStore('binQueue', {
       if (notes !== undefined && notes !== '') entry.notes = notes;
       this.entries.push(entry);
       this.persist();
-      return entry.id;
+      return null;
     },
     /**
      * Applies partial changes to an existing entry. The product is replaced
      * wholesale when given (the sync-safe way to edit a discriminated union);
-     * id and createdAt never change.
+     * id and createdAt never change. Validates like add and returns null on
+     * success or the user-worded problem, leaving the entry unchanged.
      */
-    update(id: string, changes: QueueEntryUpdate) {
+    update(id: string, changes: QueueEntryUpdate): string | null {
       const index = this.entries.findIndex((e) => e.id === id);
-      if (index === -1) return;
-      this.entries[index] = { ...this.entries[index], ...changes };
+      if (index === -1) return null;
+      const updated = { ...this.entries[index], ...changes };
+      const problem = validateQueueMutation(updated.product, updated.quantity);
+      if (problem !== null) return problem;
+      this.entries[index] = updated;
       this.persist();
+      return null;
     },
     /** Duplicates an entry as a fresh copy. Returns the new id. */
     duplicate(id: string): string | null {

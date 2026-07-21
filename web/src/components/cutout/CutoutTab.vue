@@ -718,6 +718,11 @@ function choiceOf(product: Product): ProductChoice {
       return product.labelSlot ? 'bin' : 'plainBin';
     case 'insert':
       return 'plainBin';
+    case 'baseplate':
+    case 'clip':
+      // Neither ever reaches this tab: their edits route to the Baseplate
+      // tab. Answered like the insert case rather than left to a fallthrough.
+      return 'plainBin';
     default:
       return assertNever(product);
   }
@@ -842,6 +847,9 @@ function designedProduct(): Product {
   return { kind: 'bin', bin, labelSlot: params.labelSlot };
 }
 
+// The queue's refusal of an invalid design, shown beside the save button.
+const saveError = ref<string | null>(null);
+
 function saveEntry(): void {
   if (submitBlocker.value !== null) return;
   const cleanNotes = notes.value.trim();
@@ -850,14 +858,16 @@ function saveEntry(): void {
   // The model files are already in IndexedDB and still held, so the queue
   // mutation below (which sweeps) finds every one of them referenced.
   if (entry !== null) {
-    queue.update(entry.id, {
+    saveError.value = queue.update(entry.id, {
       product,
       quantity: quantity.value,
       notes: cleanNotes === '' ? undefined : cleanNotes,
     });
+    if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    queue.add(product, quantity.value, cleanNotes);
+    saveError.value = queue.add(product, quantity.value, cleanNotes);
+    if (saveError.value !== null) return;
   }
   resetTab();
 }
@@ -993,6 +1003,9 @@ function editingTitle(entry: QueueEntry): string {
       <div v-if="submitBlocker" class="text-caption text-medium-emphasis mt-2">
         {{ submitBlocker }}
       </div>
+      <v-alert v-if="saveError" type="error" density="compact" class="mt-2">
+        {{ saveError }}
+      </v-alert>
       <v-alert
         v-if="editingEntry !== null"
         type="info"

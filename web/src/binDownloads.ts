@@ -1,4 +1,6 @@
 import {
+  generateBaseplate,
+  generateConnectionClip,
   generateCutoutBin,
   generateCutoutBinUnion,
   generateInsert,
@@ -10,6 +12,7 @@ import {
 } from './workerClient';
 import { meshToStlBlob } from './engine/gridfinity/stlExport';
 import { binOuterSizeMm } from './engine/gridfinity/constants';
+import { baseplateSpanMm, clipFootprintMm } from './engine/baseplate/generator';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
 import type { MeshData, PartMeshes } from './engine/gridfinity/types';
 import { assertNever, type BinPockets, type CutoutModel, type Product } from './engine/plan/types';
@@ -83,6 +86,12 @@ async function generatePartMeshes(
           return assertNever(interior);
       }
     }
+    // A baseplate and a clip are single solids with no second-filament part,
+    // so the label mesh is null and the 3MF writer emits them single-filament.
+    case 'baseplate':
+      return generateBaseplate(part.baseplate).then((body) => ({ body, label: null }));
+    case 'clip':
+      return generateConnectionClip(part.clip).then((body) => ({ body, label: null }));
     default:
       return assertNever(part);
   }
@@ -115,13 +124,22 @@ async function generatePartUnion(
           return assertNever(interior);
       }
     }
+    // The same generators the two-mesh path calls: a baseplate and a clip are
+    // one mesh, so there is no separate union worker method to disagree with.
+    case 'baseplate':
+      return generateBaseplate(part.baseplate);
+    case 'clip':
+      return generateConnectionClip(part.clip);
     default:
       return assertNever(part);
   }
 }
 
-/** The part's plate footprint in millimetres. */
-function partFootprint(part: PrintablePart): { widthMm: number; depthMm: number } {
+/**
+ * The part's plate footprint in millimetres. Exported for tests: the batch
+ * arranger lays plates out by this, so it must agree with the generator.
+ */
+export function partFootprint(part: PrintablePart): { widthMm: number; depthMm: number } {
   switch (part.part) {
     case 'insert':
       return { widthMm: insertLengthMm(part.insert.cells), depthMm: INSERT_DEPTH };
@@ -132,6 +150,16 @@ function partFootprint(part: PrintablePart): { widthMm: number; depthMm: number 
         widthMm: binOuterSizeMm(part.bin.gridX),
         depthMm: binOuterSizeMm(part.bin.gridY),
       };
+    // Derived by the geometry module's own span functions, never recomputed
+    // here: a locally derived outer size could silently overlap plates in a
+    // batch export.
+    case 'baseplate':
+      return {
+        widthMm: baseplateSpanMm(part.baseplate.unitsX),
+        depthMm: baseplateSpanMm(part.baseplate.unitsY),
+      };
+    case 'clip':
+      return clipFootprintMm(part.clip);
     default:
       return assertNever(part);
   }
@@ -162,6 +190,12 @@ function partName(part: PrintablePart): string {
       const size = `${part.bin.gridX}x${part.bin.gridY}x${part.bin.heightUnits}`;
       return part.labelText !== undefined ? `${part.labelText} (${size})` : size;
     }
+    case 'baseplate':
+      return `Baseplate ${part.baseplate.unitsX}x${part.baseplate.unitsY}`;
+    case 'clip':
+      return part.clip.toleranceMm !== 0
+        ? `Connection clip, ${part.clip.toleranceMm} mm tolerance`
+        : 'Connection clip';
     default:
       return assertNever(part);
   }
@@ -170,9 +204,11 @@ function partName(part: PrintablePart): string {
 /**
  * File name stem of a single-product download. Every bin-bearing product is
  * named by its grid size whatever the bin's origin, so a cutout bin downloads
- * under the same convention a manual or traced one does.
+ * under the same convention a manual or traced one does. The clip _tol
+ * suffix keeps genuinely different clips from downloading over each other.
+ * Exported for tests.
  */
-function fileStem(product: Product): string {
+export function fileStem(product: Product): string {
   switch (product.kind) {
     case 'insert':
       return `gridfinity_label_insert_${product.cells}u`;
@@ -180,6 +216,14 @@ function fileStem(product: Product): string {
     case 'binWithInsert': {
       const bin = product.bin;
       return `gridfinity_bin_${bin.gridX}x${bin.gridY}x${bin.heightUnits}`;
+    }
+    case 'baseplate':
+      return `gridfinity_baseplate_${product.unitsX}x${product.unitsY}`;
+    case 'clip': {
+      // The decimal point becomes p so the stem stays a single dotless token.
+      const tol =
+        product.toleranceMm !== 0 ? `_tol${String(product.toleranceMm).replace('.', 'p')}` : '';
+      return `gridfinity_connection_clip${tol}`;
     }
     default:
       return assertNever(product);
