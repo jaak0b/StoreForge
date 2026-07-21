@@ -10,6 +10,7 @@ import type { PartMeshes } from '../engine/gridfinity/types';
 import type { BaseplateParams } from '../engine/baseplate/constants';
 import {
   BASEPLATE_UNITS_MAX,
+  type BaseplateBrim,
   CLIP_TOLERANCE_DEFAULT,
   CLIP_TOLERANCE_MAX,
   CLIP_TOLERANCE_MIN,
@@ -26,6 +27,7 @@ import { validateProduct } from '../engine/plan/planFile';
 import { PITCH } from '../engine/gridfinity/constants';
 import type { BaseplateProduct } from '../engine/plan/types';
 import BinViewport from './BinViewport.vue';
+import MoreOptions from './MoreOptions.vue';
 
 /**
  * The Baseplate tab of the add-bin card: the baseplate designer form with a
@@ -54,6 +56,10 @@ const LIVE_PREVIEW_MAX_CELLS = 25;
 
 const quantity = ref(1);
 const widthField = ref<{ focus: () => void } | null>(null);
+
+// The single-plate form's More options disclosure; collapsed by default and
+// component-local, unlike the bin tabs' shared store-persisted open state.
+const moreOptionsOpen = ref(false);
 
 // The connection clip's two fields. Component-local because neither is part
 // of any baseplate design and neither needs to survive a tab switch.
@@ -105,6 +111,60 @@ const drawerFillError = computed<string | null>(() => {
 /** One planned plate's outer size in mm, for the readout and the SVG preview. */
 function drawerFillOuterMm(plate: DrawerFillPlate): { widthMm: number; depthMm: number } {
   return baseplateOuterMm({ unitsX: plate.unitsX, unitsY: plate.unitsY, brim: plate.brim });
+}
+
+/** Whether two brims match on all four sides, for the readout's grouping. */
+function sameBrim(a: BaseplateBrim, b: BaseplateBrim): boolean {
+  return (
+    a.leftMm === b.leftMm &&
+    a.rightMm === b.rightMm &&
+    a.frontMm === b.frontMm &&
+    a.backMm === b.backMm
+  );
+}
+
+/** One readout row: a run of identical planned plates and how many there are. */
+interface DrawerFillGroup {
+  count: number;
+  plate: DrawerFillPlate;
+}
+
+/**
+ * The planned plates grouped for the readout: plates with the same unit
+ * counts and the same brim on all four sides collapse into one row with a
+ * count. Presentation only; the plates queued are still the planner's own,
+ * one product per plate.
+ */
+const drawerFillGroups = computed<DrawerFillGroup[]>(() => {
+  const groups: DrawerFillGroup[] = [];
+  for (const plate of drawerFillPlates.value) {
+    const match = groups.find(
+      (group) =>
+        group.plate.unitsX === plate.unitsX &&
+        group.plate.unitsY === plate.unitsY &&
+        sameBrim(group.plate.brim, plate.brim),
+    );
+    if (match !== undefined) match.count += 1;
+    else groups.push({ count: 1, plate });
+  }
+  return groups;
+});
+
+/**
+ * One readout row's value: unit counts, outer mm (from baseplateOuterMm, the
+ * single outer-size source) and the brimmed sides by name, omitting sides
+ * with no brim; a plate with no brim at all gets no brim clause.
+ */
+function describeDrawerFillPlate(plate: DrawerFillPlate): string {
+  const outer = drawerFillOuterMm(plate);
+  const sides: string[] = [];
+  if (plate.brim.leftMm > 0) sides.push(`left ${plate.brim.leftMm.toFixed(1)} mm`);
+  if (plate.brim.rightMm > 0) sides.push(`right ${plate.brim.rightMm.toFixed(1)} mm`);
+  if (plate.brim.frontMm > 0) sides.push(`front ${plate.brim.frontMm.toFixed(1)} mm`);
+  if (plate.brim.backMm > 0) sides.push(`back ${plate.brim.backMm.toFixed(1)} mm`);
+  const brimClause = sides.length > 0 ? `, brim ${sides.join(', ')}` : '';
+  const outerMm = `${outer.widthMm.toFixed(1)}x${outer.depthMm.toFixed(1)} mm outer`;
+  return `${plate.unitsX}x${plate.unitsY} units, ${outerMm}${brimClause}`;
 }
 
 const drawerFillQueueError = ref<string | null>(null);
@@ -525,18 +585,9 @@ function editingTitle(entry: QueueEntry): string {
               <td>Plate count</td>
               <td>{{ drawerFillPlates.length }}</td>
             </tr>
-            <tr v-for="plate in drawerFillPlates" :key="`${plate.column}-${plate.row}`">
-              <td>Plate column {{ plate.column }}, row {{ plate.row }}</td>
-              <td>
-                {{ plate.unitsX }}×{{ plate.unitsY }} units,
-                {{ drawerFillOuterMm(plate).widthMm.toFixed(1) }}×{{
-                  drawerFillOuterMm(plate).depthMm.toFixed(1)
-                }}
-                mm outer, brim L{{ plate.brim.leftMm.toFixed(1) }} R{{
-                  plate.brim.rightMm.toFixed(1)
-                }}
-                F{{ plate.brim.frontMm.toFixed(1) }} B{{ plate.brim.backMm.toFixed(1) }}
-              </td>
+            <tr v-for="(group, index) in drawerFillGroups" :key="index">
+              <td>{{ group.count }} x plate</td>
+              <td>{{ describeDrawerFillPlate(group.plate) }}</td>
             </tr>
           </tbody>
         </table>
@@ -662,19 +713,63 @@ function editingTitle(entry: QueueEntry): string {
       />
 
       <template v-if="sizeMode === 'single' || editingEntry !== null">
-      <div class="d-flex ga-2 mt-4">
-        <v-text-field
-          v-model.number="quantity"
-          type="number"
-          min="1"
-          step="1"
-          label="Quantity"
-          density="comfortable"
-          hide-details
-          style="max-width: 140px"
-        />
-        <v-textarea v-model="store.notes" label="Notes" rows="2" auto-grow density="comfortable" hide-details />
-      </div>
+      <MoreOptions
+        v-model:open="moreOptionsOpen"
+        per-bin-fields
+        hide-bin-fields
+        :quantity="quantity"
+        @update:quantity="quantity = $event"
+      >
+        <template #fields>
+          <v-text-field
+            v-model.number="store.brimLeftMm"
+            type="number"
+            min="0"
+            step="0.1"
+            label="Brim left (mm)"
+            density="comfortable"
+            hide-details
+          />
+          <v-text-field
+            v-model.number="store.brimRightMm"
+            type="number"
+            min="0"
+            step="0.1"
+            label="Brim right (mm)"
+            density="comfortable"
+            hide-details
+          />
+          <v-text-field
+            v-model.number="store.brimFrontMm"
+            type="number"
+            min="0"
+            step="0.1"
+            label="Brim front (mm)"
+            density="comfortable"
+            hide-details
+          />
+          <v-text-field
+            v-model.number="store.brimBackMm"
+            type="number"
+            min="0"
+            step="0.1"
+            label="Brim back (mm)"
+            density="comfortable"
+            hide-details
+          />
+        </template>
+        <template #after>
+          <v-textarea
+            v-model="store.notes"
+            label="Notes"
+            rows="2"
+            auto-grow
+            density="comfortable"
+            hide-details
+            class="mt-3"
+          />
+        </template>
+      </MoreOptions>
 
       <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">
         {{ errorMessage }}

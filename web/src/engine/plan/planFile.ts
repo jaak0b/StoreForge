@@ -821,10 +821,16 @@ function validateBrim(raw: unknown, subject: string): string | null {
     return `${subject}: brim must be an object`;
   }
   const brim = raw as Record<string, unknown>;
-  for (const side of ['leftMm', 'rightMm', 'frontMm', 'backMm'] as const) {
-    const value = brim[side];
+  const sides = [
+    ['leftMm', 'left'],
+    ['rightMm', 'right'],
+    ['frontMm', 'front'],
+    ['backMm', 'back'],
+  ] as const;
+  for (const [key, name] of sides) {
+    const value = brim[key];
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value >= PITCH) {
-      return `${subject}: brim ${side} must be a number from 0 up to (not including) ${PITCH}`;
+      return `${subject}: the brim's ${name} side must be a number of millimeters from 0 up to (not including) ${PITCH}`;
     }
   }
   return null;

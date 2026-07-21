@@ -147,15 +147,15 @@ describe('baseplate brim round trip and validation', () => {
     [{ brim: 5 }, 'entry a1: brim must be an object'],
     [
       { brim: { leftMm: -1, rightMm: 0, frontMm: 0, backMm: 0 } },
-      `entry a1: brim leftMm must be a number from 0 up to (not including) ${42}`,
+      `entry a1: the brim's left side must be a number of millimeters from 0 up to (not including) ${42}`,
     ],
     [
       { brim: { leftMm: 42, rightMm: 0, frontMm: 0, backMm: 0 } },
-      `entry a1: brim leftMm must be a number from 0 up to (not including) ${42}`,
+      `entry a1: the brim's left side must be a number of millimeters from 0 up to (not including) ${42}`,
     ],
     [
       { brim: { leftMm: 0, rightMm: 'x', frontMm: 0, backMm: 0 } },
-      `entry a1: brim rightMm must be a number from 0 up to (not including) ${42}`,
+      `entry a1: the brim's right side must be a number of millimeters from 0 up to (not including) ${42}`,
     ],
   ])('rejects a brimmed baseplate with %j', (overrides, message) => {
     const bad = entry('a1', { ...brimmedBaseplate(), ...overrides } as unknown as Product);

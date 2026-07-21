@@ -37,8 +37,8 @@ describe('baseplateDesigner store', () => {
   });
 
   it('round-trips a brimmed product through loadProduct and the product getter verbatim', () => {
-    // A queue edit of a drawer-fill plate loads here; the form has no brim
-    // controls, so the brim must survive the load-save round trip untouched.
+    // A queue edit of a drawer-fill plate loads its planned brim into the
+    // four editable side fields; saving unedited must emit it unchanged.
     const store = useBaseplateDesigner();
     const brim = { leftMm: 4, rightMm: 0, frontMm: 0, backMm: 6.5 };
     store.loadProduct({
@@ -51,8 +51,30 @@ describe('baseplateDesigner store', () => {
       brim,
     });
     expect(store.product.brim).toEqual(brim);
-    // The stored brim is a copy, detached from the loaded product object.
+    // The emitted brim is built from the side fields, detached from the
+    // loaded product object.
     expect(store.brim).not.toBe(brim);
+  });
+
+  it('emits the edited brim sides, with empty fields counting as 0', () => {
+    const store = useBaseplateDesigner();
+    store.brimLeftMm = 4.5;
+    store.brimBackMm = '' as unknown as number; // a cleared number field
+    expect(store.product.brim).toEqual({ leftMm: 4.5, rightMm: 0, frontMm: 0, backMm: 0 });
+  });
+
+  it('collapses an all-zero brim to an absent one, so plain plates carry no brim field', () => {
+    const store = useBaseplateDesigner();
+    store.brimLeftMm = 3;
+    expect(store.product.brim).toBeDefined();
+    store.brimLeftMm = 0;
+    expect(store.product.brim).toBeUndefined();
+  });
+
+  it('rejects an out-of-range brim side through the plan file validator', () => {
+    const store = useBaseplateDesigner();
+    store.brimRightMm = 42;
+    expect(validateProduct(store.product, 'This design')).not.toBeNull();
   });
 
   it('emits no brim on a fresh design and clears a loaded brim on reset', () => {
