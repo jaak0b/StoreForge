@@ -112,7 +112,7 @@ describe('confirmBatchItem', () => {
     ).batch!;
 
   it('a partial confirmation decrements the item count', () => {
-    const updated = confirmBatchItem(batch(), 'item1', 2);
+    const updated = confirmBatchItem(batch(), 'item1', 2).batch;
     expect(updated!.items.map((i) => [i.id, i.count])).toEqual([
       ['item1', 1],
       ['item2', 2],
@@ -120,17 +120,17 @@ describe('confirmBatchItem', () => {
   });
 
   it('a full confirmation removes the item', () => {
-    const updated = confirmBatchItem(batch(), 'item1', 3);
+    const updated = confirmBatchItem(batch(), 'item1', 3).batch;
     expect(updated!.items.map((i) => i.id)).toEqual(['item2']);
   });
 
   it('confirming the last remaining item empties the batch to null', () => {
-    const oneLeft = confirmBatchItem(batch(), 'item1', 3)!;
-    expect(confirmBatchItem(oneLeft, 'item2', 2)).toBeNull();
+    const oneLeft = confirmBatchItem(batch(), 'item1', 3).batch!;
+    expect(confirmBatchItem(oneLeft, 'item2', 2).batch).toBeNull();
   });
 
   it('clamps an amount above the item count', () => {
-    const updated = confirmBatchItem(batch(), 'item1', 99);
+    const updated = confirmBatchItem(batch(), 'item1', 99).batch;
     expect(updated!.items.map((i) => i.id)).toEqual(['item2']);
   });
 });

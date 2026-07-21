@@ -267,13 +267,13 @@ export interface GroupDescriptor {
   counts: { done: number; printing: number; queued: number; planned: number; total: number };
 }
 
-/** Whether a product is the baseplate of the given plate in the given group. */
+/** Whether a product is a linked baseplate that stands for the given plate in the given group. */
 function isPlateProduct(product: Product, groupId: string, plateId: string): boolean {
   return (
     product.kind === 'baseplate' &&
     product.group !== undefined &&
     product.group.groupId === groupId &&
-    product.group.plateId === plateId
+    product.group.plateIds.includes(plateId)
   );
 }
 

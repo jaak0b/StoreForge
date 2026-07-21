@@ -45,8 +45,8 @@ function drawerGroup(overrides: Partial<Group> = {}): Group {
   };
 }
 
-/** A baseplate product linked to a group's plate, as a plate is queued or batched. */
-function linkedPlateProduct(groupId: string, plateId: string): BaseplateProduct {
+/** A baseplate product linked to a group's plates, as they are queued or batched. */
+function linkedPlateProduct(groupId: string, ...plateIds: string[]): BaseplateProduct {
   return {
     kind: 'baseplate',
     unitsX: 3,
@@ -55,7 +55,7 @@ function linkedPlateProduct(groupId: string, plateId: string): BaseplateProduct 
     screwHoles: false,
     connectable: false,
     brim: { leftMm: 4, rightMm: 0, frontMm: 0, backMm: 6 },
-    group: { groupId, plateId },
+    group: { groupId, plateIds },
   };
 }
 
@@ -184,8 +184,20 @@ describe('repairGroupLinks', () => {
     expect((batch.items[0].product as BaseplateProduct).group).toBeUndefined();
     expect((batch.items[1].product as BaseplateProduct).group).toEqual({
       groupId: 'g1',
-      plateId: 'p1',
+      plateIds: ['p1'],
     });
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('drops only the unresolvable plate ids and reduces the quantity to match', () => {
+    // A merged entry carries two plate ids; one no longer resolves, so it is
+    // trimmed to the surviving id and the quantity follows.
+    const merged = entry('e1', linkedPlateProduct('g1', 'p1', 'ghost'));
+    merged.quantity = 2;
+    const warnings: string[] = [];
+    repairGroupLinks([merged], [], [drawerGroup()], warnings);
+    expect((merged.product as BaseplateProduct).group).toEqual({ groupId: 'g1', plateIds: ['p1'] });
+    expect(merged.quantity).toBe(1);
     expect(warnings).toHaveLength(1);
   });
 });
@@ -209,7 +221,7 @@ describe('plan file v10 groups', () => {
     expect(result.plan.groups).toEqual([group]);
     expect((result.plan.entries[0].product as BaseplateProduct).group).toEqual({
       groupId: 'g1',
-      plateId: 'p2',
+      plateIds: ['p2'],
     });
   });
 

@@ -22,6 +22,7 @@ import {
   validateProduct,
 } from '../engine/plan/planFile';
 import { planDrawerFill, type DrawerFillPlate } from '../engine/baseplate/drawerFill';
+import type { BaseplateBrim } from '../engine/baseplate/constants';
 import {
   confirmBatchItem,
   createBatch,
@@ -52,27 +53,78 @@ function validateQueueMutation(product: Product, quantity: number): string | nul
   return validateProduct(product, 'This design');
 }
 
+/** Whether two plate brims are equal on all four sides. */
+function brimEqual(a: BaseplateBrim, b: BaseplateBrim): boolean {
+  return (
+    a.leftMm === b.leftMm &&
+    a.rightMm === b.rightMm &&
+    a.frontMm === b.frontMm &&
+    a.backMm === b.backMm
+  );
+}
+
 /**
- * Builds the BaseplateProduct one drawer plate is queued as: the group's
- * shared options for the full cells, the plate's own planned brim, and the
- * backlink to its group. The single place a plate becomes a product, so the
- * initial queueing and a later options re-stamp agree.
+ * The stable spec key of a drawer plate: its cell size and brim. Plates that
+ * share a key are interchangeable (the group's shared options are the same for
+ * all), so they merge into one queue row. Options are not part of the key
+ * because they are group-wide.
  */
-function baseplateProductForPlate(
-  plate: DrawerPlate,
+function plateSpecKey(plate: Pick<DrawerPlate, 'unitsX' | 'unitsY' | 'brim'>): string {
+  const b = plate.brim;
+  return `${plate.unitsX}x${plate.unitsY}:${b.leftMm},${b.rightMm},${b.frontMm},${b.backMm}`;
+}
+
+/**
+ * Builds the BaseplateProduct that stands for a set of interchangeable drawer
+ * plates: the group's shared options for the full cells, the shared brim and
+ * cell size (the plates all share a spec), and the backlink carrying every
+ * plate's id. The single place plates become a product, so the initial
+ * queueing, a later options re-stamp and a requeue agree. plates is non-empty
+ * and every plate shares plateSpecKey.
+ */
+function baseplateProductForPlates(
+  plates: DrawerPlate[],
   options: DrawerPlateOptions,
   groupId: string,
 ): BaseplateProduct {
+  const spec = plates[0];
   return {
     kind: 'baseplate',
-    unitsX: plate.unitsX,
-    unitsY: plate.unitsY,
+    unitsX: spec.unitsX,
+    unitsY: spec.unitsY,
     magnets: options.magnets,
     screwHoles: options.screwHoles,
     connectable: options.connectable,
-    brim: plate.brim,
-    group: { groupId, plateId: plate.id },
+    brim: spec.brim,
+    group: { groupId, plateIds: plates.map((plate) => plate.id) },
   };
+}
+
+/**
+ * Builds one queue entry per distinct plate spec: identical plates collapse to
+ * a single row whose quantity is how many of them there are and whose link
+ * carries all their ids. Insertion order follows the plates' order, so the
+ * first plate of each spec fixes that spec's row position.
+ */
+function linkedEntriesForPlates(
+  plates: DrawerPlate[],
+  options: DrawerPlateOptions,
+  groupId: string,
+  now: string,
+): QueueEntry[] {
+  const bySpec = new Map<string, DrawerPlate[]>();
+  for (const plate of plates) {
+    const key = plateSpecKey(plate);
+    const bucket = bySpec.get(key);
+    if (bucket === undefined) bySpec.set(key, [plate]);
+    else bucket.push(plate);
+  }
+  return [...bySpec.values()].map((specPlates) => ({
+    id: crypto.randomUUID(),
+    quantity: specPlates.length,
+    createdAt: now,
+    product: baseplateProductForPlates(specPlates, options, groupId),
+  }));
 }
 
 /** Whether two drawer-fill inputs differ on any of their four mm fields. */
@@ -264,19 +316,43 @@ export const useBinQueue = defineStore('binQueue', {
       const index = this.entries.findIndex((e) => e.id === id);
       if (index === -1) return null;
       const updated = { ...this.entries[index], ...changes };
+      // A linked drawer-plate row's quantity is bound to its plate set: lowering
+      // it trims the trailing plate ids (those plates become planned again, and
+      // can be re-queued from the drawer view); raising it past the linked plate
+      // count is refused, since a new slot has to come from the drawer, not from
+      // an arbitrary quantity bump.
+      if (updated.product.kind === 'baseplate' && updated.product.group !== undefined) {
+        const link = updated.product.group;
+        if (updated.quantity > link.plateIds.length) {
+          return 'This is a drawer plate row, so its quantity is set by the drawer plan. Open the drawer to queue more of its plates.';
+        }
+        if (updated.quantity < link.plateIds.length) {
+          updated.product = {
+            ...updated.product,
+            group: { groupId: link.groupId, plateIds: link.plateIds.slice(0, updated.quantity) },
+          };
+        }
+      }
       const problem = validateQueueMutation(updated.product, updated.quantity);
       if (problem !== null) return problem;
       this.entries[index] = updated;
       this.persist();
       return null;
     },
-    /** Duplicates an entry as a fresh copy. Returns the new id. */
+    /**
+     * Duplicates an entry as a fresh copy. A drawer-linked plate row duplicates
+     * to an UNLINKED standalone baseplate: a duplicate has no slot in the
+     * drawer plan, so it keeps the plate's geometry but drops the group link
+     * (and with it the plateIds bookkeeping). Returns the new id.
+     */
     duplicate(id: string): string | null {
       const source = this.entryById(id);
       if (source === null) return null;
+      const product = JSON.parse(JSON.stringify(source.product)) as Product;
+      if (product.kind === 'baseplate' && product.group !== undefined) delete product.group;
       const copy: QueueEntry = {
         ...source,
-        product: JSON.parse(JSON.stringify(source.product)) as Product,
+        product,
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
       };
@@ -317,39 +393,41 @@ export const useBinQueue = defineStore('binQueue', {
     confirmBatchItem(batchId: string, itemId: string, amount: number) {
       const batch = this.batchById(batchId);
       if (batch === null) return;
-      const item = batch.items.find((i) => i.id === itemId);
-      const updated = confirmBatchItem(batch, itemId, amount);
-      this.batches = updated === null
+      const result = confirmBatchItem(batch, itemId, amount);
+      this.batches = result.batch === null
         ? this.batches.filter((b) => b.id !== batchId)
-        : this.batches.map((b) => (b.id === batchId ? updated : b));
-      // A confirmed plate that belongs to a drawer group counts toward that
-      // group's progress; the helper is a no-op for any other product.
-      if (item !== undefined) this.markGroupPlateDone(item.product);
+        : this.batches.map((b) => (b.id === batchId ? result.batch! : b));
+      // The confirmed plates of a drawer group count toward its progress; done
+      // is null for any other product.
+      if (result.done !== null) this.markGroupPlatesDone(result.done.groupId, result.done.plateIds);
       this.persist();
     },
     /** Confirms every item of a batch as fully printed; the batch disappears. */
     confirmAll(batchId: string) {
       const batch = this.batchById(batchId);
       if (batch !== null) {
-        for (const item of batch.items) this.markGroupPlateDone(item.product);
+        for (const item of batch.items) {
+          if (item.product.kind === 'baseplate' && item.product.group !== undefined) {
+            this.markGroupPlatesDone(item.product.group.groupId, item.product.group.plateIds);
+          }
+        }
       }
       this.batches = this.batches.filter((b) => b.id !== batchId);
       this.persist();
     },
     /**
-     * Records that a confirmed baseplate plate belongs to a drawer group and
-     * has printed, by adding its plate id to the group's done list. Idempotent
-     * and a no-op for any product that is not a group-linked baseplate, or when
-     * the group or plate no longer exists.
+     * Records that the given plates of a drawer group have printed, by adding
+     * their ids to the group's done list. Idempotent, and skips any id that is
+     * not one of the group's plates or when the group no longer exists.
      */
-    markGroupPlateDone(product: Product) {
-      if (product.kind !== 'baseplate' || product.group === undefined) return;
-      const group = this.groupById(product.group.groupId);
+    markGroupPlatesDone(groupId: string, plateIds: string[]) {
+      const group = this.groupById(groupId);
       if (group === null) return;
-      const { plateId } = product.group;
-      if (!group.payload.plates.some((plate) => plate.id === plateId)) return;
-      if (!group.payload.donePlateIds.includes(plateId)) {
-        group.payload.donePlateIds.push(plateId);
+      const valid = new Set(group.payload.plates.map((plate) => plate.id));
+      for (const plateId of plateIds) {
+        if (valid.has(plateId) && !group.payload.donePlateIds.includes(plateId)) {
+          group.payload.donePlateIds.push(plateId);
+        }
       }
     },
     /**
@@ -428,12 +506,7 @@ export const useBinQueue = defineStore('binQueue', {
       };
       const groupProblem = validateGroup(group, `group ${groupId}`);
       if (groupProblem !== null) return groupProblem;
-      const entries: QueueEntry[] = plates.map((plate) => ({
-        id: crypto.randomUUID(),
-        quantity: 1,
-        createdAt: new Date().toISOString(),
-        product: baseplateProductForPlate(plate, options, groupId),
-      }));
+      const entries = linkedEntriesForPlates(plates, options, groupId, new Date().toISOString());
       for (const entry of entries) {
         const problem = validateProduct(entry.product, 'A planned plate');
         if (problem !== null) return problem;
@@ -481,12 +554,7 @@ export const useBinQueue = defineStore('binQueue', {
           column: plate.column,
           row: plate.row,
         }));
-        const newEntries: QueueEntry[] = newPlates.map((plate) => ({
-          id: crypto.randomUUID(),
-          quantity: 1,
-          createdAt: new Date().toISOString(),
-          product: baseplateProductForPlate(plate, options, id),
-        }));
+        const newEntries = linkedEntriesForPlates(newPlates, options, id, new Date().toISOString());
         for (const entry of newEntries) {
           const problem = validateProduct(entry.product, 'A planned plate');
           if (problem !== null) return problem;
@@ -512,10 +580,14 @@ export const useBinQueue = defineStore('binQueue', {
         const restamped: { entry: QueueEntry; product: BaseplateProduct }[] = [];
         for (const entry of this.entries) {
           if (entry.product.kind !== 'baseplate' || entry.product.group?.groupId !== id) continue;
-          const plateId = entry.product.group.plateId;
-          const plate = payload.plates.find((pl) => pl.id === plateId);
-          if (plate === undefined) continue;
-          const product = baseplateProductForPlate(plate, options, id);
+          // Re-stamp the shared options only: the plate set (group.plateIds),
+          // the cell size and the brim stay exactly as they were.
+          const product: BaseplateProduct = {
+            ...entry.product,
+            magnets: options.magnets,
+            screwHoles: options.screwHoles,
+            connectable: options.connectable,
+          };
           const problem = validateProduct(product, 'A planned plate');
           if (problem !== null) return problem;
           restamped.push({ entry, product });
@@ -528,14 +600,16 @@ export const useBinQueue = defineStore('binQueue', {
       return null;
     },
     /**
-     * Re-queues a single plate of a drawer group: builds its linked
-     * BaseplateProduct from the group's stored options and the plate's own
-     * planned brim (through baseplateProductForPlate, the same mapping
-     * addDrawerGroup uses), validates it, and adds one queue entry. Use it to
+     * Re-queues a single planned plate of a drawer group. When a queued row
+     * already carries an interchangeable plate (same group, same cell size and
+     * brim), the plate merges into it (its id is appended and the row's quantity
+     * grows); otherwise a fresh one-plate row is added. Both paths build the
+     * product from the group's stored options and the plate's own brim, so the
+     * queue never grows a second row for a spec it already lists. Use it to
      * order a plate the group planned but that has no queue row or batch item
-     * anymore (a planned plate, or one that printed and was confirmed).
-     * Returns null on success, or the user-worded problem with nothing queued;
-     * null too when the group or plate no longer exists.
+     * anymore (a planned plate, or one that printed and was confirmed). Returns
+     * null on success, or the user-worded problem with nothing queued; null too
+     * when the group or plate no longer exists, or the plate is already queued.
      */
     requeueGroupPlate(groupId: string, plateId: string): string | null {
       const group = this.groupById(groupId);
@@ -543,7 +617,33 @@ export const useBinQueue = defineStore('binQueue', {
       if (group.payload.kind !== 'drawer') return null;
       const plate = group.payload.plates.find((p) => p.id === plateId);
       if (plate === undefined) return null;
-      const product = baseplateProductForPlate(plate, group.payload.options, groupId);
+      const options = group.payload.options;
+      // A plate already carried by some queued row must not be queued twice.
+      const alreadyQueued = this.entries.some(
+        (entry) =>
+          entry.product.kind === 'baseplate' &&
+          entry.product.group?.groupId === groupId &&
+          entry.product.group.plateIds.includes(plateId),
+      );
+      if (alreadyQueued) return null;
+      // Merge into a matching queued row when one exists, keeping quantity in
+      // step with the plate set.
+      const match = this.entries.find(
+        (entry) =>
+          entry.product.kind === 'baseplate' &&
+          entry.product.group?.groupId === groupId &&
+          entry.product.unitsX === plate.unitsX &&
+          entry.product.unitsY === plate.unitsY &&
+          brimEqual(entry.product.brim ?? plate.brim, plate.brim),
+      );
+      if (match !== undefined && match.product.kind === 'baseplate' && match.product.group) {
+        const plateIds = [...match.product.group.plateIds, plateId];
+        match.product = { ...match.product, group: { groupId, plateIds } };
+        match.quantity = plateIds.length;
+        this.persist();
+        return null;
+      }
+      const product = baseplateProductForPlates([plate], options, groupId);
       const problem = validateProduct(product, 'A planned plate');
       if (problem !== null) return problem;
       this.entries.push({

@@ -889,10 +889,11 @@ function validateBaseplate(raw: Record<string, unknown>, subject: string): strin
 
 /**
  * Validates a baseplate product's optional group backlink: absent (a plain
- * plate) or an object whose groupId and plateId are both non-empty strings.
- * Only the shape is checked here, never whether the ids resolve: a dangling
- * link is repaired at the plan level (parsePlanFile), after every group and
- * product has been picked, following the screw-bin repair precedent.
+ * plate) or an object whose groupId is a non-empty string and whose plateIds
+ * is a non-empty array of unique non-empty strings. Only the shape is checked
+ * here, never whether the ids resolve: a dangling link is repaired at the plan
+ * level (parsePlanFile), after every group and product has been picked,
+ * following the screw-bin repair precedent.
  */
 function validateGroupLink(raw: unknown, subject: string): string | null {
   if (raw === undefined) return null;
@@ -903,8 +904,18 @@ function validateGroupLink(raw: unknown, subject: string): string | null {
   if (typeof link.groupId !== 'string' || link.groupId.length === 0) {
     return `${subject}: the group link's groupId must be text that is not empty`;
   }
-  if (typeof link.plateId !== 'string' || link.plateId.length === 0) {
-    return `${subject}: the group link's plateId must be text that is not empty`;
+  if (!Array.isArray(link.plateIds) || link.plateIds.length === 0) {
+    return `${subject}: the group link's plateIds must be a list with at least one plate id`;
+  }
+  const seen = new Set<string>();
+  for (const plateId of link.plateIds) {
+    if (typeof plateId !== 'string' || plateId.length === 0) {
+      return `${subject}: each group link plate id must be text that is not empty`;
+    }
+    if (seen.has(plateId)) {
+      return `${subject}: the group link plate id ${plateId} appears twice`;
+    }
+    seen.add(plateId);
   }
   return null;
 }
@@ -934,7 +945,10 @@ function pickBaseplate(raw: Record<string, unknown>): BaseplateProduct {
   };
   if (raw.group !== undefined) {
     const link = raw.group as Record<string, unknown>;
-    product.group = { groupId: link.groupId as string, plateId: link.plateId as string };
+    product.group = {
+      groupId: link.groupId as string,
+      plateIds: [...(link.plateIds as string[])],
+    };
   }
   return product;
 }
@@ -1758,34 +1772,47 @@ export function parsePlanFile(text: string): PlanParseResult {
   return { ok: true, plan: { version: PLAN_FILE_VERSION, entries, batches, groups }, warnings };
 }
 
-/** Every baseplate product across the queue entries and batch items, for link repair. */
-function baseplateProductsOf(
-  entries: QueueEntry[],
-  batches: PrintBatch[],
-): { product: BaseplateProduct; subject: string }[] {
-  const found: { product: BaseplateProduct; subject: string }[] = [];
-  for (const entry of entries) {
-    if (entry.product.kind === 'baseplate') {
-      found.push({ product: entry.product, subject: `Entry ${entry.id}` });
-    }
+/**
+ * Repairs a baseplate product's group link against the plan's groups, per plate
+ * id: unresolvable ids (their group is gone, or the id is no longer one of the
+ * group's plates) are dropped from plateIds, and the link is removed entirely
+ * when none resolve. setQuantity keeps the row's quantity in step with the
+ * trimmed plate set, upholding the linked-entry invariant that quantity equals
+ * plateIds.length. Mutates the product in place and appends a user-worded
+ * warning. A dangling link is repaired, never rejected: the plate is still a
+ * perfectly good baseplate.
+ */
+function repairBaseplateLink(
+  product: BaseplateProduct,
+  setQuantity: (quantity: number) => void,
+  platesByGroup: Map<string, Set<string>>,
+  subject: string,
+  warnings: string[],
+): void {
+  const link = product.group;
+  if (link === undefined) return;
+  const plateIds = platesByGroup.get(link.groupId);
+  const kept = plateIds === undefined ? [] : link.plateIds.filter((id) => plateIds.has(id));
+  if (kept.length === link.plateIds.length) return;
+  if (kept.length === 0) {
+    delete product.group;
+    warnings.push(
+      `${subject} was linked to a drawer group that is no longer in the plan; the link was removed and the plate kept as a standalone baseplate.`,
+    );
+    return;
   }
-  for (const batch of batches) {
-    for (const item of batch.items) {
-      if (item.product.kind === 'baseplate') {
-        found.push({ product: item.product, subject: `Batch ${batch.id} item ${item.id}` });
-      }
-    }
-  }
-  return found;
+  product.group = { groupId: link.groupId, plateIds: kept };
+  setQuantity(kept.length);
+  warnings.push(
+    `${subject} was linked to ${link.plateIds.length - kept.length} drawer plates that are no longer in the plan; those links were removed and the quantity reduced to ${kept.length}.`,
+  );
 }
 
 /**
- * Strips a baseplate product's group link when it resolves to no group or to
- * no plate within that group, leaving the plate as a valid standalone plate
- * and appending a user-worded warning. Mutates the products in place. Runs
- * after every array is picked on load, and again after an import merge, since
- * a merge can drop the group an imported plate pointed at. A dangling link is
- * repaired, never rejected: the plate is still a perfectly good baseplate.
+ * Repairs every baseplate group link across the queue entries and batch items.
+ * Runs after every array is picked on load, and again after an import merge,
+ * since a merge can drop a group an imported plate pointed at. A queue entry's
+ * quantity and a batch item's count are the plate-set sizes kept in step.
  */
 export function repairGroupLinks(
   entries: QueueEntry[],
@@ -1796,15 +1823,32 @@ export function repairGroupLinks(
   const platesByGroup = new Map<string, Set<string>>(
     groups.map((group) => [group.id, new Set(group.payload.plates.map((plate) => plate.id))]),
   );
-  for (const { product, subject } of baseplateProductsOf(entries, batches)) {
-    const link = product.group;
-    if (link === undefined) continue;
-    const plateIds = platesByGroup.get(link.groupId);
-    if (plateIds === undefined || !plateIds.has(link.plateId)) {
-      delete product.group;
-      warnings.push(
-        `${subject} was linked to a drawer group that is no longer in the plan; the link was removed and the plate kept as a standalone baseplate.`,
+  for (const entry of entries) {
+    if (entry.product.kind === 'baseplate') {
+      repairBaseplateLink(
+        entry.product,
+        (quantity) => {
+          entry.quantity = quantity;
+        },
+        platesByGroup,
+        `Entry ${entry.id}`,
+        warnings,
       );
+    }
+  }
+  for (const batch of batches) {
+    for (const item of batch.items) {
+      if (item.product.kind === 'baseplate') {
+        repairBaseplateLink(
+          item.product,
+          (count) => {
+            item.count = count;
+          },
+          platesByGroup,
+          `Batch ${batch.id} item ${item.id}`,
+          warnings,
+        );
+      }
     }
   }
 }

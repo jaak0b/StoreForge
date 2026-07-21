@@ -52,8 +52,8 @@ function plannerPlates(): DrawerFillPlate[] {
   ];
 }
 
-/** A queue entry's baseplate group link, or null when it is not a linked plate. */
-function linkOf(product: unknown): { groupId: string; plateId: string } | undefined {
+/** A queue entry's baseplate group link, or undefined when it is not a linked plate. */
+function linkOf(product: unknown): { groupId: string; plateIds: string[] } | undefined {
   const p = product as BaseplateProduct;
   return p.kind === 'baseplate' ? p.group : undefined;
 }
@@ -83,7 +83,11 @@ describe('binQueue drawer groups', () => {
     for (const entry of store.entries) {
       const link = linkOf(entry.product);
       expect(link?.groupId).toBe(id);
-      expect(group.payload.plates.some((p) => p.id === link?.plateId)).toBe(true);
+      // The row's quantity equals its plate set, and every id resolves to a plate.
+      expect(entry.quantity).toBe(link?.plateIds.length);
+      expect(
+        (link?.plateIds ?? []).every((pid) => group.payload.plates.some((p) => p.id === pid)),
+      ).toBe(true);
     }
   });
 
@@ -105,7 +109,7 @@ describe('binQueue drawer groups', () => {
     expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
     const id = store.groups[0].id;
     const firstEntry = store.entries[0];
-    const plateId = linkOf(firstEntry.product)!.plateId;
+    const plateId = linkOf(firstEntry.product)!.plateIds[0];
     const batchId = store.createBatch([{ entryId: firstEntry.id, count: 1 }], 'Printer')!;
     const batch = store.batchById(batchId)!;
     store.confirmBatchItem(batchId, batch.items[0].id, 1);
@@ -131,13 +135,13 @@ describe('binQueue drawer groups', () => {
     expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
     const id = store.groups[0].id;
     const firstEntry = store.entries[0];
-    const plateId = linkOf(firstEntry.product)!.plateId;
+    const plateId = linkOf(firstEntry.product)!.plateIds[0];
     const batchId = store.createBatch([{ entryId: firstEntry.id, count: 1 }], 'Printer')!;
     const batch = store.batchById(batchId)!;
     store.failBatchItem(batchId, batch.items[0].id);
-    const requeued = store.entries.find((e) => linkOf(e.product)?.plateId === plateId);
+    const requeued = store.entries.find((e) => linkOf(e.product)?.plateIds.includes(plateId));
     expect(requeued).toBeDefined();
-    expect(linkOf(requeued!.product)).toEqual({ groupId: id, plateId });
+    expect(linkOf(requeued!.product)).toEqual({ groupId: id, plateIds: [plateId] });
     // The plate is not marked done: a failed print did not print it.
     expect(store.groupProgress(id)).toEqual({ done: 0, total: 2 });
   });
@@ -198,9 +202,7 @@ describe('binQueue drawer groups', () => {
     expect(store.groupProgress(id)!.done).toBe(0);
     const newPlateIds = store.groups[0].payload.plates.map((p) => p.id);
     for (const pid of newPlateIds) expect(oldPlateIds.has(pid)).toBe(false);
-    const queuedPlateIds = store.entries
-      .map((e) => linkOf(e.product)?.plateId)
-      .filter((x): x is string => x !== undefined);
+    const queuedPlateIds = store.entries.flatMap((e) => linkOf(e.product)?.plateIds ?? []);
     expect(new Set(queuedPlateIds)).toEqual(new Set(newPlateIds));
   });
 
@@ -222,7 +224,7 @@ describe('binQueue drawer groups', () => {
     expect(store.entries).toHaveLength(1);
     const product = store.entries[0].product as BaseplateProduct;
     expect(product.kind).toBe('baseplate');
-    expect(product.group).toEqual({ groupId: id, plateId: plate.id });
+    expect(product.group).toEqual({ groupId: id, plateIds: [plate.id] });
     // The re-queued product inherits the group's stored options and the plate's
     // own brim.
     expect(product.brim).toEqual(plate.brim);
@@ -237,5 +239,85 @@ describe('binQueue drawer groups', () => {
     expect(store.requeueGroupPlate(id, 'no-such-plate')).toBeNull();
     // Neither call queued anything beyond the original two plates.
     expect(store.entries).toHaveLength(2);
+  });
+
+  it('merges identical plates into one row with a quantity', () => {
+    const store = useBinQueue();
+    // Four plates, two of each of two specs: two distinct rows, quantity two each.
+    const brimA = { leftMm: 4, rightMm: 0, frontMm: 0, backMm: 0 };
+    const brimB = { leftMm: 0, rightMm: 4, frontMm: 0, backMm: 0 };
+    const plates: DrawerFillPlate[] = [
+      { unitsX: 3, unitsY: 2, brim: brimA, column: 0, row: 0 },
+      { unitsX: 3, unitsY: 2, brim: brimA, column: 1, row: 0 },
+      { unitsX: 3, unitsY: 2, brim: brimB, column: 2, row: 0 },
+      { unitsX: 3, unitsY: 2, brim: brimB, column: 3, row: 0 },
+    ];
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Wide drawer')).toBeNull();
+    expect(store.groups[0].payload.plates).toHaveLength(4);
+    expect(store.entries).toHaveLength(2);
+    for (const entry of store.entries) {
+      expect(entry.quantity).toBe(2);
+      expect(linkOf(entry.product)!.plateIds).toHaveLength(2);
+    }
+  });
+
+  it('lowering a linked row quantity trims its plate set', () => {
+    const store = useBinQueue();
+    const brim = { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 };
+    const plates: DrawerFillPlate[] = [
+      { unitsX: 2, unitsY: 2, brim, column: 0, row: 0 },
+      { unitsX: 2, unitsY: 2, brim, column: 1, row: 0 },
+    ];
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer')).toBeNull();
+    const entry = store.entries[0];
+    expect(entry.quantity).toBe(2);
+    expect(store.update(entry.id, { quantity: 1 })).toBeNull();
+    expect(store.entries[0].quantity).toBe(1);
+    expect(linkOf(store.entries[0].product)!.plateIds).toHaveLength(1);
+  });
+
+  it('refuses to raise a linked row quantity beyond its planned plates', () => {
+    const store = useBinQueue();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const entry = store.entries[0];
+    expect(entry.quantity).toBe(1);
+    const problem = store.update(entry.id, { quantity: 2 });
+    expect(problem).not.toBeNull();
+    expect(store.entries[0].quantity).toBe(1);
+  });
+
+  it('duplicating a linked row produces an unlinked standalone plate', () => {
+    const store = useBinQueue();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const source = store.entries[0];
+    const newId = store.duplicate(source.id)!;
+    const copy = store.entries.find((e) => e.id === newId)!;
+    expect(copy.product.kind).toBe('baseplate');
+    expect(linkOf(copy.product)).toBeUndefined();
+  });
+
+  it('requeue merges into a matching queued row instead of adding a second', () => {
+    const store = useBinQueue();
+    const brim = { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 };
+    const plates: DrawerFillPlate[] = [
+      { unitsX: 2, unitsY: 2, brim, column: 0, row: 0 },
+      { unitsX: 2, unitsY: 2, brim, column: 1, row: 0 },
+    ];
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer')).toBeNull();
+    // One merged row of quantity two; batch one plate away so it becomes planned.
+    const entry = store.entries[0];
+    const batchId = store.createBatch([{ entryId: entry.id, count: 1 }], 'Printer')!;
+    store.confirmAll(batchId);
+    // The remaining row carries one plate; the group has one planned plate.
+    const remaining = store.entries[0];
+    expect(linkOf(remaining.product)!.plateIds).toHaveLength(1);
+    const queuedId = linkOf(remaining.product)!.plateIds[0];
+    const id = store.groups[0].id;
+    const plannedPlate = store.groups[0].payload.plates.find((p) => p.id !== queuedId)!;
+    expect(store.requeueGroupPlate(id, plannedPlate.id)).toBeNull();
+    // Still one row, now back to quantity two.
+    expect(store.entries).toHaveLength(1);
+    expect(store.entries[0].quantity).toBe(2);
+    expect(linkOf(store.entries[0].product)!.plateIds).toContain(plannedPlate.id);
   });
 });

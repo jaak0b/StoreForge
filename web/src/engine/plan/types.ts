@@ -317,14 +317,20 @@ export interface BaseplateProduct {
   brim?: BaseplateBrim;
   /**
    * Backlink to the drawer group this plate belongs to, or absent for a plain
-   * standalone plate. Both halves are always present together: groupId names
-   * the Group and plateId names the DrawerPlate within it. Kept on the product
-   * (not the queue entry) so a batch item's snapshot carries the link too,
-   * letting confirmBatchItem mark the plate done from a batched row. A dangling
-   * link (its group or plate no longer resolves) is repaired away on load, so
-   * consumers may treat a present link as resolvable.
+   * standalone plate. groupId names the Group; plateIds names the DrawerPlates
+   * within it that this one queue entry stands for. Identical plates (same
+   * units, brim and options) are interchangeable, so they merge into a single
+   * entry whose quantity always equals plateIds.length; the invariant is
+   * enforced everywhere the quantity or the plate set changes (queue edits,
+   * batching, confirm and fail). plateIds is non-empty and its ids are unique
+   * and all resolve to plates of the group. Kept on the product (not the queue
+   * entry) so a batch item's snapshot carries the link too, letting
+   * confirmBatchItem mark exactly its plates done from a batched row. A dangling
+   * link is repaired on load per plate id (unresolvable ids are dropped, the
+   * link removed entirely when none remain), so consumers may treat a present
+   * link as fully resolvable.
    */
-  group?: { groupId: string; plateId: string };
+  group?: { groupId: string; plateIds: string[] };
 }
 
 /**

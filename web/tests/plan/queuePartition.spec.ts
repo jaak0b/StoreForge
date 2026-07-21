@@ -17,7 +17,7 @@ function plateProduct(groupId: string, plateId: string): Product {
     screwHoles: false,
     connectable: false,
     brim: { ...BRIM },
-    group: { groupId, plateId },
+    group: { groupId, plateIds: [plateId] },
   };
 }
 
