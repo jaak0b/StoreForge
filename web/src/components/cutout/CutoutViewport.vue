@@ -558,12 +558,31 @@ function releaseStuckDrag(): void {
   }
 }
 
+/**
+ * Abandons the paint stroke in progress WITHOUT committing it: the sampled
+ * points and their ghost preview meshes are discarded and the orbit camera is
+ * handed back. The one place a stroke is torn down without emitting it, shared
+ * so the recovery paths cannot drift from each other. It runs both when a
+ * pointercancel or lostpointercapture ends a drag with no pointerup (a browser
+ * gesture takeover, which would otherwise leave the stroke active and the
+ * camera disabled for good) and when the tool is switched mid-stroke.
+ */
+function abortStroke(ctx: ThreeSceneContext): void {
+  if (!strokeActive) return;
+  strokeActive = false;
+  strokePoints = [];
+  clearStrokeGhosts(ctx);
+  ctx.controls.enabled = true;
+}
+
 let onPointerUp: ((event: PointerEvent) => void) | null = null;
 let onPointerMove: ((event: PointerEvent) => void) | null = null;
 let onPointerDownPaintHandler: ((event: PointerEvent) => void) | null = null;
 let onPointerUpPaintHandler: ((event: PointerEvent) => void) | null = null;
+let onPointerCancelRecovery: ((event: PointerEvent) => void) | null = null;
 let onKeyDown: ((event: KeyboardEvent) => void) | null = null;
 let onKeyUp: ((event: KeyboardEvent) => void) | null = null;
+let onWindowBlur: (() => void) | null = null;
 
 function wireGizmo(
   ctx: ThreeSceneContext,
@@ -601,12 +620,14 @@ function hidePaintCursor(): void {
 }
 
 /**
- * Raycasts against the carved bin only (never the ghosts), returning the hit
- * point in bin-local mm. Also fills `paintLocalNormal` with the clicked
- * surface's outward unit normal, transformed from the hit face's own local
- * space into modelRoot/bin-local space by its normal matrix. Returns the same
- * scratch vector on every call; the caller must consume it (and the normal)
- * before the next raycast.
+ * Raycasts against the carved bin body only (never the ghosts, and never the
+ * label), returning the hit point in bin-local mm. Cavity edits apply to the
+ * body alone, so a click that only meets the label geometry is a no-op rather
+ * than a confusing edit against a surface no carve touches. Also fills
+ * `paintLocalNormal` with the clicked surface's outward unit normal,
+ * transformed from the hit face's own local space into modelRoot/bin-local
+ * space by its normal matrix. Returns the same scratch vector on every call;
+ * the caller must consume it (and the normal) before the next raycast.
  */
 function raycastPaintHit(ctx: ThreeSceneContext, event: PointerEvent): THREE.Vector3 | null {
   const rect = ctx.canvas.getBoundingClientRect();
@@ -618,7 +639,6 @@ function raycastPaintHit(ctx: ThreeSceneContext, event: PointerEvent): THREE.Vec
   raycaster.setFromCamera(pointerNdc, ctx.camera);
   const targets: THREE.Mesh[] = [];
   if (binMesh) targets.push(binMesh);
-  if (binLabelMesh) targets.push(binLabelMesh);
   if (targets.length === 0) return null;
   const hits = raycaster.intersectObjects(targets, false);
   if (hits.length === 0) return null;
@@ -901,6 +921,17 @@ function onKeyUpGlobal(event: KeyboardEvent): void {
   if (!isEditableTarget(event.target)) event.preventDefault();
 }
 
+/**
+ * Losing the window (Alt+Tab, a click into another app) never delivers the Tab
+ * keyup, so the held state is cleared here instead, restoring every ghost's
+ * visibility exactly as the keyup would.
+ */
+function onWindowBlurGlobal(): void {
+  if (!tabHeld.value) return;
+  tabHeld.value = false;
+  applyGhostVisibility();
+}
+
 const container = ref<HTMLDivElement | null>(null);
 
 const { context } = useThreeScene(container, {
@@ -926,17 +957,29 @@ const { context } = useThreeScene(container, {
     onPointerMove = (event: PointerEvent) => onPointerMovePaint(ctx, event);
     onPointerDownPaintHandler = (event: PointerEvent) => onPointerDownPaint(ctx, event);
     onPointerUpPaintHandler = (event: PointerEvent) => onPointerUpPaint(ctx, event);
+    // One recovery path for both an interrupted gizmo drag and an interrupted
+    // paint stroke: the same pointercancel/lostpointercapture that leaves a
+    // gizmo drag stuck also leaves a stroke stuck, so both are released here.
+    onPointerCancelRecovery = () => {
+      releaseStuckDrag();
+      abortStroke(ctx);
+    };
     onKeyDown = (event: KeyboardEvent) => onKeyDownGlobal(event);
     onKeyUp = (event: KeyboardEvent) => onKeyUpGlobal(event);
+    // Alt+Tab away loses the Tab keyup, so the blur that comes with it is what
+    // clears the held state; without it the ghosts would stay hidden until Tab
+    // was pressed and released again.
+    onWindowBlur = () => onWindowBlurGlobal();
     ctx.canvas.addEventListener('pointerdown', onPointerDown);
     ctx.canvas.addEventListener('pointerup', onPointerUp);
-    ctx.canvas.addEventListener('pointercancel', releaseStuckDrag);
-    ctx.canvas.addEventListener('lostpointercapture', releaseStuckDrag);
+    ctx.canvas.addEventListener('pointercancel', onPointerCancelRecovery);
+    ctx.canvas.addEventListener('lostpointercapture', onPointerCancelRecovery);
     ctx.canvas.addEventListener('pointermove', onPointerMove);
     ctx.canvas.addEventListener('pointerdown', onPointerDownPaintHandler);
     ctx.canvas.addEventListener('pointerup', onPointerUpPaintHandler);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onWindowBlur);
 
     ctx.modelRoot.add(paintCursorMesh);
     ctx.modelRoot.add(paintFlattenCylinderMesh);
@@ -948,8 +991,10 @@ const { context } = useThreeScene(container, {
   onTeardown: (ctx) => {
     ctx.canvas.removeEventListener('pointerdown', onPointerDown);
     if (onPointerUp) ctx.canvas.removeEventListener('pointerup', onPointerUp);
-    ctx.canvas.removeEventListener('pointercancel', releaseStuckDrag);
-    ctx.canvas.removeEventListener('lostpointercapture', releaseStuckDrag);
+    if (onPointerCancelRecovery) {
+      ctx.canvas.removeEventListener('pointercancel', onPointerCancelRecovery);
+      ctx.canvas.removeEventListener('lostpointercapture', onPointerCancelRecovery);
+    }
     if (onPointerMove) ctx.canvas.removeEventListener('pointermove', onPointerMove);
     if (onPointerDownPaintHandler) {
       ctx.canvas.removeEventListener('pointerdown', onPointerDownPaintHandler);
@@ -957,12 +1002,15 @@ const { context } = useThreeScene(container, {
     if (onPointerUpPaintHandler) ctx.canvas.removeEventListener('pointerup', onPointerUpPaintHandler);
     if (onKeyDown) window.removeEventListener('keydown', onKeyDown);
     if (onKeyUp) window.removeEventListener('keyup', onKeyUp);
+    if (onWindowBlur) window.removeEventListener('blur', onWindowBlur);
     onPointerUp = null;
     onPointerMove = null;
     onPointerDownPaintHandler = null;
     onPointerUpPaintHandler = null;
+    onPointerCancelRecovery = null;
     onKeyDown = null;
     onKeyUp = null;
+    onWindowBlur = null;
     for (const instance of [translateControls, rotateControls]) {
       if (!instance) continue;
       instance.detach();
@@ -1056,11 +1104,8 @@ watch(
   (tool) => {
     const ctx = context.value;
     if (tool !== null) {
-      strokeActive = false;
-      strokePoints = [];
-      if (ctx) clearStrokeGhosts(ctx);
+      if (ctx) abortStroke(ctx);
       hidePaintCursor();
-      if (ctx) ctx.controls.enabled = true;
     }
     syncGizmo();
   },

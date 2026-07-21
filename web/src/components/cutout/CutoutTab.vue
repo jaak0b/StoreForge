@@ -407,6 +407,8 @@ function onConfirmClearEdits(): void {
   cutout.clearEdits();
   // No edits left to be suspect of.
   lastGoodEditCount.value = 0;
+  // No edit remains for the rejection alert to be about.
+  editError.value = null;
   clearEditsDialogOpen.value = false;
 }
 
@@ -912,6 +914,8 @@ function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
   // These edits were carved successfully when the bin was saved, so they do
   // not need re-proving; the running count starts fresh at the loaded length.
   lastGoodEditCount.value = cutout.edits.length;
+  // A rejection alert from the previous entry does not belong to this one.
+  editError.value = null;
   boundsById.value = {};
   const models = JSON.parse(JSON.stringify(bin.models)) as CutoutModel[];
   for (const model of models) {
