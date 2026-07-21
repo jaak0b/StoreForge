@@ -1,25 +1,30 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import * as THREE from 'three';
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import type { MeshData, PartMeshes } from '../../engine/gridfinity/types';
-import type { MeshBounds } from '../../engine/cutout/cutoutMesh';
-import type { ModelPlacement } from '../../engine/cutout/cutoutBin';
+import type { PartMeshes } from '../../engine/gridfinity/types';
 import { strokeToleranceMm } from '../../engine/carve/cavityEdits';
 import { assertNever, type Vec3Mm } from '../../engine/plan/types';
 import { ERROR, INFO, PRIMARY } from '../../themeColors';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import {
-  buildMeshObject,
-  createBodyMaterial,
-  createLabelMaterial,
+  createGhostMaterial,
   useThreeScene,
   type ThreeSceneContext,
 } from '../../composables/useThreeScene';
+import { useBinMesh } from '../../composables/useBinMesh';
+import { CLICK_TOLERANCE_PX, useModelGizmo } from '../../composables/useModelGizmo';
 
 /**
  * The cutout bin editor's viewport: the carved bin, the placed models drawn as
- * translucent ghosts, and the gizmo that moves and turns the selected one.
+ * translucent ghosts, and the gizmo that moves and turns the selected one, plus
+ * the cavity paint tools.
+ *
+ * It is the base viewport (scene, camera, orbit, lighting, grid, bin mesh) with
+ * two layers composed on top. The scene scaffolding lives in `useThreeScene`,
+ * the bin body and label in `useBinMesh`, and the ghosts and gizmo in
+ * `useModelGizmo`; what stays here is the paint layer and the one place that
+ * arbitrates a gizmo drag, a paint stroke and the orbit camera against each
+ * other.
  *
  * Two tiers of preview meet here. The carved bin is geometry the worker
  * produced and this component only draws. The ghosts are the imported
@@ -91,88 +96,26 @@ const emit = defineEmits<{
   toggleShortcutHelp: [];
 }>();
 
-/**
- * Size of the rotate gizmo relative to the translate gizmo, which stays at the
- * default 1.
- *
- * Derived from the handle geometry rather than judged by eye: the translate
- * arrow cones sit at 0.5 on each axis and the rotation arcs are a torus of
- * radius 0.5, so at equal sizes the arcs pass exactly through the arrow tips
- * and neither is reliably grabbable. At 1.6 the arcs sit at 0.8 with a clear
- * band between them and the arrow tips, and the outer free-rotation ring lands
- * at 1.2.
- */
-const ROTATE_GIZMO_SIZE = 1.6;
+const container = ref<HTMLDivElement | null>(null);
+
+/** The base bin body and label. Its body mesh is what the paint tools raycast against. */
+const binDisplay = useBinMesh();
 
 /**
- * How far the pointer may travel between press and release and still count as
- * a click rather than an orbit, in pixels. Small enough that a deliberate
- * camera drag never selects a model, loose enough that the hand tremor in a
- * click on a trackpad still does.
+ * The ghosts and gizmo layer. Its hidden state is either Tab held (a paint-side
+ * concern tracked here) or the eye button, matching the trace canvas.
  */
-const CLICK_TOLERANCE_PX = 4;
-
-/**
- * What a ghost's colour says about it. Exactly three states, in the order they
- * take precedence.
- *
- * A warning outranks the selection deliberately. The selected model already
- * carries the gizmo, so which one is selected is unmistakable without any
- * colour at all, whereas a warning is the thing the user can miss. Painting the
- * selected model blue over a warning would hide the warning on the one model he
- * is actually working on.
- */
-type GhostTone = 'warned' | 'selected' | 'plain';
-
-/** A drawn ghost, the geometry it was built from, its bounds and its colour. */
-interface GhostEntry {
-  mesh: THREE.Mesh;
-  source: MeshData;
-  bounds: MeshBounds;
-  /**
-   * The tone its current material was chosen for, or null before it has been
-   * painted once. Recorded rather than inferred, so the paint pass can tell a
-   * ghost that is already the right colour from one that is stale, and no
-   * selection or warning change can leave a ghost showing an old material.
-   */
-  painted: GhostTone | null;
-}
-
-const bodyMaterial = createBodyMaterial();
-const labelMaterial = createLabelMaterial();
-
-/**
- * The three ghost materials, one per tone, taking their colours from the
- * theme's own accents: the amber the app accents everything with, the info blue
- * and the error red.
- *
- * Ghosts are drawn translucent so a model sunk into the bin still reads, and
- * with depth writing off so two overlapping ghosts do not punch holes in each
- * other. Depth testing stays on: a model hidden behind a bin wall is genuinely
- * not clickable in the viewport, which is why the model list is the selection
- * path that always works.
- */
-function createGhostMaterial(color: string): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: new THREE.Color(color),
-    metalness: 0.05,
-    roughness: 0.5,
-    transparent: true,
-    opacity: 0.55,
-    depthWrite: false,
-  });
-}
-
-/**
- * Keyed by the tone rather than switched on it. A record over the union is
- * total by construction: a tone added later is a compile error here, at the
- * definition, rather than a case that falls through at run time.
- */
-const ghostMaterials: Record<GhostTone, THREE.MeshStandardMaterial> = {
-  plain: createGhostMaterial(PRIMARY),
-  selected: createGhostMaterial(INFO),
-  warned: createGhostMaterial(ERROR),
-};
+const gizmo = useModelGizmo({
+  ghosts: () => props.ghosts,
+  selectedModelId: () => props.selectedModelId,
+  warnedModelIds: () => props.warnedModelIds,
+  paintActive: () => props.paintTool !== null,
+  modelsHidden: () => tabHeld.value || props.modelsHiddenButton,
+  onSelect: (id) => emit('update:selectedModelId', id),
+  onPlacementChange: (moved) => emit('placementChange', moved),
+  onPlacementCommit: (moved) => emit('placementCommit', moved),
+  onBoundsChange: (moved) => emit('boundsChange', moved),
+});
 
 /**
  * Geometry and materials for the paint-mode cursor and the stroke ghost
@@ -230,11 +173,9 @@ let strokeActive = false;
 let strokePoints: Vec3Mm[] = [];
 const strokeGhostMeshes: THREE.Mesh[] = [];
 
-let binMesh: THREE.Mesh | null = null;
-let binLabelMesh: THREE.Mesh | null = null;
-let drawnMeshes: PartMeshes | null = null;
-
-const ghostEntries = new Map<string, GhostEntry>();
+/** The paint layer's own raycaster; the gizmo's selection uses its own. */
+const raycaster = new THREE.Raycaster();
+const pointerNdc = new THREE.Vector2();
 
 /**
  * True while Tab is held, hiding every model ghost mesh so the carved bin
@@ -253,309 +194,14 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
 }
 
-/**
- * Applies the current hidden state to every drawn ghost mesh. Called after
- * every ghost sync (so a ghost rebuilt while hidden comes in hidden), on every
- * Tab keydown/keyup, and whenever the eye button's sticky toggle changes.
- * Either Tab held or the eye button hides the ghosts, matching the trace
- * canvas's "hold Tab or eye button" behaviour.
- */
-function applyGhostVisibility(): void {
-  const hidden = tabHeld.value || props.modelsHiddenButton;
-  for (const entry of ghostEntries.values()) {
-    entry.mesh.visible = !hidden;
-  }
-}
-
-let translateControls: TransformControls | null = null;
-let rotateControls: TransformControls | null = null;
-let attachedId: string | null = null;
-let draggingId: string | null = null;
-
 let pointerDownX = 0;
 let pointerDownY = 0;
 let pointerDownButton = -1;
-
-const raycaster = new THREE.Raycaster();
-const pointerNdc = new THREE.Vector2();
-const scratchVertex = new THREE.Vector3();
-
-function degToRad(deg: number): number {
-  return (deg * Math.PI) / 180;
-}
-
-function radToDeg(rad: number): number {
-  return (rad * 180) / Math.PI;
-}
-
-function applyPlacement(mesh: THREE.Mesh, placement: ModelPlacement): void {
-  mesh.position.set(placement.xMm, placement.yMm, placement.zMm);
-  mesh.rotation.set(
-    degToRad(placement.rotXDeg),
-    degToRad(placement.rotYDeg),
-    degToRad(placement.rotZDeg),
-  );
-}
-
-function placementOf(mesh: THREE.Mesh): ModelPlacement {
-  return {
-    xMm: mesh.position.x,
-    yMm: mesh.position.y,
-    zMm: mesh.position.z,
-    rotXDeg: radToDeg(mesh.rotation.x),
-    rotYDeg: radToDeg(mesh.rotation.y),
-    rotZDeg: radToDeg(mesh.rotation.z),
-  };
-}
-
-function samePlacement(a: ModelPlacement, b: ModelPlacement): boolean {
-  return (
-    a.xMm === b.xMm &&
-    a.yMm === b.yMm &&
-    a.zMm === b.zMm &&
-    a.rotXDeg === b.rotXDeg &&
-    a.rotYDeg === b.rotYDeg &&
-    a.rotZDeg === b.rotZDeg
-  );
-}
-
-/**
- * Exact bounds of a placed ghost in bin-local millimetres, walking the
- * transformed vertices rather than transforming a bounding box. Transforming
- * the eight corners of the untransformed box is cheaper but overestimates every
- * shape that is not itself a box, so the footprint the readout shows would be
- * wrong and the bin the fit button sizes would come out larger than the models
- * need.
- */
-function ghostBounds(mesh: THREE.Mesh): MeshBounds {
-  const position = mesh.geometry.getAttribute('position');
-  mesh.updateMatrix();
-  let minX = Infinity;
-  let minY = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let maxZ = -Infinity;
-  for (let i = 0; i < position.count; i += 1) {
-    scratchVertex.fromBufferAttribute(position, i).applyMatrix4(mesh.matrix);
-    if (scratchVertex.x < minX) minX = scratchVertex.x;
-    if (scratchVertex.y < minY) minY = scratchVertex.y;
-    if (scratchVertex.z < minZ) minZ = scratchVertex.z;
-    if (scratchVertex.x > maxX) maxX = scratchVertex.x;
-    if (scratchVertex.y > maxY) maxY = scratchVertex.y;
-    if (scratchVertex.z > maxZ) maxZ = scratchVertex.z;
-  }
-  return {
-    minX,
-    minY,
-    minZ,
-    maxX,
-    maxY,
-    maxZ,
-    sizeX: maxX - minX,
-    sizeY: maxY - minY,
-    sizeZ: maxZ - minZ,
-  };
-}
-
-/** What a ghost's colour should say right now, warning ahead of selection. */
-function toneOf(id: string): GhostTone {
-  if (props.warnedModelIds.includes(id)) return 'warned';
-  if (id === props.selectedModelId) return 'selected';
-  return 'plain';
-}
-
-/**
- * Give every drawn ghost the material its current tone calls for.
- *
- * Runs over the whole map on every frame rather than at the point something
- * changes, and that is the point: the tone is a pure function of the props, so
- * a ghost cannot be left holding a material chosen for a state that has since
- * passed. Selecting a second model repaints the one that lost the selection as
- * well as the one that gained it, whichever way the selection was changed, and
- * clearing the selection returns its ghost to the plain colour. The recorded
- * tone keeps the pass down to a comparison per ghost when nothing changed.
- */
-function paintGhosts(): void {
-  for (const [id, entry] of ghostEntries) {
-    const tone = toneOf(id);
-    if (tone === entry.painted) continue;
-    entry.painted = tone;
-    entry.mesh.material = ghostMaterials[tone];
-  }
-}
-
-/** Recompute a ghost's bounds after it moved. */
-function refreshBounds(entry: GhostEntry): void {
-  entry.bounds = ghostBounds(entry.mesh);
-}
-
-function disposeGhost(ctx: ThreeSceneContext, entry: GhostEntry): void {
-  ctx.modelRoot.remove(entry.mesh);
-  entry.mesh.geometry.dispose();
-}
-
-function syncBin(ctx: ThreeSceneContext): void {
-  if (props.meshes === drawnMeshes) return;
-  drawnMeshes = props.meshes;
-  if (binMesh) {
-    ctx.modelRoot.remove(binMesh);
-    binMesh.geometry.dispose();
-    binMesh = null;
-  }
-  if (binLabelMesh) {
-    ctx.modelRoot.remove(binLabelMesh);
-    binLabelMesh.geometry.dispose();
-    binLabelMesh = null;
-  }
-  if (!props.meshes) return;
-  binMesh = buildMeshObject(props.meshes.body, bodyMaterial);
-  ctx.modelRoot.add(binMesh);
-  if (props.meshes.label) {
-    binLabelMesh = buildMeshObject(props.meshes.label, labelMaterial);
-    ctx.modelRoot.add(binLabelMesh);
-  }
-}
-
-function syncGhosts(ctx: ThreeSceneContext): void {
-  const wanted = new Set(props.ghosts.map((ghost) => ghost.id));
-  for (const [id, entry] of ghostEntries) {
-    if (wanted.has(id)) continue;
-    disposeGhost(ctx, entry);
-    ghostEntries.delete(id);
-  }
-  for (const ghost of props.ghosts) {
-    const existing = ghostEntries.get(ghost.id);
-    if (existing && existing.source === ghost.mesh) {
-      // The gizmo is the authority on the model it is currently dragging, so
-      // the placement echoed back through the props is not written over it.
-      if (ghost.id === draggingId) continue;
-      // Nothing moved, so the bounds still stand and nothing has to be
-      // remeasured. The colour is settled by the paint pass below.
-      if (samePlacement(placementOf(existing.mesh), ghost.placement)) continue;
-      applyPlacement(existing.mesh, ghost.placement);
-      refreshBounds(existing);
-      emit('boundsChange', {
-        id: ghost.id,
-        placement: placementOf(existing.mesh),
-        bounds: existing.bounds,
-      });
-      continue;
-    }
-    if (existing) {
-      disposeGhost(ctx, existing);
-      ghostEntries.delete(ghost.id);
-    }
-    // Built with the plain material and painted by the pass below, so a ghost
-    // drawn for the first time takes its colour from the same one place.
-    const mesh = buildMeshObject(ghost.mesh, ghostMaterials.plain);
-    // Three's intrinsic ZYX Euler order equals the extrinsic XYZ order
-    // Manifold.rotate documents, so the angles read off this object are the
-    // angles the carve applies. Set before any placement is written.
-    mesh.rotation.order = 'ZYX';
-    applyPlacement(mesh, ghost.placement);
-    ctx.modelRoot.add(mesh);
-    const entry: GhostEntry = {
-      mesh,
-      source: ghost.mesh,
-      bounds: ghostBounds(mesh),
-      painted: null,
-    };
-    ghostEntries.set(ghost.id, entry);
-    emit('boundsChange', {
-      id: ghost.id,
-      placement: placementOf(mesh),
-      bounds: entry.bounds,
-    });
-  }
-  paintGhosts();
-  applyGhostVisibility();
-  syncGizmo();
-}
-
-/**
- * The single source of gizmo attachment. Desired attachment is a pure function
- * of the selection, the paint tool and the drawn ghosts; this reconciles the
- * live controls to it and is safe to call after any change that can affect it.
- */
-function syncGizmo(): void {
-  if (!translateControls || !rotateControls) return;
-  const enabled = props.paintTool === null;
-  translateControls.enabled = enabled;
-  rotateControls.enabled = enabled;
-  const desiredMesh =
-    enabled && props.selectedModelId !== null
-      ? (ghostEntries.get(props.selectedModelId)?.mesh ?? null)
-      : null;
-  if ((translateControls.object ?? null) === desiredMesh) return;
-  if (desiredMesh === null) {
-    translateControls.detach();
-    rotateControls.detach();
-    attachedId = null;
-  } else {
-    translateControls.attach(desiredMesh);
-    rotateControls.attach(desiredMesh);
-    attachedId = props.selectedModelId;
-  }
-}
-
-function entryIdOf(mesh: THREE.Object3D): string | null {
-  for (const [id, entry] of ghostEntries) {
-    if (entry.mesh === mesh) return id;
-  }
-  return null;
-}
-
-function movedPayload(id: string): CutoutGhostMoved | null {
-  const entry = ghostEntries.get(id);
-  if (!entry) return null;
-  refreshBounds(entry);
-  return { id, placement: placementOf(entry.mesh), bounds: entry.bounds };
-}
-
-/** Is either gizmo hovering a handle or mid-drag? Then the click is not a selection. */
-function gizmoBusy(): boolean {
-  return [translateControls, rotateControls].some(
-    (instance) => instance !== null && (instance.dragging || instance.axis !== null),
-  );
-}
 
 function onPointerDown(event: PointerEvent): void {
   pointerDownX = event.clientX;
   pointerDownY = event.clientY;
   pointerDownButton = event.button;
-}
-
-function selectAtPointer(ctx: ThreeSceneContext, event: PointerEvent): void {
-  if (props.paintTool !== null) return;
-  if (pointerDownButton !== 0 || event.button !== 0) return;
-  const travelled = Math.hypot(event.clientX - pointerDownX, event.clientY - pointerDownY);
-  if (travelled > CLICK_TOLERANCE_PX) return;
-  if (gizmoBusy()) return;
-  const rect = ctx.canvas.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return;
-  pointerNdc.set(
-    ((event.clientX - rect.left) / rect.width) * 2 - 1,
-    -((event.clientY - rect.top) / rect.height) * 2 + 1,
-  );
-  raycaster.setFromCamera(pointerNdc, ctx.camera);
-  const meshes = [...ghostEntries.values()].map((entry) => entry.mesh);
-  const hits = raycaster.intersectObjects(meshes, false);
-  emit('update:selectedModelId', hits.length === 0 ? null : entryIdOf(hits[0].object));
-}
-
-/**
- * TransformControls has no pointercancel listener, so a touch interruption or
- * a browser gesture takeover can end a drag with no pointerup at all, leaving
- * dragging true and the orbit camera disabled for good, which reads as the app
- * having frozen. Forcing dragging false runs the same setter a normal release
- * runs, so this recovery path is the ordinary release path and cannot drift
- * from it.
- */
-function releaseStuckDrag(): void {
-  for (const instance of [translateControls, rotateControls]) {
-    if (instance !== null && instance.dragging) instance.dragging = false;
-  }
 }
 
 /**
@@ -584,35 +230,6 @@ let onKeyDown: ((event: KeyboardEvent) => void) | null = null;
 let onKeyUp: ((event: KeyboardEvent) => void) | null = null;
 let onWindowBlur: (() => void) | null = null;
 
-function wireGizmo(
-  ctx: ThreeSceneContext,
-  instance: TransformControls,
-  other: () => TransformControls | null,
-): void {
-  instance.addEventListener('dragging-changed', (event) => {
-    const dragging = event.value === true;
-    // Whichever instance grabbed a handle disables both the orbit camera and
-    // its sibling, so one press can never start two drags at once.
-    ctx.controls.enabled = !dragging;
-    const sibling = other();
-    if (sibling) sibling.enabled = !dragging;
-    if (dragging) {
-      draggingId = attachedId;
-      return;
-    }
-    const finished = draggingId;
-    draggingId = null;
-    if (finished === null) return;
-    const moved = movedPayload(finished);
-    if (moved) emit('placementCommit', moved);
-  });
-  instance.addEventListener('objectChange', () => {
-    if (draggingId === null) return;
-    const moved = movedPayload(draggingId);
-    if (moved) emit('placementChange', moved);
-  });
-}
-
 /** Hide the paint cursor. */
 function hidePaintCursor(): void {
   paintCursorMesh.visible = false;
@@ -637,10 +254,9 @@ function raycastPaintHit(ctx: ThreeSceneContext, event: PointerEvent): THREE.Vec
     -((event.clientY - rect.top) / rect.height) * 2 + 1,
   );
   raycaster.setFromCamera(pointerNdc, ctx.camera);
-  const targets: THREE.Mesh[] = [];
-  if (binMesh) targets.push(binMesh);
-  if (targets.length === 0) return null;
-  const hits = raycaster.intersectObjects(targets, false);
+  const body = binDisplay.bodyMesh;
+  if (!body) return null;
+  const hits = raycaster.intersectObjects([body], false);
   if (hits.length === 0) return null;
   const hit = hits[0];
   const face = hit.face;
@@ -854,7 +470,7 @@ function onKeyDownGlobal(event: KeyboardEvent): void {
     if (isEditableTarget(event.target)) return;
     if (!event.repeat) {
       tabHeld.value = true;
-      applyGhostVisibility();
+      gizmo.applyGhostVisibility();
     }
     event.preventDefault();
     return;
@@ -917,7 +533,7 @@ function onKeyDownGlobal(event: KeyboardEvent): void {
 function onKeyUpGlobal(event: KeyboardEvent): void {
   if (event.key !== 'Tab') return;
   tabHeld.value = false;
-  applyGhostVisibility();
+  gizmo.applyGhostVisibility();
   if (!isEditableTarget(event.target)) event.preventDefault();
 }
 
@@ -929,31 +545,19 @@ function onKeyUpGlobal(event: KeyboardEvent): void {
 function onWindowBlurGlobal(): void {
   if (!tabHeld.value) return;
   tabHeld.value = false;
-  applyGhostVisibility();
+  gizmo.applyGhostVisibility();
 }
-
-const container = ref<HTMLDivElement | null>(null);
 
 const { context } = useThreeScene(container, {
   onReady: (ctx) => {
-    // The translate instance is constructed first deliberately. Both instances
-    // listen on the same canvas and the browser delivers pointerdown in
-    // registration order, so the one constructed first wins any overlap
-    // between an arrow and an arc, and translation is the more common gesture.
-    translateControls = new TransformControls(ctx.camera, ctx.canvas);
-    rotateControls = new TransformControls(ctx.camera, ctx.canvas);
-    rotateControls.setMode('rotate');
-    rotateControls.setSize(ROTATE_GIZMO_SIZE);
+    gizmo.setup(ctx);
 
-    // TransformControls extends Controls, not Object3D, so the scene receives
-    // the helper rather than the controls themselves.
-    ctx.scene.add(translateControls.getHelper());
-    ctx.scene.add(rotateControls.getHelper());
-
-    wireGizmo(ctx, translateControls, () => rotateControls);
-    wireGizmo(ctx, rotateControls, () => translateControls);
-
-    onPointerUp = (event: PointerEvent) => selectAtPointer(ctx, event);
+    onPointerUp = (event: PointerEvent) =>
+      gizmo.selectAtPointer(ctx, event, {
+        button: pointerDownButton,
+        x: pointerDownX,
+        y: pointerDownY,
+      });
     onPointerMove = (event: PointerEvent) => onPointerMovePaint(ctx, event);
     onPointerDownPaintHandler = (event: PointerEvent) => onPointerDownPaint(ctx, event);
     onPointerUpPaintHandler = (event: PointerEvent) => onPointerUpPaint(ctx, event);
@@ -961,7 +565,7 @@ const { context } = useThreeScene(container, {
     // paint stroke: the same pointercancel/lostpointercapture that leaves a
     // gizmo drag stuck also leaves a stroke stuck, so both are released here.
     onPointerCancelRecovery = () => {
-      releaseStuckDrag();
+      gizmo.releaseStuckDrag();
       abortStroke(ctx);
     };
     onKeyDown = (event: KeyboardEvent) => onKeyDownGlobal(event);
@@ -984,9 +588,9 @@ const { context } = useThreeScene(container, {
     ctx.modelRoot.add(paintCursorMesh);
     ctx.modelRoot.add(paintFlattenCylinderMesh);
 
-    syncBin(ctx);
-    syncGhosts(ctx);
-    syncGizmo();
+    binDisplay.sync(ctx, props.meshes?.body ?? null, props.meshes?.label ?? null);
+    gizmo.syncGhosts(ctx);
+    gizmo.syncGizmo();
   },
   onTeardown: (ctx) => {
     ctx.canvas.removeEventListener('pointerdown', onPointerDown);
@@ -1011,26 +615,13 @@ const { context } = useThreeScene(container, {
     onKeyDown = null;
     onKeyUp = null;
     onWindowBlur = null;
-    for (const instance of [translateControls, rotateControls]) {
-      if (!instance) continue;
-      instance.detach();
-      // dispose() releases the helper's own resources but does not take it out
-      // of the scene, so the removal has to come first.
-      ctx.scene.remove(instance.getHelper());
-      instance.dispose();
-    }
-    translateControls = null;
-    rotateControls = null;
-    for (const entry of ghostEntries.values()) disposeGhost(ctx, entry);
-    ghostEntries.clear();
+
+    gizmo.teardown(ctx);
+    binDisplay.dispose(ctx);
+
     clearStrokeGhosts(ctx);
     ctx.modelRoot.remove(paintCursorMesh);
     ctx.modelRoot.remove(paintFlattenCylinderMesh);
-    binMesh?.geometry.dispose();
-    binLabelMesh?.geometry.dispose();
-    bodyMaterial.dispose();
-    labelMaterial.dispose();
-    for (const material of Object.values(ghostMaterials)) material.dispose();
     paintSphereGeometry.dispose();
     paintCylinderGeometry.dispose();
     paintDiscGeometry.dispose();
@@ -1047,7 +638,7 @@ const { context } = useThreeScene(container, {
  * prop does, so a watcher runs them exactly then rather than the render loop
  * re-deriving them sixty times a second. Every handler guards on the scene
  * existing, because a prop can settle before onReady has built it; onReady runs
- * the same three syncs once so the first paint is not left to a prop changing.
+ * the same syncs once so the first paint is not left to a prop changing.
  *
  * What genuinely needs the frame loop stays there: the gizmo follows the model
  * it drags through TransformControls itself, and the dragged ghost is skipped
@@ -1058,39 +649,39 @@ watch(
   () => props.meshes,
   () => {
     const ctx = context.value;
-    if (ctx) syncBin(ctx);
+    if (ctx) binDisplay.sync(ctx, props.meshes?.body ?? null, props.meshes?.label ?? null);
   },
 );
 watch(
   () => props.ghosts,
   () => {
     const ctx = context.value;
-    if (ctx) syncGhosts(ctx);
+    if (ctx) gizmo.syncGhosts(ctx);
   },
 );
 watch(
   () => props.selectedModelId,
   () => {
     if (!context.value) return;
-    syncGizmo();
+    gizmo.syncGizmo();
     // The selection tone is settled here rather than in syncGizmo: the
     // ghost that lost the selection and the one that gained it both change
     // colour, and neither changed the ghost list that syncGhosts repaints from.
-    paintGhosts();
-    applyGhostVisibility();
+    gizmo.paintGhosts();
+    gizmo.applyGhostVisibility();
   },
 );
 watch(
   () => props.warnedModelIds,
   () => {
-    if (context.value) paintGhosts();
+    if (context.value) gizmo.paintGhosts();
   },
   { deep: true },
 );
 /** The eye button's sticky toggle combines with Tab held; either hides the ghosts. */
 watch(
   () => props.modelsHiddenButton,
-  () => applyGhostVisibility(),
+  () => gizmo.applyGhostVisibility(),
 );
 
 /**
@@ -1107,7 +698,7 @@ watch(
       if (ctx) abortStroke(ctx);
       hidePaintCursor();
     }
-    syncGizmo();
+    gizmo.syncGizmo();
   },
   { immediate: true },
 );

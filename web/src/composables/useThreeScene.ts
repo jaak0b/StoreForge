@@ -100,6 +100,28 @@ export function createLabelMaterial(): THREE.MeshStandardMaterial {
 }
 
 /**
+ * A translucent preview material in one of the theme's accent colours. Used for
+ * the model ghosts and the gizmo tones, and for the paint cursor and stroke
+ * previews: every non-solid overlay the editors draw takes its look from here,
+ * so one factory settles the opacity and depth behaviour they all share.
+ *
+ * Drawn translucent so a model sunk into the bin still reads, and with depth
+ * writing off so two overlapping overlays do not punch holes in each other.
+ * Depth testing stays on: a shape hidden behind a bin wall is genuinely not
+ * clickable in the viewport.
+ */
+export function createGhostMaterial(color: string): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color),
+    metalness: 0.05,
+    roughness: 0.5,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  });
+}
+
+/**
  * A renderable mesh from generated geometry. The returned mesh carries no
  * rotation of its own: it belongs under the context's modelRoot, which holds
  * the Z-up to Y-up conversion for everything in the scene.
