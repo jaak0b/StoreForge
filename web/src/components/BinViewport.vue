@@ -71,9 +71,10 @@ watch(
   },
 );
 
-// Switching to pointer mode abandons any stroke in flight and clears the
-// cursor, matching the cutout viewport's paint-tool watch (there is no gizmo to
-// resync here).
+// Switching to a paint tool abandons any stroke already in flight (a tool
+// switch mid-drag) and hides the paint cursor, matching the cutout viewport's
+// paint-tool watch (there is no gizmo to resync here). Returning to pointer mode
+// (tool null) leaves nothing to abort, so the guard runs only when tool is set.
 watch(
   () => props.paint?.paintTool() ?? null,
   (tool) => {

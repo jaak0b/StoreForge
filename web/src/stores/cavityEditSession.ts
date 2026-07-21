@@ -117,6 +117,13 @@ export function createCavityEditSession() {
   function undoEdit(): void {
     const edit = edits.value.pop();
     if (edit !== undefined) redoStack.value.push(edit);
+    // The known-good count can never exceed the live edit list. Undoing an edit
+    // that a landed carve had already proven leaves lastGoodEditCount pointing
+    // past the shortened list; a bad edit painted next would then compute a
+    // rollback count of zero and stick. Clamped down here so the very next carve
+    // rejection unwinds it. clearEdits and setEdits keep the count equal to the
+    // list length by construction, so this is the one mutator that can strand it.
+    lastGoodEditCount.value = clampLastGoodEditCount(lastGoodEditCount.value, edits.value.length);
   }
   /** Moves the last undone edit back onto the list. */
   function redoEdit(): void {

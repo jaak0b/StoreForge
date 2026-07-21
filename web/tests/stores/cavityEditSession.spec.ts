@@ -125,6 +125,26 @@ describe('createCavityEditSession', () => {
     expect(s.edits.value[0]).toEqual(stroke(1));
   });
 
+  it('undo clamps the known-good count so a later bad edit still rolls back', () => {
+    // The debounce can coalesce edits into one carve, so an undo can shorten the
+    // list below the last landed carve's count with no carve in between. If the
+    // count is not clamped on undo, the next painted edit computes a rollback of
+    // zero and sticks, serialising a bad edit into the plan.
+    const s = createCavityEditSession();
+    s.appendEdit(stroke(1));
+    s.appendEdit(stroke(2));
+    s.noteLandedCarve(2);
+    // Undo one edit with no carve landing afterwards.
+    s.undoEdit();
+    expect(s.lastGoodEditCount.value).toBe(1);
+    // Paint a bad edit; a rejection must now pop it back off.
+    s.appendEdit(stroke(3));
+    const returned = s.rollbackRejectedEdits(REJECTION_MESSAGE);
+    expect(returned).toBe(REJECTION_MESSAGE);
+    expect(s.edits.value).toHaveLength(1);
+    expect(s.edits.value[0]).toEqual(stroke(1));
+  });
+
   it('rollbackRejectedEdits leaves edits alone for a non-rejection failure', () => {
     const s = createCavityEditSession();
     s.appendEdit(stroke(1));

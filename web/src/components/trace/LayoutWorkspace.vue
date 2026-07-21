@@ -12,9 +12,12 @@ import {
 } from '../../workerClient';
 import { cloneEdit } from '../../stores/cavityEditSession';
 import type { CavityPaintBinding } from '../../composables/useCavityPaint';
+import {
+  useCavityEditPreview,
+  type CavityCarveOutcome,
+} from '../../composables/useCavityEditPreview';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import {
-  assertNever,
   binOf,
   insertOf,
   type BinPockets,
@@ -22,7 +25,6 @@ import {
   type QueueEntry,
   type TracePaper,
   type TracedBin,
-  type Vec3Mm,
 } from '../../engine/plan/types';
 import type { PaperCorners } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
@@ -183,9 +185,11 @@ const pocketParams = computed<PocketBinParams>(() => {
  * alongside, so a rejection knows how far to roll the edits back. The count
  * travels with the result rather than sitting in shared state, for the same
  * reason the cutout carve carries its model ids: a newer request can have
- * changed the live edit list by the time an older result lands.
+ * changed the live edit list by the time an older result lands. A pocket carve
+ * adds only its meshes to the shared outcome shape.
  */
-type PocketResultWithMeta = PocketPreviewResult & { editCount: number };
+type PocketCarveMeta = Omit<Extract<PocketPreviewResult, { outcome: 'carved' }>, 'outcome'>;
+type PocketResultWithMeta = CavityCarveOutcome<PocketCarveMeta>;
 
 /**
  * Carves the preview through the cancellable pocket-preview call, recording
@@ -215,43 +219,23 @@ const {
 /** The last carve that actually landed, which is what the 3D viewport draws. */
 const carved = shallowRef<Extract<PocketResultWithMeta, { outcome: 'carved' }> | null>(null);
 
-watch(previewResult, (result) => {
-  if (result === null) return;
-  switch (result.outcome) {
-    case 'carved':
+// The shared session-to-preview wiring: the landing switch, the rejection
+// rollback into editError, the active-tool clear, and the stroke and flatten
+// commit builders. The traced flow's only own parts are drawing the landed bin
+// and clearing it when a carve fails, both passed as hooks.
+const { editError, onStrokeCommit, onFlattenCommit } = useCavityEditPreview<PocketCarveMeta>(
+  trace,
+  { generating, errorMessage, previewResult },
+  {
+    onCarved: (result) => {
       carved.value = result;
-      // This carve reached the worker and produced a bin, so every edit it was
-      // built from is known good. Clamped inside noteLandedCarve to the live
-      // edit list, in case an undo shrank it while this carve was in flight.
-      trace.noteLandedCarve(result.editCount);
-      return;
-    case 'superseded':
-      // A newer request replaced this one before it finished; the newer carve
-      // is the one being waited for, so nothing here changes.
-      return;
-    default:
-      return assertNever(result);
-  }
-});
-
-/** The error a rejected cavity edit surfaced, shown as its own alert row. */
-const editError = ref<string | null>(null);
-
-// A manual cavity edit that makes the carve fail must not stay applied: it
-// would sit in the undo stack looking normal while the bin it produced is
-// gone. Only an edit rejection rolls edits back; any other carve failure (an
-// oversized layout) is not the edit's fault and leaves the edit list alone.
-// This mirrors the cutout tab's rejection wiring exactly.
-watch(generating, (isGenerating) => {
-  if (isGenerating) return;
-  const rolledBack = trace.rollbackRejectedEdits(errorMessage.value);
-  if (rolledBack !== null) editError.value = rolledBack;
-});
-
-watch(
-  () => trace.activeTool,
-  () => {
-    editError.value = null;
+    },
+    // A carve that finished with an error is not showing a valid bin: clear the
+    // drawn geometry so the viewport does not keep stale pockets on screen for
+    // the user to go on painting. Mirrors the cutout tab's missing-file clear.
+    onCarveFailed: () => {
+      carved.value = null;
+    },
   },
 );
 
@@ -261,26 +245,6 @@ watch(
 
 /** Whether the paint toolbar's shortcut help popover is open. */
 const shortcutHelpOpen = ref(false);
-
-/** Fires a paint stroke's add or remove edit. */
-function onStrokeCommit(points: Vec3Mm[]): void {
-  if (trace.activeTool !== 'add' && trace.activeTool !== 'remove') return;
-  editError.value = null;
-  trace.appendEdit({ kind: trace.activeTool, points, radiusMm: trace.brushRadiusMm });
-}
-
-/** Fires a flatten click's edit. */
-function onFlattenCommit(centerMm: Vec3Mm, normalMm: Vec3Mm): void {
-  if (trace.activeTool !== 'flatten') return;
-  editError.value = null;
-  trace.appendEdit({
-    kind: 'flatten',
-    centerMm,
-    radiusMm: trace.brushRadiusMm,
-    normalMm,
-    heightMm: trace.flattenHeightMm,
-  });
-}
 
 /**
  * The paint binding handed to the display viewport: the reactive getters it

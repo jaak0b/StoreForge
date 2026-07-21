@@ -365,6 +365,12 @@ function isEditableTarget(target: EventTarget | null): boolean {
  * nothing until a mask exists, and never fire while focus is in a field.
  */
 function onKeyDown(event: KeyboardEvent): void {
+  // This canvas stays mounted (v-show hidden) while the user works in Layout
+  // mode, where the 3D preview owns Tab, ?, 0 and Space for its own painting.
+  // The window-level handler must do nothing unless the trace canvas is the
+  // visible surface, or it would reset this canvas's zoom, desync its help
+  // popover and double-preventDefault keys the layout preview is handling.
+  if (store.workspaceMode !== 'trace') return;
   if (isEditableTarget(event.target)) return;
   // Tab held hides the mask-derived layers so the raw photo shows through;
   // preventDefault stops focus from traversing away. Auto-repeat is ignored.
@@ -434,6 +440,9 @@ function onKeyDown(event: KeyboardEvent): void {
 }
 
 function onKeyUp(event: KeyboardEvent): void {
+  // Inert while Layout mode owns the keyboard, matching onKeyDown: the held-key
+  // flags are only ever set while this canvas is the visible surface.
+  if (store.workspaceMode !== 'trace') return;
   if (event.key === ' ' || event.code === 'Space') spaceHeld.value = false;
   if (event.key === 'Tab') {
     tabHeld.value = false;

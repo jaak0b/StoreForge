@@ -7,6 +7,10 @@ import { useBinQueue } from '../../stores/binQueue';
 import { cloneEdit, useCutout } from '../../stores/cutout';
 import { useBinPreview } from '../../composables/useBinPreview';
 import {
+  useCavityEditPreview,
+  type CavityCarveOutcome,
+} from '../../composables/useCavityEditPreview';
+import {
   generateCutoutBinPreview,
   importCutoutModel,
   type CutoutBinRequest,
@@ -39,7 +43,6 @@ import {
   type CutoutModel,
   type Product,
   type QueueEntry,
-  type Vec3Mm,
 } from '../../engine/plan/types';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
@@ -182,7 +185,10 @@ const carveModelIds = computed(() => cutout.carvableModels.map((model) => model.
  * result lands, and its footprints and warnings would map onto the wrong rows.
  * Travelling with the result, the ids always match the carve they describe.
  */
-type CarveResultWithIds = CutoutPreviewResult & { modelIds: string[]; editCount: number };
+type CutoutCarveMeta = Omit<Extract<CutoutPreviewResult, { outcome: 'carved' }>, 'outcome'> & {
+  modelIds: string[];
+};
+type CarveResultWithIds = CavityCarveOutcome<CutoutCarveMeta>;
 
 /**
  * Carves the preview, or refuses because a model's file is not on this device.
@@ -237,31 +243,26 @@ watch(previewRefusal, (refusal) => {
   if (refusal !== null) carved.value = null;
 });
 
-watch(previewResult, (result) => {
-  if (result === null) return;
-  switch (result.outcome) {
-    case 'carved':
+// The shared session-to-preview wiring: the landing switch (noteLandedCarve),
+// the rejection rollback into editError, the active-tool clear, and the stroke
+// and flatten commit builders. The cutout flow's own parts stay here as hooks:
+// drawing the landed bin and dropping the out-of-date flag, and clearing the
+// drawn bin when a carve fails.
+const { editError, onStrokeCommit, onFlattenCommit } = useCavityEditPreview<CutoutCarveMeta>(
+  cutout,
+  { generating, errorMessage, previewResult },
+  {
+    onCarved: (result) => {
       carved.value = result;
       stale.value = false;
-      // This carve reached the worker and produced a bin, so every edit it was
-      // built from is good: assigned directly, not folded into a running max,
-      // because useBinPreview only ever lands the latest ticket's outcome
-      // (regenerate's `ticket > displayedTicket` guard), so this always is the
-      // most recent landed carve. An undo can still shrink the live edit list
-      // below the count this carve was built from before its result arrives,
-      // so the count is clamped to the live length: nothing above it could be
-      // rolled back anyway, and leaving it too high would make a later
-      // rejection under-roll-back.
-      cutout.noteLandedCarve(result.editCount);
-      return;
-    case 'superseded':
-      // A newer request replaced this one before it finished. Not a failure,
-      // and not something to show: the newer carve is the one being waited for.
-      return;
-    default:
-      return assertNever(result);
-  }
-});
+    },
+    // A carve that finished with an error is not showing a valid bin, so the
+    // drawn geometry is cleared, exactly as the missing-file refusal above does.
+    onCarveFailed: () => {
+      carved.value = null;
+    },
+  },
+);
 
 /** The placed pocket sizes the last carve measured, by model id. */
 const pocketSizeById = computed<Record<string, SizeMm>>(() => {
@@ -366,60 +367,6 @@ function onConfirmClearEdits(): void {
   editError.value = null;
   clearEditsDialogOpen.value = false;
 }
-
-/** The error a rejected edit surfaced, shown as its own alert row. */
-const editError = ref<string | null>(null);
-
-/**
- * Fires a paint stroke's add or remove edit. Ignored when the tool changed
- * between the gesture starting and ending, which the viewport itself should
- * not allow, but is checked here too since this is where the edit is appended.
- */
-function onStrokeCommit(points: Vec3Mm[]): void {
-  if (cutout.activeTool !== 'add' && cutout.activeTool !== 'remove') return;
-  editError.value = null;
-  cutout.appendEdit({ kind: cutout.activeTool, points, radiusMm: cutout.brushRadiusMm });
-}
-
-/** Fires a flatten click's edit. */
-function onFlattenCommit(centerMm: Vec3Mm, normalMm: Vec3Mm): void {
-  if (cutout.activeTool !== 'flatten') return;
-  editError.value = null;
-  cutout.appendEdit({
-    kind: 'flatten',
-    centerMm,
-    radiusMm: cutout.brushRadiusMm,
-    normalMm,
-    heightMm: cutout.flattenHeightMm,
-  });
-}
-
-watch(
-  () => cutout.activeTool,
-  () => {
-    editError.value = null;
-  },
-);
-
-// A manual edit that makes the carve fail must not stay applied: it would sit
-// in the undo stack looking like a normal edit while the bin it produced is
-// gone. Every edit above the last known-good count is suspect, not just the
-// one most recently appended: the debounce can coalesce two edits into one
-// carve, or a second edit can be painted while an earlier carve is still in
-// flight, and either way a single failure means none of those edits are
-// proven. All of them are rolled back together, down to the last count that
-// did carve successfully.
-//
-// Only an edit rejection (the carve reached the worker and the folded edits
-// themselves were bad) rolls edits back. Any other failure, a missing model
-// file or divider walls on a cutout bin, is not the edit's fault, so it is
-// surfaced without touching cutout.edits: rolling back would silently drop a
-// perfectly good edit because something unrelated to it failed.
-watch(generating, (isGenerating) => {
-  if (isGenerating) return;
-  const rolledBack = cutout.rollbackRejectedEdits(errorMessage.value);
-  if (rolledBack !== null) editError.value = rolledBack;
-});
 
 // ---------------------------------------------------------------------------
 // Importing models
