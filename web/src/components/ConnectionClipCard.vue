@@ -95,7 +95,6 @@ const emit = defineEmits<{ submit: []; cancel: [] }>();
 /* The clip count readout: a labeled row, value in a monospace column. */
 .clip-readout {
   margin: 0;
-  max-width: 220px;
 }
 .clip-readout > div {
   display: flex;
