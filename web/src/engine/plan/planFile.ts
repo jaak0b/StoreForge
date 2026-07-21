@@ -813,7 +813,9 @@ function pickMagnets(raw: Record<string, unknown> | null): BaseplateMagnets | nu
  * plain plate) or an object whose four sides are each a finite number from
  * 0 up to but not including PITCH, matching BaseplateBrim's own contract in
  * baseplate/constants.ts (a brim is always less than one pitch, by
- * construction of the drawer-fill planner).
+ * construction of the drawer-fill planner). The brim is only an anti-wobble
+ * shim, so a side that reaches a full pitch is refused rather than silently
+ * capped: the user must choose a larger plate instead.
  */
 function validateBrim(raw: unknown, subject: string): string | null {
   if (raw === undefined) return null;
@@ -822,15 +824,18 @@ function validateBrim(raw: unknown, subject: string): string | null {
   }
   const brim = raw as Record<string, unknown>;
   const sides = [
-    ['leftMm', 'left'],
-    ['rightMm', 'right'],
-    ['frontMm', 'front'],
-    ['backMm', 'back'],
+    ['leftMm', 'left', 'width'],
+    ['rightMm', 'right', 'width'],
+    ['frontMm', 'front', 'depth'],
+    ['backMm', 'back', 'depth'],
   ] as const;
-  for (const [key, name] of sides) {
+  for (const [key, name, axis] of sides) {
     const value = brim[key];
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value >= PITCH) {
-      return `${subject}: the brim's ${name} side must be a number of millimeters from 0 up to (not including) ${PITCH}`;
+      return (
+        `${subject}: the brim's ${name} side must stay below one grid pitch (${PITCH} mm). ` +
+        `Increase the plate ${axis} instead if you want more size in that direction.`
+      );
     }
   }
   return null;

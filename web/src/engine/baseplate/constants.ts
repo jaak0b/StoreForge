@@ -129,11 +129,13 @@ export interface BaseplateMagnets {
 
 /**
  * Brim extension per edge, in mm: the four edge plates of a drawer-filling
- * baseplate grid grow toward the drawer wall by this much, carrying a
- * partial row/column of sockets rather than a solid bar. Each side is
- * always less than one pitch, so a brimmed edge never grows a full extra
- * socket. The planner in drawerFill.ts is the only place that computes these
- * values; the generator only ever consumes them.
+ * baseplate grid grow toward the drawer wall by this much, as a plain flat
+ * spacer bar with no socket profile, so the plate does not wobble in the
+ * drawer. Each side must stay strictly below one pitch: the brim is an
+ * anti-wobble shim, never a way to grow the grid, so a larger side means a
+ * larger baseplate (more units) instead. The planner in drawerFill.ts is the
+ * only place that computes these values; the generator only ever consumes
+ * them.
  */
 export interface BaseplateBrim {
   leftMm: number;

@@ -396,6 +396,18 @@ const editingEntry = computed<QueueEntry | null>(() => {
 // The queue's refusal of an invalid design, shown beside the save button.
 const saveError = ref<string | null>(null);
 
+/**
+ * Live brim cap feedback: the same validateProduct check that blocks Add to
+ * queue / Save changes at submit time, surfaced as soon as a brim side
+ * reaches the cap so the user sees it while still editing. Filtered to the
+ * brim's own message so an unrelated in-progress field (already constrained
+ * by its own min/max) never shows here.
+ */
+const brimCapError = computed<string | null>(() => {
+  const problem = validateProduct(store.product, 'This baseplate');
+  return problem !== null && problem.includes('brim') ? problem : null;
+});
+
 function saveEntry(): void {
   const cleanNotes = store.notes.trim();
   const product = store.product;
@@ -779,6 +791,9 @@ function editingTitle(entry: QueueEntry): string {
               />
             </div>
           </div>
+          <v-alert v-if="brimCapError" type="error" density="compact" class="mt-2">
+            {{ brimCapError }}
+          </v-alert>
         </template>
         <template #after>
           <v-textarea

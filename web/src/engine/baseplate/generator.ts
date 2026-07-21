@@ -82,19 +82,14 @@ export function baseplateOuterMm(
 }
 
 /**
- * Number of socket cells the plate generates, counting the partial cell each
- * brimmed side adds (the generator stamps one extra cell per brimmed side and
- * clips it to the brim). The single source of the generated cell count; the
+ * Number of socket cells the plate generates: unitsX by unitsY. A brim never
+ * adds a cell (it is a flat spacer, not a partial cell), so it plays no part
+ * in this count. The single source of the generated cell count; the
  * designer's live-preview gate derives its workload estimate here, never
  * locally.
  */
-export function baseplateCellCount(
-  params: Pick<BaseplateParams, 'unitsX' | 'unitsY' | 'brim'>,
-): number {
-  const brim = params.brim ?? ZERO_BRIM;
-  const columns = params.unitsX + (brim.leftMm > 0 ? 1 : 0) + (brim.rightMm > 0 ? 1 : 0);
-  const rows = params.unitsY + (brim.frontMm > 0 ? 1 : 0) + (brim.backMm > 0 ? 1 : 0);
-  return columns * rows;
+export function baseplateCellCount(params: Pick<BaseplateParams, 'unitsX' | 'unitsY'>): number {
+  return params.unitsX * params.unitsY;
 }
 
 /**
@@ -329,26 +324,17 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   const clipper = plainClipper.translate(dx, dy, 0);
   plainClipper.delete();
 
-  // Stage 3: sharp-cornered cell cavities on the pitch lattice. The full
-  // unitsX by unitsY cells are always present; one extra column or row is
-  // added on each brimmed side (brim is always less than one pitch, so the
-  // extra cell always straddles the plate's brimmed edge). That extra cell
-  // is a full-size socket cavity, exactly like a full cell; it is clipped
-  // down to only its brim-covered portion by the intersection with clipper
-  // in stage 4 below, the same mechanism that rounds a corner cavity today.
+  // Stage 3: sharp-cornered cell cavities on the pitch lattice. Only the full
+  // unitsX by unitsY cells ever get a cavity; a brimmed side never grows the
+  // grid, so no extra column or row is stamped for it. The brim is an
+  // anti-wobble shim, not a partial cell: the material beyond the full-cell
+  // edge stays solid, giving the brim a plain flat profile flush with the
+  // plate base, with none of the socket's chamfer.
   const socketTop = BASE_TOP_SIZE + 2 * BASEPLATE_SOCKET_CLEARANCE;
   const cellSolid = loftChain(m, socketTop, socketTop, sections, 0, 0);
-  const ixValues: number[] = [];
-  if (brim.leftMm > 0) ixValues.push(-1);
-  for (let ix = 0; ix < params.unitsX; ix++) ixValues.push(ix);
-  if (brim.rightMm > 0) ixValues.push(params.unitsX);
-  const iyValues: number[] = [];
-  if (brim.frontMm > 0) iyValues.push(-1);
-  for (let iy = 0; iy < params.unitsY; iy++) iyValues.push(iy);
-  if (brim.backMm > 0) iyValues.push(params.unitsY);
   const cells: Manifold[] = [];
-  for (const ix of ixValues) {
-    for (const iy of iyValues) {
+  for (let ix = 0; ix < params.unitsX; ix++) {
+    for (let iy = 0; iy < params.unitsY; iy++) {
       cells.push(
         cellSolid.translate(cellCentre(ix, width, pitch), cellCentre(iy, depth, pitch), 0),
       );
@@ -357,8 +343,7 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   cellSolid.delete();
 
   // Stage 4: one intersection produces rounded cavity corners at the plate
-  // boundary, sharp ones internally, and (new) partial sockets wherever a
-  // brim cell's full-size cavity is cut short by the brimmed clipper.
+  // boundary and sharp ones internally.
   const cellUnion = m.Manifold.union(cells);
   const cavity = cellUnion.intersect(clipper);
   cellUnion.delete();
