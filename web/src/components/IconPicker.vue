@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { LABEL_ICONS, type LabelIcon } from '../engine/label/icons';
-import { validateCustomIcon } from '../engine/label/customIcon';
+import type { CustomIconValidation } from '../engine/label/customIcon';
+import { validateCustomIcon } from '../workerClient';
 import { useCustomIcons } from '../stores/customIcons';
 
 /**
@@ -37,13 +38,34 @@ const customIconInput = ref('');
 const customIconName = ref('');
 const svgFileInput = ref<HTMLInputElement | null>(null);
 
-const customIconValidation = computed(() =>
-  customIconInput.value.trim() === '' ? null : validateCustomIcon(customIconInput.value),
-);
+// Validation runs in the worker (its union and stroke expansion need the
+// manifold WASM), so it is async: each input change starts a validation and a
+// later change supersedes an earlier one still in flight.
+const customIconValidation = ref<CustomIconValidation | null>(null);
+const validating = ref(false);
+let validationToken = 0;
+
+watch(customIconInput, (value) => {
+  const token = ++validationToken;
+  if (value.trim() === '') {
+    customIconValidation.value = null;
+    validating.value = false;
+    return;
+  }
+  validating.value = true;
+  void validateCustomIcon(value).then((result) => {
+    if (token !== validationToken) return;
+    customIconValidation.value = result;
+    validating.value = false;
+  });
+});
 
 function openUpload(): void {
   customIconInput.value = '';
   customIconName.value = '';
+  customIconValidation.value = null;
+  validating.value = false;
+  validationToken++;
   uploadOpen.value = true;
 }
 
@@ -73,6 +95,7 @@ const customIconNameTaken = computed(() => {
 
 const canAddCustomIcon = computed(
   () =>
+    !validating.value &&
     customIconValidation.value?.ok === true &&
     customIconName.value.trim() !== '' &&
     !customIconNameTaken.value,
@@ -138,7 +161,7 @@ function addCustomIcon(): void {
             label="SVG path data or a full <svg>"
             rows="3"
             density="compact"
-            hint="Use one filled shape; keep it simple and bold."
+            hint="Paste path data or a whole SVG. Filled shapes and stroked outlines are merged into one silhouette, so most icons work as they are."
             persistent-hint
           />
           <input
@@ -157,8 +180,12 @@ function addCustomIcon(): void {
           >
             Upload SVG file
           </v-btn>
+          <div v-if="validating" class="d-flex align-center ga-2 mt-2">
+            <v-progress-circular indeterminate size="20" width="2" />
+            <span class="text-body-2">Checking this shape.</span>
+          </div>
           <v-alert
-            v-if="customIconValidation !== null && !customIconValidation.ok"
+            v-if="!validating && customIconValidation !== null && !customIconValidation.ok"
             type="warning"
             density="compact"
             variant="tonal"
@@ -166,7 +193,7 @@ function addCustomIcon(): void {
           >
             {{ customIconValidation.error }}
           </v-alert>
-          <template v-if="customIconValidation !== null && customIconValidation.ok">
+          <template v-if="!validating && customIconValidation !== null && customIconValidation.ok">
             <div class="d-flex align-center ga-2 mt-2">
               <v-icon icon="mdi-check-circle" color="success" size="20" />
               <svg
