@@ -1,6 +1,7 @@
 import * as Comlink from 'comlink';
 import type { GeometryWorkerApi } from './worker/geometry.worker';
 import { withResolvedBinInsert, withResolvedInsertContent } from './labelIcons';
+import { sanitizeForWorker } from './workerSanitize';
 import { getModel } from './modelStore';
 import { modelNotStoredMessage } from './engine/plan/missingModels';
 import { cutoutModelKey } from './engine/cutout/cutoutBin';
@@ -52,7 +53,7 @@ function getWorker(): Comlink.Remote<GeometryWorkerApi> {
 
 /** Generate a plain bin mesh in the geometry worker. */
 export async function generateBin(params: BinParams): Promise<MeshData> {
-  return getWorker().generateBin(params);
+  return getWorker().generateBin(sanitizeForWorker(params));
 }
 
 /**
@@ -65,44 +66,44 @@ export async function validateCustomIcon(input: string): Promise<CustomIconValid
 
 /** Generate a slotted bin as separate body and preview-insert meshes. */
 export async function generateSlottedBin(params: SlottedBinParams): Promise<PartMeshes> {
-  return getWorker().generateSlottedBin(withResolvedBinInsert(params));
+  return getWorker().generateSlottedBin(sanitizeForWorker(withResolvedBinInsert(params)));
 }
 
 /** Generate a slotted bin as one unioned mesh for the STL download. */
 export async function generateSlottedBinUnion(params: SlottedBinParams): Promise<MeshData> {
-  return getWorker().generateSlottedBinUnion(withResolvedBinInsert(params));
+  return getWorker().generateSlottedBinUnion(sanitizeForWorker(withResolvedBinInsert(params)));
 }
 
 /** Generate a label insert as separate plate and inlay meshes. */
 export async function generateInsert(params: InsertParams): Promise<PartMeshes> {
-  return getWorker().generateInsert(withResolvedInsertContent(params));
+  return getWorker().generateInsert(sanitizeForWorker(withResolvedInsertContent(params)));
 }
 
 /** Generate a label insert as one unioned mesh for the STL download. */
 export async function generateInsertUnion(params: InsertParams): Promise<MeshData> {
-  return getWorker().generateInsertUnion(withResolvedInsertContent(params));
+  return getWorker().generateInsertUnion(sanitizeForWorker(withResolvedInsertContent(params)));
 }
 
 /** Generate a bin with tool-shaped pockets as separate body and preview-insert meshes. */
 export async function generatePocketBin(params: PocketBinParams): Promise<PartMeshes> {
-  return getWorker().generatePocketBin(withResolvedBinInsert(params));
+  return getWorker().generatePocketBin(sanitizeForWorker(withResolvedBinInsert(params)));
 }
 
 /** Generate a pocket bin as one unioned mesh for the STL download. */
 export async function generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
-  return getWorker().generatePocketBinUnion(withResolvedBinInsert(params));
+  return getWorker().generatePocketBinUnion(sanitizeForWorker(withResolvedBinInsert(params)));
 }
 
 /** Generate a baseplate mesh in the geometry worker. */
 export async function generateBaseplate(params: BaseplateParams): Promise<MeshData> {
-  return getWorker().generateBaseplate(params);
+  return getWorker().generateBaseplate(sanitizeForWorker(params));
 }
 
 /** Generate a connection clip mesh in the geometry worker. */
 export async function generateConnectionClip(
   params: ConnectionClipParams,
 ): Promise<MeshData> {
-  return getWorker().generateConnectionClip(params);
+  return getWorker().generateConnectionClip(sanitizeForWorker(params));
 }
 
 /** The three values a cached model solid is keyed by, from anything carrying them. */
@@ -133,12 +134,12 @@ async function uploadCutoutModel(model: CutoutModelIdentity): Promise<CutoutMode
   if (blob === null) throw new Error(modelNotStoredMessage(model));
   const buffer = await blob.arrayBuffer();
   return getWorker().putCutoutModel(
-    {
+    sanitizeForWorker({
       modelSourceId: model.modelSourceId,
       unitScale: model.unitScale,
       clearanceMm: model.clearanceMm,
       name: model.name,
-    },
+    }),
     Comlink.transfer(buffer, [buffer]),
   );
 }
@@ -171,7 +172,7 @@ async function ensureCutoutModels(models: CutoutModelRequest[]): Promise<void> {
       model,
     ]),
   );
-  const missing = await worker.missingCutoutModels(models.map(keySpecOf));
+  const missing = await worker.missingCutoutModels(sanitizeForWorker(models.map(keySpecOf)));
   for (const spec of missing) {
     const model = byKey.get(
       cutoutModelKey(spec.modelSourceId, spec.unitScale, spec.clearanceMm),
@@ -200,7 +201,7 @@ async function ensureCutoutModels(models: CutoutModelRequest[]): Promise<void> {
  */
 export async function releaseCutoutModels(keep: CutoutModelKeySpec[]): Promise<void> {
   if (remote === null) return;
-  return getWorker().releaseCutoutModels(keep.map(keySpecOf));
+  return getWorker().releaseCutoutModels(sanitizeForWorker(keep.map(keySpecOf)));
 }
 
 /**
@@ -211,7 +212,7 @@ export async function generateCutoutBinPreview(
   request: CutoutBinRequest,
 ): Promise<CutoutPreviewResult> {
   await ensureCutoutModels(request.models);
-  return getWorker().generateCutoutBinPreview(withResolvedBinInsert(request));
+  return getWorker().generateCutoutBinPreview(sanitizeForWorker(withResolvedBinInsert(request)));
 }
 
 /** Carve a cutout bin as separate body and label meshes, with its warnings. */
@@ -219,7 +220,7 @@ export async function generateCutoutBin(
   request: CutoutBinRequest,
 ): Promise<CutoutCarveResult> {
   await ensureCutoutModels(request.models);
-  return getWorker().generateCutoutBin(withResolvedBinInsert(request));
+  return getWorker().generateCutoutBin(sanitizeForWorker(withResolvedBinInsert(request)));
 }
 
 /** Carve a cutout bin as one unioned mesh for the STL download, with its warnings. */
@@ -227,5 +228,5 @@ export async function generateCutoutBinUnion(
   request: CutoutBinRequest,
 ): Promise<CutoutUnionResult> {
   await ensureCutoutModels(request.models);
-  return getWorker().generateCutoutBinUnion(withResolvedBinInsert(request));
+  return getWorker().generateCutoutBinUnion(sanitizeForWorker(withResolvedBinInsert(request)));
 }

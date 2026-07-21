@@ -107,12 +107,7 @@ export function toSlottedBinParams(
     magnetHoles: bin.magnetHoles,
     // Both carve flows fill the interior solid before subtracting, so neither a
     // traced nor a cutout bin has divider walls for the walls to divide.
-    // Deep-copied to strip Vue proxies, which the structured clone of the
-    // worker call rejects.
-    walls:
-      bin.origin === 'traced' || bin.origin === 'cutout'
-        ? []
-        : (JSON.parse(JSON.stringify(bin.walls)) as typeof bin.walls),
+    walls: bin.origin === 'traced' || bin.origin === 'cutout' ? [] : bin.walls,
     labelSlot,
     insert,
     fusedLabel,
