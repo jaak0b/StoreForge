@@ -1,15 +1,20 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
-import { generatePocketBin } from '../../workerClient';
+import {
+  generatePocketBinPreview,
+  type PocketBinPreviewResult,
+} from '../../workerClient';
 import { cloneEdit } from '../../stores/cavityEditSession';
+import type { CavityPaintBinding } from '../../composables/useCavityPaint';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import {
+  assertNever,
   binOf,
   insertOf,
   type BinPockets,
@@ -17,11 +22,13 @@ import {
   type QueueEntry,
   type TracePaper,
   type TracedBin,
+  type Vec3Mm,
 } from '../../engine/plan/types';
 import type { PaperCorners } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
 import BinViewport from '../BinViewport.vue';
+import PaintToolbar from '../carve/PaintToolbar.vue';
 import LayoutCanvas from './LayoutCanvas.vue';
 import LayoutToolbar from './LayoutToolbar.vue';
 import AdvancedDrawer from './AdvancedDrawer.vue';
@@ -171,15 +178,134 @@ const pocketParams = computed<PocketBinParams>(() => {
   };
 });
 
+/**
+ * A pocket carve result with the edit count it was built from carried
+ * alongside, so a rejection knows how far to roll the edits back. The count
+ * travels with the result rather than sitting in shared state, for the same
+ * reason the cutout carve carries its model ids: a newer request can have
+ * changed the live edit list by the time an older result lands.
+ */
+type PocketResultWithMeta = PocketBinPreviewResult & { editCount: number };
+
+/**
+ * Carves the preview through the cancellable pocket-preview call, recording
+ * the edit count the request carried. A carve superseded by a newer request
+ * comes back as an outcome to discard, never as an error.
+ */
+async function carvePreview(params: PocketBinParams): Promise<PocketResultWithMeta> {
+  const editCount = params.edits?.length ?? 0;
+  const result = await generatePocketBinPreview({ ...params, edits: params.edits ?? [] });
+  return Object.assign(result, { editCount });
+}
+
 // The preview generation always runs so the layout is validated (the
 // worker's exact CSG containment check is the final authority over the
 // layout model's bounding-box sizing); the heavy viewport itself mounts only
 // while the 3D toggle is on. Its error alert is the single surface for
 // layout validation problems.
-const { meshes, errorMessage } = useBinPreview(
+const {
+  meshes: previewResult,
+  generating,
+  errorMessage,
+} = useBinPreview<PocketBinParams, PocketResultWithMeta>(
   () => pocketParams.value,
-  (params) => generatePocketBin(params as PocketBinParams),
+  carvePreview,
 );
+
+/** The last carve that actually landed, which is what the 3D viewport draws. */
+const carved = shallowRef<Extract<PocketResultWithMeta, { outcome: 'carved' }> | null>(null);
+
+watch(previewResult, (result) => {
+  if (result === null) return;
+  switch (result.outcome) {
+    case 'carved':
+      carved.value = result;
+      // This carve reached the worker and produced a bin, so every edit it was
+      // built from is known good. Clamped inside noteLandedCarve to the live
+      // edit list, in case an undo shrank it while this carve was in flight.
+      trace.noteLandedCarve(result.editCount);
+      return;
+    case 'superseded':
+      // A newer request replaced this one before it finished; the newer carve
+      // is the one being waited for, so nothing here changes.
+      return;
+    default:
+      return assertNever(result);
+  }
+});
+
+/** The error a rejected cavity edit surfaced, shown as its own alert row. */
+const editError = ref<string | null>(null);
+
+// A manual cavity edit that makes the carve fail must not stay applied: it
+// would sit in the undo stack looking normal while the bin it produced is
+// gone. Only an edit rejection rolls edits back; any other carve failure (an
+// oversized layout) is not the edit's fault and leaves the edit list alone.
+// This mirrors the cutout tab's rejection wiring exactly.
+watch(generating, (isGenerating) => {
+  if (isGenerating) return;
+  const rolledBack = trace.rollbackRejectedEdits(errorMessage.value);
+  if (rolledBack !== null) editError.value = rolledBack;
+});
+
+watch(
+  () => trace.activeTool,
+  () => {
+    editError.value = null;
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Painting manual cavity edits on the 3D preview
+// ---------------------------------------------------------------------------
+
+/** Whether the paint toolbar's shortcut help popover is open. */
+const shortcutHelpOpen = ref(false);
+
+/** Fires a paint stroke's add or remove edit. */
+function onStrokeCommit(points: Vec3Mm[]): void {
+  if (trace.activeTool !== 'add' && trace.activeTool !== 'remove') return;
+  editError.value = null;
+  trace.appendEdit({ kind: trace.activeTool, points, radiusMm: trace.brushRadiusMm });
+}
+
+/** Fires a flatten click's edit. */
+function onFlattenCommit(centerMm: Vec3Mm, normalMm: Vec3Mm): void {
+  if (trace.activeTool !== 'flatten') return;
+  editError.value = null;
+  trace.appendEdit({
+    kind: 'flatten',
+    centerMm,
+    radiusMm: trace.brushRadiusMm,
+    normalMm,
+    heightMm: trace.flattenHeightMm,
+  });
+}
+
+/**
+ * The paint binding handed to the display viewport: the reactive getters it
+ * reads and the callbacks it raises, all routed through the toolTrace store's
+ * embedded edit session. The step and set calls go through the session's own
+ * clamped setters, so this layer never has to know the bounds. The getters read
+ * the store at call time, so the plain object stays valid for the viewport's
+ * lifetime.
+ */
+const paintBinding: CavityPaintBinding = {
+  paintTool: () => trace.activeTool,
+  brushRadiusMm: () => trace.brushRadiusMm,
+  flattenHeightMm: () => trace.flattenHeightMm,
+  canUndo: () => trace.edits.length > 0,
+  canRedo: () => trace.redoStack.length > 0,
+  onStrokeCommit,
+  onFlattenCommit,
+  onSetTool: (tool) => trace.setActiveTool(tool),
+  onStepBrushRadius: (deltaMm) => trace.setBrushRadius(trace.brushRadiusMm + deltaMm),
+  onUndo: () => trace.undoEdit(),
+  onRedo: () => trace.redoEdit(),
+  onToggleShortcutHelp: () => {
+    shortcutHelpOpen.value = !shortcutHelpOpen.value;
+  },
+};
 
 /**
  * Why the queue action is unavailable right now, or null when it can run.
@@ -322,8 +448,22 @@ function cancelEdit(): void {
       <div v-show="!show3d" class="canvas-wrap">
         <LayoutCanvas />
       </div>
-      <div v-if="show3d" class="preview-body">
-        <BinViewport :mesh="meshes?.body ?? null" :label="meshes?.label ?? null" />
+      <div v-if="show3d" class="preview-3d">
+        <PaintToolbar
+          v-model:shortcut-help-open="shortcutHelpOpen"
+          :session="trace"
+          class="paint-bar"
+        />
+        <div class="preview-body">
+          <BinViewport
+            :mesh="carved?.meshes.body ?? null"
+            :label="carved?.meshes.label ?? null"
+            :paint="paintBinding"
+          />
+        </div>
+        <v-alert v-if="editError" type="error" density="compact" class="mt-2">
+          {{ editError }}
+        </v-alert>
       </div>
 
       <div class="canvas-hint text-caption text-medium-emphasis">
@@ -448,6 +588,14 @@ function cancelEdit(): void {
   min-height: 420px;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 8px;
+}
+
+.paint-bar {
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
 }
 
 .canvas-hint {

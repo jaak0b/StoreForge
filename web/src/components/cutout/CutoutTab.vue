@@ -41,15 +41,10 @@ import {
   type QueueEntry,
   type Vec3Mm,
 } from '../../engine/plan/types';
-import {
-  CAVITY_EDIT_RADIUS_MIN_MM,
-  CAVITY_EDIT_RADIUS_MAX_MM,
-  FLATTEN_HEIGHT_MIN_MM,
-  FLATTEN_HEIGHT_MAX_MM,
-} from '../../engine/carve/cavityEdits';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import CutoutViewport from './CutoutViewport.vue';
+import PaintToolbar from '../carve/PaintToolbar.vue';
 import ModelList from './ModelList.vue';
 import ModelReadout from './ModelReadout.vue';
 import CarveProgressBar from '../CarveProgressBar.vue';
@@ -332,36 +327,6 @@ function onPlacementCommit(moved: CutoutGhostMoved): void {
 // Painting manual cavity edits
 // ---------------------------------------------------------------------------
 
-/** Draft value of the brush radius field, committed on blur or Enter. */
-const brushRadiusDraft = ref(cutout.brushRadiusMm);
-watch(
-  () => cutout.brushRadiusMm,
-  (radiusMm) => {
-    brushRadiusDraft.value = radiusMm;
-  },
-);
-
-/** Commits the brush radius draft, then resyncs in case the store clamped it. */
-function onCommitBrushRadius(): void {
-  cutout.setBrushRadius(brushRadiusDraft.value);
-  brushRadiusDraft.value = cutout.brushRadiusMm;
-}
-
-/** Draft value of the flatten cut height field, committed on blur or Enter. */
-const flattenHeightDraft = ref(cutout.flattenHeightMm);
-watch(
-  () => cutout.flattenHeightMm,
-  (heightMm) => {
-    flattenHeightDraft.value = heightMm;
-  },
-);
-
-/** Commits the flatten cut height draft, then resyncs in case the store clamped it. */
-function onCommitFlattenHeight(): void {
-  cutout.setFlattenHeight(flattenHeightDraft.value);
-  flattenHeightDraft.value = cutout.flattenHeightMm;
-}
-
 /** Text shown for the "Clear all edits" confirmation. */
 const clearEditsDialogOpen = ref(false);
 
@@ -375,15 +340,12 @@ const shortcutHelpOpen = ref(false);
  */
 const modelsHiddenButton = ref(false);
 
-/** The cutout paint shortcuts listed in the help popover, action left, keys right. */
-const shortcutRows: { action: string; keys: string }[] = [
-  { action: 'Paint add', keys: 'B' },
-  { action: 'Paint remove', keys: 'E' },
-  { action: 'Flatten', keys: 'S' },
-  { action: 'Pointer mode', keys: 'V or Escape' },
-  { action: 'Brush size', keys: '[ and ]' },
-  { action: 'Undo', keys: 'Ctrl+Z' },
-  { action: 'Redo', keys: 'Ctrl+Y' },
+/**
+ * The cutout-specific shortcut row appended to the paint toolbar's own rows.
+ * Hiding the model ghosts is a cutout concern (the tool bin has none), so it
+ * is passed in rather than owned by the shared toolbar.
+ */
+const extraShortcutRows: { action: string; keys: string }[] = [
   { action: 'Hide models', keys: 'Hold Tab or eye button' },
 ];
 
@@ -1039,88 +1001,12 @@ function editingTitle(entry: QueueEntry): string {
 <template>
   <v-row>
     <v-col cols="12" md="7">
-      <div class="d-flex align-center flex-wrap ga-1 mb-2">
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :color="cutout.activeTool === 'add' ? 'info' : undefined"
-          @click="cutout.setActiveTool(cutout.activeTool === 'add' ? null : 'add')"
-        >
-          <v-icon icon="mdi-brush" size="20" />
-          <v-tooltip activator="parent" location="bottom">Add material.</v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :color="cutout.activeTool === 'remove' ? 'error' : undefined"
-          @click="cutout.setActiveTool(cutout.activeTool === 'remove' ? null : 'remove')"
-        >
-          <v-icon icon="mdi-eraser" size="20" />
-          <v-tooltip activator="parent" location="bottom">Remove material.</v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :color="cutout.activeTool === 'flatten' ? 'secondary' : undefined"
-          @click="cutout.setActiveTool(cutout.activeTool === 'flatten' ? null : 'flatten')"
-        >
-          <v-icon icon="mdi-blur" size="20" />
-          <v-tooltip activator="parent" location="bottom">Flatten to bin surface.</v-tooltip>
-        </v-btn>
-        <v-text-field
-          v-model.number="brushRadiusDraft"
-          type="number"
-          label="Brush radius"
-          suffix="mm"
-          :min="CAVITY_EDIT_RADIUS_MIN_MM"
-          :max="CAVITY_EDIT_RADIUS_MAX_MM"
-          step="0.1"
-          density="compact"
-          hide-details
-          style="max-width: 130px"
-          class="ml-1"
-          @blur="onCommitBrushRadius"
-          @keydown.enter="onCommitBrushRadius"
-        />
-        <v-text-field
-          v-if="cutout.activeTool === 'flatten'"
-          v-model.number="flattenHeightDraft"
-          type="number"
-          label="Cut height"
-          suffix="mm"
-          :min="FLATTEN_HEIGHT_MIN_MM"
-          :max="FLATTEN_HEIGHT_MAX_MM"
-          step="0.5"
-          density="compact"
-          hide-details
-          style="max-width: 130px"
-          class="ml-1"
-          @blur="onCommitFlattenHeight"
-          @keydown.enter="onCommitFlattenHeight"
-        />
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :disabled="cutout.edits.length === 0"
-          @click="cutout.undoEdit()"
-        >
-          <v-icon icon="mdi-undo" size="20" />
-          <v-tooltip activator="parent" location="bottom">Undo last edit.</v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :disabled="cutout.redoStack.length === 0"
-          @click="cutout.redoEdit()"
-        >
-          <v-icon icon="mdi-redo" size="20" />
-          <v-tooltip activator="parent" location="bottom">Redo edit.</v-tooltip>
-        </v-btn>
+      <PaintToolbar
+        v-model:shortcut-help-open="shortcutHelpOpen"
+        :session="cutout"
+        :extra-shortcut-rows="extraShortcutRows"
+        class="mb-2"
+      >
         <v-btn
           icon
           size="small"
@@ -1143,25 +1029,7 @@ function editingTitle(entry: QueueEntry): string {
             Hide the model ghosts. Holding Tab does the same while held.
           </v-tooltip>
         </v-btn>
-        <v-menu v-model="shortcutHelpOpen" location="top end" :close-on-content-click="false">
-          <template #activator="{ props: menuProps }">
-            <v-btn icon size="small" variant="text" v-bind="menuProps">
-              <v-icon icon="mdi-help-circle-outline" size="20" />
-              <v-tooltip activator="parent" location="bottom">Canvas shortcuts</v-tooltip>
-            </v-btn>
-          </template>
-          <v-card min-width="280" class="pa-2">
-            <div
-              v-for="row in shortcutRows"
-              :key="row.action"
-              class="d-flex align-center justify-space-between ga-4 px-2 py-1 shortcut-row"
-            >
-              <span class="text-body-2">{{ row.action }}</span>
-              <span class="text-caption text-medium-emphasis">{{ row.keys }}</span>
-            </div>
-          </v-card>
-        </v-menu>
-      </div>
+      </PaintToolbar>
 
       <v-dialog v-model="clearEditsDialogOpen" max-width="480">
         <v-card>

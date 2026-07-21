@@ -522,6 +522,17 @@ export function setPocketDepth(state: LayoutState, toolId: string, depthMm: numb
 }
 
 /**
+ * Sets a placement's pocket draft angle, in degrees. Draft leans the pocket
+ * walls outward toward the top and never changes the footprint (the mouth is
+ * the outline; the draft only widens the opening above the floor).
+ */
+export function setDraftAngle(state: LayoutState, toolId: string, draftAngleDeg: number): void {
+  const placement = state.placements.find((p) => p.toolId === toolId);
+  if (placement === undefined) return;
+  placement.draftAngleDeg = draftAngleDeg;
+}
+
+/**
  * Adds a finger hole to a tool, in tool-local mm. Re-sizes unless manual.
  * Returns the pushed hole (the reactive instance when the state is a store)
  * so a placement drag can keep stretching it, or null when the tool is gone.

@@ -232,6 +232,10 @@ export const useToolTrace = defineStore('toolTrace', () => {
     layout.setPocketDepth(layoutState, toolId, depthMm);
   }
 
+  function setDraftAngle(toolId: string, draftAngleDeg: number): void {
+    layout.setDraftAngle(layoutState, toolId, draftAngleDeg);
+  }
+
   function addFingerHole(toolId: string, hole: FingerHole): FingerHole | null {
     return layout.addFingerHole(layoutState, toolId, hole);
   }
@@ -330,6 +334,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     setToolTransform,
     toggleFilledHole,
     setPocketDepth,
+    setDraftAngle,
     addFingerHole,
     moveFingerHole,
     stretchFingerHole,
