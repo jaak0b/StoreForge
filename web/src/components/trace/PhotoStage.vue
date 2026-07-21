@@ -360,10 +360,7 @@ async function confirm(): Promise<void> {
   errorMessage.value = null;
   try {
     busyText.value = 'Rectifying the sheet.';
-    const result = await rectifyPaper(
-      JSON.parse(JSON.stringify(corners.value)) as PaperCorners,
-      paperKind.value,
-    );
+    const result = await rectifyPaper(corners.value, paperKind.value);
     store.calibration = result.calibration;
     store.rectifiedPreview = result.preview;
     store.embedReady = false;

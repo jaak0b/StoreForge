@@ -7,6 +7,9 @@
  * Framework-free by construction (no Vue import): it recognises a reactive Proxy
  * structurally, because such a Proxy reports Object.prototype as its prototype
  * and is rebuilt as a plain object below.
+ *
+ * Payloads are assumed acyclic: there is no visited-set cycle guard, so a cyclic
+ * value would recurse forever, exactly as the JSON round-trip this replaced did.
  */
 export function sanitizeForWorker<T>(value: T): T {
   // Primitives clone as-is. undefined-valued optional keys (iconPath, scoop,
