@@ -10,14 +10,9 @@ import type { PartMeshes } from '../engine/gridfinity/types';
 import type { BaseplateParams } from '../engine/baseplate/constants';
 import {
   BASEPLATE_UNITS_MAX,
-  type BaseplateBrim,
   CLIP_TOLERANCE_DEFAULT,
   CLIP_TOLERANCE_MAX,
   CLIP_TOLERANCE_MIN,
-  MAGNET_DIAMETER_MAX,
-  MAGNET_DIAMETER_MIN,
-  MAGNET_HEIGHT_MAX,
-  MAGNET_HEIGHT_MIN,
 } from '../engine/baseplate/constants';
 import { originOf, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
@@ -26,10 +21,11 @@ import {
   planDrawerFill,
   type DrawerFillPlate,
 } from '../engine/baseplate/drawerFill';
-import { baseplateCellCount, baseplateOuterMm } from '../engine/baseplate/generator';
+import { groupDrawerFillPlanRows } from '../engine/baseplate/drawerFillPlan';
+import { baseplateCellCount } from '../engine/baseplate/generator';
 import { validateProduct } from '../engine/plan/planFile';
-import type { BaseplateProduct } from '../engine/plan/types';
 import BinViewport from './BinViewport.vue';
+import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
 import MoreOptions from './MoreOptions.vue';
 
 /**
@@ -111,101 +107,79 @@ const drawerFillError = computed<string | null>(() => {
   return result !== null && 'error' in result ? result.error : null;
 });
 
-/** One planned plate's outer size in mm, for the readout and the SVG preview. */
-function drawerFillOuterMm(plate: DrawerFillPlate): { widthMm: number; depthMm: number } {
-  return baseplateOuterMm({ unitsX: plate.unitsX, unitsY: plate.unitsY, brim: plate.brim });
-}
-
-/** Whether two brims match on all four sides, for the readout's grouping. */
-function sameBrim(a: BaseplateBrim, b: BaseplateBrim): boolean {
-  return (
-    a.leftMm === b.leftMm &&
-    a.rightMm === b.rightMm &&
-    a.frontMm === b.frontMm &&
-    a.backMm === b.backMm
-  );
-}
-
-/** One readout row: a run of identical planned plates and how many there are. */
-interface DrawerFillGroup {
-  count: number;
-  plate: DrawerFillPlate;
-}
+/**
+ * The planned plates grouped into plan-table rows (identical plates collapse
+ * to one row with a count), from the shared presentation helper so the table
+ * and its tests read the same rows and strings.
+ */
+const drawerFillPlanRows = computed(() => groupDrawerFillPlanRows(drawerFillPlates.value));
 
 /**
- * The planned plates grouped for the readout: plates with the same unit
- * counts and the same brim on all four sides collapse into one row with a
- * count. Presentation only; the plates queued are still the planner's own,
- * one product per plate.
+ * The plate positions ("column-row") currently highlighted by a hover, shared
+ * between the plan table and the SVG preview so a hovered table row lights its
+ * plates and a hovered plate lights its table row. Empty when nothing hovers.
  */
-const drawerFillGroups = computed<DrawerFillGroup[]>(() => {
-  const groups: DrawerFillGroup[] = [];
-  for (const plate of drawerFillPlates.value) {
-    const match = groups.find(
-      (group) =>
-        group.plate.unitsX === plate.unitsX &&
-        group.plate.unitsY === plate.unitsY &&
-        sameBrim(group.plate.brim, plate.brim),
-    );
-    if (match !== undefined) match.count += 1;
-    else groups.push({ count: 1, plate });
-  }
-  return groups;
-});
+const highlightedPlates = ref<Set<string>>(new Set());
 
-/**
- * One readout row's value: unit counts, outer mm (from baseplateOuterMm, the
- * single outer-size source) and the brimmed sides by name, omitting sides
- * with no brim; a plate with no brim at all gets no brim clause.
- */
-function describeDrawerFillPlate(plate: DrawerFillPlate): string {
-  const outer = drawerFillOuterMm(plate);
-  const sides: string[] = [];
-  if (plate.brim.leftMm > 0) sides.push(`left ${plate.brim.leftMm.toFixed(1)} mm`);
-  if (plate.brim.rightMm > 0) sides.push(`right ${plate.brim.rightMm.toFixed(1)} mm`);
-  if (plate.brim.frontMm > 0) sides.push(`front ${plate.brim.frontMm.toFixed(1)} mm`);
-  if (plate.brim.backMm > 0) sides.push(`back ${plate.brim.backMm.toFixed(1)} mm`);
-  const brimClause = sides.length > 0 ? `, brim ${sides.join(', ')}` : '';
-  const outerMm = `${outer.widthMm.toFixed(1)}x${outer.depthMm.toFixed(1)} mm outer`;
-  return `${plate.unitsX}x${plate.unitsY} units, ${outerMm}${brimClause}`;
+/** The hover key of a plate, matching a layout rectangle's column and row. */
+function plateKey(plate: { column: number; row: number }): string {
+  return `${plate.column}-${plate.row}`;
+}
+
+/** Highlights every plate of a plan row (a table row hover). */
+function highlightRow(plates: DrawerFillPlate[]): void {
+  highlightedPlates.value = new Set(plates.map(plateKey));
+}
+
+/** Highlights one plate (an SVG rectangle hover). */
+function highlightPlate(rect: { column: number; row: number }): void {
+  highlightedPlates.value = new Set([plateKey(rect)]);
+}
+
+/** Clears the hover highlight. */
+function clearHighlight(): void {
+  highlightedPlates.value = new Set();
+}
+
+/** Whether a plan row has any plate in the current highlight, for the row's own highlight. */
+function rowHighlighted(plates: DrawerFillPlate[]): boolean {
+  return plates.some((plate) => highlightedPlates.value.has(plateKey(plate)));
 }
 
 const drawerFillQueueError = ref<string | null>(null);
 
 /**
- * Queues one BaseplateProduct per planned plate, inheriting the tab's
- * current magnet, screw-hole and connectable settings for the plate's full
- * cells (the same settings store.product uses today, shared between both
- * modes); each plate's brim comes from the planner, never recomputed here.
- * All-or-nothing: every product is validated with the queue's own validator
- * first, and nothing is queued unless all of them pass, so a refused plate
- * never leaves the drawer partially filled.
+ * Queues the planned plates as one drawer group: the group carries the four mm
+ * inputs, the tab's shared magnet, screw-hole and connectable options and the
+ * planner's plates (each plate's brim is the planner's own), and one linked
+ * baseplate row is added per plate. All-or-nothing lives in the store, which
+ * validates the group and every plate first and leaves the plan untouched on
+ * any refusal. A refusal is surfaced here.
  */
 function addDrawerFillPlates(): void {
   drawerFillQueueError.value = null;
-  const products: BaseplateProduct[] = drawerFillPlates.value.map((plate) => ({
-    kind: 'baseplate',
-    unitsX: plate.unitsX,
-    unitsY: plate.unitsY,
+  if (
+    drawerWidthMm.value === null ||
+    drawerDepthMm.value === null ||
+    plateWidthMm.value === null ||
+    plateDepthMm.value === null
+  ) {
+    return;
+  }
+  const input = {
+    drawerWidthMm: drawerWidthMm.value,
+    drawerDepthMm: drawerDepthMm.value,
+    plateWidthMm: plateWidthMm.value,
+    plateDepthMm: plateDepthMm.value,
+  };
+  const options = {
     magnets: store.magnets,
     screwHoles: store.screwHoleMode === 'full',
     connectable: store.connectable,
-    brim: plate.brim,
-  }));
-  for (const product of products) {
-    const problem = validateProduct(product, 'A planned plate');
-    if (problem !== null) {
-      drawerFillQueueError.value = problem;
-      return;
-    }
-  }
-  for (const product of products) {
-    const error = queue.add(product, 1);
-    if (error !== null) {
-      drawerFillQueueError.value = error;
-      return;
-    }
-  }
+  };
+  const name = `Drawer ${drawerWidthMm.value} × ${drawerDepthMm.value} mm`;
+  const error = queue.addDrawerGroup(input, options, drawerFillPlates.value, name);
+  if (error !== null) drawerFillQueueError.value = error;
 }
 
 /**
@@ -407,25 +381,169 @@ function cancelClipEdit(): void {
 function editingTitle(entry: QueueEntry): string {
   return describeProduct(entry.product).title;
 }
+
+/** Whether the drawer-fill layout is showing (a new plate in fill mode, no clip edit). */
+const fillMode = computed(
+  () => clipEditingEntry.value === null && editingEntry.value === null && sizeMode.value === 'fill',
+);
 </script>
 
 <template>
-  <v-row>
-    <v-col cols="12" md="6">
-      <template v-if="clipEditingEntry === null">
-      <v-btn-toggle
-        v-if="editingEntry === null"
-        v-model="sizeMode"
-        mandatory
-        density="comfortable"
-        variant="outlined"
-        class="mb-4"
-      >
-        <v-btn value="single">Single plate</v-btn>
-        <v-btn value="fill">Fill a drawer</v-btn>
-      </v-btn-toggle>
+  <!-- The mode toggle switches the tab between designing one plate and filling
+       a drawer; hidden while editing an existing plate. -->
+  <v-btn-toggle
+    v-if="clipEditingEntry === null && editingEntry === null"
+    v-model="sizeMode"
+    mandatory
+    density="comfortable"
+    variant="outlined"
+    class="mb-4"
+  >
+    <v-btn value="single">Single plate</v-btn>
+    <v-btn value="fill">Fill a drawer</v-btn>
+  </v-btn-toggle>
 
-      <template v-if="sizeMode === 'single' || editingEntry !== null">
+  <!-- Fill a drawer: inputs and options on the left, the top-down preview and
+       plan on the right, the queue button last. On a narrow screen the three
+       stack in reading order, so the button stays last. -->
+  <div v-if="fillMode" class="fill-layout">
+    <div class="fill-inputs">
+      <p class="text-body-2 text-medium-emphasis mb-3">
+        Enter the drawer's inside size and your build plate size; the plates fill
+        the drawer wall to wall.
+      </p>
+      <div class="d-flex align-center ga-2 mb-2">
+        <v-text-field
+          v-model.number="drawerWidthMm"
+          type="number"
+          min="0"
+          label="Drawer width (mm)"
+          density="comfortable"
+          hide-details
+        />
+        <span class="text-medium-emphasis">x</span>
+        <v-text-field
+          v-model.number="drawerDepthMm"
+          type="number"
+          min="0"
+          label="Drawer depth (mm)"
+          density="comfortable"
+          hide-details
+        />
+      </div>
+      <div class="d-flex align-center ga-2 mb-2">
+        <v-text-field
+          v-model.number="plateWidthMm"
+          type="number"
+          min="0"
+          label="Build plate width (mm)"
+          density="comfortable"
+          hide-details
+        />
+        <span class="text-medium-emphasis">x</span>
+        <v-text-field
+          v-model.number="plateDepthMm"
+          type="number"
+          min="0"
+          label="Build plate depth (mm)"
+          density="comfortable"
+          hide-details
+        />
+      </div>
+      <v-alert v-if="drawerFillError" type="error" density="compact" class="mb-4">
+        {{ drawerFillError }}
+      </v-alert>
+
+      <BaseplateOptionsFields
+        v-model:magnet-mode="store.magnetMode"
+        v-model:magnet-diameter-mm="store.magnetDiameterMm"
+        v-model:magnet-height-mm="store.magnetHeightMm"
+        v-model:screw-hole-mode="store.screwHoleMode"
+        v-model:connectable="store.connectable"
+        class="mt-4"
+      />
+    </div>
+
+    <div class="fill-preview">
+      <template v-if="drawerFillPlates.length > 0">
+        <svg
+          class="drawer-fill-preview mb-4"
+          :viewBox="`0 0 ${drawerWidthMm} ${drawerDepthMm}`"
+          preserveAspectRatio="xMidYMid meet"
+        >
+          <rect
+            x="0"
+            y="0"
+            :width="drawerWidthMm ?? 0"
+            :height="drawerDepthMm ?? 0"
+            class="drawer-fill-outline"
+          />
+          <rect
+            v-for="rect in drawerFillPreviewRects"
+            :key="rect.key"
+            :x="rect.x"
+            :y="rect.y"
+            :width="rect.width"
+            :height="rect.height"
+            :class="[
+              rect.brim ? 'drawer-fill-brim' : 'drawer-fill-cell',
+              { highlighted: highlightedPlates.has(`${rect.column}-${rect.row}`) },
+            ]"
+            @mouseenter="highlightPlate(rect)"
+            @mouseleave="clearHighlight"
+          />
+        </svg>
+
+        <table class="plan-table">
+          <thead>
+            <tr>
+              <th>Count</th>
+              <th>Units</th>
+              <th>Outer size (mm)</th>
+              <th>Brim (mm)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="(row, index) in drawerFillPlanRows"
+              :key="index"
+              :class="{ highlighted: rowHighlighted(row.plates) }"
+              @mouseenter="highlightRow(row.plates)"
+              @mouseleave="clearHighlight"
+            >
+              <td>{{ row.count }}×</td>
+              <td>{{ row.unitsLabel }}</td>
+              <td>{{ row.outerLabel }}</td>
+              <td>{{ row.brimLabel }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+      <div v-else class="fill-preview-empty text-body-2 text-medium-emphasis">
+        Enter all four sizes to plan the plates.
+      </div>
+    </div>
+
+    <div class="fill-actions">
+      <v-btn
+        color="primary"
+        variant="flat"
+        size="large"
+        block
+        :disabled="drawerFillPlates.length === 0"
+        @click="addDrawerFillPlates"
+      >
+        Add plates to queue
+      </v-btn>
+      <v-alert v-if="drawerFillQueueError" type="error" class="mt-4" density="compact">
+        {{ drawerFillQueueError }}
+      </v-alert>
+    </div>
+  </div>
+
+  <!-- Single plate, or editing an existing plate: the form beside the 3D preview. -->
+  <v-row v-else-if="clipEditingEntry === null">
+    <v-col cols="12" md="6">
       <div class="text-caption text-medium-emphasis mb-1">
         Baseplate size (grid units of 42 mm)
       </div>
@@ -456,198 +574,16 @@ function editingTitle(entry: QueueEntry): string {
       <v-alert v-if="brimCapError" type="error" density="compact" class="mt-2">
         {{ brimCapError }}
       </v-alert>
-      </template>
 
-      <template v-else>
-      <div class="text-caption text-medium-emphasis mb-1">
-        Drawer size and build plate size (mm)
-      </div>
-      <p class="text-body-2 text-medium-emphasis mb-4">
-        Enter the drawer's inside size and the printer's build plate size.
-        The tool splits the drawer into as few baseplates as fit the build
-        plate, and extends the plates against the back, left and right
-        walls with a brimmed edge carrying partial sockets, so the plates
-        cover the drawer wall to wall with no gap.
-      </p>
-      <div class="d-flex align-center ga-2 mb-2">
-        <v-text-field
-          v-model.number="drawerWidthMm"
-          type="number"
-          min="0"
-          label="Drawer width (mm)"
-          density="comfortable"
-          hide-details
-        />
-        <span class="text-medium-emphasis">x</span>
-        <v-text-field
-          v-model.number="drawerDepthMm"
-          type="number"
-          min="0"
-          label="Drawer depth (mm)"
-          density="comfortable"
-          hide-details
-        />
-      </div>
-      <div class="d-flex align-center ga-2 mb-4">
-        <v-text-field
-          v-model.number="plateWidthMm"
-          type="number"
-          min="0"
-          label="Build plate width (mm)"
-          density="comfortable"
-          hide-details
-        />
-        <span class="text-medium-emphasis">x</span>
-        <v-text-field
-          v-model.number="plateDepthMm"
-          type="number"
-          min="0"
-          label="Build plate depth (mm)"
-          density="comfortable"
-          hide-details
-        />
-      </div>
-
-      <v-alert v-if="drawerFillError" type="error" density="compact" class="mb-4">
-        {{ drawerFillError }}
-      </v-alert>
-
-      <template v-if="drawerFillPlates.length > 0">
-        <div class="text-caption text-medium-emphasis mb-1">Plan</div>
-        <table class="drawer-fill-readout mb-4">
-          <tbody>
-            <tr>
-              <td>Plate count</td>
-              <td>{{ drawerFillPlates.length }}</td>
-            </tr>
-            <tr v-for="(group, index) in drawerFillGroups" :key="index">
-              <td>{{ group.count }} x plate</td>
-              <td>{{ describeDrawerFillPlate(group.plate) }}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <svg
-          class="drawer-fill-preview mb-4"
-          :viewBox="`0 0 ${drawerWidthMm} ${drawerDepthMm}`"
-          preserveAspectRatio="xMidYMid meet"
-        >
-          <rect
-            x="0"
-            y="0"
-            :width="drawerWidthMm ?? 0"
-            :height="drawerDepthMm ?? 0"
-            class="drawer-fill-outline"
-          />
-          <rect
-            v-for="rect in drawerFillPreviewRects"
-            :key="rect.key"
-            :x="rect.x"
-            :y="rect.y"
-            :width="rect.width"
-            :height="rect.height"
-            :class="rect.brim ? 'drawer-fill-brim' : 'drawer-fill-cell'"
-          />
-        </svg>
-      </template>
-
-      <div class="d-flex ga-2 mb-4">
-        <v-btn
-          color="primary"
-          variant="outlined"
-          :disabled="drawerFillPlates.length === 0"
-          @click="addDrawerFillPlates"
-        >
-          Add plates to queue
-        </v-btn>
-      </div>
-      <v-alert v-if="drawerFillQueueError" type="error" class="mb-4" density="compact">
-        {{ drawerFillQueueError }}
-      </v-alert>
-      </template>
-
-      <div class="text-caption text-medium-emphasis mb-1 mt-4">Base magnets</div>
-      <v-btn-toggle
-        v-model="store.magnetMode"
-        mandatory
-        density="comfortable"
-        variant="outlined"
-      >
-        <v-btn value="none">None</v-btn>
-        <v-btn value="full">Full</v-btn>
-      </v-btn-toggle>
-      <v-expand-transition>
-        <div v-if="store.magnetMode === 'full'" class="mt-6">
-          <v-slider
-            v-model="store.magnetDiameterMm"
-            :min="MAGNET_DIAMETER_MIN"
-            :max="MAGNET_DIAMETER_MAX"
-            step="0.1"
-            thumb-label="always"
-            label="Magnet diameter (mm)"
-            hide-details
-          >
-            <template #append>
-              <v-text-field
-                v-model.number="store.magnetDiameterMm"
-                type="number"
-                :min="MAGNET_DIAMETER_MIN"
-                :max="MAGNET_DIAMETER_MAX"
-                step="0.1"
-                density="compact"
-                hide-details
-                style="width: 90px"
-              />
-            </template>
-          </v-slider>
-          <v-slider
-            v-model="store.magnetHeightMm"
-            :min="MAGNET_HEIGHT_MIN"
-            :max="MAGNET_HEIGHT_MAX"
-            step="0.1"
-            thumb-label="always"
-            label="Magnet height (mm)"
-            hide-details
-            class="mt-4"
-          >
-            <template #append>
-              <v-text-field
-                v-model.number="store.magnetHeightMm"
-                type="number"
-                :min="MAGNET_HEIGHT_MIN"
-                :max="MAGNET_HEIGHT_MAX"
-                step="0.1"
-                density="compact"
-                hide-details
-                style="width: 90px"
-              />
-            </template>
-          </v-slider>
-        </div>
-      </v-expand-transition>
-
-      <div class="text-caption text-medium-emphasis mb-1 mt-4">Screw holes</div>
-      <v-btn-toggle
-        v-model="store.screwHoleMode"
-        mandatory
-        density="comfortable"
-        variant="outlined"
-      >
-        <v-btn value="none">None</v-btn>
-        <v-btn value="full">Full</v-btn>
-      </v-btn-toggle>
-
-      <v-switch
-        v-model="store.connectable"
-        label="Connectable"
-        color="primary"
-        density="compact"
-        hint="The plate's edges get the mating features a connection clip bridges."
-        persistent-hint
-        class="mt-2"
+      <BaseplateOptionsFields
+        v-model:magnet-mode="store.magnetMode"
+        v-model:magnet-diameter-mm="store.magnetDiameterMm"
+        v-model:magnet-height-mm="store.magnetHeightMm"
+        v-model:screw-hole-mode="store.screwHoleMode"
+        v-model:connectable="store.connectable"
+        class="mt-4"
       />
 
-      <template v-if="sizeMode === 'single' || editingEntry !== null">
       <MoreOptions
         v-model:open="moreOptionsOpen"
         per-bin-fields
@@ -742,77 +678,9 @@ function editingTitle(entry: QueueEntry): string {
       >
         Editing "{{ editingTitle(editingEntry) }}"; saving updates the queue row.
       </v-alert>
-      </template>
-      </template>
-
-      <v-card
-        v-if="(editingEntry === null && store.connectable) || clipEditingEntry !== null"
-        variant="tonal"
-        class="mt-4"
-        density="compact"
-      >
-        <v-card-item>
-          <v-card-title>Connection clips</v-card-title>
-        </v-card-item>
-        <v-card-text>
-          <p class="text-body-2 text-medium-emphasis mb-4">
-            A connection clip bridges two connectable baseplates. It prints as
-            its own part, so it is queued as a separate row.
-          </p>
-          <v-slider
-            v-model="clipToleranceMm"
-            :min="CLIP_TOLERANCE_MIN"
-            :max="CLIP_TOLERANCE_MAX"
-            step="0.05"
-            thumb-label="always"
-            label="Clip tolerance (mm)"
-            hint="The clearance is added to the clip only, so a clip printed with a larger tolerance still fits a plate you have already printed. Raise it when the clip is too tight to push into the joint."
-            persistent-hint
-            class="mt-4"
-          >
-            <template #append>
-              <v-text-field
-                v-model.number="clipToleranceMm"
-                type="number"
-                :min="CLIP_TOLERANCE_MIN"
-                :max="CLIP_TOLERANCE_MAX"
-                step="0.05"
-                density="compact"
-                hide-details
-                style="width: 90px"
-              />
-            </template>
-          </v-slider>
-          <div class="d-flex align-center ga-2 mt-4">
-            <v-text-field
-              v-model.number="clipQuantity"
-              type="number"
-              min="1"
-              step="1"
-              label="Quantity"
-              density="comfortable"
-              hide-details
-              style="max-width: 140px"
-            />
-            <v-btn variant="outlined" @click="addClips">
-              {{ clipEditingEntry !== null ? 'Save changes' : 'Add clips to queue' }}
-            </v-btn>
-            <v-btn v-if="clipEditingEntry !== null" variant="outlined" @click="cancelClipEdit">
-              Cancel edit
-            </v-btn>
-          </div>
-          <v-alert v-if="clipSaveError" type="error" class="mt-4" density="compact">
-            {{ clipSaveError }}
-          </v-alert>
-        </v-card-text>
-      </v-card>
     </v-col>
 
-    <v-col
-      v-if="clipEditingEntry === null && (sizeMode === 'single' || editingEntry !== null)"
-      cols="12"
-      md="6"
-    >
+    <v-col cols="12" md="6">
       <v-card variant="outlined" class="preview-card">
         <template v-if="!previewLoaded">
           <div class="d-flex flex-column align-center justify-center text-center fill-height pa-8">
@@ -841,6 +709,70 @@ function editingTitle(entry: QueueEntry): string {
       </v-card>
     </v-col>
   </v-row>
+
+  <!-- The connection clip card: shown while designing a connectable plate, or
+       alone when a clip row routes here for editing. -->
+  <v-card
+    v-if="(editingEntry === null && store.connectable) || clipEditingEntry !== null"
+    variant="tonal"
+    class="mt-4"
+    density="compact"
+  >
+    <v-card-item>
+      <v-card-title>Connection clips</v-card-title>
+    </v-card-item>
+    <v-card-text>
+      <p class="text-body-2 text-medium-emphasis mb-4">
+        A connection clip bridges two connectable baseplates. It prints as
+        its own part, so it is queued as a separate row.
+      </p>
+      <v-slider
+        v-model="clipToleranceMm"
+        :min="CLIP_TOLERANCE_MIN"
+        :max="CLIP_TOLERANCE_MAX"
+        step="0.05"
+        thumb-label="always"
+        label="Clip tolerance (mm)"
+        hint="The clearance is added to the clip only, so a clip printed with a larger tolerance still fits a plate you have already printed. Raise it when the clip is too tight to push into the joint."
+        persistent-hint
+        class="mt-4"
+      >
+        <template #append>
+          <v-text-field
+            v-model.number="clipToleranceMm"
+            type="number"
+            :min="CLIP_TOLERANCE_MIN"
+            :max="CLIP_TOLERANCE_MAX"
+            step="0.05"
+            density="compact"
+            hide-details
+            style="width: 90px"
+          />
+        </template>
+      </v-slider>
+      <div class="d-flex align-center ga-2 mt-4">
+        <v-text-field
+          v-model.number="clipQuantity"
+          type="number"
+          min="1"
+          step="1"
+          label="Quantity"
+          density="comfortable"
+          hide-details
+          style="max-width: 140px"
+        />
+        <v-btn variant="outlined" @click="addClips">
+          {{ clipEditingEntry !== null ? 'Save changes' : 'Add clips to queue' }}
+        </v-btn>
+        <v-btn v-if="clipEditingEntry !== null" variant="outlined" @click="cancelClipEdit">
+          Cancel edit
+        </v-btn>
+      </div>
+      <v-alert v-if="clipSaveError" type="error" class="mt-4" density="compact">
+        {{ clipSaveError }}
+      </v-alert>
+    </v-card-text>
+  </v-card>
 </template>
 
 <style scoped>
@@ -851,9 +783,38 @@ function editingTitle(entry: QueueEntry): string {
   grid-column: 1 / -1;
   order: -1;
 }
+
+/*
+ * The drawer-fill layout: inputs, preview and the queue button wrap two per
+ * row on a wide screen (inputs and preview side by side, the button under the
+ * inputs), and stack in reading order on a narrow one, keeping the button last.
+ */
+.fill-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+.fill-layout > * {
+  flex: 1 1 100%;
+}
+@media (min-width: 960px) {
+  .fill-layout > * {
+    flex: 1 1 calc(50% - 12px);
+  }
+}
+.fill-inputs {
+  order: 1;
+}
+.fill-preview {
+  order: 2;
+}
+.fill-actions {
+  order: 3;
+}
+
 .drawer-fill-preview {
   width: 100%;
-  max-height: 240px;
+  max-height: 320px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 .drawer-fill-outline {
@@ -871,13 +832,43 @@ function editingTitle(entry: QueueEntry): string {
   stroke: rgba(var(--v-theme-warning), 0.6);
   stroke-width: 1;
 }
-.drawer-fill-readout {
+.drawer-fill-cell.highlighted,
+.drawer-fill-brim.highlighted {
+  fill: rgba(var(--v-theme-primary), 0.55);
+  stroke: rgb(var(--v-theme-primary));
+  stroke-width: 2;
+}
+.fill-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  border: 1px dashed rgba(var(--v-theme-on-surface), 0.2);
+  border-radius: 8px;
+  text-align: center;
+  padding: 16px;
+}
+
+.plan-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.8125rem;
 }
-.drawer-fill-readout td {
-  padding: 2px 8px 2px 0;
-  vertical-align: top;
+.plan-table th {
+  text-align: left;
+  font-weight: 600;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+  padding: 2px 8px 4px 0;
+  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+}
+.plan-table td {
+  padding: 3px 8px 3px 0;
+  font-family: monospace;
+}
+.plan-table tbody tr {
+  cursor: default;
+}
+.plan-table tbody tr.highlighted {
+  background: rgba(var(--v-theme-primary), 0.12);
 }
 </style>
