@@ -406,6 +406,19 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
         </template>
       </MoreOptions>
 
+      <!-- The connection clip card, following the fill-a-drawer ordering:
+           options, clips card, then the action button. -->
+      <ConnectionClipCard
+        v-if="editingEntry === null && store.connectable"
+        v-model:tolerance-mm="clipToleranceMm"
+        v-model:quantity="clipQuantity"
+        show-quantity
+        submit-label="Add clips to queue"
+        :error="clipSaveError"
+        class="mt-4"
+        @submit="addClips"
+      />
+
       <v-alert v-if="errorMessage" type="error" class="mt-4" density="compact">
         {{ errorMessage }}
       </v-alert>
@@ -462,19 +475,18 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
     </v-col>
   </v-row>
 
-  <!-- The connection clip card: shown while designing a single connectable
-       plate, or alone when a clip row routes here for editing. In fill-a-drawer
-       mode the DrawerFillPanel owns the clip control (tolerance only, no
-       quantity), so this card stays hidden there. -->
+  <!-- The clip card alone, when a clip row routes here for editing. The
+       single-plate and fill-a-drawer flows render their own copies inside
+       their form columns. -->
   <ConnectionClipCard
-    v-if="(editingEntry === null && store.connectable && !fillMode) || clipEditingEntry !== null"
+    v-if="clipEditingEntry !== null"
     v-model:tolerance-mm="clipToleranceMm"
     v-model:quantity="clipQuantity"
     show-quantity
-    :submit-label="clipEditingEntry !== null ? 'Save changes' : 'Add clips to queue'"
-    :show-cancel="clipEditingEntry !== null"
+    submit-label="Save changes"
+    show-cancel
     :error="clipSaveError"
-    class="mt-4"
+    class="mt-4 clip-edit-card"
     @submit="addClips"
     @cancel="cancelClipEdit"
   />
@@ -488,5 +500,9 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
 .brim-fields-row {
   grid-column: 1 / -1;
   order: -1;
+}
+/* Clip-edit mode shows only this card; keep it form-column width. */
+.clip-edit-card {
+  max-width: 520px;
 }
 </style>
