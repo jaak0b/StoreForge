@@ -11,12 +11,14 @@ import type {
   QueueEntryUpdate,
 } from '../engine/plan/types';
 import {
+  baseplateProductForPlates,
   isPositiveInteger,
   mergeBatches,
   mergeEntries,
   mergeGroups,
   parsePlanFile,
   repairGroupLinks,
+  resyncLinkedPlateProducts,
   serializePlanFile,
   validateGroup,
   validateProduct,
@@ -76,32 +78,6 @@ function brimEqual(a: BaseplateBrim, b: BaseplateBrim): boolean {
 function plateSpecKey(plate: Pick<DrawerPlate, 'unitsX' | 'unitsY' | 'brim'>): string {
   const b = plate.brim;
   return `${plate.unitsX}x${plate.unitsY}:${b.leftMm},${b.rightMm},${b.frontMm},${b.backMm}`;
-}
-
-/**
- * Builds the BaseplateProduct that stands for a set of interchangeable drawer
- * plates: the group's shared options for the full cells, the shared brim and
- * cell size (the plates all share a spec), and the backlink carrying every
- * plate's id. The single place plates become a product, so the initial
- * queueing, a later options re-stamp and a requeue agree. plates is non-empty
- * and every plate shares plateSpecKey.
- */
-function baseplateProductForPlates(
-  plates: DrawerPlate[],
-  options: DrawerPlateOptions,
-  groupId: string,
-): BaseplateProduct {
-  const spec = plates[0];
-  return {
-    kind: 'baseplate',
-    unitsX: spec.unitsX,
-    unitsY: spec.unitsY,
-    magnets: options.magnets,
-    screwHoles: options.screwHoles,
-    connectable: options.connectable,
-    brim: spec.brim,
-    group: { groupId, plateIds: plates.map((plate) => plate.id) },
-  };
 }
 
 /**
@@ -399,8 +375,43 @@ export const useBinQueue = defineStore('binQueue', {
       this.persist();
       return copy.id;
     },
+    /**
+     * Whether a group still has any trace in the plan: a still-queued linked row
+     * (plate or clip), a batch item snapshot carrying its link, or a plate already
+     * confirmed printed (a non-empty done list). The single aliveness test every
+     * removal path consults before auto-deleting an emptied group, so a group is
+     * only ever deleted when nothing of it is left. A group whose plates are on a
+     * build plate, or that has printed progress worth keeping, reports alive.
+     */
+    groupHasTrace(groupId: string): boolean {
+      const group = this.groupById(groupId);
+      if (group === null) return false;
+      if (group.payload.donePlateIds.length > 0) return true;
+      const linksGroup = (product: Product): boolean =>
+        (product.kind === 'baseplate' || product.kind === 'clip') &&
+        product.group?.groupId === groupId;
+      if (this.entries.some((entry) => linksGroup(entry.product))) return true;
+      return this.batches.some((batch) => batch.items.some((item) => linksGroup(item.product)));
+    },
+    /**
+     * Removes a queue entry. When the removed row was the last still-queued row of
+     * an otherwise untouched drawer group (no batch item carries its link and no
+     * plate has printed), the now-empty group is deleted automatically: a drawer
+     * the user emptied by hand before printing any of it leaves no orphan header.
+     * A group with printing or printed plates survives, and confirming a print is
+     * not user removal, so it never triggers this cleanup.
+     */
     remove(id: string) {
+      const removed = this.entryById(id);
+      const groupId =
+        removed !== null &&
+        (removed.product.kind === 'baseplate' || removed.product.kind === 'clip')
+          ? removed.product.group?.groupId
+          : undefined;
       this.entries = this.entries.filter((e) => e.id !== id);
+      if (groupId !== undefined && !this.groupHasTrace(groupId)) {
+        this.groups = this.groups.filter((g) => g.id !== groupId);
+      }
       this.persist();
     },
     /**
@@ -509,6 +520,10 @@ export const useBinQueue = defineStore('binQueue', {
         // pointed at; repair the dangling links rather than leave them.
         const warnings: string[] = [];
         repairGroupLinks(this.entries, this.batches, this.groups, warnings);
+        // A merge can also replace a group whose options changed while an
+        // existing linked row still carries the old product; resync the linked
+        // rows to the merged groups so no stale plate survives the import.
+        resyncLinkedPlateProducts(this.entries, this.groups);
         for (const warning of warnings) console.warn(warning);
       }
       this.persist();

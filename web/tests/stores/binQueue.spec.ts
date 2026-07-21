@@ -349,6 +349,61 @@ describe('binQueue drawer groups', () => {
   });
 });
 
+describe('binQueue empty group auto-delete', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    const store = useBinQueue();
+    store.entries = [];
+    store.batches = [];
+    store.groups = [];
+  });
+
+  it('deletes an unprinted group when its last queued row is removed', () => {
+    const store = useBinQueue();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
+    for (const e of [...store.entries]) store.remove(e.id);
+    expect(store.groupById(id)).toBeNull();
+    expect(store.groups).toHaveLength(0);
+  });
+
+  it('keeps a group with printed plates when its last queued row is removed', () => {
+    const store = useBinQueue();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
+    const first = store.entries[0];
+    const batchId = store.createBatch([{ entryId: first.id, count: 1 }], 'Printer')!;
+    const batch = store.batchById(batchId)!;
+    store.confirmBatchItem(batchId, batch.items[0].id, 1);
+    for (const e of [...store.entries]) store.remove(e.id);
+    expect(store.groupById(id)).not.toBeNull();
+  });
+
+  it('keeps a group with a linked batch item when its last queued row is removed', () => {
+    const store = useBinQueue();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
+    const first = store.entries[0];
+    store.createBatch([{ entryId: first.id, count: 1 }], 'Printer');
+    for (const e of [...store.entries]) store.remove(e.id);
+    expect(store.groupById(id)).not.toBeNull();
+  });
+
+  it('does not auto-delete when the queue empties through print confirmation', () => {
+    const store = useBinQueue();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    const id = store.groups[0].id;
+    const batchId = store.createBatch(
+      store.entries.map((e) => ({ entryId: e.id, count: 1 })),
+      'Printer',
+    )!;
+    store.confirmAll(batchId);
+    expect(store.entries).toHaveLength(0);
+    expect(store.groupById(id)).not.toBeNull();
+    expect(store.groupProgress(id)).toEqual({ done: 2, total: 2 });
+  });
+});
+
 describe('binQueue drawer connection clips', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
