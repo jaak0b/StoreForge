@@ -27,6 +27,7 @@ import { validateProduct } from '../engine/plan/planFile';
 import BinViewport from './BinViewport.vue';
 import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
 import MoreOptions from './MoreOptions.vue';
+import DrawerView from './DrawerView.vue';
 
 /**
  * The Baseplate tab of the add-bin card: the baseplate designer form with a
@@ -386,9 +387,22 @@ function editingTitle(entry: QueueEntry): string {
 const fillMode = computed(
   () => clipEditingEntry.value === null && editingEntry.value === null && sizeMode.value === 'fill',
 );
+
+/**
+ * Whether the Baseplate tab is showing a drawer group's detail view instead of
+ * the designer. This is the tab's third mode, alongside the single-plate form
+ * and the fill-a-drawer form; it is driven by the app store's viewingDrawerId,
+ * set when a drawer header or a drawer-linked plate row is clicked.
+ */
+const drawerMode = computed(() => app.viewingDrawerId !== null);
 </script>
 
 <template>
+  <!-- The tab's drawer-detail mode: a drawer group header or one of its linked
+       plate rows navigates here and shows the group's status and settings in
+       place of the designer, with its own way back to the queue. -->
+  <DrawerView v-if="drawerMode" />
+  <template v-else>
   <!-- The mode toggle switches the tab between designing one plate and filling
        a drawer; hidden while editing an existing plate. -->
   <v-btn-toggle
@@ -773,6 +787,7 @@ const fillMode = computed(
       </v-alert>
     </v-card-text>
   </v-card>
+  </template>
 </template>
 
 <style scoped>

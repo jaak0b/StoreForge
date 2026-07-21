@@ -23,11 +23,19 @@ export const useApp = defineStore('app', {
     viewingDrawerId: null as string | null,
   }),
   actions: {
-    /** Opens the drawer group detail view for the given group id. */
+    /**
+     * Opens the drawer group detail view for the given group id. The view lives
+     * inside the Baseplate tab of the add-bin card, so this leaves any entry
+     * edit and bumps focusAddSeq the same way editEntry does, letting the card
+     * switch to the Baseplate tab and scroll into view.
+     */
     openDrawer(groupId: string) {
+      this.editingEntryId = null;
+      this.editingKind = null;
       this.viewingDrawerId = groupId;
+      this.focusAddSeq += 1;
     },
-    /** Closes the drawer group detail view, returning to the queue. */
+    /** Closes the drawer group detail view, returning the tab to its designer. */
     closeDrawer() {
       this.viewingDrawerId = null;
     },
@@ -35,12 +43,14 @@ export const useApp = defineStore('app', {
     focusAddCard() {
       this.editingEntryId = null;
       this.editingKind = null;
+      this.viewingDrawerId = null;
       this.focusAddSeq += 1;
     },
     /** Loads a queue entry into the tab owning its origin for editing. */
     editEntry(entryId: string, kind: ProductOrigin) {
       this.editingEntryId = entryId;
       this.editingKind = kind;
+      this.viewingDrawerId = null;
       this.focusAddSeq += 1;
     },
     /** Leaves editing mode; the tabs design new bins again. */

@@ -18,7 +18,6 @@ import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
 import CountStepper from './CountStepper.vue';
-import DrawerView from './DrawerView.vue';
 
 /**
  * One rendered queue line: a drawer group header, or a queue entry (marked
@@ -133,9 +132,16 @@ function createPlate(): void {
   plateCounts.value = new Map();
 }
 
-// Row click loads the entry into the tab that owns its origin for editing.
+// Row click: a drawer-linked plate row opens its drawer's detail view (editing
+// one plate of a planned layout in isolation would break the fill), and every
+// other row loads into the tab that owns its origin for editing.
 function editRow(entry: QueueEntry): void {
-  app.editEntry(entry.id, originOf(entry.product));
+  const product = entry.product;
+  if (product.kind === 'baseplate' && product.group !== undefined) {
+    app.openDrawer(product.group.groupId);
+  } else {
+    app.editEntry(entry.id, originOf(product));
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -177,8 +183,6 @@ function removeRow(entry: QueueEntry): void {
 
 <template>
   <v-container class="main-page">
-    <DrawerView v-if="app.viewingDrawerId !== null" />
-    <template v-else>
     <h1 class="text-h5 mt-2 mb-1">What do you want to print?</h1>
     <p class="text-body-2 text-medium-emphasis mb-5">
       Add parts to the queue, select rows to create a build plate batch, then
@@ -353,7 +357,6 @@ function removeRow(entry: QueueEntry): void {
         {{ selectedPartTotal === 1 ? 'part' : 'parts' }})
       </v-btn>
     </div>
-    </template>
   </v-container>
 </template>
 
