@@ -53,8 +53,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
 
   <text x="${textX}" y="300" font-family="${FONT}" font-size="${HEAD}" font-weight="700" fill="${WHITE}">Any generator makes a bin.</text>
   <text x="${textX}" y="372" font-family="${FONT}" font-size="${HEAD}" font-weight="700" fill="${WHITE}"><tspan fill="${PRIMARY}">StoreForge</tspan> makes your Gridfinity setup:</text>
-  <text x="${textX}" y="452" font-family="${FONT}" font-size="${LIST}" font-weight="400" fill="${LIST_GRAY}">screw-fitted, tool-traced, labeled</text>
-  <text x="${textX}" y="504" font-family="${FONT}" font-size="${LIST}" font-weight="400" fill="${LIST_GRAY}">and ready to print.</text>
+  <text x="${textX}" y="452" font-family="${FONT}" font-size="${LIST}" font-weight="400" fill="${LIST_GRAY}">screw-fitted, tool-traced, labeled and ready to print.</text>
 </svg>`;
 
 const png = await sharp(Buffer.from(svg)).png().toBuffer();
