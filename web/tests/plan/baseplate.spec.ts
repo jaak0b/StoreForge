@@ -6,7 +6,7 @@ import {
   validateEntry,
 } from '../../src/engine/plan/planFile';
 import { partsOf } from '../../src/engine/plan/geometry';
-import { baseplateSpanMm } from '../../src/engine/baseplate/generator';
+import { baseplateOuterMm, baseplateSpanMm } from '../../src/engine/baseplate/generator';
 import { fileStem, partFootprint } from '../../src/binDownloads';
 import type {
   BaseplateProduct,
@@ -287,6 +287,26 @@ describe('export plumbing for the new kinds', () => {
   it('names baseplate downloads by grid size', () => {
     expect(fileStem(plainBaseplate())).toBe('gridfinity_baseplate_4x2');
     expect(fileStem(fullBaseplate())).toBe('gridfinity_baseplate_4x2');
+  });
+
+  it('gives a brimmed baseplate a stem distinct from the plain plate of the same units', () => {
+    const brimmed = brimmedBaseplate();
+    const plain: BaseplateProduct = { ...brimmed, brim: undefined };
+    // The suffix carries the outer mm size from baseplateOuterMm, the single
+    // outer-size source, with decimal points as p like the clip stem.
+    const outer = baseplateOuterMm(brimmed);
+    const mm = (value: number): string => value.toFixed(1).replace('.', 'p');
+    expect(fileStem(plain)).toBe('gridfinity_baseplate_6x7');
+    expect(fileStem(brimmed)).toBe(
+      `gridfinity_baseplate_6x7_outer${mm(outer.widthMm)}x${mm(outer.depthMm)}mm`,
+    );
+    expect(fileStem(brimmed)).not.toBe(fileStem(plain));
+    // An all-zero brim is the same plate as no brim and keeps the plain stem.
+    const zeroBrim: BaseplateProduct = {
+      ...brimmed,
+      brim: { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 },
+    };
+    expect(fileStem(zeroBrim)).toBe('gridfinity_baseplate_6x7');
   });
 
   it('gives clips at different tolerances distinct file stems', () => {
