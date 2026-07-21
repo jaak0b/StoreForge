@@ -53,7 +53,7 @@ export const LABEL_ICONS: LabelIcon[] = [
     path:
       'M24 30a20 20 0 1 0 0 40a20 20 0 1 0 0-40Z' +
       'M31 50L27.5 43.94L20.5 43.94L17 50L20.5 56.06L27.5 56.06Z' +
-      'M56 34L74 34L74 43L100 43L100 57L74 57L74 66L56 66Z',
+      'M74 34A18 16 0 0 0 74 66L74 57L100 57L100 43L74 43Z',
     viewBox: VIEW_BOX,
     category: 'fasteners',
   },
