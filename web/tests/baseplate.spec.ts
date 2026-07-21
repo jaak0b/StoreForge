@@ -10,7 +10,6 @@ import {
 import {
   baseplateOuterMm,
   baseplateRiserMm,
-  baseplateSpanMm,
   clipFootprintMm,
   generateBaseplate,
   generateConnectionClip,
@@ -471,6 +470,27 @@ describe('generateBaseplate with a brim', () => {
     // cells, and their meeting adds one corner cell: 4 + 2 + 2 + 1 = 9.
     expect(plate.genus()).toBe(2 * 2 + 2 + 2 + 1);
     plate.delete();
+  });
+
+  it('stays watertight with unchanged genus at sliver brims thinner than the rim', () => {
+    // The planner may emit any brim in (0, pitch), including slivers thinner
+    // than the socket rim. The clipper is inset from the brimmed outline by
+    // the rim profile at every height, so a brim cell's cavity exists only
+    // where the brim exceeds the inset at that height. At 1 mm, below every
+    // inset the cell solid meets, no cavity opens at all: the brim is a
+    // solid bar. At 3 mm the cavity opens through the 2.15 mm upper bands
+    // but never the 3.95 mm bottom band: a blind pocket open at the top
+    // only, a boundary depression rather than a vertical through tunnel, so
+    // it adds no handle either. Both keep the genus of the 4 full cells.
+    for (const leftMm of [1, 3]) {
+      const plate = generateBaseplate(
+        m,
+        brimParams({ brim: { leftMm, rightMm: 0, frontMm: 0, backMm: 0 } }),
+      );
+      expect(plate.status()).toBe('NoError');
+      expect(plate.genus()).toBe(2 * 2);
+      plate.delete();
+    }
   });
 
   it('omits connector slots on brimmed edges but keeps them on plain edges', () => {

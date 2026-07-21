@@ -301,15 +301,17 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
     [roundedRectPolygon(outerWidth, outerDepth, OUTER_CORNER_RADIUS)],
     height,
   );
+  // translate always returns a distinct wrapper with its own lifetime, even
+  // for a zero shift, so the untranslated solid is deleted unconditionally.
   const outline = plainOutline.translate(dx, dy, 0);
-  if (dx !== 0 || dy !== 0) plainOutline.delete();
+  plainOutline.delete();
 
   // Stage 2: the socket clipper, inset from the outline by the rim at every
   // height, grown and shifted exactly like the outline so a brimmed cell's
   // cavity clips consistently against the wall it actually sits behind.
   const plainClipper = loftChain(m, outerWidth, outerDepth, sections);
   const clipper = plainClipper.translate(dx, dy, 0);
-  if (dx !== 0 || dy !== 0) plainClipper.delete();
+  plainClipper.delete();
 
   // Stage 3: sharp-cornered cell cavities on the pitch lattice. The full
   // unitsX by unitsY cells are always present; one extra column or row is
