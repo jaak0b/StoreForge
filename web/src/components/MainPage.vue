@@ -2,12 +2,15 @@
 import { computed, ref } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
-import { originOf, type QueueEntry } from '../engine/plan/types';
+import { originOf, type Group, type QueueEntry } from '../engine/plan/types';
 import {
+  describeGroup,
   describeProduct,
   downloadSubtitles,
+  type GroupDescriptor,
   type RowDescriptor,
 } from '../engine/plan/rowDescriptor';
+import { partitionQueue } from '../engine/plan/queuePartition';
 import { snapshotProduct, type BatchSelection } from '../engine/plan/batches';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
@@ -15,6 +18,17 @@ import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
 import CountStepper from './CountStepper.vue';
+import DrawerView from './DrawerView.vue';
+
+/**
+ * One rendered queue line: a drawer group header, or a queue entry (marked
+ * grouped when it renders indented under a group header). Flattening the
+ * partition into one list keeps a single copy of the entry row markup, shared
+ * between grouped plate rows and loose rows.
+ */
+type QueueRow =
+  | { kind: 'group'; group: Group; descriptor: GroupDescriptor }
+  | { kind: 'entry'; entry: QueueEntry; grouped: boolean };
 
 /**
  * The whole app on one page: the add-bin card on top, then zero or more
@@ -25,6 +39,34 @@ import CountStepper from './CountStepper.vue';
 
 const app = useApp();
 const queue = useBinQueue();
+
+/**
+ * The queue as a flat list of group headers and entries: each drawer group's
+ * header followed by its indented plate rows, then the loose entries. Built
+ * from partitionQueue (the single grouping source) and describeGroup (the
+ * single status source).
+ */
+const queueRows = computed<QueueRow[]>(() => {
+  const { groups, loose } = partitionQueue(queue.entries, queue.groups);
+  const rows: QueueRow[] = [];
+  for (const section of groups) {
+    rows.push({
+      kind: 'group',
+      group: section.group,
+      descriptor: describeGroup(section.group, queue.entries, queue.batches),
+    });
+    for (const entry of section.entries) rows.push({ kind: 'entry', entry, grouped: true });
+  }
+  for (const entry of loose) rows.push({ kind: 'entry', entry, grouped: false });
+  return rows;
+});
+
+/** A drawer group's short caption: its plate count and drawer size. */
+function groupCaption(group: Group, descriptor: GroupDescriptor): string {
+  const input = group.payload.input;
+  const plates = `${descriptor.counts.total} ${descriptor.counts.total === 1 ? 'plate' : 'plates'}`;
+  return `${plates} · ${input.drawerWidthMm} × ${input.drawerDepthMm} mm drawer`;
+}
 
 /** The row's title, caption and icon, from the shared row descriptor. */
 function rowOf(entry: QueueEntry): RowDescriptor {
@@ -135,6 +177,8 @@ function removeRow(entry: QueueEntry): void {
 
 <template>
   <v-container class="main-page">
+    <DrawerView v-if="app.viewingDrawerId !== null" />
+    <template v-else>
     <h1 class="text-h5 mt-2 mb-1">What do you want to print?</h1>
     <p class="text-body-2 text-medium-emphasis mb-5">
       Add parts to the queue, select rows to create a build plate batch, then
@@ -176,14 +220,33 @@ function removeRow(entry: QueueEntry): void {
     />
 
     <div v-else class="d-flex flex-column ga-1">
+      <template v-for="row in queueRows">
       <div
-        v-for="entry in queue.entries"
-        :key="entry.id"
-        class="qrow"
-        :class="{ selected: selectedIds.has(entry.id) }"
+        v-if="row.kind === 'group'"
+        :key="`g-${row.group.id}`"
+        class="group-header"
         role="button"
-        @click="editRow(entry)"
+        @click="app.openDrawer(row.group.id)"
       >
+        <v-icon icon="mdi-view-grid-outline" size="18" class="mr-2 text-medium-emphasis" />
+        <span class="row-text">
+          <span class="text-body-2 font-weight-bold d-block text-truncate">{{ row.group.name }}</span>
+          <span class="group-caption">{{ groupCaption(row.group, row.descriptor) }}</span>
+        </span>
+        <v-chip size="small" variant="tonal" color="primary">
+          {{ row.descriptor.counts.done }} / {{ row.descriptor.counts.total }} printed
+        </v-chip>
+        <v-icon icon="mdi-chevron-right" size="20" class="text-medium-emphasis" />
+      </div>
+      <div
+        v-else
+        :key="`e-${row.entry.id}`"
+        class="qrow"
+        :class="{ selected: selectedIds.has(row.entry.id), grouped: row.grouped }"
+        role="button"
+        @click="editRow(row.entry)"
+      >
+      <template v-for="entry in [row.entry]" :key="entry.id">
         <v-checkbox-btn
           :model-value="selectedIds.has(entry.id)"
           density="compact"
@@ -274,7 +337,9 @@ function removeRow(entry: QueueEntry): void {
             <v-tooltip activator="parent" location="bottom">Remove</v-tooltip>
           </v-btn>
         </div>
+      </template>
       </div>
+      </template>
     </div>
 
     <div v-if="selectedEntries.length > 0" class="create-plate-bar">
@@ -288,6 +353,7 @@ function removeRow(entry: QueueEntry): void {
         {{ selectedPartTotal === 1 ? 'part' : 'parts' }})
       </v-btn>
     </div>
+    </template>
   </v-container>
 </template>
 
@@ -310,6 +376,33 @@ function removeRow(entry: QueueEntry): void {
 
 .row-check {
   flex: 0 0 auto;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border: 1px solid rgba(var(--v-theme-primary), 0.4);
+  border-radius: 10px;
+  cursor: pointer;
+  background: rgba(var(--v-theme-primary), 0.04);
+}
+
+.group-header:hover {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+.group-caption {
+  display: block;
+  font-family: monospace;
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+
+.qrow.grouped {
+  margin-left: 24px;
 }
 
 .qty-badge {
