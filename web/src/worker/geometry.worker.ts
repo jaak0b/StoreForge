@@ -35,9 +35,11 @@ import { parseStl } from '../engine/cutout/stlReader';
 import { meshToManifold } from '../engine/cutout/cutoutMesh';
 import { assertNever } from '../engine/plan/types';
 import {
+  CavityEditedBodyCache,
   CutoutModelCache,
   CutoutSweptCache,
   carveModelNames,
+  cutoutCarveRecipeKey,
   importCutoutModel,
   resolveCutoutModels,
   restoreCutoutModels,
@@ -132,6 +134,14 @@ const cutoutModels = new CutoutModelCache();
 const cutoutSwept = new CutoutSweptCache();
 
 /**
+ * The worker's single-entry memo for the edited body (after cavity edits are
+ * folded onto a carve), beside the other two caches for the same reason: the
+ * edited body outlives any one carve, so appending one more stroke reuses it
+ * instead of refolding every earlier edit.
+ */
+const cavityEdited = new CavityEditedBodyCache();
+
+/**
  * Resolve a carve request into engine params wired to the swept-solid cache,
  * and run the carve with every borrowed solid pinned. The single place every
  * cutout carve endpoint goes through, so none of them can forget either the
@@ -190,7 +200,13 @@ async function withCutoutCarve<T>(
         (key, entry) => persisted.saveSwept(key, entry),
       );
       const models = resolveCutoutModels(cutoutModels, request.models);
-      return carve({ ...request, models, sweptMemo });
+      return carve({
+        ...request,
+        models,
+        sweptMemo,
+        editedMemo: cavityEdited,
+        editedRecipeKey: cutoutCarveRecipeKey(request),
+      });
     }),
   );
 }
@@ -366,6 +382,10 @@ const api = {
         cutoutModelKey(spec.modelSourceId, spec.unitScale, spec.clearanceMm),
       ),
     );
+    // The edited-body memo is derived from the current model set, so a plan
+    // mutation that releases models cannot strand a body built over solids
+    // that no longer exist.
+    cavityEdited.clear();
   },
 
   /**

@@ -158,6 +158,9 @@ const carveRequest = computed<CutoutBinRequest>(() => ({
     sweepEnabled: model.sweepEnabled,
     draftAngleDeg: model.draftAngleDeg,
   })),
+  // Wired to the plan's own cavity edits in a later task; the carve accepts
+  // an empty list unchanged.
+  edits: [],
 }));
 
 // ---------------------------------------------------------------------------

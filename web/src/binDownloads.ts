@@ -72,6 +72,8 @@ async function generatePartMeshes(
           const carve = await generateCutoutBin({
             ...part.bin,
             models: plainModels(interior.models),
+            // Wired to the plan's own cavity edits in a later task.
+            edits: [],
           });
           // The download has no model card to show a warning on, so the
           // sentence the carve wrote (which names the model) is what is shown.
@@ -112,6 +114,8 @@ async function generatePartUnion(
           const carve = await generateCutoutBinUnion({
             ...part.bin,
             models: plainModels(interior.models),
+            // Wired to the plan's own cavity edits in a later task.
+            edits: [],
           });
           for (const warning of carve.warnings) warn(warning.message);
           return carve.mesh;

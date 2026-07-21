@@ -416,6 +416,22 @@ describe('buildCutoutBinBody', () => {
   });
 });
 
+describe('cavity edits in the cutout carve', () => {
+  it('a remove edit changes the generated body and keeps it watertight', () => {
+    const withoutEdits = buildCutoutBinBody(m, params());
+    const withEdits = buildCutoutBinBody(m, {
+      ...params(),
+      edits: [
+        { kind: 'remove', points: [{ xMm: 10, yMm: 10, zMm: 10 }], radiusMm: 4 },
+      ],
+    });
+    expect(withEdits.body.status()).toBe('NoError');
+    expect(withEdits.body.volume()).toBeLessThan(withoutEdits.body.volume());
+    withoutEdits.body.delete();
+    withEdits.body.delete();
+  });
+});
+
 describe('placeCutter transform order', () => {
   it('rotates about the model centre and then translates, not the other way round', () => {
     // Silent for a centred model left at the origin, and wrong everywhere

@@ -33,6 +33,8 @@ import { binInteriorSizeMm, HEIGHT_UNIT, LIP_HEIGHT } from '../gridfinity/consta
 import { circleSegments } from '../geometry/circleSegments';
 import { buildFusedLabel } from '../label/slot';
 import type { MeshData, PartMeshes, SlottedBinParams } from '../gridfinity/types';
+import { applyCavityEditsMemoized, type CavityEditedBodyMemo } from './cavityEdits';
+import type { CavityEdit } from '../plan/types';
 
 /**
  * Default dilation of a cutout pocket beyond the model surface. One nozzle
@@ -171,6 +173,16 @@ export interface CutoutBinParams extends SlottedBinParams {
    * way by construction (see SweptSolidMemo).
    */
   sweptMemo?: SweptSolidMemo;
+  /** Manual cavity edits applied after the model carve, before the label stage. Absent means none. */
+  edits?: CavityEdit[];
+  /**
+   * Memo for the edited body, supplied by the worker so appending one edit to
+   * an unchanged carve reuses the previous edited body. Absent for direct
+   * callers, which fold every edit; the result is identical by construction.
+   */
+  editedMemo?: CavityEditedBodyMemo;
+  /** Identity of the carve the edits apply to, required when editedMemo is set. */
+  editedRecipeKey?: string;
 }
 
 /**
@@ -918,13 +930,31 @@ export function buildCutoutBinBody(
     for (const { cutter } of placed) cutter.delete();
     throw error;
   }
-  const body = buildCarvedBinBody(
+  let body = buildCarvedBinBody(
     m,
     params,
     placed.map(({ cutter }) => cutter),
     'Cutout bin',
     ctx,
   );
+  const edits = params.edits ?? [];
+  if (edits.length > 0) {
+    const binTopZMm = sweptReachZ(params.heightUnits);
+    // The un-carved solid bin body: the same carve stage with no cutters, so
+    // the Add clamp envelope is derived where the carve already derives it.
+    // buildCarvedBinBody only reads the CarvedBinParams fields it needs, so
+    // params (a superset, carrying edits and the memo fields too) is passed
+    // through a variable rather than an object literal to avoid an excess
+    // property error on fields it structurally ignores.
+    const makeBinSolid = (): Manifold => buildCarvedBinBody(m, params, [], 'Cutout bin');
+    body =
+      params.editedMemo !== undefined && params.editedRecipeKey !== undefined
+        ? applyCavityEditsMemoized(m, body, makeBinSolid, edits, binTopZMm, {
+            store: params.editedMemo,
+            recipeKey: params.editedRecipeKey,
+          })
+        : applyCavityEditsMemoized(m, body, makeBinSolid, edits, binTopZMm);
+  }
   return { body, warnings, footprints };
 }
 

@@ -120,6 +120,60 @@ export function flattenSolid(
 }
 
 /**
+ * Folds one edit onto `current` (owned by the caller, consumed here) and
+ * returns the new working solid. `binSolid` is borrowed and only consulted
+ * for the Add clamp. Shared by applyCavityEdits and applyCavityEditsMemoized
+ * so the two folding paths cannot drift (rule 10).
+ */
+function foldCavityEdit(
+  m: ManifoldToplevel,
+  current: Manifold,
+  edit: CavityEdit,
+  binSolid: Manifold,
+  binTopZMm: number,
+): Manifold {
+  switch (edit.kind) {
+    case 'add': {
+      const stroke = strokeSolid(m, edit.points, edit.radiusMm);
+      const clamped = stroke.intersect(binSolid);
+      stroke.delete();
+      const next = current.add(clamped);
+      current.delete();
+      clamped.delete();
+      return next;
+    }
+    case 'remove': {
+      const stroke = strokeSolid(m, edit.points, edit.radiusMm);
+      const next = current.subtract(stroke);
+      current.delete();
+      stroke.delete();
+      return next;
+    }
+    case 'flatten': {
+      const cylinder = flattenSolid(m, edit, binTopZMm);
+      const next = current.subtract(cylinder);
+      current.delete();
+      cylinder.delete();
+      return next;
+    }
+    default:
+      return assertNever(edit);
+  }
+}
+
+/** Status-checks and empties-checks the final folded body, or throws a user-worded error. */
+function finishCavityEdits(current: Manifold): Manifold {
+  if (current.isEmpty()) {
+    throw new Error('The cavity edits removed the entire bin, so the last edit was not applied.');
+  }
+  const status = current.status();
+  if (status !== 'NoError') {
+    throw new Error(`Applying the cavity edits produced an invalid solid (${status}).`);
+  }
+  return current;
+}
+
+/**
  * Folds the edits onto the carved body in list order. Remove and flatten
  * subtract their solid; add unions the stroke solid intersected with the
  * un-carved solid bin body, so Add can only restore material the bin
@@ -135,45 +189,11 @@ export function applyCavityEdits(
   binTopZMm: number,
 ): Manifold {
   let current: Manifold = body;
-  const advance = (next: Manifold): void => {
-    current.delete();
-    current = next;
-  };
   try {
     for (const edit of edits) {
-      switch (edit.kind) {
-        case 'add': {
-          const stroke = strokeSolid(m, edit.points, edit.radiusMm);
-          const clamped = stroke.intersect(binSolid);
-          stroke.delete();
-          advance(current.add(clamped));
-          clamped.delete();
-          break;
-        }
-        case 'remove': {
-          const stroke = strokeSolid(m, edit.points, edit.radiusMm);
-          advance(current.subtract(stroke));
-          stroke.delete();
-          break;
-        }
-        case 'flatten': {
-          const cylinder = flattenSolid(m, edit, binTopZMm);
-          advance(current.subtract(cylinder));
-          cylinder.delete();
-          break;
-        }
-        default:
-          assertNever(edit);
-      }
+      current = foldCavityEdit(m, current, edit, binSolid, binTopZMm);
     }
-    if (current.isEmpty()) {
-      throw new Error('The cavity edits removed the entire bin, so the last edit was not applied.');
-    }
-    const status = current.status();
-    if (status !== 'NoError') {
-      throw new Error(`Applying the cavity edits produced an invalid solid (${status}).`);
-    }
-    const result = current;
+    const result = finishCavityEdits(current);
     current = null as unknown as Manifold;
     return result;
   } finally {
@@ -189,4 +209,95 @@ export function applyCavityEdits(
  */
 export function cavityEditsKey(edits: CavityEdit[]): string {
   return JSON.stringify(edits);
+}
+
+/**
+ * Storage for the worker's single-entry edited-body memo. The worker's
+ * CavityEditedBodyCache implements this; the engine only depends on the
+ * interface, keeping cavityEdits.ts framework-agnostic (rule 3).
+ */
+export interface CavityEditedBodyMemo {
+  /** The memoized edited body under this key, borrowed, or null. */
+  get(key: string): Manifold | null;
+  /** Stores the edited body under this key, taking ownership of the given handle. */
+  put(key: string, body: Manifold): void;
+}
+
+/**
+ * Deterministic identity of the folded body after the first `count` edits of
+ * `edits`, applied to the carve identified by `recipeKey`. Any change to the
+ * carve recipe, to an earlier edit, or to the edit count changes this key, so
+ * a stale memo entry is never mistaken for the requested prefix.
+ */
+export function cavityEditPrefixKey(recipeKey: string, edits: CavityEdit[], count: number): string {
+  return `${recipeKey}|${count}|${cavityEditsKey(edits.slice(0, count))}`;
+}
+
+/**
+ * Folds the edits onto the carved body, like applyCavityEdits, but with an
+ * optional single-entry memo for the append case: painting one more stroke
+ * onto an unchanged carve reuses the previously folded body instead of
+ * refolding every earlier edit.
+ *
+ * With a memo, the prefix key for `edits.length - 1` is consulted first. On a
+ * hit, folding starts from a retained handle of the memoized body
+ * (`translate([0, 0, 0])`, a new handle over the same shared lazy CSG node,
+ * so the cache entry itself stays valid) and only the last edit is folded. On
+ * a miss, every edit is folded from the fresh carve body, exactly as
+ * applyCavityEdits does. Either way, the final body is stored under the
+ * full-list prefix key as a retained handle, so the next append hits.
+ *
+ * Undo, reorder, a radius change, or any carve recipe change misses (the
+ * prefix key changes) and rebuilds fully: that is the single-entry contract,
+ * not a bug in it.
+ *
+ * `makeBinSolid` is only invoked, at most once, when a folded edit is an Add
+ * (the clamp needs the un-carved bin envelope); its result is deleted before
+ * this function returns. Takes ownership of `body`.
+ */
+export function applyCavityEditsMemoized(
+  m: ManifoldToplevel,
+  body: Manifold,
+  makeBinSolid: () => Manifold,
+  edits: CavityEdit[],
+  binTopZMm: number,
+  memo?: { store: CavityEditedBodyMemo; recipeKey: string },
+): Manifold {
+  const binSolidRef: { value: Manifold | null } = { value: null };
+  const getBinSolid = (): Manifold => {
+    if (binSolidRef.value === null) binSolidRef.value = makeBinSolid();
+    return binSolidRef.value;
+  };
+  let current: Manifold | null = null;
+  try {
+    let startIndex = 0;
+    if (memo !== undefined && edits.length > 0) {
+      const hitKey = cavityEditPrefixKey(memo.recipeKey, edits, edits.length - 1);
+      const hit = memo.store.get(hitKey);
+      if (hit !== null) {
+        current = hit.translate([0, 0, 0]);
+        startIndex = edits.length - 1;
+      }
+    }
+    if (current === null) {
+      current = body;
+      startIndex = 0;
+    } else {
+      // The memo hit is the working solid; the fresh carve body is unused.
+      body.delete();
+    }
+    for (let i = startIndex; i < edits.length; i += 1) {
+      current = foldCavityEdit(m, current, edits[i], getBinSolid(), binTopZMm);
+    }
+    const result = finishCavityEdits(current);
+    current = null;
+    if (memo !== undefined) {
+      const storeKey = cavityEditPrefixKey(memo.recipeKey, edits, edits.length);
+      memo.store.put(storeKey, result.translate([0, 0, 0]));
+    }
+    return result;
+  } finally {
+    current?.delete();
+    binSolidRef.value?.delete();
+  }
 }
