@@ -352,17 +352,19 @@ function editingTitle(entry: QueueEntry): string {
       </v-alert>
       </template>
 
-      <v-card v-if="editingEntry === null" variant="tonal" class="mt-4" density="compact">
+      <v-card
+        v-if="(editingEntry === null && store.connectable) || clipEditingEntry !== null"
+        variant="tonal"
+        class="mt-4"
+        density="compact"
+      >
         <v-card-item>
           <v-card-title>Connection clips</v-card-title>
         </v-card-item>
         <v-card-text>
           <p class="text-body-2 text-medium-emphasis mb-4">
             A connection clip bridges two connectable baseplates. It prints as
-            its own part, so it is queued as a separate row.<template
-              v-if="!store.connectable"
-            >
-              Turn on Connectable so the plates have edges for the clip to grip.</template>
+            its own part, so it is queued as a separate row.
           </p>
           <v-slider
             v-model="clipToleranceMm"
