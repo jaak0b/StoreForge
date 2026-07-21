@@ -896,6 +896,7 @@ watch(
       syncSelection();
     }
   },
+  { immediate: true },
 );
 </script>
 
