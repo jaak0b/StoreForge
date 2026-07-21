@@ -16,18 +16,12 @@ import {
 } from '../engine/baseplate/constants';
 import { originOf, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
-import {
-  drawerFillLayoutRects,
-  planDrawerFill,
-  type DrawerFillPlate,
-} from '../engine/baseplate/drawerFill';
-import { groupDrawerFillPlanRows } from '../engine/baseplate/drawerFillPlan';
 import { baseplateCellCount } from '../engine/baseplate/generator';
 import { validateProduct } from '../engine/plan/planFile';
 import BinViewport from './BinViewport.vue';
 import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
 import MoreOptions from './MoreOptions.vue';
-import DrawerView from './DrawerView.vue';
+import DrawerFillPanel from './DrawerFillPanel.vue';
 
 /**
  * The Baseplate tab of the add-bin card: the baseplate designer form with a
@@ -68,129 +62,6 @@ const clipQuantity = ref(1);
 
 /** Which size section the tab shows: the units X/Y form, or the drawer-fill form. Pure view state, never part of a queued product. */
 const sizeMode = ref<'single' | 'fill'>('single');
-
-// The drawer-fill form's four mm inputs. Component-local, like sizeMode:
-// this tool composes queue entries from the tab's current magnet/screw/
-// connectable settings, but keeps its own size fields since a drawer's and
-// a build plate's mm size are not part of any single baseplate design.
-const drawerWidthMm = ref<number | null>(null);
-const drawerDepthMm = ref<number | null>(null);
-const plateWidthMm = ref<number | null>(null);
-const plateDepthMm = ref<number | null>(null);
-
-/** The planner's outcome, or null until all four fields are filled in. */
-const drawerFillResult = computed(() => {
-  if (
-    drawerWidthMm.value === null ||
-    drawerDepthMm.value === null ||
-    plateWidthMm.value === null ||
-    plateDepthMm.value === null
-  ) {
-    return null;
-  }
-  return planDrawerFill({
-    drawerWidthMm: drawerWidthMm.value,
-    drawerDepthMm: drawerDepthMm.value,
-    plateWidthMm: plateWidthMm.value,
-    plateDepthMm: plateDepthMm.value,
-  });
-});
-
-/** The planned plates, or an empty array while nothing has planned yet or the plan errored. */
-const drawerFillPlates = computed<DrawerFillPlate[]>(() => {
-  const result = drawerFillResult.value;
-  return result !== null && 'plates' in result ? result.plates : [];
-});
-
-/** The planner's error message, or null when there is none to show. */
-const drawerFillError = computed<string | null>(() => {
-  const result = drawerFillResult.value;
-  return result !== null && 'error' in result ? result.error : null;
-});
-
-/**
- * The planned plates grouped into plan-table rows (identical plates collapse
- * to one row with a count), from the shared presentation helper so the table
- * and its tests read the same rows and strings.
- */
-const drawerFillPlanRows = computed(() => groupDrawerFillPlanRows(drawerFillPlates.value));
-
-/**
- * The plate positions ("column-row") currently highlighted by a hover, shared
- * between the plan table and the SVG preview so a hovered table row lights its
- * plates and a hovered plate lights its table row. Empty when nothing hovers.
- */
-const highlightedPlates = ref<Set<string>>(new Set());
-
-/** The hover key of a plate, matching a layout rectangle's column and row. */
-function plateKey(plate: { column: number; row: number }): string {
-  return `${plate.column}-${plate.row}`;
-}
-
-/** Highlights every plate of a plan row (a table row hover). */
-function highlightRow(plates: DrawerFillPlate[]): void {
-  highlightedPlates.value = new Set(plates.map(plateKey));
-}
-
-/** Highlights one plate (an SVG rectangle hover). */
-function highlightPlate(rect: { column: number; row: number }): void {
-  highlightedPlates.value = new Set([plateKey(rect)]);
-}
-
-/** Clears the hover highlight. */
-function clearHighlight(): void {
-  highlightedPlates.value = new Set();
-}
-
-/** Whether a plan row has any plate in the current highlight, for the row's own highlight. */
-function rowHighlighted(plates: DrawerFillPlate[]): boolean {
-  return plates.some((plate) => highlightedPlates.value.has(plateKey(plate)));
-}
-
-const drawerFillQueueError = ref<string | null>(null);
-
-/**
- * Queues the planned plates as one drawer group: the group carries the four mm
- * inputs, the tab's shared magnet, screw-hole and connectable options and the
- * planner's plates (each plate's brim is the planner's own), and one linked
- * baseplate row is added per plate. All-or-nothing lives in the store, which
- * validates the group and every plate first and leaves the plan untouched on
- * any refusal. A refusal is surfaced here.
- */
-function addDrawerFillPlates(): void {
-  drawerFillQueueError.value = null;
-  if (
-    drawerWidthMm.value === null ||
-    drawerDepthMm.value === null ||
-    plateWidthMm.value === null ||
-    plateDepthMm.value === null
-  ) {
-    return;
-  }
-  const input = {
-    drawerWidthMm: drawerWidthMm.value,
-    drawerDepthMm: drawerDepthMm.value,
-    plateWidthMm: plateWidthMm.value,
-    plateDepthMm: plateDepthMm.value,
-  };
-  const options = {
-    magnets: store.magnets,
-    screwHoles: store.screwHoleMode === 'full',
-    connectable: store.connectable,
-  };
-  const name = `Drawer ${drawerWidthMm.value} × ${drawerDepthMm.value} mm`;
-  const error = queue.addDrawerGroup(input, options, drawerFillPlates.value, name);
-  if (error !== null) drawerFillQueueError.value = error;
-}
-
-/**
- * The full set of preview rectangles for every planned plate, from the shared
- * drawer-fill layout function (the single source of the top-down layout, Y-flip
- * included), so the SVG preview and any other top-down view agree.
- */
-const drawerFillPreviewRects = computed(() =>
-  drawerFillLayoutRects(drawerFillPlates.value, drawerDepthMm.value ?? 0),
-);
 
 /**
  * Whether the current plate is small enough to regenerate on every change.
@@ -399,9 +270,9 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
 
 <template>
   <!-- The tab's drawer-detail mode: a drawer group header or one of its linked
-       plate rows navigates here and shows the group's status and settings in
-       place of the designer, with its own way back to the queue. -->
-  <DrawerView v-if="drawerMode" />
+       plate rows navigates here and shows the same fill-a-drawer layout, in edit
+       mode, preloaded from the saved group with its own way back to the queue. -->
+  <DrawerFillPanel v-if="drawerMode" :group-id="app.viewingDrawerId" />
   <template v-else>
   <!-- The mode toggle switches the tab between designing one plate and filling
        a drawer; hidden while editing an existing plate. -->
@@ -417,143 +288,9 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
     <v-btn value="fill">Fill a drawer</v-btn>
   </v-btn-toggle>
 
-  <!-- Fill a drawer: inputs and options on the left, the top-down preview and
-       plan on the right, the queue button last. On a narrow screen the three
-       stack in reading order, so the button stays last. -->
-  <div v-if="fillMode" class="fill-layout">
-    <div class="fill-inputs">
-      <p class="text-body-2 text-medium-emphasis mb-3">
-        Enter the drawer's inside size and your build plate size; the plates fill
-        the drawer wall to wall.
-      </p>
-      <div class="d-flex align-center ga-2 mb-2">
-        <v-text-field
-          v-model.number="drawerWidthMm"
-          type="number"
-          min="0"
-          label="Drawer width (mm)"
-          density="comfortable"
-          hide-details
-        />
-        <span class="text-medium-emphasis">x</span>
-        <v-text-field
-          v-model.number="drawerDepthMm"
-          type="number"
-          min="0"
-          label="Drawer depth (mm)"
-          density="comfortable"
-          hide-details
-        />
-      </div>
-      <div class="d-flex align-center ga-2 mb-2">
-        <v-text-field
-          v-model.number="plateWidthMm"
-          type="number"
-          min="0"
-          label="Build plate width (mm)"
-          density="comfortable"
-          hide-details
-        />
-        <span class="text-medium-emphasis">x</span>
-        <v-text-field
-          v-model.number="plateDepthMm"
-          type="number"
-          min="0"
-          label="Build plate depth (mm)"
-          density="comfortable"
-          hide-details
-        />
-      </div>
-      <v-alert v-if="drawerFillError" type="error" density="compact" class="mb-4">
-        {{ drawerFillError }}
-      </v-alert>
-
-      <BaseplateOptionsFields
-        v-model:magnet-mode="store.magnetMode"
-        v-model:magnet-diameter-mm="store.magnetDiameterMm"
-        v-model:magnet-height-mm="store.magnetHeightMm"
-        v-model:screw-hole-mode="store.screwHoleMode"
-        v-model:connectable="store.connectable"
-        class="mt-4"
-      />
-    </div>
-
-    <div class="fill-preview">
-      <template v-if="drawerFillPlates.length > 0">
-        <svg
-          class="drawer-fill-preview mb-4"
-          :viewBox="`0 0 ${drawerWidthMm} ${drawerDepthMm}`"
-          preserveAspectRatio="xMidYMid meet"
-        >
-          <rect
-            x="0"
-            y="0"
-            :width="drawerWidthMm ?? 0"
-            :height="drawerDepthMm ?? 0"
-            class="drawer-fill-outline"
-          />
-          <rect
-            v-for="rect in drawerFillPreviewRects"
-            :key="rect.key"
-            :x="rect.x"
-            :y="rect.y"
-            :width="rect.width"
-            :height="rect.height"
-            :class="[
-              rect.brim ? 'drawer-fill-brim' : 'drawer-fill-cell',
-              { highlighted: highlightedPlates.has(`${rect.column}-${rect.row}`) },
-            ]"
-            @mouseenter="highlightPlate(rect)"
-            @mouseleave="clearHighlight"
-          />
-        </svg>
-
-        <table class="plan-table">
-          <thead>
-            <tr>
-              <th>Count</th>
-              <th>Units</th>
-              <th>Outer size (mm)</th>
-              <th>Brim (mm)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="(row, index) in drawerFillPlanRows"
-              :key="index"
-              :class="{ highlighted: rowHighlighted(row.plates) }"
-              @mouseenter="highlightRow(row.plates)"
-              @mouseleave="clearHighlight"
-            >
-              <td>{{ row.count }}×</td>
-              <td>{{ row.unitsLabel }}</td>
-              <td>{{ row.outerLabel }}</td>
-              <td>{{ row.brimLabel }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </template>
-      <div v-else class="fill-preview-empty text-body-2 text-medium-emphasis">
-        Enter all four sizes to plan the plates.
-      </div>
-    </div>
-
-    <div class="fill-actions">
-      <v-btn
-        color="primary"
-        variant="flat"
-        size="large"
-        block
-        :disabled="drawerFillPlates.length === 0"
-        @click="addDrawerFillPlates"
-      >
-        Add plates to queue
-      </v-btn>
-      <v-alert v-if="drawerFillQueueError" type="error" class="mt-4" density="compact">
-        {{ drawerFillQueueError }}
-      </v-alert>
-    </div>
-  </div>
+  <!-- Fill a drawer (create mode): the same shared panel the drawer detail view
+       uses, composing a new drawer group. -->
+  <DrawerFillPanel v-if="fillMode" :group-id="null" />
 
   <!-- Single plate, or editing an existing plate: the form beside the 3D preview. -->
   <v-row v-else-if="clipEditingEntry === null">
@@ -797,93 +534,5 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
 .brim-fields-row {
   grid-column: 1 / -1;
   order: -1;
-}
-
-/*
- * The drawer-fill layout: inputs, preview and the queue button wrap two per
- * row on a wide screen (inputs and preview side by side, the button under the
- * inputs), and stack in reading order on a narrow one, keeping the button last.
- */
-.fill-layout {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
-}
-.fill-layout > * {
-  flex: 1 1 100%;
-}
-@media (min-width: 960px) {
-  .fill-layout > * {
-    flex: 1 1 calc(50% - 12px);
-  }
-}
-.fill-inputs {
-  order: 1;
-}
-.fill-preview {
-  order: 2;
-}
-.fill-actions {
-  order: 3;
-}
-
-.drawer-fill-preview {
-  width: 100%;
-  max-height: 320px;
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-}
-.drawer-fill-outline {
-  fill: none;
-  stroke: rgba(var(--v-theme-on-surface), 0.4);
-  stroke-width: 2;
-}
-.drawer-fill-cell {
-  fill: rgba(var(--v-theme-primary), 0.25);
-  stroke: rgba(var(--v-theme-primary), 0.6);
-  stroke-width: 1;
-}
-.drawer-fill-brim {
-  fill: rgba(var(--v-theme-warning), 0.25);
-  stroke: rgba(var(--v-theme-warning), 0.6);
-  stroke-width: 1;
-}
-.drawer-fill-cell.highlighted,
-.drawer-fill-brim.highlighted {
-  fill: rgba(var(--v-theme-primary), 0.55);
-  stroke: rgb(var(--v-theme-primary));
-  stroke-width: 2;
-}
-.fill-preview-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 160px;
-  border: 1px dashed rgba(var(--v-theme-on-surface), 0.2);
-  border-radius: 8px;
-  text-align: center;
-  padding: 16px;
-}
-
-.plan-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.8125rem;
-}
-.plan-table th {
-  text-align: left;
-  font-weight: 600;
-  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
-  padding: 2px 8px 4px 0;
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-}
-.plan-table td {
-  padding: 3px 8px 3px 0;
-  font-family: monospace;
-}
-.plan-table tbody tr {
-  cursor: default;
-}
-.plan-table tbody tr.highlighted {
-  background: rgba(var(--v-theme-primary), 0.12);
 }
 </style>
