@@ -5,7 +5,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import type { MeshData, PartMeshes } from '../../engine/gridfinity/types';
 import type { MeshBounds } from '../../engine/cutout/cutoutMesh';
 import type { ModelPlacement } from '../../engine/cutout/cutoutBin';
-import { strokeToleranceMm } from '../../engine/cutout/cavityEdits';
+import { strokeToleranceMm } from '../../engine/carve/cavityEdits';
 import { assertNever, type Vec3Mm } from '../../engine/plan/types';
 import { ERROR, INFO, PRIMARY } from '../../themeColors';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';

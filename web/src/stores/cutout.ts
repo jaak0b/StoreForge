@@ -6,7 +6,7 @@ import {
   CAVITY_EDIT_RADIUS_MIN_MM,
   FLATTEN_HEIGHT_MAX_MM,
   FLATTEN_HEIGHT_MIN_MM,
-} from '../engine/cutout/cavityEdits';
+} from '../engine/carve/cavityEdits';
 import type { UnitScaleProposal } from '../engine/cutout/unitScale';
 import { assertNever, type CavityEdit, type CutoutModel, type ModelPlacement } from '../engine/plan/types';
 

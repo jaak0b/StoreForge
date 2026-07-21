@@ -26,7 +26,7 @@ import {
 import {
   applyCavityEdits,
   applyCavityEditsMemoized,
-} from '../../src/engine/cutout/cavityEdits';
+} from '../../src/engine/carve/cavityEdits';
 import { referencedCutoutModelKeySpecs } from '../../src/engine/plan/storedAssets';
 import type { CavityEdit, QueueEntry } from '../../src/engine/plan/types';
 

@@ -15,9 +15,9 @@ import {
   maxClearanceMm,
   placeCutter,
   prepareCutoutModel,
-  simplifyToleranceMm,
   validateClearanceMm,
 } from '../../src/engine/cutout/cutoutBin';
+import { simplifyToleranceMm } from '../../src/engine/carve/sweep';
 import type {
   CutoutBinParams,
   CutoutModelSpec,

@@ -1,7 +1,7 @@
-// Manual cavity edits for cutout bins: brush strokes and flatten clicks,
-// stored on the plan (plan/types CavityEdit) and folded onto the carved body
-// after the model carve and before the label stage. Framework-agnostic; the
-// ManifoldToplevel is injected as everywhere else in the engine.
+// Manual cavity edits: brush strokes and flatten clicks, stored on the plan
+// (plan/types CavityEdit) and folded onto any carved bin body after the carve
+// and before the label stage. Framework-agnostic; the ManifoldToplevel is
+// injected as everywhere else in the engine.
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { circleSegments } from '../geometry/circleSegments';
 import { assertNever, type CavityEdit, type Vec3Mm } from '../plan/types';
@@ -17,7 +17,7 @@ export const FLATTEN_HEIGHT_MAX_MM = 100;
 /**
  * The geometric error budget one stroke may spend, in mm: a quarter of its
  * own brush radius, the same quarter rule the clearance offset pipeline
- * spends (simplifyToleranceMm in cutoutBin.ts). Spent twice coherently: the
+ * spends (simplifyToleranceMm in carve/sweep.ts). Spent twice coherently: the
  * Douglas-Peucker simplification of the polyline and the sphere faceting
  * both stay within it, so the painted shape is faithful to brush fidelity.
  */

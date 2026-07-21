@@ -4,18 +4,20 @@ import { loadManifold } from '../helpers/manifold';
 import { componentVolumes } from '../helpers/components';
 import {
   buildCutoutBinBody,
-  isDraftAngleDegValid,
   placeCutter,
   prepareCutoutModel,
+  type CutoutBinParams,
+  type CutoutModelSpec,
+  type ModelPlacement,
+} from '../../src/engine/cutout/cutoutBin';
+import {
+  isDraftAngleDegValid,
   simplifyToleranceMm,
   sweepCutterUpward,
   sweepSolidUpward,
   sweepToleranceMm,
   validateDraftAngleDeg,
-  type CutoutBinParams,
-  type CutoutModelSpec,
-  type ModelPlacement,
-} from '../../src/engine/cutout/cutoutBin';
+} from '../../src/engine/carve/sweep';
 import { FLOOR_TOP, HEIGHT_UNIT } from '../../src/engine/gridfinity/constants';
 
 let m: ManifoldToplevel;

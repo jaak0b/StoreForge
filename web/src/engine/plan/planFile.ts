@@ -24,7 +24,7 @@ import {
   CAVITY_EDIT_RADIUS_MIN_MM,
   FLATTEN_HEIGHT_MAX_MM,
   FLATTEN_HEIGHT_MIN_MM,
-} from '../cutout/cavityEdits';
+} from '../carve/cavityEdits';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
 import { PITCH } from '../gridfinity/constants';
 import {
@@ -40,10 +40,9 @@ import {
 } from '../baseplate/constants';
 import {
   DEFAULT_CUTOUT_CLEARANCE_MM,
-  DEFAULT_DRAFT_ANGLE_DEG,
-  isDraftAngleDegValid,
   maxClearanceMm,
 } from '../cutout/cutoutBin';
+import { DEFAULT_DRAFT_ANGLE_DEG, isDraftAngleDegValid } from '../carve/sweep';
 import { MAX_TRIANGLES } from '../cutout/stlReader';
 import {
   composeLabelText,

@@ -32,7 +32,7 @@ import {
   type SweptSolid,
   type SweptSolidMemo,
 } from '../engine/cutout/cutoutBin';
-import type { CavityEditedBodyMemo } from '../engine/cutout/cavityEdits';
+import type { CavityEditedBodyMemo } from '../engine/carve/cavityEdits';
 import { modelNotStoredMessage } from '../engine/plan/missingModels';
 import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 import type { CavityEdit } from '../engine/plan/types';

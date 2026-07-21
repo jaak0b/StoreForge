@@ -18,12 +18,11 @@ import { centredModelMesh, meshBounds, type MeshBounds } from '../../engine/cuto
 import {
   DEFAULT_CUTOUT_CLEARANCE_MM,
   DEFAULT_CUTOUT_SWEEP_ENABLED,
-  DEFAULT_DRAFT_ANGLE_DEG,
   maxClearanceMm,
   validateClearanceMm,
-  validateDraftAngleDeg,
   type SizeMm,
 } from '../../engine/cutout/cutoutBin';
+import { DEFAULT_DRAFT_ANGLE_DEG, validateDraftAngleDeg } from '../../engine/carve/sweep';
 import {
   fitBinToModels,
   interiorBoundsMm,
@@ -33,7 +32,7 @@ import { proposeUnitScale } from '../../engine/cutout/unitScale';
 import {
   cavityEditRollbackCount,
   clampLastGoodEditCount,
-} from '../../engine/cutout/cavityEditRollback';
+} from '../../engine/carve/cavityEditRollback';
 import { modelNotStoredMessage, relinkCutoutModel } from '../../engine/plan/missingModels';
 import { MIN_HEIGHT_UNITS } from '../../engine/gridfinity/constants';
 import type { SlottedBinParams } from '../../engine/gridfinity/types';
@@ -52,7 +51,7 @@ import {
   FLATTEN_HEIGHT_MIN_MM,
   FLATTEN_HEIGHT_MAX_MM,
   isCavityEditRejectionMessage,
-} from '../../engine/cutout/cavityEdits';
+} from '../../engine/carve/cavityEdits';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import CutoutViewport from './CutoutViewport.vue';
