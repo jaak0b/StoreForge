@@ -9,7 +9,7 @@ import {
   lowResMaskToMat,
   prepareEncoderInput,
 } from '../../src/engine/trace/sam';
-import { maskToContour } from '../../src/engine/trace/contour';
+import { denoiseMask, maskToContour } from '../../src/engine/trace/contour';
 import { removeShadow } from '../../src/engine/trace/shadow';
 import type { MmPoint } from '../../src/engine/trace/types';
 
@@ -96,6 +96,8 @@ describe('MobileSAM click-to-segment integration', () => {
       // paper), so multilevel Otsu is degenerate and removeShadow is a no-op
       // by construction; the expected geometry below is therefore unchanged.
       removeShadow(cv, sheet, maskMat);
+      // Denoise on the same path the worker takes, now a step of its own.
+      denoiseMask(cv, maskMat);
       const result = maskToContour(cv, maskMat, {
         mmPerPixel: 0.25,
         includePoints: [{ x: 256, y: 192 }],
