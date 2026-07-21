@@ -76,7 +76,7 @@ describe('applyCavityEdits', () => {
     const edits: CavityEdit[] = [
       { kind: 'add', points: [p(20, 20, 15), p(20, 20, 25)], radiusMm: 4 },
     ];
-    const after = applyCavityEdits(m, before, binSolid, edits, 20);
+    const after = applyCavityEdits(m, before, binSolid, edits);
     expect(after.status()).toBe('NoError');
     expect(after.volume()).toBeGreaterThan(beforeVolume);
     expect(after.volume()).toBeLessThanOrEqual(binSolid.volume());
@@ -90,7 +90,7 @@ describe('applyCavityEdits', () => {
     const beforeVolume = before.volume();
     const after = applyCavityEdits(m, before, binSolid, [
       { kind: 'remove', points: [p(5, 5, 18), p(35, 5, 18)], radiusMm: 3 },
-    ], 20);
+    ]);
     expect(after.volume()).toBeLessThan(beforeVolume);
     after.delete();
     binSolid.delete();
@@ -99,9 +99,13 @@ describe('applyCavityEdits', () => {
   it('flatten leaves no material above the plane inside the brush circle', () => {
     const binSolid = box();
     const before = carvedBody();
-    const after = applyCavityEdits(m, before, binSolid, [
-      { kind: 'flatten', centerMm: p(10, 10, 15), radiusMm: 5, planeZMm: 12 },
-    ], 20);
+    const edit = {
+      kind: 'flatten' as const,
+      centerMm: p(10, 10, 12),
+      radiusMm: 5,
+      normalMm: p(0, 0, 1),
+    };
+    const after = applyCavityEdits(m, before, binSolid, [edit]);
     // Probe: intersect the result with the flatten cylinder region above the plane.
     // The probe is geometrically coincident with the cylinder that was just
     // subtracted, so the intersection's boundary faces are tangent; Manifold
@@ -109,7 +113,7 @@ describe('applyCavityEdits', () => {
     // reporting a strictly empty mesh (a documented floating-point boolean
     // edge case for exactly coincident surfaces), so the meaningful check is
     // that no volume remains, not that the vertex list is empty.
-    const probe = flattenSolid(m, { centerMm: p(10, 10, 15), radiusMm: 5, planeZMm: 12 }, 20);
+    const probe = flattenSolid(m, edit, binSolid);
     const above = after.intersect(probe);
     expect(above.volume()).toBeLessThan(1e-6);
     above.delete();
@@ -118,12 +122,60 @@ describe('applyCavityEdits', () => {
     binSolid.delete();
   });
 
+  it('flatten on a wall-facing normal removes a bump protruding past the wall but leaves material behind it', () => {
+    const binSolid = box();
+    // A cavity void carved out of the envelope for x in [0, 30] (air, open
+    // all the way to the bin's front face so no unrelated wall sits in the
+    // brush's path), with solid wall material for x in [30, 40]. A bump
+    // defect fills part of the void back in, from the wall at x=30 out to
+    // x=25, as if a stray sliver of solid protrudes into what should be
+    // open cavity air.
+    const cavityVoid = m.Manifold.cube([30, 20, 15], false).translate([0, 10, 0]);
+    const bump = m.Manifold.cube([5, 8, 8], false).translate([25, 13, 3]);
+    const envelope = box();
+    const withCavity = envelope.subtract(cavityVoid);
+    cavityVoid.delete();
+    const before = withCavity.add(bump);
+    withCavity.delete();
+    bump.delete();
+    const edit = {
+      kind: 'flatten' as const,
+      // Tangent plane x=30 (the wall), outward normal -X (into the cavity
+      // air): removes solid material found on the air side of the wall. The
+      // radius (6) comfortably covers the bump's corners (at radius
+      // sqrt(4^2+4^2) ~ 5.66 from the centre) with the round brush, while
+      // staying inside the cavity void's own y/z margins (radius 7) so the
+      // brush never reaches solid outside the cavity.
+      centerMm: p(30, 17, 7),
+      radiusMm: 6,
+      normalMm: p(-1, 0, 0),
+    };
+    const after = applyCavityEdits(m, before, binSolid, [edit]);
+    // Probe the air-side half-space (x < 30, within the brush disc): the bump
+    // is fully shaved away, nothing remains there.
+    const probe = flattenSolid(m, edit, binSolid);
+    const above = after.intersect(probe);
+    expect(above.volume()).toBeLessThan(1e-6);
+    above.delete();
+    probe.delete();
+    // Material behind the plane (the solid wall for x >= 30, untouched by the
+    // brush) survives: the flattened body matches the bump-free cavity.
+    const bumplessCavityVoid = m.Manifold.cube([30, 20, 15], false).translate([0, 10, 0]);
+    const bumplessEnvelope = box();
+    const baseline = bumplessEnvelope.subtract(bumplessCavityVoid);
+    bumplessCavityVoid.delete();
+    expect(Math.abs(after.volume() - baseline.volume())).toBeLessThan(1);
+    baseline.delete();
+    after.delete();
+    binSolid.delete();
+  });
+
   it('is order dependent for an overlapping add and remove pair', () => {
     const binSolid = box();
     const add: CavityEdit = { kind: 'add', points: [p(18, 18, 14)], radiusMm: 5 };
     const remove: CavityEdit = { kind: 'remove', points: [p(20, 20, 14)], radiusMm: 5 };
-    const a = applyCavityEdits(m, carvedBody(), binSolid, [add, remove], 20);
-    const b = applyCavityEdits(m, carvedBody(), binSolid, [remove, add], 20);
+    const a = applyCavityEdits(m, carvedBody(), binSolid, [add, remove]);
+    const b = applyCavityEdits(m, carvedBody(), binSolid, [remove, add]);
     expect(Math.abs(a.volume() - b.volume())).toBeGreaterThan(1);
     a.delete();
     b.delete();
@@ -136,7 +188,7 @@ describe('applyCavityEdits', () => {
     expect(() =>
       applyCavityEdits(m, before, binSolid, [
         { kind: 'remove', points: [p(20, 20, 10)], radiusMm: 50 },
-      ], 20),
+      ]),
     ).toThrow(/entire bin/);
     binSolid.delete();
   });
@@ -148,7 +200,7 @@ describe('applyCavityEdits', () => {
     try {
       applyCavityEdits(m, before, binSolid, [
         { kind: 'remove', points: [p(20, 20, 10)], radiusMm: 50 },
-      ], 20);
+      ]);
     } catch (error) {
       thrown = error;
     }

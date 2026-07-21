@@ -748,7 +748,6 @@ describe('CavityEditedBodyCache and applyCavityEditsMemoized', () => {
   it('appending one edit reuses the memoized body; any other prefix rebuilds', async () => {
     const cache = new CavityEditedBodyCache();
     const recipeKey = 'recipe';
-    const binTopZMm = 20;
     const freshBody = () => m.Manifold.cube([40, 40, 20], false);
     let binSolidBuilds = 0;
     const makeBinSolid = () => {
@@ -757,18 +756,18 @@ describe('CavityEditedBodyCache and applyCavityEditsMemoized', () => {
     };
     const e1: CavityEdit = { kind: 'remove', points: [{ xMm: 5, yMm: 5, zMm: 18 }], radiusMm: 3 };
     const e2: CavityEdit = { kind: 'remove', points: [{ xMm: 30, yMm: 30, zMm: 18 }], radiusMm: 3 };
-    const first = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1], binTopZMm, {
+    const first = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1], {
       store: cache, recipeKey,
     });
     expect(cache.size).toBe(1);
-    const second = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1, e2], binTopZMm, {
+    const second = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1, e2], {
       store: cache, recipeKey,
     });
     // The appended-edit path never rebuilds e1, so its result equals the full fold.
-    const full = applyCavityEdits(m, freshBody(), makeBinSolid(), [e1, e2], binTopZMm);
+    const full = applyCavityEdits(m, freshBody(), makeBinSolid(), [e1, e2]);
     expect(Math.abs(second.volume() - full.volume())).toBeLessThan(1e-6);
     // An undo (shorter list) is a full rebuild, not a crash and not a stale hit.
-    const undone = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1], binTopZMm, {
+    const undone = applyCavityEditsMemoized(m, freshBody(), makeBinSolid, [e1], {
       store: cache, recipeKey,
     });
     expect(Math.abs(undone.volume() - first.volume())).toBeLessThan(1e-6);

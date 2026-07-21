@@ -27,13 +27,16 @@ order). Discriminated union on `kind`, every branch ends in `assertNever`:
 type CavityEdit =
   | { kind: 'add';     points: Vec3Mm[]; radiusMm: number }
   | { kind: 'remove';  points: Vec3Mm[]; radiusMm: number }
-  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; planeZMm: number }
+  | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm }
 ```
 
-Coordinates are bin-local mm, same frame as `ModelPlacement`. Plan file version goes 8 to 9;
-loading a version 8 file defaults `edits` to `[]`. Validation: finite numbers, `radiusMm` within
-[0.2, 50], `points` non-empty for strokes; violations produce the existing user-worded plan
-validation messages.
+Coordinates are bin-local mm, same frame as `ModelPlacement`. Flatten shaves along the clicked
+surface rather than only horizontally: `normalMm` is the unit outward surface normal at the
+clicked point (bin-local mm), so a floor click flattens horizontally, a wall click shaves flush
+with the wall, and a ramp click shaves flush with the ramp. Plan file version goes 8 to 9; loading
+a version 8 file defaults `edits` to `[]`. Validation: finite numbers, `radiusMm` within [0.2, 50],
+`points` non-empty for strokes, `normalMm` a unit vector (length within [0.99, 1.01]); violations
+produce the existing user-worded plan validation messages.
 
 ## Engine: new module web/src/engine/cutout/cavityEdits.ts
 
@@ -43,8 +46,12 @@ Framework-agnostic, `ManifoldToplevel` injected, like every other engine module.
   standard CSG construction via Manifold's convex hull); union the segments. A single point is one
   sphere. Sphere circular resolution follows the existing preview facet convention in the cutout
   engine.
-- Flatten solid: a cylinder of radius `radiusMm` centered on `centerMm`, spanning from `planeZMm`
-  up to the bin top.
+- Flatten solid: a cylinder of radius `radiusMm`, its base disc lying on the tangent plane through
+  `centerMm` and its axis along `normalMm`, extending along +normal far enough to always clear the
+  bin (the length is the bounding-box diagonal of the bin envelope, an upper bound, not a tuned
+  constant). The cylinder is built standing along Z and rotated onto `normalMm` with the standard
+  two-angle axis alignment (Manifold's extrinsic x-y-z rotation, matching `placeCutter`); a
+  cylinder is symmetric about its own axis, so the rotation about the aligned axis is left at 0.
 - `applyCavityEdits(m, body, binSolid, edits)`: folds edits in order. `remove` and `flatten`
   subtract their solid from the body. `add` unions the stroke solid intersected with `binSolid`
   (the un-carved solid bin body), so Add can only restore material the bin originally had and can
@@ -77,13 +84,14 @@ brush fidelity.
 - While a tool is active the transform gizmos are detached and left-drag paints; right-drag and
   wheel keep orbiting the camera. Esc or clicking the active tool button leaves paint mode and
   restores the gizmo.
-- Cursor: a translucent sphere (circle for Flatten, with a height indicator) raycast onto the
-  displayed bin mesh (three.js Raycaster), sized to the brush radius, so the affected region is
-  visible before clicking.
+- Cursor: a translucent sphere raycast onto the displayed bin mesh (three.js Raycaster), sized to
+  the brush radius, so the affected region is visible before clicking. For Flatten the cursor is a
+  disc instead, tilted to lie flush with the clicked surface using that surface's hit normal.
 - Add and Remove: pointer down starts a stroke; sampled hit points build the polyline; a ghost
   capsule chain renders on the main thread during the drag (no CSG); pointer up commits the
   stroke to the store, which triggers a worker recarve, same commit pattern as gizmo drag end.
-- Flatten: single click; the hit point supplies `centerMm` and `planeZMm`.
+- Flatten: single click; the hit point supplies `centerMm`, and the hit face's normal (transformed
+  into bin-local space and normalized) supplies `normalMm`.
 - Undo and redo live in the store's editor state: undo pops the last edit onto a redo stack; a
   new stroke clears the redo stack. Clear-all empties the edit list (after confirmation) and
   clears both stacks.
@@ -99,7 +107,8 @@ brush fidelity.
 - `add` increases carved-bin volume, `remove` decreases it, and add never exceeds the un-carved
   bin volume (envelope clamp).
 - Flatten yields a flat region: after flatten, no surface of the cavity within the brush circle
-  lies above `planeZMm`.
+  protrudes past the tangent plane through `centerMm`, on the +normal side, for a horizontal
+  (floor) normal as well as a wall-facing normal, with material behind the plane left intact.
 - Edit that empties the bin is rejected with a message.
 - Order dependence: add-then-remove differs from remove-then-add on an overlapping pair.
 - Plan round-trip: version 9 serialize/validate/merge with edits; version 8 file loads with

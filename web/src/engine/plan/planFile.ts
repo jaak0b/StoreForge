@@ -469,8 +469,13 @@ export function validateCavityEdits(raw: unknown, subject: string): string | nul
       if (!isVec3Mm(edit.centerMm)) {
         return `${subject}: A flatten edit needs a centre with finite x, y and z in mm.`;
       }
-      if (!isFiniteNumber(edit.planeZMm)) {
-        return `${subject}: A flatten edit needs a finite plane height in mm.`;
+      if (!isVec3Mm(edit.normalMm)) {
+        return `${subject}: A flatten edit needs a surface normal with finite x, y and z.`;
+      }
+      const n = edit.normalMm as Vec3Mm;
+      const lengthMm = Math.sqrt(n.xMm * n.xMm + n.yMm * n.yMm + n.zMm * n.zMm);
+      if (lengthMm < 0.99 || lengthMm > 1.01) {
+        return `${subject}: A flatten edit's surface normal must be a unit vector.`;
       }
       continue;
     }
@@ -531,7 +536,7 @@ export function pickCavityEdits(raw: Record<string, unknown>): CavityEdit[] {
         kind: 'flatten',
         centerMm: copyPoint(edit.centerMm as Vec3Mm),
         radiusMm: edit.radiusMm as number,
-        planeZMm: edit.planeZMm as number,
+        normalMm: copyPoint(edit.normalMm as Vec3Mm),
       };
     }
     return {

@@ -401,10 +401,10 @@ function onStrokeCommit(points: Vec3Mm[]): void {
 }
 
 /** Fires a flatten click's edit. */
-function onFlattenCommit(centerMm: Vec3Mm, planeZMm: number): void {
+function onFlattenCommit(centerMm: Vec3Mm, normalMm: Vec3Mm): void {
   if (cutout.activeTool !== 'flatten') return;
   editError.value = null;
-  cutout.appendEdit({ kind: 'flatten', centerMm, radiusMm: cutout.brushRadiusMm, planeZMm });
+  cutout.appendEdit({ kind: 'flatten', centerMm, radiusMm: cutout.brushRadiusMm, normalMm });
 }
 
 watch(

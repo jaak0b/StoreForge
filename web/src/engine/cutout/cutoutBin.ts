@@ -939,7 +939,6 @@ export function buildCutoutBinBody(
   );
   const edits = params.edits ?? [];
   if (edits.length > 0) {
-    const binTopZMm = sweptReachZ(params.heightUnits);
     // The un-carved solid bin body: the same carve stage with no cutters, so
     // the Add clamp envelope is derived where the carve already derives it.
     // buildCarvedBinBody only reads the CarvedBinParams fields it needs, so
@@ -949,11 +948,11 @@ export function buildCutoutBinBody(
     const makeBinSolid = (): Manifold => buildCarvedBinBody(m, params, [], 'Cutout bin');
     body =
       params.editedMemo !== undefined && params.editedRecipeKey !== undefined
-        ? applyCavityEditsMemoized(m, body, makeBinSolid, edits, binTopZMm, {
+        ? applyCavityEditsMemoized(m, body, makeBinSolid, edits, {
             store: params.editedMemo,
             recipeKey: params.editedRecipeKey,
           })
-        : applyCavityEditsMemoized(m, body, makeBinSolid, edits, binTopZMm);
+        : applyCavityEditsMemoized(m, body, makeBinSolid, edits);
   }
   return { body, warnings, footprints };
 }

@@ -69,8 +69,8 @@ const emit = defineEmits<{
   boundsChange: [moved: CutoutGhostMoved];
   /** A brush stroke ended: the sampled hit points in bin-local mm. */
   strokeCommit: [points: Vec3Mm[]];
-  /** A flatten click landed: the hit point supplies the centre and the plane height. */
-  flattenCommit: [centerMm: Vec3Mm, planeZMm: number];
+  /** A flatten click landed: the hit point and the clicked surface's outward unit normal. */
+  flattenCommit: [centerMm: Vec3Mm, normalMm: Vec3Mm];
   /** The user pressed Escape inside the viewport while painting. */
   exitPaint: [];
   /** Ctrl+Z (or Cmd+Z) was pressed with an edit to undo. */
@@ -168,8 +168,9 @@ const ghostMaterials: Record<GhostTone, THREE.MeshStandardMaterial> = {
  * Geometry and materials for the paint-mode cursor and the stroke ghost
  * chain, created once per viewport instance and reused across every frame
  * and every stroke. The disc is modelled lying flat on Three's default Y
- * axis and rotated onto local Z, the up axis inside `modelRoot`, so the
- * flatten cursor sits on the surface it will level.
+ * axis and rotated onto local Z, the up axis inside `modelRoot`; the flatten
+ * cursor is then tilted per hit to the clicked surface's normal, so it always
+ * lies flush with the surface it will level.
  */
 const paintSphereGeometry = new THREE.SphereGeometry(1, 24, 16);
 const paintCylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 16);
@@ -187,16 +188,12 @@ const paintCursorMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMateri
 );
 paintCursorMesh.visible = false;
 
-/** The flatten tool's height indicator: a line from the bed to the hit point. */
-const paintHeightLineGeometry = new THREE.BufferGeometry();
-paintHeightLineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-const paintHeightLineMaterial = new THREE.LineBasicMaterial({ color: new THREE.Color(PRIMARY) });
-const paintHeightLine = new THREE.Line(paintHeightLineGeometry, paintHeightLineMaterial);
-paintHeightLine.visible = false;
-
 const UNIT_Y = new THREE.Vector3(0, 1, 0);
+const UNIT_Z = new THREE.Vector3(0, 0, 1);
 const strokeDirection = new THREE.Vector3();
 const paintLocalPoint = new THREE.Vector3();
+const paintLocalNormal = new THREE.Vector3();
+const paintNormalMatrix = new THREE.Matrix3();
 
 let strokeActive = false;
 let strokePoints: Vec3Mm[] = [];
@@ -566,16 +563,18 @@ function wireGizmo(
   });
 }
 
-/** Hide the paint cursor and the flatten height indicator. */
+/** Hide the paint cursor. */
 function hidePaintCursor(): void {
   paintCursorMesh.visible = false;
-  paintHeightLine.visible = false;
 }
 
 /**
  * Raycasts against the carved bin only (never the ghosts), returning the hit
- * point in bin-local mm. Returns the same scratch vector on every call; the
- * caller must consume it before the next raycast.
+ * point in bin-local mm. Also fills `paintLocalNormal` with the clicked
+ * surface's outward unit normal, transformed from the hit face's own local
+ * space into modelRoot/bin-local space by its normal matrix. Returns the same
+ * scratch vector on every call; the caller must consume it (and the normal)
+ * before the next raycast.
  */
 function raycastPaintHit(ctx: ThreeSceneContext, event: PointerEvent): THREE.Vector3 | null {
   const rect = ctx.canvas.getBoundingClientRect();
@@ -591,8 +590,17 @@ function raycastPaintHit(ctx: ThreeSceneContext, event: PointerEvent): THREE.Vec
   if (targets.length === 0) return null;
   const hits = raycaster.intersectObjects(targets, false);
   if (hits.length === 0) return null;
-  paintLocalPoint.copy(hits[0].point);
+  const hit = hits[0];
+  const face = hit.face;
+  if (!face) return null;
+  paintLocalPoint.copy(hit.point);
   ctx.modelRoot.worldToLocal(paintLocalPoint);
+  // hit.object is a direct child of modelRoot with an identity local
+  // transform (buildMeshObject sets no position/rotation/scale of its own),
+  // so its own .matrix already carries the face normal into modelRoot-local
+  // space with no further composition needed.
+  paintNormalMatrix.getNormalMatrix(hit.object.matrix);
+  paintLocalNormal.copy(face.normal).applyMatrix3(paintNormalMatrix).normalize();
   return paintLocalPoint;
 }
 
@@ -602,20 +610,15 @@ function showBrushCursor(hit: THREE.Vector3): void {
   paintCursorMesh.scale.setScalar(props.brushRadiusMm);
   paintCursorMesh.position.copy(hit);
   paintCursorMesh.visible = true;
-  paintHeightLine.visible = false;
 }
 
-/** Point the reused disc cursor at the hit and draw the height indicator up from the bed. */
+/** Point the reused disc cursor at the hit, tilted flush with the clicked surface. */
 function showFlattenCursor(hit: THREE.Vector3): void {
   paintCursorMesh.geometry = paintDiscGeometry;
   paintCursorMesh.scale.set(props.brushRadiusMm, props.brushRadiusMm, 1);
   paintCursorMesh.position.copy(hit);
+  paintCursorMesh.quaternion.setFromUnitVectors(UNIT_Z, paintLocalNormal);
   paintCursorMesh.visible = true;
-  const positions = paintHeightLineGeometry.getAttribute('position') as THREE.BufferAttribute;
-  positions.setXYZ(0, hit.x, hit.y, 0);
-  positions.setXYZ(1, hit.x, hit.y, hit.z);
-  positions.needsUpdate = true;
-  paintHeightLine.visible = true;
 }
 
 /** Remove and forget every ghost mesh drawn for the stroke in progress. */
@@ -757,7 +760,11 @@ function onPointerUpPaint(ctx: ThreeSceneContext, event: PointerEvent): void {
       if (travelled > CLICK_TOLERANCE_PX) return;
       const hit = raycastPaintHit(ctx, event);
       if (!hit) return;
-      emit('flattenCommit', { xMm: hit.x, yMm: hit.y, zMm: hit.z }, hit.z);
+      emit(
+        'flattenCommit',
+        { xMm: hit.x, yMm: hit.y, zMm: hit.z },
+        { xMm: paintLocalNormal.x, yMm: paintLocalNormal.y, zMm: paintLocalNormal.z },
+      );
       return;
     }
     default:
@@ -859,7 +866,6 @@ const { context } = useThreeScene(container, {
     window.addEventListener('keyup', onKeyUp);
 
     ctx.modelRoot.add(paintCursorMesh);
-    ctx.modelRoot.add(paintHeightLine);
 
     syncBin(ctx);
     syncGhosts(ctx);
@@ -897,7 +903,6 @@ const { context } = useThreeScene(container, {
     ghostEntries.clear();
     clearStrokeGhosts(ctx);
     ctx.modelRoot.remove(paintCursorMesh);
-    ctx.modelRoot.remove(paintHeightLine);
     binMesh?.geometry.dispose();
     binLabelMesh?.geometry.dispose();
     bodyMaterial.dispose();
@@ -909,8 +914,6 @@ const { context } = useThreeScene(container, {
     paintCursorMaterial.dispose();
     strokeAddMaterial.dispose();
     strokeRemoveMaterial.dispose();
-    paintHeightLineGeometry.dispose();
-    paintHeightLineMaterial.dispose();
   },
 });
 

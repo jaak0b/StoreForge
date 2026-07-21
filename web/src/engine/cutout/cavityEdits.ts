@@ -97,26 +97,59 @@ export function strokeSolid(m: ManifoldToplevel, points: Vec3Mm[], radiusMm: num
 }
 
 /**
+ * The extrinsic x-y-z Euler rotation (degrees, matching Manifold's rotate
+ * convention, see placeCutter in cutoutBin.ts) that carries the Z axis onto
+ * `normalMm`. A cylinder standing along Z is rotationally symmetric about its
+ * own axis, so the third (Z) angle is free and left at 0; only the X and Y
+ * angles are needed to point the axis, a standard two-angle axis alignment:
+ *
+ *   Rx(x) * (0,0,1) = (0, -sin x, cos x)
+ *   Ry(y) * that     = (sin y cos x, -sin x, cos y cos x)
+ *
+ * Solving that against normalMm = (nx, ny, nz) gives x = asin(-ny) and
+ * y = atan2(nx, nz), with y left at 0 in the degenerate case (normal along
+ * +-Y) where cos(x) is 0 and y does not affect the result.
+ */
+function rotationAligningZTo(normalMm: Vec3Mm): [number, number, number] {
+  const { xMm: nx, yMm: ny, zMm: nz } = normalMm;
+  const clampedNy = Math.max(-1, Math.min(1, -ny));
+  const xRad = Math.asin(clampedNy);
+  const cosX = Math.cos(xRad);
+  const yRad = Math.abs(cosX) < 1e-9 ? 0 : Math.atan2(nx, nz);
+  const toDeg = 180 / Math.PI;
+  return [xRad * toDeg, yRad * toDeg, 0];
+}
+
+/**
  * The solid one flatten click shaves away: a cylinder of the brush radius,
- * standing on the picked plane and reaching binTopZMm, the same figure the
- * swept pockets reach (sweptReachZ), so the cut provably opens through the
- * lip rather than leaving a roof over the flattened region.
+ * its base disc lying on the tangent plane through centerMm and its axis
+ * along normalMm, extending along +normal far enough to always clear the
+ * bin. The length is the bounding-box diagonal of `boundsSolid` (an upper
+ * bound on any straight-line extent inside it, not a tuned constant), so the
+ * cut provably reaches past every surface the bin could present, exactly the
+ * property the earlier binTopZMm figure guaranteed for the horizontal case.
  */
 export function flattenSolid(
   m: ManifoldToplevel,
-  edit: { centerMm: Vec3Mm; radiusMm: number; planeZMm: number },
-  binTopZMm: number,
+  edit: { centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm },
+  boundsSolid: Manifold,
 ): Manifold {
-  const heightMm = binTopZMm - edit.planeZMm;
-  if (!(heightMm > 0)) {
-    throw new Error('The flatten height must lie below the top of the bin.');
-  }
-  return m.Manifold.cylinder(
+  const box = boundsSolid.boundingBox();
+  const dx = box.max[0] - box.min[0];
+  const dy = box.max[1] - box.min[1];
+  const dz = box.max[2] - box.min[2];
+  const heightMm = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const cylinder = m.Manifold.cylinder(
     heightMm,
     edit.radiusMm,
     edit.radiusMm,
     circleSegments(edit.radiusMm, strokeToleranceMm(edit.radiusMm)),
-  ).translate([edit.centerMm.xMm, edit.centerMm.yMm, edit.planeZMm]);
+  );
+  const rotated = cylinder.rotate(rotationAligningZTo(edit.normalMm));
+  cylinder.delete();
+  const placed = rotated.translate([edit.centerMm.xMm, edit.centerMm.yMm, edit.centerMm.zMm]);
+  rotated.delete();
+  return placed;
 }
 
 /**
@@ -130,7 +163,6 @@ function foldCavityEdit(
   current: Manifold,
   edit: CavityEdit,
   binSolid: Manifold,
-  binTopZMm: number,
 ): Manifold {
   switch (edit.kind) {
     case 'add': {
@@ -150,7 +182,7 @@ function foldCavityEdit(
       return next;
     }
     case 'flatten': {
-      const cylinder = flattenSolid(m, edit, binTopZMm);
+      const cylinder = flattenSolid(m, edit, binSolid);
       const next = current.subtract(cylinder);
       current.delete();
       cylinder.delete();
@@ -208,12 +240,11 @@ export function applyCavityEdits(
   body: Manifold,
   binSolid: Manifold,
   edits: CavityEdit[],
-  binTopZMm: number,
 ): Manifold {
   let current: Manifold = body;
   try {
     for (const edit of edits) {
-      current = foldCavityEdit(m, current, edit, binSolid, binTopZMm);
+      current = foldCavityEdit(m, current, edit, binSolid);
     }
     const result = finishCavityEdits(current);
     current = null as unknown as Manifold;
@@ -282,7 +313,6 @@ export function applyCavityEditsMemoized(
   body: Manifold,
   makeBinSolid: () => Manifold,
   edits: CavityEdit[],
-  binTopZMm: number,
   memo?: { store: CavityEditedBodyMemo; recipeKey: string },
 ): Manifold {
   const binSolidRef: { value: Manifold | null } = { value: null };
@@ -309,7 +339,7 @@ export function applyCavityEditsMemoized(
       body.delete();
     }
     for (let i = startIndex; i < edits.length; i += 1) {
-      current = foldCavityEdit(m, current, edits[i], getBinSolid(), binTopZMm);
+      current = foldCavityEdit(m, current, edits[i], getBinSolid());
     }
     const result = finishCavityEdits(current);
     current = null;

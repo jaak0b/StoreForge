@@ -33,7 +33,7 @@ export function cloneEdit(edit: CavityEdit): CavityEdit {
         kind: 'flatten',
         centerMm: { ...edit.centerMm },
         radiusMm: edit.radiusMm,
-        planeZMm: edit.planeZMm,
+        normalMm: { ...edit.normalMm },
       };
     default:
       return assertNever(edit);

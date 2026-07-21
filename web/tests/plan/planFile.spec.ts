@@ -1735,7 +1735,12 @@ describe('cavity edits (plan version 9)', () => {
     const edits = [
       { kind: 'add', points: [{ xMm: 1, yMm: 2, zMm: 3 }], radiusMm: 2 },
       { kind: 'remove', points: [{ xMm: 0, yMm: 0, zMm: 5 }, { xMm: 4, yMm: 0, zMm: 5 }], radiusMm: 1.5 },
-      { kind: 'flatten', centerMm: { xMm: 5, yMm: 5, zMm: 10 }, radiusMm: 6, planeZMm: 9 },
+      {
+        kind: 'flatten',
+        centerMm: { xMm: 5, yMm: 5, zMm: 10 },
+        radiusMm: 6,
+        normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+      },
     ];
     const result = parsePlanFile(planText(edits));
     expect(result.ok).toBe(true);
@@ -1774,9 +1779,48 @@ describe('cavity edits (plan version 9)', () => {
 
   it('rejects an edit with a non-finite coordinate', () => {
     const result = parsePlanFile(
-      planText([{ kind: 'flatten', centerMm: { xMm: 0, yMm: 0, zMm: null }, radiusMm: 2, planeZMm: 1 }]),
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: null },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+        },
+      ]),
     );
     expect(result.ok).toBe(false);
+  });
+
+  it('rejects a flatten edit whose normal is not a unit vector', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: 0 },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 2 },
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('unit vector');
+  });
+
+  it('rejects a flatten edit with a zero normal', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: 0 },
+          radiusMm: 2,
+          normalMm: { xMm: 0, yMm: 0, zMm: 0 },
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('unit vector');
   });
 
   it('merges an imported entry with edits over an existing one', () => {
