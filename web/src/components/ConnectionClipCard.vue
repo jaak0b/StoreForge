@@ -48,7 +48,6 @@ const emit = defineEmits<{ submit: []; cancel: [] }>();
         :min="CLIP_TOLERANCE_MIN"
         :max="CLIP_TOLERANCE_MAX"
         step="0.05"
-        thumb-label="always"
         label="Clip tolerance (mm)"
         hint="Raise it when the clip prints too tight to push into the joint."
         persistent-hint
