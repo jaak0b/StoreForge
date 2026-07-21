@@ -85,7 +85,7 @@ function pockets(): BinPockets {
         fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
       },
     ],
-    placements: [{ toolId: 't1', xMm: 3, yMm: -4, pocketDepthMm: 12 }],
+    placements: [{ toolId: 't1', xMm: 3, yMm: -4, pocketDepthMm: 12, draftAngleDeg: 0 }],
   };
 }
 
@@ -93,7 +93,7 @@ function tracedBin(overrides: Partial<TracedBin> = {}): TracedBin {
   const { walls, origin, ...base } = manualBin();
   void walls;
   void origin;
-  return { ...base, origin: 'traced', pockets: pockets(), ...overrides };
+  return { ...base, origin: 'traced', pockets: pockets(), edits: [], ...overrides };
 }
 
 function entry(overrides: Partial<QueueEntry> = {}): QueueEntry {
@@ -1857,5 +1857,117 @@ describe('cavity edits (plan version 9)', () => {
     const merged = mergeEntries(a.plan.entries, b.plan.entries);
     expect(merged).toHaveLength(1);
     expect((merged[0].product as { bin: { edits: unknown[] } }).bin.edits).toHaveLength(1);
+  });
+});
+
+describe('traced bin cavity edits and pocket draft angle (plan version 10)', () => {
+  function tracedPlanText(
+    opts: { edits?: unknown; draftAngleDeg?: unknown } = {},
+    version = 10,
+  ): string {
+    const placement: Record<string, unknown> = {
+      toolId: 't1',
+      xMm: 0,
+      yMm: 0,
+      pocketDepthMm: 10,
+    };
+    if (opts.draftAngleDeg !== undefined) placement.draftAngleDeg = opts.draftAngleDeg;
+    const bin: Record<string, unknown> = {
+      origin: 'traced',
+      gridX: 2,
+      gridY: 2,
+      heightUnits: 4,
+      magnetHoles: false,
+      pockets: {
+        tools: [
+          {
+            id: 't1',
+            name: 'Tool',
+            outline: {
+              outer: [
+                { x: -10, y: -5 },
+                { x: 10, y: -5 },
+                { x: 10, y: 5 },
+                { x: -10, y: 5 },
+              ],
+              holes: [],
+            },
+            rotationDeg: 0,
+            offsetMm: 0,
+            mirrored: false,
+            fingerHoles: [],
+          },
+        ],
+        placements: [placement],
+      },
+    };
+    if (opts.edits !== undefined) bin.edits = opts.edits;
+    return JSON.stringify({
+      version,
+      entries: [
+        {
+          id: 'e1',
+          quantity: 1,
+          createdAt: '2026-07-22T00:00:00.000Z',
+          product: { kind: 'bin', labelSlot: true, bin },
+        },
+      ],
+      batches: [],
+    });
+  }
+
+  type LoadedTraced = {
+    edits: unknown;
+    pockets: { placements: { draftAngleDeg: unknown }[] };
+  };
+  function loadedTraced(result: PlanParseResult): LoadedTraced {
+    if (!result.ok) throw new Error(`expected a valid plan, got: ${result.error}`);
+    return (result.plan.entries[0].product as { bin: LoadedTraced }).bin;
+  }
+
+  it('round-trips a non-empty edits list and a pocket draft angle', () => {
+    const edits = [
+      { kind: 'add', points: [{ xMm: 1, yMm: 2, zMm: 3 }], radiusMm: 2 },
+      {
+        kind: 'flatten',
+        centerMm: { xMm: 5, yMm: 5, zMm: 10 },
+        radiusMm: 6,
+        normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+        heightMm: 8,
+      },
+    ];
+    const result = parsePlanFile(tracedPlanText({ edits, draftAngleDeg: 15 }));
+    const bin = loadedTraced(result);
+    expect(bin.edits).toEqual(edits);
+    expect(bin.pockets.placements[0].draftAngleDeg).toBe(15);
+    if (!result.ok) return;
+    const reparsed = parsePlanFile(
+      serializePlanFile(result.plan.entries, result.plan.batches),
+    );
+    const reBin = loadedTraced(reparsed);
+    expect(reBin.edits).toEqual(edits);
+    expect(reBin.pockets.placements[0].draftAngleDeg).toBe(15);
+  });
+
+  it('loads a traced bin lacking both fields as an empty edit list and a zero draft angle', () => {
+    const bin = loadedTraced(parsePlanFile(tracedPlanText()));
+    expect(bin.edits).toEqual([]);
+    expect(bin.pockets.placements[0].draftAngleDeg).toBe(0);
+  });
+
+  it('rejects a traced bin cavity edit with a radius outside 0.2 to 50 mm', () => {
+    const result = parsePlanFile(
+      tracedPlanText({ edits: [{ kind: 'add', points: [{ xMm: 0, yMm: 0, zMm: 0 }], radiusMm: 0.1 }] }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('brush radius');
+  });
+
+  it('rejects a traced pocket with a draft angle of 90 degrees', () => {
+    const result = parsePlanFile(tracedPlanText({ draftAngleDeg: 90 }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('draft angle');
   });
 });

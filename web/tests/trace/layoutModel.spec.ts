@@ -418,6 +418,7 @@ describe('tool list and transform actions', () => {
       xMm: 3.2 + 35 + DEFAULT_CLEARANCE_MM,
       yMm: 3.2 + 6 + DEFAULT_CLEARANCE_MM,
       pocketDepthMm: 20,
+      draftAngleDeg: 0,
     });
     addTool(
       s,
@@ -460,8 +461,8 @@ describe('tool list and transform actions', () => {
     });
     const a = addTool(s, square(40, 40), 'A', 20, [], true);
     const b = addTool(s, square(150, 90), 'B', 20, [], true);
-    expect(s.placements[0]).toEqual({ toolId: a.id, xMm: 45, yMm: 45, pocketDepthMm: 20 });
-    expect(s.placements[1]).toEqual({ toolId: b.id, xMm: 155, yMm: 95, pocketDepthMm: 20 });
+    expect(s.placements[0]).toEqual({ toolId: a.id, xMm: 45, yMm: 45, pocketDepthMm: 20, draftAngleDeg: 0 });
+    expect(s.placements[1]).toEqual({ toolId: b.id, xMm: 155, yMm: 95, pocketDepthMm: 20, draftAngleDeg: 0 });
     const bin = binPlacement(s);
     expect(bin.gridX).toBe(4);
     expect(bin.gridY).toBe(3);

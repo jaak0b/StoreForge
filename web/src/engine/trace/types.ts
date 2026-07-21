@@ -178,6 +178,14 @@ export interface ToolPlacement {
   yMm: number;
   /** How far the pocket sinks below the nominal bin top, in mm. */
   pocketDepthMm: number;
+  /**
+   * How far the tool-outline pocket's walls lean outward toward the top, in
+   * degrees, matching the swept-pocket draft on a cutout model (see
+   * DEFAULT_DRAFT_ANGLE_DEG and isDraftAngleDegValid in engine/carve/sweep.ts).
+   * 0 means straight vertical walls. It applies to the tool outline pocket
+   * only, never to the finger holes, which are always cut straight through.
+   */
+  draftAngleDeg: number;
 }
 
 /** Scale calibration derived from rectifying the sheet to a top-down image. */

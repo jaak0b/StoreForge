@@ -119,9 +119,11 @@ export interface ScrewBin extends BinEnvelope {
 /**
  * A bin with tool pockets from the Tool trace tab. The pocket generator
  * rejects divider walls, so a traced bin deliberately carries no divider
- * fields at all: walls is only legal on ManualBin and ScrewBin.
+ * fields at all: walls is only legal on ManualBin and ScrewBin. Like a cutout
+ * bin it carries manual cavity edits (CavityEditedBin), folded onto the pocket
+ * carve after the pockets are cut.
  */
-export interface TracedBin extends BinEnvelope {
+export interface TracedBin extends BinEnvelope, CavityEditedBin {
   origin: 'traced';
   /** The tool pockets sunk into the bin. */
   pockets: BinPockets;
@@ -232,12 +234,21 @@ export type CavityEdit =
    */
   | { kind: 'flatten'; centerMm: Vec3Mm; radiusMm: number; normalMm: Vec3Mm; heightMm: number };
 
-export interface CutoutBin extends BinEnvelope {
+/**
+ * The manual cavity edits shared by every carved-interior bin. Both CutoutBin
+ * and TracedBin carry the same edit list, applied in list order after the
+ * interior is carved, so shared helpers take a CavityEditedBin instead of the
+ * bin union. Absent in an older plan file means an empty list.
+ */
+export interface CavityEditedBin {
+  /** Manual cavity edits, applied in list order after the carve. */
+  edits: CavityEdit[];
+}
+
+export interface CutoutBin extends BinEnvelope, CavityEditedBin {
   origin: 'cutout';
   /** The models carved out of the interior. Empty means an uncarved solid interior. */
   models: CutoutModel[];
-  /** Manual cavity edits, applied in list order after the model carve. */
-  edits: CavityEdit[];
 }
 
 /** A bin body of any origin. Discriminated by origin, naming the tab that owns its interior features. */

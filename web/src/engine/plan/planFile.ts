@@ -272,6 +272,19 @@ export function validatePockets(raw: unknown, subject: string): string | null {
     ) {
       return `${subject}: A pocket placement needs an x, a y and a pocket depth above 0 mm.`;
     }
+    // draftAngleDeg was added when cavity editing and draft were unified into
+    // the traced flow; older plans omit it, so undefined is accepted and
+    // defaulted to a straight wall (0) on pick.
+    if (
+      placement.draftAngleDeg !== undefined &&
+      (typeof placement.draftAngleDeg !== 'number' ||
+        !isDraftAngleDegValid(placement.draftAngleDeg))
+    ) {
+      return (
+        `${subject}: A pocket placement's draft angle must be a number from 0 ` +
+        'up to but not including 90 degrees.'
+      );
+    }
   }
   return null;
 }
@@ -322,6 +335,7 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
       xMm: placement.xMm as number,
       yMm: placement.yMm as number,
       pocketDepthMm: placement.pocketDepthMm as number,
+      draftAngleDeg: (placement.draftAngleDeg as number | undefined) ?? DEFAULT_DRAFT_ANGLE_DEG,
     }),
   );
   return { tools, placements };
@@ -796,6 +810,8 @@ function validateBin(raw: unknown, subject: string): string | null {
     }
     const pocketsProblem = validatePockets(bin.pockets, subject);
     if (pocketsProblem !== null) return pocketsProblem;
+    const editsProblem = validateCavityEdits(bin.edits, subject);
+    if (editsProblem !== null) return editsProblem;
     return validateTraceSource(bin, subject);
   }
   if (bin.origin === 'cutout') {
@@ -826,6 +842,7 @@ function pickBin(raw: Record<string, unknown>): Bin {
       ...envelope,
       origin: 'traced',
       pockets: pickPockets(raw.pockets as Record<string, unknown>),
+      edits: pickCavityEdits(raw),
     };
     assignTraceSource(bin, raw);
     return bin;
@@ -1663,6 +1680,7 @@ function legacyProductOf(
       ...envelope,
       origin: 'traced',
       pockets: pickPockets(raw.pockets as Record<string, unknown>),
+      edits: pickCavityEdits(raw),
     };
     assignTraceSource(bin, raw);
   } else {

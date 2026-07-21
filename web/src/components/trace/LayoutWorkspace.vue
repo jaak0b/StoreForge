@@ -250,6 +250,8 @@ async function addToQueue(): Promise<void> {
     heightUnits: params.heightUnits,
     magnetHoles: params.magnetHoles,
     pockets,
+    // Cavity edits carry over from the entry being edited; a fresh trace has none.
+    edits: editingBin?.edits ?? [],
   };
   const traceSourceId = source.traceSourceId ?? editingBin?.traceSourceId;
   const paper = source.paper ?? editingBin?.paper;
