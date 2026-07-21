@@ -70,6 +70,7 @@ const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(st
           hide-details
           @update:model-value="emit('update:quantity', Number($event))"
         />
+        <slot name="fields" />
       </div>
       <template v-if="!props.hideDividers && !props.insertOnly">
         <div v-if="props.dividerNotice" class="text-caption text-medium-emphasis mt-4">
