@@ -5,6 +5,8 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import type { MeshData, PartMeshes } from '../../engine/gridfinity/types';
 import type { MeshBounds } from '../../engine/cutout/cutoutMesh';
 import type { ModelPlacement } from '../../engine/cutout/cutoutBin';
+import { strokeToleranceMm } from '../../engine/cutout/cavityEdits';
+import { assertNever, type Vec3Mm } from '../../engine/plan/types';
 import { ERROR, INFO, PRIMARY } from '../../themeColors';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import {
@@ -38,6 +40,10 @@ const props = defineProps<{
    * whether or not they are also the selected model.
    */
   warnedModelIds: readonly string[];
+  /** The active paint tool, or null when the gizmo owns the pointer. */
+  paintTool: 'add' | 'remove' | 'flatten' | null;
+  /** Brush radius in mm, sizing the cursor and the ghost capsules. */
+  brushRadiusMm: number;
 }>();
 
 const emit = defineEmits<{
@@ -57,6 +63,12 @@ const emit = defineEmits<{
    * rows, and for sizing the bin around the models where they stand.
    */
   boundsChange: [moved: CutoutGhostMoved];
+  /** A brush stroke ended: the sampled hit points in bin-local mm. */
+  strokeCommit: [points: Vec3Mm[]];
+  /** A flatten click landed: the hit point supplies the centre and the plane height. */
+  flattenCommit: [centerMm: Vec3Mm, planeZMm: number];
+  /** The user pressed Escape inside the viewport while painting. */
+  exitPaint: [];
 }>();
 
 /**
@@ -141,6 +153,44 @@ const ghostMaterials: Record<GhostTone, THREE.MeshStandardMaterial> = {
   selected: createGhostMaterial(INFO),
   warned: createGhostMaterial(ERROR),
 };
+
+/**
+ * Geometry and materials for the paint-mode cursor and the stroke ghost
+ * chain, created once per viewport instance and reused across every frame
+ * and every stroke. The disc is modelled lying flat on Three's default Y
+ * axis and rotated onto local Z, the up axis inside `modelRoot`, so the
+ * flatten cursor sits on the surface it will level.
+ */
+const paintSphereGeometry = new THREE.SphereGeometry(1, 24, 16);
+const paintCylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 16);
+const paintDiscGeometry = new THREE.CylinderGeometry(1, 1, 0.2, 32);
+paintDiscGeometry.rotateX(Math.PI / 2);
+
+const paintCursorMaterial = createGhostMaterial(PRIMARY);
+const strokeAddMaterial = createGhostMaterial(INFO);
+const strokeRemoveMaterial = createGhostMaterial(ERROR);
+
+/** The one cursor mesh the pointer drives; its geometry swaps with the tool. */
+const paintCursorMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> = new THREE.Mesh(
+  paintSphereGeometry,
+  paintCursorMaterial,
+);
+paintCursorMesh.visible = false;
+
+/** The flatten tool's height indicator: a line from the bed to the hit point. */
+const paintHeightLineGeometry = new THREE.BufferGeometry();
+paintHeightLineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+const paintHeightLineMaterial = new THREE.LineBasicMaterial({ color: new THREE.Color(PRIMARY) });
+const paintHeightLine = new THREE.Line(paintHeightLineGeometry, paintHeightLineMaterial);
+paintHeightLine.visible = false;
+
+const UNIT_Y = new THREE.Vector3(0, 1, 0);
+const strokeDirection = new THREE.Vector3();
+const paintLocalPoint = new THREE.Vector3();
+
+let strokeActive = false;
+let strokePoints: Vec3Mm[] = [];
+const strokeGhostMeshes: THREE.Mesh[] = [];
 
 let binMesh: THREE.Mesh | null = null;
 let binLabelMesh: THREE.Mesh | null = null;
@@ -372,7 +422,7 @@ function syncSelection(): void {
   if (props.selectedModelId === attachedId) return;
   attachedId = props.selectedModelId;
   const entry = attachedId === null ? undefined : ghostEntries.get(attachedId);
-  if (!entry) {
+  if (!entry || props.paintTool !== null) {
     translateControls?.detach();
     rotateControls?.detach();
     return;
@@ -409,6 +459,7 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function selectAtPointer(ctx: ThreeSceneContext, event: PointerEvent): void {
+  if (props.paintTool !== null) return;
   if (pointerDownButton !== 0 || event.button !== 0) return;
   const travelled = Math.hypot(event.clientX - pointerDownX, event.clientY - pointerDownY);
   if (travelled > CLICK_TOLERANCE_PX) return;
@@ -440,6 +491,10 @@ function releaseStuckDrag(): void {
 }
 
 let onPointerUp: ((event: PointerEvent) => void) | null = null;
+let onPointerMove: ((event: PointerEvent) => void) | null = null;
+let onPointerDownPaintHandler: ((event: PointerEvent) => void) | null = null;
+let onPointerUpPaintHandler: ((event: PointerEvent) => void) | null = null;
+let onKeyDown: ((event: KeyboardEvent) => void) | null = null;
 
 function wireGizmo(
   ctx: ThreeSceneContext,
@@ -470,6 +525,212 @@ function wireGizmo(
   });
 }
 
+/** Hide the paint cursor and the flatten height indicator. */
+function hidePaintCursor(): void {
+  paintCursorMesh.visible = false;
+  paintHeightLine.visible = false;
+}
+
+/**
+ * Raycasts against the carved bin only (never the ghosts), returning the hit
+ * point in bin-local mm. Returns the same scratch vector on every call; the
+ * caller must consume it before the next raycast.
+ */
+function raycastPaintHit(ctx: ThreeSceneContext, event: PointerEvent): THREE.Vector3 | null {
+  const rect = ctx.canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  pointerNdc.set(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  raycaster.setFromCamera(pointerNdc, ctx.camera);
+  const targets: THREE.Mesh[] = [];
+  if (binMesh) targets.push(binMesh);
+  if (binLabelMesh) targets.push(binLabelMesh);
+  if (targets.length === 0) return null;
+  const hits = raycaster.intersectObjects(targets, false);
+  if (hits.length === 0) return null;
+  paintLocalPoint.copy(hits[0].point);
+  ctx.modelRoot.worldToLocal(paintLocalPoint);
+  return paintLocalPoint;
+}
+
+/** Point the reused sphere cursor at the hit, sized to the brush radius. */
+function showBrushCursor(hit: THREE.Vector3): void {
+  paintCursorMesh.geometry = paintSphereGeometry;
+  paintCursorMesh.scale.setScalar(props.brushRadiusMm);
+  paintCursorMesh.position.copy(hit);
+  paintCursorMesh.visible = true;
+  paintHeightLine.visible = false;
+}
+
+/** Point the reused disc cursor at the hit and draw the height indicator up from the bed. */
+function showFlattenCursor(hit: THREE.Vector3): void {
+  paintCursorMesh.geometry = paintDiscGeometry;
+  paintCursorMesh.scale.set(props.brushRadiusMm, props.brushRadiusMm, 1);
+  paintCursorMesh.position.copy(hit);
+  paintCursorMesh.visible = true;
+  const positions = paintHeightLineGeometry.getAttribute('position') as THREE.BufferAttribute;
+  positions.setXYZ(0, hit.x, hit.y, 0);
+  positions.setXYZ(1, hit.x, hit.y, hit.z);
+  positions.needsUpdate = true;
+  paintHeightLine.visible = true;
+}
+
+/** Remove and forget every ghost mesh drawn for the stroke in progress. */
+function clearStrokeGhosts(ctx: ThreeSceneContext): void {
+  for (const mesh of strokeGhostMeshes) ctx.modelRoot.remove(mesh);
+  strokeGhostMeshes.length = 0;
+}
+
+/**
+ * Draws one sphere at the new point and, when a previous point exists, a
+ * cylinder segment between the two: the capsule chain that stands in for the
+ * eventual carve while the stroke is still a drag.
+ */
+function addStrokeGhostPoint(
+  ctx: ThreeSceneContext,
+  tool: 'add' | 'remove',
+  point: Vec3Mm,
+  previous: Vec3Mm | null,
+): void {
+  const material = tool === 'add' ? strokeAddMaterial : strokeRemoveMaterial;
+  const sphere = new THREE.Mesh(paintSphereGeometry, material);
+  sphere.scale.setScalar(props.brushRadiusMm);
+  sphere.position.set(point.xMm, point.yMm, point.zMm);
+  ctx.modelRoot.add(sphere);
+  strokeGhostMeshes.push(sphere);
+  if (!previous) return;
+  const dx = point.xMm - previous.xMm;
+  const dy = point.yMm - previous.yMm;
+  const dz = point.zMm - previous.zMm;
+  const length = Math.hypot(dx, dy, dz);
+  if (length < 1e-6) return;
+  const cylinder = new THREE.Mesh(paintCylinderGeometry, material);
+  cylinder.scale.set(props.brushRadiusMm, length, props.brushRadiusMm);
+  cylinder.position.set(
+    (point.xMm + previous.xMm) / 2,
+    (point.yMm + previous.yMm) / 2,
+    (point.zMm + previous.zMm) / 2,
+  );
+  strokeDirection.set(dx, dy, dz).normalize();
+  cylinder.quaternion.setFromUnitVectors(UNIT_Y, strokeDirection);
+  ctx.modelRoot.add(cylinder);
+  strokeGhostMeshes.push(cylinder);
+}
+
+/**
+ * Appends the hit to the stroke's sampled points when it moved far enough
+ * from the last sample, and draws the ghost for the new point. The tolerance
+ * is the stroke figure the engine already derives from the brush radius, not
+ * a separate constant guessed here.
+ */
+function sampleStroke(ctx: ThreeSceneContext, tool: 'add' | 'remove', hit: THREE.Vector3): void {
+  const last = strokePoints[strokePoints.length - 1] ?? null;
+  if (last) {
+    const dx = hit.x - last.xMm;
+    const dy = hit.y - last.yMm;
+    const dz = hit.z - last.zMm;
+    if (Math.hypot(dx, dy, dz) < strokeToleranceMm(props.brushRadiusMm)) return;
+  }
+  const point: Vec3Mm = { xMm: hit.x, yMm: hit.y, zMm: hit.z };
+  strokePoints.push(point);
+  addStrokeGhostPoint(ctx, tool, point, last);
+}
+
+/**
+ * Tracks the cursor across the bin surface while a paint tool is active, and
+ * samples the stroke when one is in progress. Exhaustive over the tool union
+ * plus null, per the union-switch convention.
+ */
+function onPointerMovePaint(ctx: ThreeSceneContext, event: PointerEvent): void {
+  const tool = props.paintTool;
+  switch (tool) {
+    case null:
+      hidePaintCursor();
+      return;
+    case 'add':
+    case 'remove': {
+      const hit = raycastPaintHit(ctx, event);
+      if (!hit) {
+        hidePaintCursor();
+        return;
+      }
+      showBrushCursor(hit);
+      if (strokeActive) sampleStroke(ctx, tool, hit);
+      return;
+    }
+    case 'flatten': {
+      const hit = raycastPaintHit(ctx, event);
+      if (!hit) {
+        hidePaintCursor();
+        return;
+      }
+      showFlattenCursor(hit);
+      return;
+    }
+    default:
+      assertNever(tool);
+  }
+}
+
+/** Starts an add/remove stroke on a left press with a hit; flatten commits on release instead. */
+function onPointerDownPaint(ctx: ThreeSceneContext, event: PointerEvent): void {
+  const tool = props.paintTool;
+  if (tool === null || tool === 'flatten') return;
+  if (event.button !== 0) return;
+  const hit = raycastPaintHit(ctx, event);
+  if (!hit) return;
+  ctx.canvas.setPointerCapture(event.pointerId);
+  ctx.controls.enabled = false;
+  strokeActive = true;
+  strokePoints = [];
+  clearStrokeGhosts(ctx);
+  sampleStroke(ctx, tool, hit);
+}
+
+/**
+ * Ends an add/remove stroke, clearing the ghosts and committing the sampled
+ * points; or, for flatten, treats a click within the travel tolerance as the
+ * commit. Exhaustive over the tool union plus null.
+ */
+function onPointerUpPaint(ctx: ThreeSceneContext, event: PointerEvent): void {
+  const tool = props.paintTool;
+  switch (tool) {
+    case null:
+      return;
+    case 'add':
+    case 'remove': {
+      if (!strokeActive) return;
+      strokeActive = false;
+      ctx.controls.enabled = true;
+      clearStrokeGhosts(ctx);
+      const points = strokePoints;
+      strokePoints = [];
+      if (points.length > 0) emit('strokeCommit', points);
+      return;
+    }
+    case 'flatten': {
+      if (pointerDownButton !== 0 || event.button !== 0) return;
+      const travelled = Math.hypot(event.clientX - pointerDownX, event.clientY - pointerDownY);
+      if (travelled > CLICK_TOLERANCE_PX) return;
+      const hit = raycastPaintHit(ctx, event);
+      if (!hit) return;
+      emit('flattenCommit', { xMm: hit.x, yMm: hit.y, zMm: hit.z }, hit.z);
+      return;
+    }
+    default:
+      assertNever(tool);
+  }
+}
+
+/** Escape leaves paint mode; only meaningful while a tool is active. */
+function onKeyDownPaint(event: KeyboardEvent): void {
+  if (props.paintTool === null) return;
+  if (event.key !== 'Escape') return;
+  emit('exitPaint');
+}
+
 const container = ref<HTMLDivElement | null>(null);
 
 const { context } = useThreeScene(container, {
@@ -492,10 +753,21 @@ const { context } = useThreeScene(container, {
     wireGizmo(ctx, rotateControls, () => translateControls);
 
     onPointerUp = (event: PointerEvent) => selectAtPointer(ctx, event);
+    onPointerMove = (event: PointerEvent) => onPointerMovePaint(ctx, event);
+    onPointerDownPaintHandler = (event: PointerEvent) => onPointerDownPaint(ctx, event);
+    onPointerUpPaintHandler = (event: PointerEvent) => onPointerUpPaint(ctx, event);
+    onKeyDown = (event: KeyboardEvent) => onKeyDownPaint(event);
     ctx.canvas.addEventListener('pointerdown', onPointerDown);
     ctx.canvas.addEventListener('pointerup', onPointerUp);
     ctx.canvas.addEventListener('pointercancel', releaseStuckDrag);
     ctx.canvas.addEventListener('lostpointercapture', releaseStuckDrag);
+    ctx.canvas.addEventListener('pointermove', onPointerMove);
+    ctx.canvas.addEventListener('pointerdown', onPointerDownPaintHandler);
+    ctx.canvas.addEventListener('pointerup', onPointerUpPaintHandler);
+    window.addEventListener('keydown', onKeyDown);
+
+    ctx.modelRoot.add(paintCursorMesh);
+    ctx.modelRoot.add(paintHeightLine);
 
     syncBin(ctx);
     syncGhosts(ctx);
@@ -506,7 +778,17 @@ const { context } = useThreeScene(container, {
     if (onPointerUp) ctx.canvas.removeEventListener('pointerup', onPointerUp);
     ctx.canvas.removeEventListener('pointercancel', releaseStuckDrag);
     ctx.canvas.removeEventListener('lostpointercapture', releaseStuckDrag);
+    if (onPointerMove) ctx.canvas.removeEventListener('pointermove', onPointerMove);
+    if (onPointerDownPaintHandler) {
+      ctx.canvas.removeEventListener('pointerdown', onPointerDownPaintHandler);
+    }
+    if (onPointerUpPaintHandler) ctx.canvas.removeEventListener('pointerup', onPointerUpPaintHandler);
+    if (onKeyDown) window.removeEventListener('keydown', onKeyDown);
     onPointerUp = null;
+    onPointerMove = null;
+    onPointerDownPaintHandler = null;
+    onPointerUpPaintHandler = null;
+    onKeyDown = null;
     for (const instance of [translateControls, rotateControls]) {
       if (!instance) continue;
       instance.detach();
@@ -519,11 +801,22 @@ const { context } = useThreeScene(container, {
     rotateControls = null;
     for (const entry of ghostEntries.values()) disposeGhost(ctx, entry);
     ghostEntries.clear();
+    clearStrokeGhosts(ctx);
+    ctx.modelRoot.remove(paintCursorMesh);
+    ctx.modelRoot.remove(paintHeightLine);
     binMesh?.geometry.dispose();
     binLabelMesh?.geometry.dispose();
     bodyMaterial.dispose();
     labelMaterial.dispose();
     for (const material of Object.values(ghostMaterials)) material.dispose();
+    paintSphereGeometry.dispose();
+    paintCylinderGeometry.dispose();
+    paintDiscGeometry.dispose();
+    paintCursorMaterial.dispose();
+    strokeAddMaterial.dispose();
+    strokeRemoveMaterial.dispose();
+    paintHeightLineGeometry.dispose();
+    paintHeightLineMaterial.dispose();
   },
 });
 
@@ -571,6 +864,38 @@ watch(
     if (context.value) paintGhosts();
   },
   { deep: true },
+);
+
+/**
+ * While a paint tool is active, both gizmos let go of whatever they held so a
+ * drag never fights a stroke, and any stroke already in flight (a tool
+ * switch mid-drag) is abandoned rather than left to commit half-drawn.
+ * Returning to null hands the gizmos back to the current selection.
+ */
+watch(
+  () => props.paintTool,
+  (tool) => {
+    const ctx = context.value;
+    if (tool !== null) {
+      if (translateControls) {
+        translateControls.detach();
+        translateControls.enabled = false;
+      }
+      if (rotateControls) {
+        rotateControls.detach();
+        rotateControls.enabled = false;
+      }
+      strokeActive = false;
+      strokePoints = [];
+      if (ctx) clearStrokeGhosts(ctx);
+      hidePaintCursor();
+      if (ctx) ctx.controls.enabled = true;
+    } else {
+      if (translateControls) translateControls.enabled = true;
+      if (rotateControls) rotateControls.enabled = true;
+      syncSelection();
+    }
+  },
 );
 </script>
 

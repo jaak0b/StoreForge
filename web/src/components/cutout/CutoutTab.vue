@@ -894,6 +894,8 @@ function editingTitle(entry: QueueEntry): string {
           :ghosts="ghosts"
           :selected-model-id="cutout.selectedModelId"
           :warned-model-ids="warnedModelIds"
+          :paint-tool="cutout.activeTool"
+          :brush-radius-mm="cutout.brushRadiusMm"
           @update:selected-model-id="cutout.select($event)"
           @placement-change="onPlacementChange"
           @placement-commit="onPlacementCommit"
