@@ -354,6 +354,18 @@ function onCommitBrushRadius(): void {
 /** Text shown for the "Clear all edits" confirmation. */
 const clearEditsDialogOpen = ref(false);
 
+/** Whether the viewport's shortcut help popover is open. */
+const shortcutHelpOpen = ref(false);
+
+/** The cutout paint shortcuts listed in the help popover, in plain prose. */
+const shortcutLines: string[] = [
+  'Left drag paints.',
+  'Right drag orbits the camera.',
+  'Escape leaves the paint tool.',
+  'Holding Tab hides the models.',
+  'Ctrl+Z undoes an edit; Ctrl+Y redoes an edit.',
+];
+
 function onConfirmClearEdits(): void {
   cutout.clearEdits();
   // No edits left to be suspect of.
@@ -1006,12 +1018,37 @@ function editingTitle(entry: QueueEntry): string {
 <template>
   <v-row>
     <v-col cols="12" md="7">
-      <div class="d-flex align-center flex-wrap ga-2 mb-2">
-        <v-btn-toggle v-model="cutout.activeTool" density="comfortable" divided>
-          <v-btn value="add" size="small">Add</v-btn>
-          <v-btn value="remove" size="small">Remove</v-btn>
-          <v-btn value="flatten" size="small">Flatten</v-btn>
-        </v-btn-toggle>
+      <div class="d-flex align-center flex-wrap ga-1 mb-2">
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          :color="cutout.activeTool === 'add' ? 'info' : undefined"
+          @click="cutout.setActiveTool(cutout.activeTool === 'add' ? null : 'add')"
+        >
+          <v-icon icon="mdi-brush" size="20" />
+          <v-tooltip activator="parent" location="bottom">Add material.</v-tooltip>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          :color="cutout.activeTool === 'remove' ? 'error' : undefined"
+          @click="cutout.setActiveTool(cutout.activeTool === 'remove' ? null : 'remove')"
+        >
+          <v-icon icon="mdi-eraser" size="20" />
+          <v-tooltip activator="parent" location="bottom">Remove material.</v-tooltip>
+        </v-btn>
+        <v-btn
+          icon
+          size="small"
+          variant="text"
+          :color="cutout.activeTool === 'flatten' ? 'secondary' : undefined"
+          @click="cutout.setActiveTool(cutout.activeTool === 'flatten' ? null : 'flatten')"
+        >
+          <v-icon icon="mdi-arrow-collapse-down" size="20" />
+          <v-tooltip activator="parent" location="bottom">Flatten to bin surface.</v-tooltip>
+        </v-btn>
         <v-text-field
           v-model.number="brushRadiusDraft"
           type="number"
@@ -1022,37 +1059,58 @@ function editingTitle(entry: QueueEntry): string {
           step="0.1"
           density="compact"
           hide-details
-          style="max-width: 160px"
+          style="max-width: 130px"
+          class="ml-1"
           @blur="onCommitBrushRadius"
           @keydown.enter="onCommitBrushRadius"
         />
         <v-btn
-          variant="outlined"
+          icon
           size="small"
-          prepend-icon="mdi-undo"
+          variant="text"
           :disabled="cutout.edits.length === 0"
           @click="cutout.undoEdit()"
         >
-          Undo
+          <v-icon icon="mdi-undo" size="20" />
+          <v-tooltip activator="parent" location="bottom">Undo last edit.</v-tooltip>
         </v-btn>
         <v-btn
-          variant="outlined"
+          icon
           size="small"
-          prepend-icon="mdi-redo"
+          variant="text"
           :disabled="cutout.redoStack.length === 0"
           @click="cutout.redoEdit()"
         >
-          Redo
+          <v-icon icon="mdi-redo" size="20" />
+          <v-tooltip activator="parent" location="bottom">Redo edit.</v-tooltip>
         </v-btn>
         <v-btn
-          variant="outlined"
+          icon
           size="small"
-          prepend-icon="mdi-delete-outline"
+          variant="text"
           :disabled="cutout.edits.length === 0"
           @click="clearEditsDialogOpen = true"
         >
-          Clear all edits
+          <v-icon icon="mdi-delete" size="20" />
+          <v-tooltip activator="parent" location="bottom">Clear all edits.</v-tooltip>
         </v-btn>
+        <v-menu v-model="shortcutHelpOpen" location="top end" :close-on-content-click="false">
+          <template #activator="{ props: menuProps }">
+            <v-btn icon size="small" variant="text" v-bind="menuProps">
+              <v-icon icon="mdi-help-circle" size="20" />
+              <v-tooltip activator="parent" location="bottom">Show keyboard shortcuts.</v-tooltip>
+            </v-btn>
+          </template>
+          <v-card min-width="280" class="pa-2">
+            <p
+              v-for="line in shortcutLines"
+              :key="line"
+              class="text-body-2 px-2 py-1 mb-0"
+            >
+              {{ line }}
+            </p>
+          </v-card>
+        </v-menu>
       </div>
 
       <v-dialog v-model="clearEditsDialogOpen" max-width="480">
@@ -1079,6 +1137,8 @@ function editingTitle(entry: QueueEntry): string {
           :warned-model-ids="warnedModelIds"
           :paint-tool="cutout.activeTool"
           :brush-radius-mm="cutout.brushRadiusMm"
+          :can-undo="cutout.edits.length > 0"
+          :can-redo="cutout.redoStack.length > 0"
           @update:selected-model-id="cutout.select($event)"
           @placement-change="onPlacementChange"
           @placement-commit="onPlacementCommit"
@@ -1086,6 +1146,9 @@ function editingTitle(entry: QueueEntry): string {
           @stroke-commit="onStrokeCommit"
           @flatten-commit="onFlattenCommit"
           @exit-paint="cutout.setActiveTool(null)"
+          @undo="cutout.undoEdit()"
+          @redo="cutout.redoEdit()"
+          @toggle-shortcut-help="shortcutHelpOpen = !shortcutHelpOpen"
         />
       </v-card>
 

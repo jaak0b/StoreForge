@@ -44,6 +44,10 @@ const props = defineProps<{
   paintTool: 'add' | 'remove' | 'flatten' | null;
   /** Brush radius in mm, sizing the cursor and the ghost capsules. */
   brushRadiusMm: number;
+  /** Whether Ctrl+Z has an edit to undo, so the shortcut knows to claim the key. */
+  canUndo: boolean;
+  /** Whether Ctrl+Y has an edit to redo, so the shortcut knows to claim the key. */
+  canRedo: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -69,6 +73,12 @@ const emit = defineEmits<{
   flattenCommit: [centerMm: Vec3Mm, planeZMm: number];
   /** The user pressed Escape inside the viewport while painting. */
   exitPaint: [];
+  /** Ctrl+Z (or Cmd+Z) was pressed with an edit to undo. */
+  undo: [];
+  /** Ctrl+Y (or Cmd+Shift+Z) was pressed with an edit to redo. */
+  redo: [];
+  /** The "?" key was pressed outside a field, toggling the shortcut help popover. */
+  toggleShortcutHelp: [];
 }>();
 
 /**
@@ -197,6 +207,35 @@ let binLabelMesh: THREE.Mesh | null = null;
 let drawnMeshes: PartMeshes | null = null;
 
 const ghostEntries = new Map<string, GhostEntry>();
+
+/**
+ * True while Tab is held, hiding every model ghost mesh so the carved bin
+ * surface underneath is visible and paintable (the Flatten tool otherwise
+ * has to work through the translucent ghost sitting in front of the cavity).
+ * Selection and warning colours are untouched: only visibility changes, so
+ * releasing Tab shows exactly the ghosts that were there before, in the
+ * tones the paint pass already keeps current.
+ */
+const tabHeld = ref(false);
+
+/** True when focus sits in a field where Tab and the shortcut keys are ordinary input. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+}
+
+/**
+ * Applies the current Tab-held state to every drawn ghost mesh. Called after
+ * every ghost sync (so a ghost rebuilt while Tab is down comes in hidden) and
+ * on every Tab keydown/keyup.
+ */
+function applyGhostVisibility(): void {
+  const hidden = tabHeld.value;
+  for (const entry of ghostEntries.values()) {
+    entry.mesh.visible = !hidden;
+  }
+}
 
 let translateControls: TransformControls | null = null;
 let rotateControls: TransformControls | null = null;
@@ -416,6 +455,7 @@ function syncGhosts(ctx: ThreeSceneContext): void {
     }
   }
   paintGhosts();
+  applyGhostVisibility();
 }
 
 function syncSelection(): void {
@@ -495,6 +535,7 @@ let onPointerMove: ((event: PointerEvent) => void) | null = null;
 let onPointerDownPaintHandler: ((event: PointerEvent) => void) | null = null;
 let onPointerUpPaintHandler: ((event: PointerEvent) => void) | null = null;
 let onKeyDown: ((event: KeyboardEvent) => void) | null = null;
+let onKeyUp: ((event: KeyboardEvent) => void) | null = null;
 
 function wireGizmo(
   ctx: ThreeSceneContext,
@@ -731,6 +772,55 @@ function onKeyDownPaint(event: KeyboardEvent): void {
   emit('exitPaint');
 }
 
+/**
+ * The viewport's own keyboard shortcuts: Tab held hides the ghosts, "?"
+ * toggles the shortcut help popover, Ctrl+Z (or Cmd+Z) undoes and Ctrl+Y (or
+ * Cmd+Y, or Cmd+Shift+Z on mac) redoes, and Escape leaves the active paint
+ * tool. None of these fire while focus sits in a field.
+ */
+function onKeyDownGlobal(event: KeyboardEvent): void {
+  if (event.key === 'Tab') {
+    if (isEditableTarget(event.target)) return;
+    if (!event.repeat) {
+      tabHeld.value = true;
+      applyGhostVisibility();
+    }
+    event.preventDefault();
+    return;
+  }
+  if (isEditableTarget(event.target)) return;
+  if (event.key === '?') {
+    emit('toggleShortcutHelp');
+    event.preventDefault();
+    return;
+  }
+  const key = event.key;
+  const modifier = event.ctrlKey || event.metaKey;
+  if (modifier && (key === 'z' || key === 'Z') && !event.shiftKey) {
+    if (props.canUndo) {
+      emit('undo');
+      event.preventDefault();
+    }
+    return;
+  }
+  if (modifier && ((key === 'y' || key === 'Y') || (event.shiftKey && (key === 'z' || key === 'Z')))) {
+    if (props.canRedo) {
+      emit('redo');
+      event.preventDefault();
+    }
+    return;
+  }
+  onKeyDownPaint(event);
+}
+
+/** Tab release restores every ghost's visibility to what the paint pass already decided. */
+function onKeyUpGlobal(event: KeyboardEvent): void {
+  if (event.key !== 'Tab') return;
+  tabHeld.value = false;
+  applyGhostVisibility();
+  if (!isEditableTarget(event.target)) event.preventDefault();
+}
+
 const container = ref<HTMLDivElement | null>(null);
 
 const { context } = useThreeScene(container, {
@@ -756,7 +846,8 @@ const { context } = useThreeScene(container, {
     onPointerMove = (event: PointerEvent) => onPointerMovePaint(ctx, event);
     onPointerDownPaintHandler = (event: PointerEvent) => onPointerDownPaint(ctx, event);
     onPointerUpPaintHandler = (event: PointerEvent) => onPointerUpPaint(ctx, event);
-    onKeyDown = (event: KeyboardEvent) => onKeyDownPaint(event);
+    onKeyDown = (event: KeyboardEvent) => onKeyDownGlobal(event);
+    onKeyUp = (event: KeyboardEvent) => onKeyUpGlobal(event);
     ctx.canvas.addEventListener('pointerdown', onPointerDown);
     ctx.canvas.addEventListener('pointerup', onPointerUp);
     ctx.canvas.addEventListener('pointercancel', releaseStuckDrag);
@@ -765,6 +856,7 @@ const { context } = useThreeScene(container, {
     ctx.canvas.addEventListener('pointerdown', onPointerDownPaintHandler);
     ctx.canvas.addEventListener('pointerup', onPointerUpPaintHandler);
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
 
     ctx.modelRoot.add(paintCursorMesh);
     ctx.modelRoot.add(paintHeightLine);
@@ -784,11 +876,13 @@ const { context } = useThreeScene(container, {
     }
     if (onPointerUpPaintHandler) ctx.canvas.removeEventListener('pointerup', onPointerUpPaintHandler);
     if (onKeyDown) window.removeEventListener('keydown', onKeyDown);
+    if (onKeyUp) window.removeEventListener('keyup', onKeyUp);
     onPointerUp = null;
     onPointerMove = null;
     onPointerDownPaintHandler = null;
     onPointerUpPaintHandler = null;
     onKeyDown = null;
+    onKeyUp = null;
     for (const instance of [translateControls, rotateControls]) {
       if (!instance) continue;
       instance.detach();
