@@ -7,6 +7,7 @@ import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
 import { generatePocketBin } from '../../workerClient';
+import { cloneEdit } from '../../stores/cavityEditSession';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import {
   binOf,
@@ -164,6 +165,9 @@ const pocketParams = computed<PocketBinParams>(() => {
     fusedLabel: fusedContent,
     tools: JSON.parse(JSON.stringify(trace.tools)),
     placements: JSON.parse(JSON.stringify(local.placements)),
+    // The manual cavity edits fold onto the pocket carve, so the preview shows
+    // them; deep-copied for the same reason the tools and placements are.
+    edits: trace.edits.map(cloneEdit),
   };
 });
 
@@ -250,8 +254,10 @@ async function addToQueue(): Promise<void> {
     heightUnits: params.heightUnits,
     magnetHoles: params.magnetHoles,
     pockets,
-    // Cavity edits carry over from the entry being edited; a fresh trace has none.
-    edits: editingBin?.edits ?? [],
+    // The edit session holds the current edits (rehydrated from the entry when
+    // one is being edited, empty for a fresh trace); deep-copied out of the
+    // reactive store so the saved plan holds plain JSON.
+    edits: trace.edits.map(cloneEdit),
   };
   const traceSourceId = source.traceSourceId ?? editingBin?.traceSourceId;
   const paper = source.paper ?? editingBin?.paper;

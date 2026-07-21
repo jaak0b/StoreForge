@@ -92,7 +92,11 @@ async function generatePartMeshes(
           return carve.meshes;
         }
         case 'pockets':
-          return generatePocketBin({ ...part.bin, ...plainPockets(interior.pockets) });
+          return generatePocketBin({
+            ...part.bin,
+            ...plainPockets(interior.pockets),
+            edits: plainEdits(interior.edits),
+          });
         case 'walls':
           return generateSlottedBin(part.bin);
         default:
@@ -131,7 +135,11 @@ async function generatePartUnion(
           return carve.mesh;
         }
         case 'pockets':
-          return generatePocketBinUnion({ ...part.bin, ...plainPockets(interior.pockets) });
+          return generatePocketBinUnion({
+            ...part.bin,
+            ...plainPockets(interior.pockets),
+            edits: plainEdits(interior.edits),
+          });
         case 'walls':
           return generateSlottedBinUnion(part.bin);
         default:

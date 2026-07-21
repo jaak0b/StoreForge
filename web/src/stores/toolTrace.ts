@@ -13,6 +13,7 @@ import type {
 } from '../engine/trace/types';
 import type { LayoutState } from '../engine/trace/layoutModel';
 import * as layout from '../engine/trace/layoutModel';
+import { createCavityEditSession } from './cavityEditSession';
 
 /**
  * Community shadow boards use a finger relief around 25 mm across; that
@@ -108,6 +109,14 @@ export const useToolTrace = defineStore('toolTrace', () => {
    * above the pocket for lifting the tool out.
    */
   const defaultDepthMm = ref(20);
+
+  /**
+   * The traced bin's manual cavity edits and their tool state, shared with the
+   * cutout flow through the same session factory. Its own instance, so the
+   * trace tab keeps an edit list and brush settings independent of the cutout
+   * tab's.
+   */
+  const editSession = createCavityEditSession();
 
   let toolCounter = 0;
 
@@ -280,10 +289,12 @@ export const useToolTrace = defineStore('toolTrace', () => {
     gridY.value = 1;
     gridManual.value = false;
     defaultDepthMm.value = 20;
+    editSession.resetEditSession();
     toolCounter = 0;
   }
 
   return {
+    ...editSession,
     photoUrl,
     photoBlob,
     sourceId,

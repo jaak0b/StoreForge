@@ -29,10 +29,6 @@ import {
   restingPlacementMm,
 } from '../../engine/cutout/binEnvelope';
 import { proposeUnitScale } from '../../engine/cutout/unitScale';
-import {
-  cavityEditRollbackCount,
-  clampLastGoodEditCount,
-} from '../../engine/carve/cavityEditRollback';
 import { modelNotStoredMessage, relinkCutoutModel } from '../../engine/plan/missingModels';
 import { MIN_HEIGHT_UNITS } from '../../engine/gridfinity/constants';
 import type { SlottedBinParams } from '../../engine/gridfinity/types';
@@ -50,7 +46,6 @@ import {
   CAVITY_EDIT_RADIUS_MAX_MM,
   FLATTEN_HEIGHT_MIN_MM,
   FLATTEN_HEIGHT_MAX_MM,
-  isCavityEditRejectionMessage,
 } from '../../engine/carve/cavityEdits';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
@@ -262,7 +257,7 @@ watch(previewResult, (result) => {
       // so the count is clamped to the live length: nothing above it could be
       // rolled back anyway, and leaving it too high would make a later
       // rejection under-roll-back.
-      lastGoodEditCount.value = clampLastGoodEditCount(result.editCount, cutout.edits.length);
+      cutout.noteLandedCarve(result.editCount);
       return;
     case 'superseded':
       // A newer request replaced this one before it finished. Not a failure,
@@ -403,9 +398,8 @@ function onStepBrushRadius(deltaMm: number): void {
 }
 
 function onConfirmClearEdits(): void {
+  // clearEdits also forgets the known-good count, so nothing is left suspect.
   cutout.clearEdits();
-  // No edits left to be suspect of.
-  lastGoodEditCount.value = 0;
   // No edit remains for the rejection alert to be about.
   editError.value = null;
   clearEditsDialogOpen.value = false;
@@ -413,19 +407,6 @@ function onConfirmClearEdits(): void {
 
 /** The error a rejected edit surfaced, shown as its own alert row. */
 const editError = ref<string | null>(null);
-/**
- * The number of edits the most recently LANDED successful carve was built
- * from. Every edit at or below this count is known good: some carve has
- * folded it in without failing. This is not a running maximum: it is
- * reassigned on every landed carve, because a running maximum only ever
- * grows, so undoing an edit and then painting a bad one could leave the live
- * edit count back at an old high-water mark and the rejection rollback below
- * would never fire. Starts at whatever the plan already had (opening a saved
- * cutout bin does not need those edits re-proven), and is reset the same way
- * whenever the edit list is replaced wholesale (loading another entry,
- * clearing all edits).
- */
-const lastGoodEditCount = ref(cutout.edits.length);
 
 /**
  * Fires a paint stroke's add or remove edit. Ignored when the tool changed
@@ -474,13 +455,8 @@ watch(
 // perfectly good edit because something unrelated to it failed.
 watch(generating, (isGenerating) => {
   if (isGenerating) return;
-  const message = errorMessage.value;
-  if (message === null || !isCavityEditRejectionMessage(message)) return;
-  let toRollBack = cavityEditRollbackCount(cutout.edits.length, lastGoodEditCount.value);
-  while (toRollBack-- > 0) {
-    cutout.rollbackEdit();
-  }
-  editError.value = message;
+  const rolledBack = cutout.rollbackRejectedEdits(errorMessage.value);
+  if (rolledBack !== null) editError.value = rolledBack;
 });
 
 // ---------------------------------------------------------------------------
@@ -909,10 +885,9 @@ function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
   cutout.reset();
   cutout.gridX = bin.gridX;
   cutout.gridY = bin.gridY;
+  // setEdits also marks every loaded edit known good: they carved cleanly when
+  // the bin was saved, so they do not need re-proving.
   cutout.setEdits(bin.edits);
-  // These edits were carved successfully when the bin was saved, so they do
-  // not need re-proving; the running count starts fresh at the loaded length.
-  lastGoodEditCount.value = cutout.edits.length;
   // A rejection alert from the previous entry does not belong to this one.
   editError.value = null;
   boundsById.value = {};

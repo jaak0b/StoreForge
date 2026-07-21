@@ -8,10 +8,12 @@ import {
 import type {
   BaseplateProduct,
   BinWithInsertProduct,
+  BinPockets,
   CavityEdit,
   CutoutBin,
   CutoutModel,
   ManualBin,
+  TracedBin,
 } from '../../src/engine/plan/types';
 
 function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
@@ -121,6 +123,61 @@ describe('partsOf for a cutout bin', () => {
     const bin = parts[0];
     if (bin.part !== 'bin') throw new Error('expected bin part');
     expect(bin.edits).toEqual([]);
+  });
+});
+
+function tracedBin(overrides: Partial<TracedBin> = {}): TracedBin {
+  const pockets: BinPockets = {
+    tools: [
+      {
+        id: 't1',
+        name: 'wrench',
+        outline: { outer: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 4 }, { x: 0, y: 4 }], holes: [] },
+        clicks: [],
+        rotationDeg: 0,
+        offsetMm: 0.5,
+        mirrored: false,
+        minHoleWidthMm: 0,
+        filledHoleIndices: [],
+        fingerHoles: [],
+      },
+    ],
+    placements: [{ toolId: 't1', xMm: 0, yMm: 0, pocketDepthMm: 20, draftAngleDeg: 3 }],
+  };
+  return {
+    origin: 'traced',
+    gridX: 2,
+    gridY: 1,
+    heightUnits: 4,
+    magnetHoles: false,
+    pockets,
+    edits: [],
+    ...overrides,
+  };
+}
+
+describe('partsOf for a traced bin', () => {
+  it('carries the pockets and the manual cavity edits through, so exports fold them in', () => {
+    const edits: CavityEdit[] = [
+      { kind: 'flatten', centerMm: { xMm: 1, yMm: 2, zMm: 3 }, radiusMm: 4, normalMm: { xMm: 0, yMm: 0, zMm: 1 }, heightMm: 5 },
+    ];
+    const bin = tracedBin({ edits });
+    const parts = partsOf({ kind: 'bin', bin, labelSlot: false });
+    const part = parts[0];
+    if (part.part !== 'bin') throw new Error('expected bin part');
+    expect(part.edits).toEqual(edits);
+    expect(part.pockets).toEqual(bin.pockets);
+    // The interior read side routes the same edits (and the pockets that carry
+    // each placement's draft angle) on to the pocket generator.
+    expect(binInteriorOf(part)).toEqual({ interior: 'pockets', pockets: bin.pockets, edits });
+  });
+
+  it('gives a traced bin with no edits an empty (never omitted) edit list', () => {
+    const parts = partsOf({ kind: 'bin', bin: tracedBin(), labelSlot: false });
+    const part = parts[0];
+    if (part.part !== 'bin') throw new Error('expected bin part');
+    expect(part.edits).toEqual([]);
+    expect(binInteriorOf(part)).toEqual({ interior: 'pockets', pockets: tracedBin().pockets, edits: [] });
   });
 });
 

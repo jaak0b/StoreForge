@@ -137,6 +137,9 @@ watch(
       bin.gridY,
     );
     trace.selectedToolId = null;
+    // Rehydrate the bin's manual cavity edits into the shared edit session so
+    // they round-trip through the designer and fold onto the saved carve again.
+    trace.setEdits(bin.edits);
     // The stored footprint is a floor; the layout can still demand more.
     trace.gridX = bin.gridX;
     trace.gridY = bin.gridY;
