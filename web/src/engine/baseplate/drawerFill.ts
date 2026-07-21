@@ -192,6 +192,10 @@ export interface DrawerFillLayoutRect {
   width: number;
   height: number;
   brim: boolean;
+  /** 0-based column of the plate this rectangle belongs to, for hover linking. */
+  column: number;
+  /** 0-based row of the plate this rectangle belongs to, for hover linking. */
+  row: number;
 }
 
 /**
@@ -243,6 +247,8 @@ export function drawerFillLayoutRects(
           width: PITCH,
           height: PITCH,
           brim: false,
+          column: plate.column,
+          row: plate.row,
         });
       }
     }
@@ -254,6 +260,8 @@ export function drawerFillLayoutRects(
         width: plate.brim.leftMm,
         height: plate.unitsY * PITCH,
         brim: true,
+        column: plate.column,
+        row: plate.row,
       });
     }
     if (plate.brim.rightMm > 0) {
@@ -264,6 +272,8 @@ export function drawerFillLayoutRects(
         width: plate.brim.rightMm,
         height: plate.unitsY * PITCH,
         brim: true,
+        column: plate.column,
+        row: plate.row,
       });
     }
     if (plate.brim.backMm > 0) {
@@ -274,6 +284,8 @@ export function drawerFillLayoutRects(
         width: plate.unitsX * PITCH,
         height: plate.brim.backMm,
         brim: true,
+        column: plate.column,
+        row: plate.row,
       });
     }
   }
