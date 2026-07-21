@@ -411,8 +411,11 @@ function applyName(): void {
 
 const deleteConfirmOpen = ref(false);
 
-/** How many still-queued plate rows a delete would also remove. */
+/** How many still-queued baseplates a delete would also remove. */
 const queuedCount = computed(() => descriptor.value?.counts.queued ?? 0);
+
+/** Summed quantity of still-queued linked connection clips a delete removes. */
+const queuedClipCount = computed(() => descriptor.value?.queuedClipCount ?? 0);
 
 /** How many plates already printed, whose record a delete would lose. */
 const doneCount = computed(() => descriptor.value?.counts.done ?? 0);
@@ -664,6 +667,7 @@ function deleteGroup(): void {
     <DeleteDrawerDialog
       v-model="deleteConfirmOpen"
       :queued-count="queuedCount"
+      :queued-clip-count="queuedClipCount"
       :done-count="doneCount"
       @confirm="deleteGroup"
     />

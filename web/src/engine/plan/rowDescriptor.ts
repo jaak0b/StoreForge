@@ -265,6 +265,12 @@ export interface GroupDescriptor {
   plates: GroupPlateDescriptor[];
   /** How many plates fall in each status, plus the total. */
   counts: { done: number; printing: number; queued: number; planned: number; total: number };
+  /**
+   * Summed quantity of the group's still-queued linked connection clip rows.
+   * Zero when the drawer is not connectable or its clip row was already
+   * batched or confirmed.
+   */
+  queuedClipCount: number;
 }
 
 /** Whether a product is a linked baseplate that stands for the given plate in the given group. */
@@ -314,7 +320,14 @@ export function describeGroup(
         counts[status] += 1;
         return { plate, status };
       });
-      return { name: group.name, plates, counts };
+      const queuedClipCount = entries.reduce(
+        (sum, entry) =>
+          entry.product.kind === 'clip' && entry.product.group?.groupId === group.id
+            ? sum + entry.quantity
+            : sum,
+        0,
+      );
+      return { name: group.name, plates, counts, queuedClipCount };
     }
     default:
       return assertNever(payload.kind);

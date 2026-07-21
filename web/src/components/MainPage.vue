@@ -380,6 +380,7 @@ function removeRow(entry: QueueEntry): void {
     <DeleteDrawerDialog
       :model-value="deleteTarget !== null"
       :queued-count="deleteTarget?.descriptor.counts.queued ?? 0"
+      :queued-clip-count="deleteTarget?.descriptor.queuedClipCount ?? 0"
       :done-count="deleteTarget?.descriptor.counts.done ?? 0"
       @update:model-value="(open: boolean) => { if (!open) deleteTarget = null; }"
       @confirm="confirmDeleteGroup"
