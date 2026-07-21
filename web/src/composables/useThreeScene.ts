@@ -183,9 +183,12 @@ export function useThreeScene(
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     el.appendChild(renderer.domElement);
+    // The canvas is absolutely positioned so its pixel buffer size never feeds
+    // back into the container's layout height at fractional device pixel ratios.
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.inset = '0';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
-    renderer.domElement.style.display = 'block';
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x121212);
