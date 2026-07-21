@@ -6,7 +6,7 @@ import {
   validateEntry,
 } from '../../src/engine/plan/planFile';
 import { partsOf } from '../../src/engine/plan/geometry';
-import { baseplateSpanMm } from '../../src/engine/baseplate/generator';
+import { baseplateOuterMm, baseplateSpanMm } from '../../src/engine/baseplate/generator';
 import { fileStem, partFootprint } from '../../src/binDownloads';
 import type {
   BaseplateProduct,
@@ -14,6 +14,7 @@ import type {
   Product,
   QueueEntry,
 } from '../../src/engine/plan/types';
+import { PLAN_FILE_VERSION } from '../../src/engine/plan/types';
 
 /** A baseplate with every option on and non-default. */
 function fullBaseplate(): BaseplateProduct {
@@ -115,6 +116,64 @@ describe('baseplate round trip', () => {
   });
 });
 
+/** A baseplate with a brim on two adjacent edges, as a drawer-fill edge plate would carry. */
+function brimmedBaseplate(): BaseplateProduct {
+  return {
+    kind: 'baseplate',
+    unitsX: 6,
+    unitsY: 7,
+    magnets: null,
+    screwHoles: false,
+    connectable: false,
+    brim: { leftMm: 4, rightMm: 0, frontMm: 0, backMm: 6 },
+  };
+}
+
+describe('baseplate brim round trip and validation', () => {
+  it('round-trips a brimmed baseplate with its brim intact', () => {
+    const back = roundTrip([entry('a1', brimmedBaseplate())]);
+    expect(back[0].product).toEqual(brimmedBaseplate());
+  });
+
+  it('round-trips a brim-less baseplate with brim staying absent, not zeroed', () => {
+    const back = roundTrip([entry('a1', plainBaseplate())]);
+    const product = back[0].product;
+    if (product.kind !== 'baseplate') throw new Error('expected a baseplate');
+    expect(product.brim).toBeUndefined();
+    expect(product).toEqual(plainBaseplate());
+  });
+
+  it.each([
+    [{ brim: 5 }, 'entry a1: brim must be an object'],
+    [
+      { brim: { leftMm: -1, rightMm: 0, frontMm: 0, backMm: 0 } },
+      "entry a1: the brim's left side must stay below one grid pitch (42 mm). " +
+        'Increase the plate width instead if you want more size in that direction.',
+    ],
+    [
+      { brim: { leftMm: 42, rightMm: 0, frontMm: 0, backMm: 0 } },
+      "entry a1: the brim's left side must stay below one grid pitch (42 mm). " +
+        'Increase the plate width instead if you want more size in that direction.',
+    ],
+    [
+      { brim: { leftMm: 0, rightMm: 'x', frontMm: 0, backMm: 0 } },
+      "entry a1: the brim's right side must stay below one grid pitch (42 mm). " +
+        'Increase the plate width instead if you want more size in that direction.',
+    ],
+  ])('rejects a brimmed baseplate with %j', (overrides, message) => {
+    const bad = entry('a1', { ...brimmedBaseplate(), ...overrides } as unknown as Product);
+    expect(validateEntry(bad)).toBe(message);
+  });
+
+  it.each([
+    [{ leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 }],
+    [{ leftMm: 41.9, rightMm: 0, frontMm: 0, backMm: 0 }],
+  ])('accepts the inclusive brim boundary %j', (brim) => {
+    const good = entry('a1', { ...brimmedBaseplate(), brim } as unknown as Product);
+    expect(validateEntry(good)).toBeNull();
+  });
+});
+
 describe('baseplate and clip validation messages', () => {
   function baseplateEntry(overrides: Partial<Record<string, unknown>>): Record<string, unknown> {
     return { ...entry('a1', { ...fullBaseplate(), ...overrides } as unknown as Product) };
@@ -174,11 +233,11 @@ describe('baseplate and clip validation messages', () => {
     };
     expect(validateEntry(withExtra)).toBeNull();
     const result = parsePlanFile(
-      JSON.stringify({ version: 8, entries: [withExtra], batches: [] }),
+      JSON.stringify({ version: PLAN_FILE_VERSION, entries: [withExtra], batches: [] }),
     );
     expect(result).toEqual({
       ok: true,
-      plan: { version: 8, entries: [entry('a1', plainBaseplate())], batches: [] },
+      plan: { version: PLAN_FILE_VERSION, entries: [entry('a1', plainBaseplate())], batches: [] },
       warnings: [],
     });
   });
@@ -231,6 +290,26 @@ describe('export plumbing for the new kinds', () => {
   it('names baseplate downloads by grid size', () => {
     expect(fileStem(plainBaseplate())).toBe('gridfinity_baseplate_4x2');
     expect(fileStem(fullBaseplate())).toBe('gridfinity_baseplate_4x2');
+  });
+
+  it('gives a brimmed baseplate a stem distinct from the plain plate of the same units', () => {
+    const brimmed = brimmedBaseplate();
+    const plain: BaseplateProduct = { ...brimmed, brim: undefined };
+    // The suffix carries the outer mm size from baseplateOuterMm, the single
+    // outer-size source, with decimal points as p like the clip stem.
+    const outer = baseplateOuterMm(brimmed);
+    const mm = (value: number): string => value.toFixed(1).replace('.', 'p');
+    expect(fileStem(plain)).toBe('gridfinity_baseplate_6x7');
+    expect(fileStem(brimmed)).toBe(
+      `gridfinity_baseplate_6x7_outer${mm(outer.widthMm)}x${mm(outer.depthMm)}mm`,
+    );
+    expect(fileStem(brimmed)).not.toBe(fileStem(plain));
+    // An all-zero brim is the same plate as no brim and keeps the plain stem.
+    const zeroBrim: BaseplateProduct = {
+      ...brimmed,
+      brim: { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 },
+    };
+    expect(fileStem(zeroBrim)).toBe('gridfinity_baseplate_6x7');
   });
 
   it('gives clips at different tolerances distinct file stems', () => {

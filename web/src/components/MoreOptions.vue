@@ -1,16 +1,20 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../stores/binDesigner';
 import DividerEditor from './divider/DividerEditor.vue';
 
 /**
- * The "More options" disclosure shared by the Manual bin and Screw entry
- * tabs of the add-bin card. State binds to the binDesigner Pinia store so
- * values persist across tab switches. Second label line and quantity are
- * per-bin-only fields that do not apply to a screw entry (which always adds
- * a set count of identical bins), so the caller hides them with perBinFields.
- * The second label line additionally follows the store's label-visibility
- * getter, so it disappears for products without a label.
+ * The "More options" disclosure shared by the Manual bin, Screw entry and
+ * Baseplate tabs of the add-bin card. Bin state binds to the binDesigner
+ * Pinia store so values persist across tab switches. Second label line and
+ * quantity are per-bin-only fields that do not apply to a screw entry (which
+ * always adds a set count of identical bins), so the caller hides them with
+ * perBinFields. The second label line additionally follows the store's
+ * label-visibility getter, so it disappears for products without a label.
+ * A non-bin caller (the Baseplate tab) hides every binDesigner-bound field
+ * with hideBinFields and owns the open state through the open model, filling
+ * the disclosure through the fields and after slots instead.
  */
 
 const props = defineProps<{
@@ -29,14 +33,35 @@ const props = defineProps<{
    * insert-only design has no bin body to configure.
    */
   insertOnly?: boolean;
+  /**
+   * Hides every field bound to the binDesigner store (second label line,
+   * dividers, magnet holes, notes); a caller designing a non-bin product
+   * supplies its own fields through the slots.
+   */
+  hideBinFields?: boolean;
+  /**
+   * Overrides the disclosure's open state. When given, the caller owns the
+   * state through update:open; when absent, the binDesigner store's
+   * moreOptionsOpen persists it across the bin tabs.
+   */
+  open?: boolean;
 }>();
 
 const emit = defineEmits<{
   'update:quantity': [value: number];
+  'update:open': [value: boolean];
 }>();
 
 const store = useBinDesigner();
-const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(store);
+const { labelText2, magnetHoles, notes } = storeToRefs(store);
+
+const open = computed({
+  get: () => props.open ?? store.moreOptionsOpen,
+  set: (value: boolean) => {
+    if (props.open !== undefined) emit('update:open', value);
+    else store.moreOptionsOpen = value;
+  },
+});
 </script>
 
 <template>
@@ -52,7 +77,7 @@ const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(st
   <v-expand-transition>
     <div v-if="open" class="mt-3">
       <v-text-field
-        v-if="props.perBinFields && store.hasLabel"
+        v-if="props.perBinFields && !props.hideBinFields && store.hasLabel"
         v-model="labelText2"
         label="Second label line"
         density="comfortable"
@@ -72,13 +97,13 @@ const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(st
         />
         <slot name="fields" />
       </div>
-      <template v-if="!props.hideDividers && !props.insertOnly">
+      <template v-if="!props.hideDividers && !props.insertOnly && !props.hideBinFields">
         <div v-if="props.dividerNotice" class="text-caption text-medium-emphasis mt-4">
           {{ props.dividerNotice }}
         </div>
         <DividerEditor v-else class="mt-4" />
       </template>
-      <div v-if="!props.insertOnly" class="mt-3">
+      <div v-if="!props.insertOnly && !props.hideBinFields" class="mt-3">
         <v-switch
           v-model="magnetHoles"
           color="primary"
@@ -88,6 +113,7 @@ const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(st
         />
       </div>
       <v-textarea
+        v-if="!props.hideBinFields"
         v-model="notes"
         label="Notes"
         density="comfortable"
@@ -96,6 +122,7 @@ const { labelText2, magnetHoles, notes, moreOptionsOpen: open } = storeToRefs(st
         auto-grow
         hide-details
       />
+      <slot name="after" />
     </div>
   </v-expand-transition>
 </template>

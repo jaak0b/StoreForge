@@ -1,4 +1,5 @@
 import { describeMissingModels, missingCutoutModels } from './missingModels';
+import { baseplateOuterMm } from '../baseplate/generator';
 import {
   assertNever,
   binOf,
@@ -128,15 +129,20 @@ function captionOf(product: Product): string {
       const bin = product.bin;
       return joinCaption([kind, sizeToken(bin), bin.origin, detailToken(bin)]);
     }
-    case 'baseplate':
+    case 'baseplate': {
       // Two dimensions, not three: a baseplate has no height units to state.
+      // The brim, when present, is named by the plate's exact outer size in
+      // mm (baseplateOuterMm), never recomputed here.
+      const outer = product.brim === undefined ? null : baseplateOuterMm(product);
       return joinCaption([
         'baseplate',
         `${product.unitsX}×${product.unitsY}`,
+        outer === null ? '' : `${outer.widthMm.toFixed(1)}×${outer.depthMm.toFixed(1)} mm outer`,
         product.magnets !== null ? 'magnets' : '',
         product.screwHoles ? 'screw holes' : '',
         product.connectable ? 'connectable' : '',
       ]);
+    }
     case 'clip':
       // The tolerance token appears only when non-zero, so two clip rows that
       // print differently are distinguishable in the queue.

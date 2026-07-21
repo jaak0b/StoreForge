@@ -8,6 +8,7 @@ import {
   PITCH,
 } from '../src/engine/gridfinity/constants';
 import {
+  baseplateOuterMm,
   baseplateRiserMm,
   clipFootprintMm,
   generateBaseplate,
@@ -402,5 +403,135 @@ describe('clip assembly', () => {
     ).translate(PITCH / 2, 0, CONNECTOR_SLOT_FLOOR + 0.02 + grooveDepth / 2);
     expect(overlapVolume(pair, groove)).toBeGreaterThan(0.01);
     pair.delete();
+  });
+});
+
+describe('generateBaseplate with a brim', () => {
+  function brimParams(overrides: Partial<BaseplateParams> = {}): BaseplateParams {
+    return params({
+      unitsX: 2,
+      unitsY: 2,
+      brim: { leftMm: 10, rightMm: 0, frontMm: 0, backMm: 15 },
+      ...overrides,
+    });
+  }
+
+  it('is watertight with a brim on two adjacent edges', () => {
+    const plate = generateBaseplate(m, brimParams());
+    expect(plate.status()).toBe('NoError');
+    expect(plate.isEmpty()).toBe(false);
+    plate.delete();
+  });
+
+  it('grows the bounding box by exactly the brim on the brimmed sides only', () => {
+    const plate = generateBaseplate(m, brimParams());
+    const box = plate.boundingBox();
+    // Full-cell span is 2 * PITCH = 84 on each axis. Left brim 10, right 0:
+    // total X span 94, offset so the right face stays at the un-brimmed edge.
+    expect(box.max[0] - box.min[0]).toBeCloseTo(2 * PITCH + 10, 6);
+    expect(box.max[1] - box.min[1]).toBeCloseTo(2 * PITCH + 15, 6);
+    // The un-brimmed right (+X) face sits exactly at the full-cell edge, PITCH.
+    expect(box.max[0]).toBeCloseTo(PITCH, 6);
+    // The un-brimmed front (-Y) face sits exactly at the full-cell edge, -PITCH.
+    expect(box.min[1]).toBeCloseTo(-PITCH, 6);
+    plate.delete();
+  });
+
+  it('matches baseplateOuterMm exactly', () => {
+    const plate = generateBaseplate(m, brimParams());
+    const box = plate.boundingBox();
+    const outer = baseplateOuterMm(brimParams());
+    expect(box.max[0] - box.min[0]).toBeCloseTo(outer.widthMm, 6);
+    expect(box.max[1] - box.min[1]).toBeCloseTo(outer.depthMm, 6);
+    plate.delete();
+  });
+
+  it('opens a partial socket cavity in the brim, beyond the full-cell edge', () => {
+    // The left brim is 10 mm; a probe centred 5 mm past the left full-cell
+    // edge (x = -PITCH - 5), inside the brimmed extra cell's z band, must be
+    // open cavity, matching the measured cavity width test's z = halfDz band.
+    const plate = generateBaseplate(m, brimParams());
+    const probe = m.Manifold.cube([2, 4, 0.05], true).translate(-PITCH - 5, -PITCH / 2, 0.0005);
+    const hit = plate.intersect(probe);
+    expect(Math.abs(hit.volume())).toBeLessThan(1e-6);
+    hit.delete();
+    plate.delete();
+  });
+
+  it('adds one handle per brim cell: partial cavities are still vertical through-holes', () => {
+    const plate = generateBaseplate(m, brimParams());
+    // Same reasoning as the plain-plate genus test, extended to the brim
+    // cells: the clipper is inset from the BRIMMED outline by the rim at
+    // every height, so a rim wall remains between a brim cell's partial
+    // cavity and the drawer-facing outer edge. The partial cavity is not a
+    // notch into the boundary; like every full cell it is a vertical
+    // through-hole enclosed by wall on all four sides, one handle each.
+    // Left brim adds a column of unitsY cells, the back brim a row of unitsX
+    // cells, and their meeting adds one corner cell: 4 + 2 + 2 + 1 = 9.
+    expect(plate.genus()).toBe(2 * 2 + 2 + 2 + 1);
+    plate.delete();
+  });
+
+  it('stays watertight with unchanged genus at sliver brims thinner than the rim', () => {
+    // The planner may emit any brim in (0, pitch), including slivers thinner
+    // than the socket rim. The clipper is inset from the brimmed outline by
+    // the rim profile at every height, so a brim cell's cavity exists only
+    // where the brim exceeds the inset at that height. At 1 mm, below every
+    // inset the cell solid meets, no cavity opens at all: the brim is a
+    // solid bar. At 3 mm the cavity opens through the 2.15 mm upper bands
+    // but never the 3.95 mm bottom band: a blind pocket open at the top
+    // only, a boundary depression rather than a vertical through tunnel, so
+    // it adds no handle either. Both keep the genus of the 4 full cells.
+    for (const leftMm of [1, 3]) {
+      const plate = generateBaseplate(
+        m,
+        brimParams({ brim: { leftMm, rightMm: 0, frontMm: 0, backMm: 0 } }),
+      );
+      expect(plate.status()).toBe('NoError');
+      expect(plate.genus()).toBe(2 * 2);
+      plate.delete();
+    }
+  });
+
+  it('omits connector slots on brimmed edges but keeps them on plain edges', () => {
+    const connectableBrim = generateBaseplate(
+      m,
+      brimParams({ unitsX: 1, unitsY: 1, connectable: true }),
+    );
+    // Left edge (brimmed, leftMm 10): the slot cutter for -X would sit at
+    // x = -width/2 = -21; with a 10 mm brim material still fills where the
+    // plain-edge test (4.12/10) probes the +X (right, un-brimmed) edge.
+    const rightProbe = () =>
+      m.Manifold.cube([1, 1.9, 0.3], true).translate(21, 0, 2.25);
+    const rightHit = connectableBrim.intersect(rightProbe());
+    expect(Math.abs(rightHit.volume())).toBeLessThan(1e-9); // right edge: no brim, slot present
+    rightHit.delete();
+    const backProbe = () =>
+      m.Manifold.cube([1.9, 1, 0.3], true).translate(0, 21, 2.25);
+    const backHit = connectableBrim.intersect(backProbe());
+    expect(backHit.volume()).toBeCloseTo(1.9 * 1 * 0.3, 3); // back edge: brimmed, slot suppressed
+    backHit.delete();
+    connectableBrim.delete();
+  });
+
+  it('places magnets only at full cells, unaffected by the brim', () => {
+    const magnets = { diameterMm: MAGNET_DIAMETER_DEFAULT, heightMm: MAGNET_HEIGHT_DEFAULT };
+    const plate = generateBaseplate(
+      m,
+      brimParams({ unitsX: 1, unitsY: 1, magnets, connectable: false }),
+    );
+    const riser = baseplateRiserMm(magnets, false);
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        const pocket = m.Manifold.cylinder(
+          magnets.heightMm - 0.2,
+          (magnets.diameterMm - 0.2) / 2,
+          (magnets.diameterMm - 0.2) / 2,
+          16,
+        ).translate(sx * 13.0, sy * 13.0, riser - magnets.heightMm + 0.1);
+        expect(Math.abs(overlapVolume(plate, pocket))).toBeLessThan(1e-9);
+      }
+    }
+    plate.delete();
   });
 });

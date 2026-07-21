@@ -18,6 +18,7 @@ import {
   type DividerWall,
 } from './types';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
+import { PITCH } from '../gridfinity/constants';
 import {
   BASEPLATE_UNITS_MAX,
   CLIP_TOLERANCE_MAX,
@@ -26,6 +27,7 @@ import {
   MAGNET_DIAMETER_MIN,
   MAGNET_HEIGHT_MAX,
   MAGNET_HEIGHT_MIN,
+  type BaseplateBrim,
   type BaseplateMagnets,
 } from '../baseplate/constants';
 import {
@@ -807,6 +809,51 @@ function pickMagnets(raw: Record<string, unknown> | null): BaseplateMagnets | nu
 }
 
 /**
+ * Validates a raw value as a baseplate's optional brim field: absent (a
+ * plain plate) or an object whose four sides are each a finite number from
+ * 0 up to but not including PITCH, matching BaseplateBrim's own contract in
+ * baseplate/constants.ts (a brim is always less than one pitch, by
+ * construction of the drawer-fill planner). A side that reaches a full pitch
+ * is refused rather than silently capped: at that size the user should add a
+ * grid unit instead, which the message points at.
+ */
+function validateBrim(raw: unknown, subject: string): string | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: brim must be an object`;
+  }
+  const brim = raw as Record<string, unknown>;
+  const sides = [
+    ['leftMm', 'left', 'width'],
+    ['rightMm', 'right', 'width'],
+    ['frontMm', 'front', 'depth'],
+    ['backMm', 'back', 'depth'],
+  ] as const;
+  for (const [key, name, axis] of sides) {
+    const value = brim[key];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value >= PITCH) {
+      return (
+        `${subject}: the brim's ${name} side must stay below one grid pitch (${PITCH} mm). ` +
+        `Increase the plate ${axis} instead if you want more size in that direction.`
+      );
+    }
+  }
+  return null;
+}
+
+/** Copies only the known BaseplateBrim fields from a validated raw value, or undefined for none. */
+function pickBrim(raw: unknown): BaseplateBrim | undefined {
+  if (raw === undefined) return undefined;
+  const brim = raw as Record<string, unknown>;
+  return {
+    leftMm: brim.leftMm as number,
+    rightMm: brim.rightMm as number,
+    frontMm: brim.frontMm as number,
+    backMm: brim.backMm as number,
+  };
+}
+
+/**
  * Validates the fields of a raw baseplate product, in the fixed order unitsX,
  * unitsY, magnets, screwHoles, connectable. The magnets must be present (as a
  * value or an explicit null): no older file contains a baseplate at all, so
@@ -827,6 +874,8 @@ function validateBaseplate(raw: Record<string, unknown>, subject: string): strin
   if (typeof raw.connectable !== 'boolean') {
     return `${subject}: connectable must be true or false`;
   }
+  const brimProblem = validateBrim(raw.brim, subject);
+  if (brimProblem !== null) return brimProblem;
   return null;
 }
 
@@ -851,6 +900,7 @@ function pickBaseplate(raw: Record<string, unknown>): BaseplateProduct {
     magnets: pickMagnets(raw.magnets as Record<string, unknown> | null),
     screwHoles: raw.screwHoles as boolean,
     connectable: raw.connectable as boolean,
+    brim: pickBrim(raw.brim),
   };
 }
 
