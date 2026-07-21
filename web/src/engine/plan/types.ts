@@ -290,10 +290,7 @@ export type InsertProduct = ManualInsertProduct | ScrewInsertProduct;
 
 /**
  * A queue row that orders a Gridfinity baseplate, the tray a bin's feet drop
- * into. Sized in whole grid units, except that the last column and the last
- * row may be shortened so the plate fits a drawer that is not a whole number
- * of cells deep. Only those two may shrink: every interior cell keeps the
- * full pitch, because a bin has to seat in each of them.
+ * into. Sized in whole grid units.
  */
 export interface BaseplateProduct {
   kind: 'baseplate';
@@ -301,13 +298,6 @@ export interface BaseplateProduct {
   unitsX: number;
   /** Cells along Y, integer 1 to BASEPLATE_UNITS_MAX. */
   unitsY: number;
-  /**
-   * Length of the last column along X in mm, or null when it keeps the full pitch.
-   * Above 0 and at most the pitch. Total width is (unitsX - 1) * pitch + (customXMm ?? pitch).
-   */
-  customXMm: number | null;
-  /** Depth of the last row along Y, same range and meaning. */
-  customYMm: number | null;
   /**
    * Magnet pocket dimensions, imported from the baseplate module so they
    * travel with their bounds, or null when the plate has none: a plate

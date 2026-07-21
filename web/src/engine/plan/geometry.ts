@@ -106,17 +106,13 @@ export function toSlottedBinParams(
 /**
  * The single place a stored baseplate becomes geometry: the preview, the STL
  * path and the 3MF path all go through here, so what the user sees and what
- * gets exported agree. A null custom span means the axis's last cell keeps
- * the full pitch, which the generator resolves from its own pitch parameter
- * rather than a stored 42. The magnets object is copied so the returned
- * params are detached from the (possibly reactive) product.
+ * gets exported agree. The magnets object is copied so the returned params
+ * are detached from the (possibly reactive) product.
  */
 export function baseplateParamsOf(product: BaseplateProduct): BaseplateParams {
   return {
     unitsX: product.unitsX,
     unitsY: product.unitsY,
-    customXMm: product.customXMm,
-    customYMm: product.customYMm,
     magnets: product.magnets === null ? null : { ...product.magnets },
     screwHoles: product.screwHoles,
     connectable: product.connectable,

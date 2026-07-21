@@ -18,12 +18,10 @@ import {
   type DividerWall,
 } from './types';
 import { evenDividerWalls } from '../gridfinity/dividerModel';
-import { PITCH } from '../gridfinity/constants';
 import {
   BASEPLATE_UNITS_MAX,
   CLIP_TOLERANCE_MAX,
   CLIP_TOLERANCE_MIN,
-  CUSTOM_SPAN_MIN,
   MAGNET_DIAMETER_MAX,
   MAGNET_DIAMETER_MIN,
   MAGNET_HEIGHT_MAX,
@@ -809,10 +807,9 @@ function pickMagnets(raw: Record<string, unknown> | null): BaseplateMagnets | nu
 
 /**
  * Validates the fields of a raw baseplate product, in the fixed order unitsX,
- * unitsY, customXMm, customYMm, magnets, screwHoles, connectable. The custom
- * spans and the magnets must be present (as a value or an explicit null): no
- * older file contains a baseplate at all, so requiring them costs nothing and
- * catches a truncated write.
+ * unitsY, magnets, screwHoles, connectable. The magnets must be present (as a
+ * value or an explicit null): no older file contains a baseplate at all, so
+ * requiring the field costs nothing and catches a truncated write.
  */
 function validateBaseplate(raw: Record<string, unknown>, subject: string): string | null {
   if (!isPositiveInteger(raw.unitsX, 1) || raw.unitsX > BASEPLATE_UNITS_MAX) {
@@ -820,12 +817,6 @@ function validateBaseplate(raw: Record<string, unknown>, subject: string): strin
   }
   if (!isPositiveInteger(raw.unitsY, 1) || raw.unitsY > BASEPLATE_UNITS_MAX) {
     return `${subject}: unitsY must be an integer from 1 to ${BASEPLATE_UNITS_MAX}`;
-  }
-  if (raw.customXMm !== null && !isNumberInRange(raw.customXMm, CUSTOM_SPAN_MIN, PITCH)) {
-    return `${subject}: customXMm must be a number from ${CUSTOM_SPAN_MIN} to ${PITCH}, or null for a full grid cell`;
-  }
-  if (raw.customYMm !== null && !isNumberInRange(raw.customYMm, CUSTOM_SPAN_MIN, PITCH)) {
-    return `${subject}: customYMm must be a number from ${CUSTOM_SPAN_MIN} to ${PITCH}, or null for a full grid cell`;
   }
   const magnetsProblem = validateMagnets(raw.magnets, subject);
   if (magnetsProblem !== null) return magnetsProblem;
@@ -856,8 +847,6 @@ function pickBaseplate(raw: Record<string, unknown>): BaseplateProduct {
     kind: 'baseplate',
     unitsX: raw.unitsX as number,
     unitsY: raw.unitsY as number,
-    customXMm: raw.customXMm as number | null,
-    customYMm: raw.customYMm as number | null,
     magnets: pickMagnets(raw.magnets as Record<string, unknown> | null),
     screwHoles: raw.screwHoles as boolean,
     connectable: raw.connectable as boolean,

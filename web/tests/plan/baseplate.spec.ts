@@ -21,8 +21,6 @@ function fullBaseplate(): BaseplateProduct {
     kind: 'baseplate',
     unitsX: 4,
     unitsY: 2,
-    customXMm: 30.5,
-    customYMm: 42,
     magnets: { diameterMm: 8.2, heightMm: 1 },
     screwHoles: true,
     connectable: true,
@@ -35,8 +33,6 @@ function plainBaseplate(): BaseplateProduct {
     kind: 'baseplate',
     unitsX: 4,
     unitsY: 2,
-    customXMm: null,
-    customYMm: null,
     magnets: null,
     screwHoles: false,
     connectable: false,
@@ -77,8 +73,6 @@ describe('baseplate round trip', () => {
     if (product.kind !== 'baseplate') throw new Error('expected a baseplate');
     // Explicit null, never undefined: undefined would serialize away entirely
     // on the next persist and quietly corrupt the stored plan.
-    expect(product.customXMm).toBeNull();
-    expect(product.customYMm).toBeNull();
     expect(product.magnets).toBeNull();
     expect(product).toEqual(plainBaseplate());
   });
@@ -131,9 +125,6 @@ describe('baseplate and clip validation messages', () => {
     [{ unitsX: 21 }, 'entry a1: unitsX must be an integer from 1 to 20'],
     [{ unitsX: 2.5 }, 'entry a1: unitsX must be an integer from 1 to 20'],
     [{ unitsY: 0 }, 'entry a1: unitsY must be an integer from 1 to 20'],
-    [{ customXMm: 0 }, 'entry a1: customXMm must be a number from 1 to 42, or null for a full grid cell'],
-    [{ customXMm: 43 }, 'entry a1: customXMm must be a number from 1 to 42, or null for a full grid cell'],
-    [{ customXMm: 'wide' }, 'entry a1: customXMm must be a number from 1 to 42, or null for a full grid cell'],
     [{ magnets: 5 }, 'entry a1: magnets must be an object or null'],
     [{ magnets: { diameterMm: 1.9, heightMm: 2 } }, 'entry a1: magnet diameterMm must be a number from 2 to 8.2'],
     [{ magnets: { diameterMm: 8.3, heightMm: 2 } }, 'entry a1: magnet diameterMm must be a number from 2 to 8.2'],
@@ -157,7 +148,6 @@ describe('baseplate and clip validation messages', () => {
   it.each([
     [{ unitsX: 1 }],
     [{ unitsX: 20 }],
-    [{ customXMm: 42 }],
     [{ magnets: { diameterMm: 2, heightMm: 2 } }],
     [{ magnets: { diameterMm: 8.2, heightMm: 2 } }],
     [{ magnets: { diameterMm: 6.5, heightMm: 1 } }],
@@ -226,20 +216,20 @@ describe('part deduplication keys across clip tolerances', () => {
 });
 
 describe('export plumbing for the new kinds', () => {
-  it('takes a custom-size plate footprint from baseplateSpanMm on both axes', () => {
+  it('takes the plate footprint from baseplateSpanMm on both axes', () => {
     const product = fullBaseplate();
     const part = partsOf(product)[0];
     // Compared against the geometry module's function, not a hardcoded
     // number: the arranger must agree with the generator by construction.
     expect(partFootprint(part)).toEqual({
-      widthMm: baseplateSpanMm(product.unitsX, product.customXMm),
-      depthMm: baseplateSpanMm(product.unitsY, product.customYMm),
+      widthMm: baseplateSpanMm(product.unitsX),
+      depthMm: baseplateSpanMm(product.unitsY),
     });
   });
 
-  it('names baseplate downloads by grid size with a suffix for custom spans', () => {
+  it('names baseplate downloads by grid size', () => {
     expect(fileStem(plainBaseplate())).toBe('gridfinity_baseplate_4x2');
-    expect(fileStem(fullBaseplate())).toBe('gridfinity_baseplate_4x2_custom');
+    expect(fileStem(fullBaseplate())).toBe('gridfinity_baseplate_4x2');
   });
 
   it('gives clips at different tolerances distinct file stems', () => {

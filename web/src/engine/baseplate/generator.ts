@@ -51,17 +51,13 @@ import type {
 const EPS = 0.01;
 
 /**
- * Outer span of a baseplate along one axis, in mm: full-pitch cells except
- * that the last one may be shortened to customMm. The single source of the
- * plate's outer size; the generator, the plate arranger's footprint and the
- * designer's size readout all derive it here, never locally.
+ * Outer span of a baseplate along one axis, in mm: the cell count times the
+ * pitch. The single source of the plate's outer size; the generator, the
+ * plate arranger's footprint and the designer's size readout all derive it
+ * here, never locally.
  */
-export function baseplateSpanMm(
-  units: number,
-  customMm: number | null,
-  pitchMm: number = PITCH,
-): number {
-  return (units - 1) * pitchMm + (customMm ?? pitchMm);
+export function baseplateSpanMm(units: number, pitchMm: number = PITCH): number {
+  return units * pitchMm;
 }
 
 /**
@@ -161,20 +157,16 @@ interface MagnetSite {
 }
 
 /**
- * Every magnet position whose full boss circle lies inside the plate outline.
- * A magnet whose boss circle would cross the outline of a shortened span is
- * omitted entirely (pocket, boss and screw hole), rather than clipped into an
- * open pocket in the plate's side wall. The positions sit on the bin's own
- * lattice, PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE from each cell centre, and
- * are deliberately not keyed to the plate's pitch parameter: the bin's magnet
- * does not move when a plate's pitch changes.
+ * Every magnet position on the plate, four per cell. The positions sit on the
+ * bin's own lattice, PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE from each cell
+ * centre, and are deliberately not keyed to the plate's pitch parameter: the
+ * bin's magnet does not move when a plate's pitch changes.
  */
 function magnetSites(
   params: BaseplateParams,
   widthMm: number,
   depthMm: number,
   pitchMm: number,
-  bossRadius: number,
 ): MagnetSite[] {
   const offset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
   const sites: MagnetSite[] = [];
@@ -184,13 +176,9 @@ function magnetSites(
       const cy = cellCentre(iy, depthMm, pitchMm);
       for (const sx of [-1, 1]) {
         for (const sy of [-1, 1]) {
-          const x = cx + sx * offset;
-          const y = cy + sy * offset;
-          if (Math.abs(x) + bossRadius > widthMm / 2) continue;
-          if (Math.abs(y) + bossRadius > depthMm / 2) continue;
           sites.push({
-            x,
-            y,
+            x: cx + sx * offset,
+            y: cy + sy * offset,
             cornerX: cx + (sx * pitchMm) / 2,
             cornerY: cy + (sy * pitchMm) / 2,
           });
@@ -270,8 +258,8 @@ function slotCutter(m: ManifoldToplevel, plateHeightMm: number): Manifold {
  */
 export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams): Manifold {
   const pitch = params.pitchMm ?? PITCH;
-  const width = baseplateSpanMm(params.unitsX, params.customXMm, pitch);
-  const depth = baseplateSpanMm(params.unitsY, params.customYMm, pitch);
+  const width = baseplateSpanMm(params.unitsX, pitch);
+  const depth = baseplateSpanMm(params.unitsY, pitch);
   const riser = baseplateRiserMm(params.magnets, params.screwHoles);
   const height = riser + BASEPLATE_HEIGHT;
   const sections = socketSections(riser);
@@ -308,8 +296,7 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   cellSolid.delete();
 
   // Stage 4: one intersection produces rounded cavity corners at the plate
-  // boundary and sharp ones internally, and truncates a shortened last
-  // column or row exactly the way it truncates a corner.
+  // boundary and sharp ones internally.
   const cellUnion = m.Manifold.union(cells);
   const cavity = cellUnion.intersect(clipper);
   cellUnion.delete();
@@ -321,87 +308,92 @@ export function generateBaseplate(m: ManifoldToplevel, params: BaseplateParams):
   cavity.delete();
 
   // Stages 6 to 8: bosses, screw holes and magnet pockets, at every magnet
-  // position whose boss circle fits inside the outline.
+  // position.
   if (riser > 0) {
     const bossRadius =
       (params.magnets?.diameterMm ?? MAGNET_HOLE_DIAMETER) / 2 + BASEPLATE_BOSS_WALL;
-    const sites = magnetSites(params, width, depth, pitch, bossRadius);
-    if (sites.length > 0) {
-      const parts: Manifold[] = [];
-      for (const site of sites) parts.push(...bossParts(m, site, bossRadius, riser));
-      const bossUnion = m.Manifold.union(parts);
-      // Clip to the outline so a boss at a rounded plate corner, or one whose
-      // strips run past a shortened edge, merges into the wall instead of
-      // poking outside the plate.
-      const outlineSolid = m.Manifold.extrude(
-        [roundedRectPolygon(width, depth, OUTER_CORNER_RADIUS)],
-        height,
+    const sites = magnetSites(params, width, depth, pitch);
+    const parts: Manifold[] = [];
+    for (const site of sites) parts.push(...bossParts(m, site, bossRadius, riser));
+    const bossUnion = m.Manifold.union(parts);
+    // Clip to the outline so a boss at a rounded plate corner merges into the
+    // wall instead of poking outside the plate.
+    const outlineSolid = m.Manifold.extrude(
+      [roundedRectPolygon(width, depth, OUTER_CORNER_RADIUS)],
+      height,
+    );
+    const bosses = bossUnion.intersect(outlineSolid);
+    bossUnion.delete();
+    outlineSolid.delete();
+    const withBosses = plate.add(bosses);
+    plate.delete();
+    bosses.delete();
+    plate = withBosses;
+
+    if (params.screwHoles) {
+      const screws = sites.map((site) =>
+        m.Manifold.cylinder(
+          riser + 2 * EPS,
+          BASEPLATE_SCREW_DIAMETER / 2,
+          BASEPLATE_SCREW_DIAMETER / 2,
+          4 * CORNER_SEGMENTS,
+        ).translate(site.x, site.y, -EPS),
       );
-      const bosses = bossUnion.intersect(outlineSolid);
-      bossUnion.delete();
-      outlineSolid.delete();
-      const withBosses = plate.add(bosses);
+      const screwUnion = m.Manifold.union(screws);
+      const drilled = plate.subtract(screwUnion);
       plate.delete();
-      bosses.delete();
-      plate = withBosses;
+      screwUnion.delete();
+      plate = drilled;
+    }
 
-      if (params.screwHoles) {
-        const screws = sites.map((site) =>
-          m.Manifold.cylinder(
-            riser + 2 * EPS,
-            BASEPLATE_SCREW_DIAMETER / 2,
-            BASEPLATE_SCREW_DIAMETER / 2,
-            4 * CORNER_SEGMENTS,
-          ).translate(site.x, site.y, -EPS),
-        );
-        const screwUnion = m.Manifold.union(screws);
-        const drilled = plate.subtract(screwUnion);
-        plate.delete();
-        screwUnion.delete();
-        plate = drilled;
-      }
-
-      if (params.magnets !== null) {
-        const { diameterMm, heightMm } = params.magnets;
-        const pockets = sites.map((site) =>
-          m.Manifold.cylinder(
-            heightMm + EPS,
-            diameterMm / 2,
-            diameterMm / 2,
-            4 * CORNER_SEGMENTS,
-          ).translate(site.x, site.y, riser - heightMm),
-        );
-        const pocketUnion = m.Manifold.union(pockets);
-        const pocketed = plate.subtract(pocketUnion);
-        plate.delete();
-        pocketUnion.delete();
-        plate = pocketed;
-      }
+    if (params.magnets !== null) {
+      const { diameterMm, heightMm } = params.magnets;
+      const pockets = sites.map((site) =>
+        m.Manifold.cylinder(
+          heightMm + EPS,
+          diameterMm / 2,
+          diameterMm / 2,
+          4 * CORNER_SEGMENTS,
+        ).translate(site.x, site.y, riser - heightMm),
+      );
+      const pocketUnion = m.Manifold.union(pockets);
+      const pocketed = plate.subtract(pocketUnion);
+      plate.delete();
+      pocketUnion.delete();
+      plate = pocketed;
     }
   }
 
   // Stage 9: connector slots, one per cell per outer edge, centred on the
-  // cell centre. A slot of a shortened last cell may run past the outline;
-  // the subtraction simply removes nothing there.
+  // cell centre. A slot is emitted only when its full length lies on the
+  // straight part of the edge, clear of the corner arcs: the cutter's
+  // retained-skin profile is defined against a flat outer face. A feature
+  // that does not fully fit is omitted, never clipped.
   if (params.connectable) {
+    const slotFits = (centre: number, spanMm: number): boolean =>
+      Math.abs(centre) + CONNECTOR_SLOT_LENGTH / 2 <= spanMm / 2 - OUTER_CORNER_RADIUS;
     const canonical = slotCutter(m, height);
     const slots: Manifold[] = [];
     for (let ix = 0; ix < params.unitsX; ix++) {
       const cx = cellCentre(ix, width, pitch);
+      if (!slotFits(cx, width)) continue;
       slots.push(canonical.translate(cx, depth / 2, 0));
       slots.push(canonical.rotate(0, 0, 180).translate(cx, -depth / 2, 0));
     }
     for (let iy = 0; iy < params.unitsY; iy++) {
       const cy = cellCentre(iy, depth, pitch);
+      if (!slotFits(cy, depth)) continue;
       slots.push(canonical.rotate(0, 0, -90).translate(width / 2, cy, 0));
       slots.push(canonical.rotate(0, 0, 90).translate(-width / 2, cy, 0));
     }
     canonical.delete();
-    const slotUnion = m.Manifold.union(slots);
-    const slotted = plate.subtract(slotUnion);
-    plate.delete();
-    slotUnion.delete();
-    plate = slotted;
+    if (slots.length > 0) {
+      const slotUnion = m.Manifold.union(slots);
+      const slotted = plate.subtract(slotUnion);
+      plate.delete();
+      slotUnion.delete();
+      plate = slotted;
+    }
   }
 
   return plate;

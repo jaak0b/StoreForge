@@ -130,8 +130,6 @@ function captionOf(product: Product): string {
     }
     case 'baseplate':
       // Two dimensions, not three: a baseplate has no height units to state.
-      // Custom size is deliberately absent (it lives in the title); the three
-      // feature flags are the better spend on a caption that clips.
       return joinCaption([
         'baseplate',
         `${product.unitsX}×${product.unitsY}`,
@@ -199,9 +197,8 @@ export function describeProduct(
   // carries. titlePlaceholder stays false: true renders italic and dimmed,
   // meaning "this row has no label yet", and a baseplate is not missing one.
   if (product.kind === 'baseplate') {
-    const custom = product.customXMm !== null || product.customYMm !== null;
     return {
-      title: custom ? 'Baseplate, custom size' : 'Baseplate',
+      title: 'Baseplate',
       titleLine2: '',
       titlePlaceholder: false,
       iconName: null,

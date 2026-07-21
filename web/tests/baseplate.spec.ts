@@ -9,7 +9,6 @@ import {
 } from '../src/engine/gridfinity/constants';
 import {
   baseplateRiserMm,
-  baseplateSpanMm,
   clipFootprintMm,
   generateBaseplate,
   generateConnectionClip,
@@ -41,8 +40,6 @@ function params(overrides: Partial<BaseplateParams> = {}): BaseplateParams {
   return {
     unitsX: 1,
     unitsY: 1,
-    customXMm: null,
-    customYMm: null,
     magnets: null,
     screwHoles: false,
     connectable: false,
@@ -276,61 +273,6 @@ describe('generateBaseplate', () => {
       const slab = m.Manifold.cube([1, 4, 0.1], true).translate(0, 20, z);
       expect(overlapVolume(plate, slab) / (1 * 0.1)).toBeCloseTo(skin, 3);
     }
-    plate.delete();
-  });
-
-  // 4.12/14: custom size. The last column shortens the span; the shortened
-  // edge carries the full rim profile rather than an open cavity.
-  it('truncates the last column to the custom span with a full rim', () => {
-    const plate = generateBaseplate(
-      m,
-      params({ unitsX: 4, unitsY: 2, customXMm: 30 }),
-    );
-    expect(plate.status()).toBe('NoError');
-    const box = plate.boundingBox();
-    expect(box.max[0] - box.min[0]).toBeCloseTo(baseplateSpanMm(4, 30), 6);
-    expect(baseplateSpanMm(4, 30)).toBeCloseTo(156.0, 9);
-    expect(box.max[1] - box.min[1]).toBeCloseTo(84.0, 6);
-    expect(box.max[2] - box.min[2]).toBeCloseTo(BASEPLATE_HEIGHT, 6);
-    // The rim band at the shortened edge (x 75.85 to 78 at z = 1.5) is solid.
-    const rim = m.Manifold.cube([0.5, 1, 0.5], true).translate(77, 21, 1.5);
-    expect(overlapVolume(plate, rim)).toBeCloseTo(0.5 * 1 * 0.5, 3);
-    // Just inside it, the truncated cavity of the last cell is open.
-    const cavity = m.Manifold.cube([0.5, 1, 0.5], true).translate(75, 21, 1.5);
-    expect(Math.abs(overlapVolume(plate, cavity))).toBeLessThan(1e-9);
-    plate.delete();
-  });
-
-  // 4.12/15: on a shortened span, a magnet whose boss circle crosses the
-  // outline is omitted entirely (pocket, boss and screw hole), leaving the
-  // side wall closed, while the cell's inner magnets are still emitted.
-  it('omits magnets whose boss circle leaves a shortened plate', () => {
-    // 2x1 with customXMm 36: the last cell's centre is at x = 24, so its
-    // outer magnets at x = 37 fit inside the 39 mm half-span but their boss
-    // circles (radius 4.65) do not.
-    const magnets = defaultMagnets();
-    const riser = baseplateRiserMm(magnets, true);
-    const plate = generateBaseplate(
-      m,
-      params({ unitsX: 2, unitsY: 1, customXMm: 36, magnets, screwHoles: true }),
-    );
-    expect(plate.status()).toBe('NoError');
-    const box = plate.boundingBox();
-    expect(box.max[0]).toBeCloseTo(baseplateSpanMm(2, 36) / 2, 6);
-    // The wall where the omitted pocket would have been cut stays solid.
-    const wall = m.Manifold.cube([0.5, 0.5, 0.5], true).translate(37, 13, riser - 0.8);
-    expect(overlapVolume(plate, wall)).toBeCloseTo(0.5 * 0.5 * 0.5, 3);
-    // The omitted screw hole leaves the bottom band solid too.
-    const bottom = m.Manifold.cube([0.5, 0.5, 0.5], true).translate(37, 13, 0.45);
-    expect(overlapVolume(plate, bottom)).toBeCloseTo(0.5 * 0.5 * 0.5, 3);
-    // The same cell's inner magnet, whose boss circle fits, is still emitted.
-    const pocket = m.Manifold.cylinder(
-      magnets.heightMm - 0.2,
-      (magnets.diameterMm - 0.2) / 2,
-      (magnets.diameterMm - 0.2) / 2,
-      16,
-    ).translate(11, 13, riser - magnets.heightMm + 0.1);
-    expect(Math.abs(overlapVolume(plate, pocket))).toBeLessThan(1e-9);
     plate.delete();
   });
 

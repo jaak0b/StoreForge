@@ -129,8 +129,6 @@ function baseplate(overrides: Partial<BaseplateProduct> = {}): BaseplateProduct 
     kind: 'baseplate',
     unitsX: 4,
     unitsY: 2,
-    customXMm: 30.5,
-    customYMm: null,
     magnets: { diameterMm: 6.5, heightMm: 2.4 },
     screwHoles: true,
     connectable: true,

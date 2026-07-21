@@ -155,8 +155,8 @@ export function partFootprint(part: PrintablePart): { widthMm: number; depthMm: 
     // batch export.
     case 'baseplate':
       return {
-        widthMm: baseplateSpanMm(part.baseplate.unitsX, part.baseplate.customXMm),
-        depthMm: baseplateSpanMm(part.baseplate.unitsY, part.baseplate.customYMm),
+        widthMm: baseplateSpanMm(part.baseplate.unitsX),
+        depthMm: baseplateSpanMm(part.baseplate.unitsY),
       };
     case 'clip':
       return clipFootprintMm(part.clip);
@@ -190,13 +190,8 @@ function partName(part: PrintablePart): string {
       const size = `${part.bin.gridX}x${part.bin.gridY}x${part.bin.heightUnits}`;
       return part.labelText !== undefined ? `${part.labelText} (${size})` : size;
     }
-    case 'baseplate': {
-      const custom =
-        part.baseplate.customXMm !== null || part.baseplate.customYMm !== null
-          ? ', custom size'
-          : '';
-      return `Baseplate ${part.baseplate.unitsX}x${part.baseplate.unitsY}${custom}`;
-    }
+    case 'baseplate':
+      return `Baseplate ${part.baseplate.unitsX}x${part.baseplate.unitsY}`;
     case 'clip':
       return part.clip.toleranceMm !== 0
         ? `Connection clip, ${part.clip.toleranceMm} mm tolerance`
@@ -209,9 +204,9 @@ function partName(part: PrintablePart): string {
 /**
  * File name stem of a single-product download. Every bin-bearing product is
  * named by its grid size whatever the bin's origin, so a cutout bin downloads
- * under the same convention a manual or traced one does. The baseplate
- * _custom and clip _tol suffixes keep genuinely different parts from
- * downloading over each other. Exported for tests.
+ * under the same convention a manual or traced one does. The clip _tol
+ * suffix keeps genuinely different clips from downloading over each other.
+ * Exported for tests.
  */
 export function fileStem(product: Product): string {
   switch (product.kind) {
@@ -222,10 +217,8 @@ export function fileStem(product: Product): string {
       const bin = product.bin;
       return `gridfinity_bin_${bin.gridX}x${bin.gridY}x${bin.heightUnits}`;
     }
-    case 'baseplate': {
-      const custom = product.customXMm !== null || product.customYMm !== null ? '_custom' : '';
-      return `gridfinity_baseplate_${product.unitsX}x${product.unitsY}${custom}`;
-    }
+    case 'baseplate':
+      return `gridfinity_baseplate_${product.unitsX}x${product.unitsY}`;
     case 'clip': {
       // The decimal point becomes p so the stem stays a single dotless token.
       const tol =

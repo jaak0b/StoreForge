@@ -286,8 +286,6 @@ describe('describeProduct captions', () => {
       kind: 'baseplate',
       unitsX: 4,
       unitsY: 2,
-      customXMm: null,
-      customYMm: null,
       magnets: null,
       screwHoles: false,
       connectable: false,
@@ -304,31 +302,12 @@ describe('describeProduct captions', () => {
       kind: 'baseplate',
       unitsX: 4,
       unitsY: 2,
-      customXMm: null,
-      customYMm: null,
       magnets: { diameterMm: 6.5, heightMm: 2.4 },
       screwHoles: true,
       connectable: true,
     });
     expect(row.title).toBe('Baseplate');
     expect(row.caption).toBe('baseplate · 4×2 · magnets · screw holes · connectable');
-    expect(row.titlePlaceholder).toBe(false);
-    expect(row.iconName).toBe(null);
-  });
-
-  it('names a custom-size baseplate in the title, never in the caption', () => {
-    const row = describeProduct({
-      kind: 'baseplate',
-      unitsX: 4,
-      unitsY: 2,
-      customXMm: 30.5,
-      customYMm: null,
-      magnets: null,
-      screwHoles: true,
-      connectable: false,
-    });
-    expect(row.title).toBe('Baseplate, custom size');
-    expect(row.caption).toBe('baseplate · 4×2 · screw holes');
     expect(row.titlePlaceholder).toBe(false);
     expect(row.iconName).toBe(null);
   });

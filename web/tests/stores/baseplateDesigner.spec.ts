@@ -9,26 +9,12 @@ describe('baseplateDesigner store', () => {
     setActivePinia(createPinia());
   });
 
-  it('collapses the spans to null when custom size is toggled off after typing values', () => {
-    // The single most likely regression: a naive product getter reads the raw
-    // customXMm field and persists a custom span the user turned off.
+  it('derives the size readout from the cell counts at the full pitch', () => {
     const store = useBaseplateDesigner();
-    store.customSize = true;
-    store.customXMm = 30.5;
-    store.customYMm = 20;
-    expect(store.spanX).toBe(30.5);
-    expect(store.spanY).toBe(20);
-    expect(store.product.customXMm).toBe(30.5);
-    store.customSize = false;
-    expect(store.spanX).toBeNull();
-    expect(store.spanY).toBeNull();
-    expect(store.product.customXMm).toBeNull();
-    expect(store.product.customYMm).toBeNull();
-    // The size readout collapses with it: full-pitch cells again.
     expect(store.widthMm).toBe(2 * PITCH);
-    store.customSize = true;
-    // The typed values survive the toggle for when it comes back on.
-    expect(store.widthMm).toBe(PITCH + 30.5);
+    store.unitsX = 4;
+    expect(store.widthMm).toBe(4 * PITCH);
+    expect(store.depthMm).toBe(2 * PITCH);
   });
 
   it('collapses the magnets to null when the mode is none despite non-default dimensions', () => {
@@ -51,9 +37,6 @@ describe('baseplateDesigner store', () => {
     expect(validateProduct(store.product, 'Default form')).toBeNull();
     store.unitsX = 4;
     store.unitsY = 2;
-    store.customSize = true;
-    store.customXMm = 30.5;
-    store.customYMm = 42;
     store.magnetMode = 'full';
     store.screwHoleMode = 'full';
     store.connectable = true;

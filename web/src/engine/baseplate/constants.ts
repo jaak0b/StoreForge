@@ -15,9 +15,6 @@ import {
 /** Largest cell count per axis. A 20 by 20 plate is already 840 mm square. */
 export const BASEPLATE_UNITS_MAX = 20;
 
-/** Smallest legal shortened span of a last column or row, in mm. */
-export const CUSTOM_SPAN_MIN = 1;
-
 /** Magnet pocket diameter bounds, in mm. */
 export const MAGNET_DIAMETER_MIN = 2;
 export const MAGNET_DIAMETER_MAX = 8.2;
@@ -128,10 +125,6 @@ export interface BaseplateParams {
   unitsX: number;
   /** Cells along Y, integer 1 to BASEPLATE_UNITS_MAX. */
   unitsY: number;
-  /** Length of the last column along X in mm, or null when it keeps the full pitch. */
-  customXMm: number | null;
-  /** Depth of the last row along Y in mm, or null when it keeps the full pitch. */
-  customYMm: number | null;
   /**
    * Grid pitch in mm: centre-to-centre cell spacing and the plate's footprint per cell.
    * Defaults to PITCH, valid 41.5 to 60. Not exposed in the UI; threaded so a control can be
