@@ -19,8 +19,18 @@ export const useApp = defineStore('app', {
     focusAddSeq: 0,
     /** Whether the keyboard shortcut sheet dialog is open. */
     shortcutSheetOpen: false,
+    /** Id of the drawer group whose detail view is open, or null for none. */
+    viewingDrawerId: null as string | null,
   }),
   actions: {
+    /** Opens the drawer group detail view for the given group id. */
+    openDrawer(groupId: string) {
+      this.viewingDrawerId = groupId;
+    },
+    /** Closes the drawer group detail view, returning to the queue. */
+    closeDrawer() {
+      this.viewingDrawerId = null;
+    },
     /** Asks the add-bin card to reset to a new bin and take focus. */
     focusAddCard() {
       this.editingEntryId = null;

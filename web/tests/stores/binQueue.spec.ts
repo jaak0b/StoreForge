@@ -196,4 +196,37 @@ describe('binQueue drawer groups', () => {
       .filter((x): x is string => x !== undefined);
     expect(new Set(queuedPlateIds)).toEqual(new Set(newPlateIds));
   });
+
+  it('requeues a single planned plate as a fresh linked entry', () => {
+    const store = useBinQueue();
+    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    // Batch both plates so the queue is empty and every plate is "planned".
+    const batchId = store.createBatch(
+      store.entries.map((e) => ({ entryId: e.id, count: 1 })),
+      'Printer',
+    )!;
+    store.confirmAll(batchId);
+    expect(store.entries).toHaveLength(0);
+
+    const plate = store.groups[0].payload.plates[0];
+    const problem = store.requeueGroupPlate(id, plate.id);
+    expect(problem).toBeNull();
+    expect(store.entries).toHaveLength(1);
+    const product = store.entries[0].product as BaseplateProduct;
+    expect(product.kind).toBe('baseplate');
+    expect(product.group).toEqual({ groupId: id, plateId: plate.id });
+    // The re-queued product inherits the group's stored options and the plate's
+    // own brim.
+    expect(product.brim).toEqual(plate.brim);
+    expect(product.magnets).toBe(OPTIONS.magnets);
+  });
+
+  it('requeues nothing for a group or plate that does not exist', () => {
+    const store = useBinQueue();
+    const id = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')!;
+    expect(store.requeueGroupPlate('no-such-group', 'x')).toBeNull();
+    expect(store.requeueGroupPlate(id, 'no-such-plate')).toBeNull();
+    // Neither call queued anything beyond the original two plates.
+    expect(store.entries).toHaveLength(2);
+  });
 });

@@ -527,6 +527,34 @@ export const useBinQueue = defineStore('binQueue', {
       this.persist();
       return null;
     },
+    /**
+     * Re-queues a single plate of a drawer group: builds its linked
+     * BaseplateProduct from the group's stored options and the plate's own
+     * planned brim (through baseplateProductForPlate, the same mapping
+     * addDrawerGroup uses), validates it, and adds one queue entry. Use it to
+     * order a plate the group planned but that has no queue row or batch item
+     * anymore (a planned plate, or one that printed and was confirmed).
+     * Returns null on success, or the user-worded problem with nothing queued;
+     * null too when the group or plate no longer exists.
+     */
+    requeueGroupPlate(groupId: string, plateId: string): string | null {
+      const group = this.groupById(groupId);
+      if (group === null) return null;
+      if (group.payload.kind !== 'drawer') return null;
+      const plate = group.payload.plates.find((p) => p.id === plateId);
+      if (plate === undefined) return null;
+      const product = baseplateProductForPlate(plate, group.payload.options, groupId);
+      const problem = validateProduct(product, 'A planned plate');
+      if (problem !== null) return problem;
+      this.entries.push({
+        id: crypto.randomUUID(),
+        quantity: 1,
+        createdAt: new Date().toISOString(),
+        product,
+      });
+      this.persist();
+      return null;
+    },
     /** Renames a group. */
     renameGroup(id: string, name: string) {
       const group = this.groupById(id);
