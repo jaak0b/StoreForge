@@ -6,8 +6,8 @@ import { CLIP_TOLERANCE_MAX, CLIP_TOLERANCE_MIN } from '../engine/baseplate/cons
  * fill-a-drawer panel so the tolerance slider and its wording live in one place.
  * The single-plate host passes a quantity model and a submit label to show the
  * quantity field and the Add/Save button (and a Cancel when editing an existing
- * clip row); the fill-a-drawer host passes the auto clip count to show instead,
- * since the drawer queues its clips itself. The host owns the tolerance value
+ * clip row); the fill-a-drawer host shows only the tolerance slider, since the
+ * drawer queues its clips itself. The host owns the tolerance value
  * (clamping and quantizing it on submit) and every action; this component is
  * only the markup.
  */
@@ -16,8 +16,6 @@ const toleranceMm = defineModel<number>('toleranceMm', { required: true });
 const quantity = defineModel<number>('quantity');
 
 defineProps<{
-  /** The auto-computed clip count to show as a readout, or null to hide it (single-plate mode). */
-  count?: number | null;
   /** Label for the submit button, or null to hide it (fill mode). */
   submitLabel?: string | null;
   /** Whether to show the quantity field (single-plate mode). */
@@ -37,12 +35,6 @@ const emit = defineEmits<{ submit: []; cancel: [] }>();
       <v-card-title>Connection clips</v-card-title>
     </v-card-item>
     <v-card-text>
-      <dl v-if="count != null" class="clip-readout mb-1">
-        <div>
-          <dt>Clips</dt>
-          <dd>{{ count }}</dd>
-        </div>
-      </dl>
       <v-slider
         v-model="toleranceMm"
         :min="CLIP_TOLERANCE_MIN"
@@ -90,24 +82,3 @@ const emit = defineEmits<{ submit: []; cancel: [] }>();
     </v-card-text>
   </v-card>
 </template>
-
-<style scoped>
-/* The clip count readout: a labeled row, value in a monospace column. */
-.clip-readout {
-  margin: 0;
-}
-.clip-readout > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-.clip-readout dt {
-  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
-  font-size: 0.8125rem;
-}
-.clip-readout dd {
-  margin: 0;
-  font-family: monospace;
-  font-size: 0.8125rem;
-}
-</style>

@@ -9,7 +9,6 @@ import {
   MAGNET_HEIGHT_DEFAULT,
 } from '../engine/baseplate/constants';
 import {
-  drawerFillClipCount,
   drawerFillLayoutRects,
   planDrawerFill,
   type DrawerFillInput,
@@ -227,16 +226,6 @@ const layoutRects = computed(() =>
 
 /** The plan-table rows (identical plates grouped with a count), from the shared helper. */
 const planRows = computed(() => groupDrawerFillPlanRows(previewPlates.value));
-
-/**
- * How many connection clips the current layout needs, from the shared
- * connector-slot rule (drawerFillClipCount), or 0 when the drawer is not
- * connectable. Both modes read the previewed plates, so the readout tracks the
- * live plan in create mode and the saved plates in edit mode.
- */
-const clipCount = computed(() =>
-  connectable.value ? drawerFillClipCount(previewPlates.value) : 0,
-);
 
 // --- Edit-mode status coloring and requeue --------------------------------
 
@@ -524,12 +513,11 @@ function deleteGroup(): void {
         />
 
         <!-- Connection clips: the drawer queues the right number automatically,
-             so the card shows the count and the fit, with no quantity or add
-             button (the same component the single-plate flow uses). -->
+             so the card shows only the fit, with no quantity or add button
+             (the same component the single-plate flow uses). -->
         <ConnectionClipCard
           v-if="connectable"
           v-model:tolerance-mm="clipToleranceMm"
-          :count="clipCount"
           class="mt-4"
         />
       </div>
