@@ -1,4 +1,5 @@
 import { binTopOpeningMm } from '../gridfinity/constants';
+import { assertNever } from './types';
 
 /**
  * Screw-list shorthand parsing and bin sizing for the "add bins from a screw
@@ -132,12 +133,27 @@ export const HEAD_ICON_NAME: Record<HeadType, string> = {
   'threaded insert': 'threaded insert',
 };
 
+/** Thread choices offered in the UI for metric fasteners. The parser accepts more. */
+export const METRIC_THREADS: readonly string[] = ['M2', 'M2.5', 'M3', 'M4', 'M5', 'M6', 'M8'];
+
+/** Thread choices offered in the UI for imperial fasteners. The parser accepts more. */
+export const IMPERIAL_THREADS: readonly string[] = ['#4', '#6', '#8', '#10', '#12', '1/4-20', '5/16-18', '3/8-16'];
+
 /** Head types with no meaningful length (label and sizing skip the length). */
 export const LENGTHLESS_HEADS: ReadonlySet<HeadType> = new Set<HeadType>([
   'hex nut',
   'washer',
   'threaded insert',
 ]);
+
+/**
+ * Whether a head type carries no meaningful length, so it is labelled and sized
+ * without one (a nut, washer or threaded insert). The single guard every flow
+ * shares: never re-test LENGTHLESS_HEADS membership inline.
+ */
+export function isLengthlessHead(head: HeadType | null | undefined): boolean {
+  return head !== null && head !== undefined && LENGTHLESS_HEADS.has(head);
+}
 
 /** The supported fastener length range in millimetres. */
 export const MIN_LENGTH_MM = 1;
@@ -160,6 +176,8 @@ export interface ScrewBatch {
   enteredUnit: EnteredUnit;
   /** The length as entered for an imperial batch ('1-1/2"'), display only. */
   enteredLengthText: string | null;
+  /** Whether the segment text explicitly gave a quantity, versus defaulting to 1. */
+  quantityExplicit: boolean;
 }
 
 /** Result of parsing one shorthand line. */
@@ -244,6 +262,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
   let lengthSeen = false;
   let head: HeadType | null = null;
   let quantity: number | null = null;
+  let quantityExplicit = false;
   let expectQty = false;
   let pendingSeparator = false;
   let sawAnything = false;
@@ -292,6 +311,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
       return;
     }
     quantity = value;
+    quantityExplicit = true;
   };
 
   let i = 0;
@@ -333,7 +353,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
     // An explicit imperial length ('1-1/2"', '3/4in', or any fraction).
     if (isExplicitImperialLength(word)) {
       pendingSeparator = false;
-      if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+      if (!lengthSeen && !isLengthlessHead(head)) {
         setImperialLength(word);
       } else {
         errors.push(`Can't read '${word}'. Use 'x4' for a quantity.`);
@@ -363,7 +383,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
       if (expectQty) {
         setQty(match[1]);
         expectQty = false;
-      } else if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+      } else if (!lengthSeen && !isLengthlessHead(head)) {
         setLength(match[1]);
       } else {
         setQty(match[1]);
@@ -395,7 +415,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
   if (thread === null) {
     errors.push(`Can't find a thread size (like M3 or #8) in '${text}'.`);
   }
-  if (!lengthSeen && (head === null || !LENGTHLESS_HEADS.has(head))) {
+  if (!lengthSeen && !isLengthlessHead(head)) {
     errors.push(`'${text}' has no length. Add one like 'x20' or fill it in on the row.`);
   }
   return {
@@ -405,6 +425,7 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
     quantity: quantity ?? 1,
     enteredUnit: imperial ? 'imperial' : 'metric',
     enteredLengthText,
+    quantityExplicit,
   };
 }
 
@@ -420,7 +441,7 @@ export function composeShorthand(
   head: HeadType | null,
   count: number,
 ): string {
-  const lengthless = head !== null && LENGTHLESS_HEADS.has(head);
+  const lengthless = isLengthlessHead(head);
   const parts: string[] = [];
   if (thread !== null && lengthMm !== null && !lengthless) {
     parts.push(`${thread}x${lengthMm}`);
@@ -434,7 +455,7 @@ export function composeShorthand(
 }
 
 /** Canonical shorthand alias used to compose text back out for each head type. */
-const HEAD_ALIASES_REVERSE: Record<HeadType, string> = {
+export const HEAD_ALIASES_REVERSE: Record<HeadType, string> = {
   'countersunk screw': 'fhcs',
   'pan head screw': 'bhcs',
   'cap head screw': 'shcs',
@@ -466,12 +487,145 @@ export function composeLabelText(
 ): string {
   const parts: string[] = [];
   if (thread !== null) parts.push(thread);
-  const lengthless = head !== null && LENGTHLESS_HEADS.has(head);
+  const lengthless = isLengthlessHead(head);
   if (lengthMm !== null && !lengthless) {
     parts.push(`x ${enteredLengthText ?? lengthMm}`);
   }
   if (lengthless) parts.push(HEAD_LABEL_ABBREV[head as HeadType]);
   return parts.join(' ');
+}
+
+/**
+ * The nominal major diameter of a thread designation, in millimetres, or null
+ * when the thread is absent or unrecognized. Used only to derive a head height
+ * for bin sizing, never for geometry.
+ *
+ * Metric 'M<d>' is the diameter directly. Imperial number sizes use the ANSI
+ * unified formula d = 0.060 in + 0.013 in * N (ASME B1.1 / ANSI B18.6.3), so
+ * '#8' is 0.164 in. A fractional size like '1/4-20' is the fraction in inches.
+ * Inch diameters convert at 25.4 mm per inch.
+ */
+export function threadDiameterMm(thread: string | null): number | null {
+  if (thread === null) return null;
+  const metric = /^M(\d+(?:\.\d+)?)$/.exec(thread);
+  if (metric !== null) return Number(metric[1]);
+  const numberSeries = /^#(\d{1,2})$/.exec(thread);
+  if (numberSeries !== null) {
+    const n = Number(numberSeries[1]);
+    return (0.06 + 0.013 * n) * MM_PER_INCH;
+  }
+  const fraction = /^(\d+)\/(\d+)-\d{2,3}$/.exec(thread);
+  if (fraction !== null) {
+    const den = Number(fraction[2]);
+    if (den === 0) return null;
+    return (Number(fraction[1]) / den) * MM_PER_INCH;
+  }
+  return null;
+}
+
+/**
+ * ISO 4014/4017 hexagon bolt head height k, keyed by nominal diameter (mm).
+ * The head height is not a clean ratio of the diameter, so the standard's
+ * tabulated values are listed for every metric size the parser accepts; the
+ * three imperial sizes the picker offers carry their ASME B18.2.1 hex cap
+ * screw head heights (0.163, 0.211 and 0.243 in) at their converted diameters.
+ * Matched by nearest diameter within HEX_DIAMETER_EPS_MM so an inch diameter's
+ * rounding does not miss its row.
+ */
+const HEX_HEAD_HEIGHT_MM: ReadonlyArray<readonly [number, number]> = [
+  // ISO 4014/4017 (ISO 4014:2011 Table 2), diameter -> k_nominal:
+  [1.6, 1.1],
+  [2, 1.4],
+  [2.5, 1.7],
+  [3, 2.0],
+  [4, 2.8],
+  [5, 3.5],
+  [6, 4.0],
+  [8, 5.3],
+  [10, 6.4],
+  [12, 7.5],
+  [14, 8.8],
+  [16, 10.0],
+  [20, 12.5],
+  [24, 15.0],
+  [30, 18.7],
+  [36, 22.5],
+  // ASME B18.2.1 hex cap screw head height H (basic), diameter -> k:
+  [0.25 * MM_PER_INCH, 0.163 * MM_PER_INCH], // 1/4 in
+  [0.3125 * MM_PER_INCH, 0.211 * MM_PER_INCH], // 5/16 in
+  [0.375 * MM_PER_INCH, 0.243 * MM_PER_INCH], // 3/8 in
+];
+
+const HEX_DIAMETER_EPS_MM = 0.1;
+
+/** Hex bolt head height from the ISO 4014/4017 (or ASME B18.2.1) table. */
+function hexHeadHeightMm(diameterMm: number): number {
+  for (const [d, k] of HEX_HEAD_HEIGHT_MM) {
+    if (Math.abs(d - diameterMm) <= HEX_DIAMETER_EPS_MM) return k;
+  }
+  // An unlisted diameter is sized conservatively at the socket cap head height
+  // (k = d, ISO 4762) so the bin never comes out too short for the head.
+  return diameterMm;
+}
+
+/**
+ * The head height added to a fastener's nominal length to get its overall
+ * length for bin sizing, in millimetres. By ISO/ASME convention a countersunk
+ * (flat) screw's nominal length is already the overall length, so its head
+ * adds nothing; every other head type is measured under the head, so its head
+ * height is added. Zero when the head or diameter is unknown, or when the head
+ * carries no length (a nut, washer or insert is sized without one).
+ *
+ * Standards per head type:
+ *   cap head (ISO 4762): k = d.
+ *   pan/button head (ISO 7380-1): k = 0.55 d (M3 1.65, M4 2.20, M5 2.75, ...).
+ *   hex bolt (ISO 4014/4017, ASME B18.2.1): tabulated, see HEX_HEAD_HEIGHT_MM.
+ *   countersunk (ISO 10642): 0, the nominal length is the overall length.
+ *   self-tapping / pocket screw: measured under the head; no single ISO length
+ *     standard fixes their head height, so the ISO 7380-1 button ratio 0.55 d
+ *     is used as the published pan-family figure.
+ *   wood screw (ANSI/ASME B18.6.1 flat head): countersunk, measured overall, 0.
+ *   brad (ASTM F1667 finish nail): measured overall, negligible head, 0.
+ *   dowel pin (ISO 2338): no head, overall length, 0.
+ */
+export function headHeightMm(head: HeadType | null, diameterMm: number | null): number {
+  if (head === null || diameterMm === null) return 0;
+  switch (head) {
+    case 'cap head screw':
+      return diameterMm; // ISO 4762 k = d.
+    case 'pan head screw':
+    case 'self-tapping screw':
+    case 'pocket screw':
+      return 0.55 * diameterMm; // ISO 7380-1 button head k = 0.55 d.
+    case 'hex bolt':
+      return hexHeadHeightMm(diameterMm);
+    case 'countersunk screw': // ISO 10642: nominal length is overall.
+    case 'wood screw': // ANSI/ASME B18.6.1 flat head: measured overall.
+    case 'brad': // ASTM F1667: measured overall.
+    case 'dowel': // ISO 2338: no head.
+    case 'hex nut': // Lengthless: sized without a length.
+    case 'washer':
+    case 'threaded insert':
+      return 0;
+    default:
+      return assertNever(head);
+  }
+}
+
+/**
+ * A fastener's overall length in millimetres: its nominal length plus the head
+ * height that ISO/ASME convention leaves out for every head type but the
+ * countersunk one. Null when there is no length to size from. This is the
+ * single figure bin sizing measures; callers pass its result to
+ * computeBinWidthUnits rather than the nominal length.
+ */
+export function overallLengthMm(spec: {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+}): number | null {
+  if (spec.lengthMm === null) return null;
+  return spec.lengthMm + headHeightMm(spec.head, threadDiameterMm(spec.thread));
 }
 
 /**
@@ -494,12 +648,36 @@ export function computeBinWidthUnits(lengthMm: number): number {
   return units;
 }
 
-/** A raw row headed for grouping: a batch plus its effective bin width. */
+/**
+ * THE bin sizing entry point for a screw: the single chain every flow calls to
+ * turn a screw's fields into a bin width in grid units. It composes the
+ * lengthless check (a nut, washer or insert is sized without a length),
+ * overallLengthMm (nominal length plus the head height ISO/ASME leaves out for
+ * every head type but the countersunk one), and computeBinWidthUnits, which
+ * expects that OVERALL length rather than the nominal one. Returns 1 when there
+ * is no length to size from.
+ */
+export function screwBinWidthUnits(spec: {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+}): number {
+  const effectiveLength = isLengthlessHead(spec.head) ? null : spec.lengthMm;
+  const overall = overallLengthMm({ thread: spec.thread, lengthMm: effectiveLength, head: spec.head });
+  return overall !== null ? computeBinWidthUnits(overall) : 1;
+}
+
+/**
+ * A raw row headed for grouping: a batch plus its effective bin width.
+ * widthUnits is derived from the screw's OVERALL length via screwBinWidthUnits,
+ * never from the nominal length directly.
+ */
 export interface GroupableRow {
   thread: string | null;
   lengthMm: number | null;
   head: HeadType | null;
   quantity: number;
+  /** Bin width in grid units, derived from the overall length (screwBinWidthUnits). */
   widthUnits: number;
   /** Imperial length as entered, for labels; omitted or null for metric rows. */
   enteredLengthText?: string | null;
