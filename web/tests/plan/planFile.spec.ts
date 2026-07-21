@@ -8,6 +8,7 @@ import {
   validateEntry,
   type PlanParseResult,
 } from '../../src/engine/plan/planFile';
+import { FLATTEN_HEIGHT_MAX_MM } from '../../src/engine/cutout/cavityEdits';
 import type {
   BatchItem,
   BinPockets,
@@ -1842,6 +1843,71 @@ describe('cavity edits (plan version 9)', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain('cut height');
+  });
+
+  it('loads a legacy planeZMm-style flatten edit as a vertical, max-height cut', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 3, yMm: 4, zMm: 0 },
+          radiusMm: 2,
+          planeZMm: 12,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = (result.plan.entries[0].product as { bin: { edits: unknown } }).bin;
+    expect(bin.edits).toEqual([
+      {
+        kind: 'flatten',
+        centerMm: { xMm: 3, yMm: 4, zMm: 12 },
+        radiusMm: 2,
+        normalMm: { xMm: 0, yMm: 0, zMm: 1 },
+        heightMm: FLATTEN_HEIGHT_MAX_MM,
+      },
+    ]);
+  });
+
+  it('loads a legacy normalMm-without-heightMm flatten edit at the max height bound', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 1, yMm: 1, zMm: 5 },
+          radiusMm: 3,
+          normalMm: { xMm: 0, yMm: 1, zMm: 0 },
+        },
+      ]),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = (result.plan.entries[0].product as { bin: { edits: unknown } }).bin;
+    expect(bin.edits).toEqual([
+      {
+        kind: 'flatten',
+        centerMm: { xMm: 1, yMm: 1, zMm: 5 },
+        radiusMm: 3,
+        normalMm: { xMm: 0, yMm: 1, zMm: 0 },
+        heightMm: FLATTEN_HEIGHT_MAX_MM,
+      },
+    ]);
+  });
+
+  it('rejects a flatten edit with neither planeZMm nor normalMm', () => {
+    const result = parsePlanFile(
+      planText([
+        {
+          kind: 'flatten',
+          centerMm: { xMm: 0, yMm: 0, zMm: 0 },
+          radiusMm: 2,
+        },
+      ]),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('surface normal');
   });
 
   it('merges an imported entry with edits over an existing one', () => {
