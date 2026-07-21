@@ -423,14 +423,6 @@ function syncGhosts(ctx: ThreeSceneContext): void {
     if (wanted.has(id)) continue;
     disposeGhost(ctx, entry);
     ghostEntries.delete(id);
-    // A gizmo left attached to a deleted model would keep driving an object
-    // that is no longer in the scene, and its helper would warn about it on
-    // every frame, so it is detached here at the moment the mesh leaves.
-    if (id === attachedId) {
-      translateControls?.detach();
-      rotateControls?.detach();
-      attachedId = null;
-    }
   }
   for (const ghost of props.ghosts) {
     const existing = ghostEntries.get(ghost.id);
@@ -475,32 +467,36 @@ function syncGhosts(ctx: ThreeSceneContext): void {
       placement: placementOf(mesh),
       bounds: entry.bounds,
     });
-    // A newly drawn ghost is a new object, so the gizmo is detached from the
-    // mesh that just left the scene and pointed at the new one by the
-    // selection sync that follows.
-    if (ghost.id === attachedId) {
-      translateControls?.detach();
-      rotateControls?.detach();
-      attachedId = null;
-    }
   }
   paintGhosts();
   applyGhostVisibility();
+  syncGizmo();
 }
 
-function syncSelection(): void {
-  if (props.selectedModelId === attachedId) return;
-  attachedId = props.selectedModelId;
-  const entry = attachedId === null ? undefined : ghostEntries.get(attachedId);
-  if (!entry || props.paintTool !== null) {
-    translateControls?.detach();
-    rotateControls?.detach();
-    // Not attached: leave the marker empty so leaving paint mode reattaches.
+/**
+ * The single source of gizmo attachment. Desired attachment is a pure function
+ * of the selection, the paint tool and the drawn ghosts; this reconciles the
+ * live controls to it and is safe to call after any change that can affect it.
+ */
+function syncGizmo(): void {
+  if (!translateControls || !rotateControls) return;
+  const enabled = props.paintTool === null;
+  translateControls.enabled = enabled;
+  rotateControls.enabled = enabled;
+  const desiredMesh =
+    enabled && props.selectedModelId !== null
+      ? (ghostEntries.get(props.selectedModelId)?.mesh ?? null)
+      : null;
+  if ((translateControls.object ?? null) === desiredMesh) return;
+  if (desiredMesh === null) {
+    translateControls.detach();
+    rotateControls.detach();
     attachedId = null;
-    return;
+  } else {
+    translateControls.attach(desiredMesh);
+    rotateControls.attach(desiredMesh);
+    attachedId = props.selectedModelId;
   }
-  translateControls?.attach(entry.mesh);
-  rotateControls?.attach(entry.mesh);
 }
 
 function entryIdOf(mesh: THREE.Object3D): string | null {
@@ -947,7 +943,7 @@ const { context } = useThreeScene(container, {
 
     syncBin(ctx);
     syncGhosts(ctx);
-    syncSelection();
+    syncGizmo();
   },
   onTeardown: (ctx) => {
     ctx.canvas.removeEventListener('pointerdown', onPointerDown);
@@ -1028,8 +1024,8 @@ watch(
   () => props.selectedModelId,
   () => {
     if (!context.value) return;
-    syncSelection();
-    // The selection tone is settled here rather than in syncSelection: the
+    syncGizmo();
+    // The selection tone is settled here rather than in syncGizmo: the
     // ghost that lost the selection and the one that gained it both change
     // colour, and neither changed the ghost list that syncGhosts repaints from.
     paintGhosts();
@@ -1060,24 +1056,13 @@ watch(
   (tool) => {
     const ctx = context.value;
     if (tool !== null) {
-      if (translateControls) {
-        translateControls.detach();
-        translateControls.enabled = false;
-      }
-      if (rotateControls) {
-        rotateControls.detach();
-        rotateControls.enabled = false;
-      }
       strokeActive = false;
       strokePoints = [];
       if (ctx) clearStrokeGhosts(ctx);
       hidePaintCursor();
       if (ctx) ctx.controls.enabled = true;
-    } else {
-      if (translateControls) translateControls.enabled = true;
-      if (rotateControls) rotateControls.enabled = true;
-      syncSelection();
     }
+    syncGizmo();
   },
   { immediate: true },
 );
