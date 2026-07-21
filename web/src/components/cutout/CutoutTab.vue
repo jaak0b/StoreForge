@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner, type ProductChoice } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
-import { useCutout } from '../../stores/cutout';
+import { cloneEdit, useCutout } from '../../stores/cutout';
 import { useBinPreview } from '../../composables/useBinPreview';
 import {
   generateCutoutBinPreview,
@@ -158,9 +158,7 @@ const carveRequest = computed<CutoutBinRequest>(() => ({
     sweepEnabled: model.sweepEnabled,
     draftAngleDeg: model.draftAngleDeg,
   })),
-  // Wired to the plan's own cavity edits in a later task; the carve accepts
-  // an empty list unchanged.
-  edits: [],
+  edits: cutout.edits.map(cloneEdit),
 }));
 
 // ---------------------------------------------------------------------------
@@ -740,6 +738,7 @@ function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
   cutout.reset();
   cutout.gridX = bin.gridX;
   cutout.gridY = bin.gridY;
+  cutout.setEdits(bin.edits);
   boundsById.value = {};
   const models = JSON.parse(JSON.stringify(bin.models)) as CutoutModel[];
   for (const model of models) {
@@ -839,7 +838,7 @@ function designedProduct(): Product {
     heightUnits: designer.heightUnits,
     magnetHoles: designer.magnetHoles,
     models: JSON.parse(JSON.stringify(cutout.models)) as CutoutModel[],
-    edits: [], // Filled by the cavity edit tools task.
+    edits: cutout.edits.map(cloneEdit),
   };
   const params = binParams.value;
   if (params.fusedLabel != null) {
