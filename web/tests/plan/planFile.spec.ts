@@ -367,10 +367,18 @@ describe('validateEntry', () => {
     expect(validateEntry(entry())).toBeNull();
   });
 
+  it('accepts a fractional bin height', () => {
+    const raw = entry({
+      product: { kind: 'bin', labelSlot: true, bin: { ...manualBin(), heightUnits: 5.5 } },
+    });
+    expect(validateEntry(raw)).toBeNull();
+  });
+
   it.each([
     ['gridX', 0, 'The bin width must be a whole number of at least 1 grid unit.'],
     ['gridY', 1.5, 'The bin depth must be a whole number of at least 1 grid unit.'],
-    ['heightUnits', 1, 'The bin height must be a whole number of at least 2 height units.'],
+    ['heightUnits', 1, 'The bin height must be a number of at least 2 height units.'],
+    ['heightUnits', NaN, 'The bin height must be a number of at least 2 height units.'],
     ['magnetHoles', 1, 'The magnet holes setting must be true or false.'],
     ['walls', 'nope', 'The divider walls must be a list.'],
     [

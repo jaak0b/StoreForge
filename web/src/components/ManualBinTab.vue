@@ -11,6 +11,7 @@ import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
+import { overallHeightMm } from '../heightHint';
 import BinViewport from './BinViewport.vue';
 import LabelIconField from './LabelIconField.vue';
 import ProductSelect from './ProductSelect.vue';
@@ -41,6 +42,8 @@ const quantity = ref(1);
 const gridXField = ref<{ focus: () => void } | null>(null);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
+
+const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
 /** Detaches a wall list, so the form and a stored entry never share one. */
 function copyWalls(walls: DividerWall[]): DividerWall[] {
@@ -239,11 +242,14 @@ const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generate
             v-model.number="heightUnits"
             type="number"
             min="2"
-            step="1"
+            step="0.5"
             label="Height"
             density="comfortable"
             hide-details
           />
+        </div>
+        <div v-if="heightMm !== null" class="text-caption text-medium-emphasis mt-1">
+          {{ heightMm }} mm overall
         </div>
       </template>
       <v-text-field

@@ -6,7 +6,7 @@ export interface BinParams {
   gridX: number;
   /** Number of grid cells along Y (42 mm pitch each). Integer, at least 1. */
   gridY: number;
-  /** Bin height in Gridfinity height units (7 mm each). Integer, at least 2. */
+  /** Bin height in Gridfinity height units (7 mm each). At least 2; fractional values allowed. */
   heightUnits: number;
   /** Whether to subtract magnet holes from the underside of each foot. */
   magnetHoles: boolean;

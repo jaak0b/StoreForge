@@ -7,6 +7,7 @@ import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import { DEFAULT_DRAFT_ANGLE_DEG, validateDraftAngleDeg } from '../../engine/carve/sweep';
 import type { FingerHole } from '../../engine/trace/types';
+import { overallHeightMm } from '../../heightHint';
 import LabelIconField from '../LabelIconField.vue';
 import ProductSelect from '../ProductSelect.vue';
 import MoreOptions from '../MoreOptions.vue';
@@ -153,6 +154,8 @@ function holeLengthMm(hole: FingerHole): number {
 }
 
 const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
+
+const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
 /**
  * One-line summary under each tool row: draft angle, clearance and hole width.
@@ -426,12 +429,15 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
         v-model.number="heightUnits"
         type="number"
         min="2"
-        step="1"
+        step="0.5"
         label="Height (units of 7 mm)"
         density="comfortable"
         :hint="`Pockets can be at most ${depthLimit} mm deep at this height.`"
         persistent-hint
       />
+      <div v-if="heightMm !== null" class="text-caption text-medium-emphasis mt-1">
+        {{ heightMm }} mm overall
+      </div>
       <v-text-field
         :model-value="defaultDepthMm"
         type="number"
