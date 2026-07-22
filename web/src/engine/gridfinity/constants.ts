@@ -207,7 +207,7 @@ export const DIVIDER_THICKNESS = 1.2;
  * touch or cross, so a compartment stays wide enough to be usable. Owner-set
  * value, not a measured constant.
  */
-export const MIN_COMPARTMENT_MM = 8;
+export const MIN_COMPARTMENT_MM = 2;
 
 /**
  * Outer footprint size in mm of a bin spanning `cells` grid cells along one

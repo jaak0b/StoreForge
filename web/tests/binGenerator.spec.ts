@@ -477,7 +477,7 @@ describe('interior dividers', () => {
           gridX: 3,
           walls: [
             { x1: 0, y1: -10, x2: 0, y2: 10 },
-            { x1: 3, y1: -10, x2: 3, y2: 10 },
+            { x1: 1, y1: -10, x2: 1, y2: 10 },
           ],
         }),
       ),
