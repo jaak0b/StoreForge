@@ -154,9 +154,13 @@ function holeLengthMm(hole: FingerHole): number {
 
 const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
 
-/** One-line summary under each tool row: rotation, clearance and hole width. */
-function toolSummary(rotationDeg: number, offsetMm: number, minHoleWidthMm: number): string {
-  return `${rotationDeg} deg, ${offsetMm} mm clearance, ${minHoleWidthMm} mm min hole`;
+/**
+ * One-line summary under each tool row: draft angle, clearance and hole width.
+ * The draft angle comes from the placement (its single source, edited by the
+ * draft-angle field); clearance and hole width live on the tool.
+ */
+function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: number): string {
+  return `${draftAngleDeg} deg, ${offsetMm} mm clearance, ${minHoleWidthMm} mm min hole`;
 }
 
 </script>
@@ -179,7 +183,13 @@ function toolSummary(rotationDeg: number, offsetMm: number, minHoleWidthMm: numb
           >
             <v-list-item-title>{{ tool.name }}</v-list-item-title>
             <v-list-item-subtitle class="text-caption">
-              {{ toolSummary(tool.rotationDeg, tool.offsetMm, tool.minHoleWidthMm) }}
+              {{
+                toolSummary(
+                  trace.placementOf(tool.id)?.draftAngleDeg ?? DEFAULT_DRAFT_ANGLE_DEG,
+                  tool.offsetMm,
+                  tool.minHoleWidthMm,
+                )
+              }}
             </v-list-item-subtitle>
             <template #append>
               <v-btn
