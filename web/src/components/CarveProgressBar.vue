@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
  * The indeterminate progress bar shown while the worker is busy: the whole-bin
- * carve on the cutout tab and the per-model clearance offset in the model list
- * are the same wait, so they show the same bar. One definition keeps the two in
- * step; a caller adds spacing with a class of its own, which falls through to
- * the bar.
+ * carve on the cutout tab, the pocket carve on the traced tool bin workspace,
+ * and the per-model clearance offset in the model list are the same wait, so
+ * they show the same bar. One definition keeps them in step; a caller adds
+ * spacing with a class of its own, which falls through to the bar.
  */
 </script>
 

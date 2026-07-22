@@ -30,6 +30,7 @@ import type { PaperCorners } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
 import BinViewport from '../BinViewport.vue';
+import CarveProgressBar from '../CarveProgressBar.vue';
 import PaintToolbar from '../carve/PaintToolbar.vue';
 import LayoutCanvas from './LayoutCanvas.vue';
 import LayoutToolbar from './LayoutToolbar.vue';
@@ -424,6 +425,10 @@ function cancelEdit(): void {
             :label="carved?.meshes.label ?? null"
             :paint="paintBinding"
           />
+        </div>
+        <div v-if="generating" class="mt-2">
+          <span class="text-caption text-medium-emphasis">Carving the bin.</span>
+          <CarveProgressBar class="mt-1" />
         </div>
         <v-alert v-if="editError" type="error" density="compact" class="mt-2">
           {{ editError }}
