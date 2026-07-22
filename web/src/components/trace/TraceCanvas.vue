@@ -901,6 +901,8 @@ function acceptTool(finish: boolean): void {
             </span>
           </template>
         </v-tooltip>
+      </div>
+      <div class="d-flex align-center flex-wrap ga-2 mt-2">
         <v-tooltip
           location="top"
           :disabled="!(paintedAreaDropped && outline !== null)"
