@@ -481,13 +481,9 @@ async function runSegment(): Promise<void> {
   segmenting.value = true;
   errorMessage.value = null;
   try {
-    const result = await segmentAt(
-      JSON.parse(JSON.stringify(points.value)) as SamPoint[],
-      JSON.parse(JSON.stringify(strokes.value)) as BrushStroke[],
-      // A plain object built from the ref's value: the store's reactive proxy
-      // itself cannot be structured-cloned across the worker boundary.
-      { removeShadows: removeShadows.value },
-    );
+    const result = await segmentAt(points.value, strokes.value, {
+      removeShadows: removeShadows.value,
+    });
     if (!result.ok) {
       errorMessage.value = result.error;
       outline.value = null;

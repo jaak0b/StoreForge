@@ -16,6 +16,7 @@ import type {
   SamPoint,
   SegmentOptions,
 } from './engine/trace/types';
+import { sanitizeForWorker } from './workerSanitize';
 
 // Model URLs are resolved here because the worker script lives under assets/,
 // so a BASE_URL-relative path would resolve against the wrong directory there.
@@ -73,7 +74,7 @@ export async function rectifyPaper(
   kind: PaperKind,
 ): Promise<RectifyResult> {
   const worker = await getReadyWorker();
-  return worker.rectify(corners, kind);
+  return worker.rectify(sanitizeForWorker(corners), kind);
 }
 
 /**
@@ -89,8 +90,9 @@ export async function embedImage(): Promise<EmbedResult> {
  * Segment the tool at the given click prompts (rectified-image pixels), with
  * the given brush strokes painted onto the mask, and return its outline in
  * sheet millimeters plus a mask overlay preview. `options` selects the optional
- * post-filter stages; every argument must be a plain structured-cloneable value
- * because it crosses the worker boundary.
+ * post-filter stages. Each argument crosses the worker boundary, so the client
+ * sanitizes it here into a plain structured-cloneable value, stripping any Vue
+ * reactive proxy the caller passed in.
  */
 export async function segmentAt(
   points: SamPoint[],
@@ -98,7 +100,11 @@ export async function segmentAt(
   options: SegmentOptions = {},
 ): Promise<SegmentResult> {
   const worker = await getReadyWorker();
-  return worker.segmentAt(points, strokes, options);
+  return worker.segmentAt(
+    sanitizeForWorker(points),
+    sanitizeForWorker(strokes),
+    sanitizeForWorker(options),
+  );
 }
 
 /** Verify that OpenCV and both MobileSAM ONNX sessions load in the worker. */

@@ -15,13 +15,7 @@ import { binOuterSizeMm } from './engine/gridfinity/constants';
 import { baseplateOuterMm, clipFootprintMm } from './engine/baseplate/generator';
 import { INSERT_DEPTH, insertLengthMm } from './engine/label/slot';
 import type { MeshData, PartMeshes } from './engine/gridfinity/types';
-import {
-  assertNever,
-  type BinPockets,
-  type CavityEdit,
-  type CutoutModel,
-  type Product,
-} from './engine/plan/types';
+import { assertNever, type Product } from './engine/plan/types';
 import { binInteriorOf, partsOf, type PrintablePart } from './engine/plan/geometry';
 import { arrangeAutoPlate, type FootprintItem, type Placement } from './engine/plate/arranger';
 import { mergePlacedMeshes, type PlacedMesh } from './engine/plate/placement';
@@ -40,25 +34,6 @@ import { writePlate3mf, type PlateItem } from './engine/threeMf/writer';
 export interface DownloadProduct {
   product: Product;
   count: number;
-}
-
-// Pocket data crossing into the worker is deep-copied to strip Vue proxies,
-// which the structured clone of the worker call rejects.
-function plainPockets(pockets: BinPockets): BinPockets {
-  return JSON.parse(JSON.stringify(pockets)) as BinPockets;
-}
-
-// Cutout model records cross the same boundary and are deep-copied for the
-// same reason. Only the record travels: the model's triangles stay in the
-// model store and reach the worker as bytes exactly once.
-function plainModels(models: CutoutModel[]): CutoutModel[] {
-  return JSON.parse(JSON.stringify(models)) as CutoutModel[];
-}
-
-// Cavity edits cross the same boundary and are deep-copied for the same
-// reason as the models they are folded onto.
-function plainEdits(edits: CavityEdit[]): CavityEdit[] {
-  return JSON.parse(JSON.stringify(edits)) as CavityEdit[];
 }
 
 /**
@@ -83,8 +58,8 @@ async function generatePartMeshes(
         case 'models': {
           const carve = await generateCutoutBin({
             ...part.bin,
-            models: plainModels(interior.models),
-            edits: plainEdits(interior.edits),
+            models: interior.models,
+            edits: interior.edits,
           });
           // The download has no model card to show a warning on, so the
           // sentence the carve wrote (which names the model) is what is shown.
@@ -92,11 +67,7 @@ async function generatePartMeshes(
           return carve.meshes;
         }
         case 'pockets':
-          return generatePocketBin({
-            ...part.bin,
-            ...plainPockets(interior.pockets),
-            edits: plainEdits(interior.edits),
-          });
+          return generatePocketBin({ ...part.bin, ...interior.pockets, edits: interior.edits });
         case 'walls':
           return generateSlottedBin(part.bin);
         default:
@@ -128,8 +99,8 @@ async function generatePartUnion(
         case 'models': {
           const carve = await generateCutoutBinUnion({
             ...part.bin,
-            models: plainModels(interior.models),
-            edits: plainEdits(interior.edits),
+            models: interior.models,
+            edits: interior.edits,
           });
           for (const warning of carve.warnings) warn(warning.message);
           return carve.mesh;
@@ -137,8 +108,8 @@ async function generatePartUnion(
         case 'pockets':
           return generatePocketBinUnion({
             ...part.bin,
-            ...plainPockets(interior.pockets),
-            edits: plainEdits(interior.edits),
+            ...interior.pockets,
+            edits: interior.edits,
           });
         case 'walls':
           return generateSlottedBinUnion(part.bin);

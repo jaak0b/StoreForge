@@ -96,10 +96,7 @@ async function resumeTrace(): Promise<void> {
     trace.sourceId = entry.traceSourceId ?? null;
     trace.corners = JSON.parse(JSON.stringify(entry.paper.corners)) as PaperCorners;
     trace.paperKind = entry.paper.kind;
-    const rectified = await rectifyPaper(
-      JSON.parse(JSON.stringify(entry.paper.corners)) as PaperCorners,
-      entry.paper.kind,
-    );
+    const rectified = await rectifyPaper(entry.paper.corners, entry.paper.kind);
     trace.calibration = rectified.calibration;
     trace.rectifiedPreview = rectified.preview;
     trace.embedReady = false;
