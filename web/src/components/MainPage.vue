@@ -236,7 +236,7 @@ function removeRow(entry: QueueEntry): void {
     </v-alert>
 
     <v-empty-state
-      v-if="queue.entries.length === 0"
+      v-if="queueRows.length === 0"
       icon="mdi-cube-outline"
       title="Nothing queued yet"
       text="Add a part with the card above."
