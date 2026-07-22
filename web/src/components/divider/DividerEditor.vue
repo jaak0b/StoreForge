@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { wallAngleDeg, wallLength } from '../../engine/gridfinity/dividerModel';
 import DividerCanvas from './DividerCanvas.vue';
 
 /**
- * The divider wall section of the More options disclosure: the top-down
- * editor with its toolbar, the wall list with the selected wall's exact
- * millimetre entry, and the even-dividers quick entry that generates a
- * regular grid of walls. The quick entry is a generator only: applying it
- * replaces the wall list, which then stays freely editable on the canvas.
+ * The free-angle divider wall editor (the Custom divider mode): the top-down
+ * canvas with its toolbar and the wall list with the selected wall's exact
+ * millimetre entry. The Grid mode's evenly spaced generator lives in the
+ * shared DividerControl above, which seeds this editor's wall list when the
+ * user switches from Grid to Custom.
  *
  * Endpoint coordinates are the only editable representation of a wall here,
  * matching the model's own representation, so there is nothing to convert and
@@ -20,14 +20,6 @@ import DividerCanvas from './DividerCanvas.vue';
 
 const store = useBinDesigner();
 const { walls, selectedWallIndex, snapEnabled } = storeToRefs(store);
-
-const evenCountX = ref(0);
-const evenCountY = ref(0);
-
-function applyEvenDividers(): void {
-  store.applyEvenDividers(Math.max(0, Math.floor(evenCountX.value || 0)),
-    Math.max(0, Math.floor(evenCountY.value || 0)));
-}
 
 /** The endpoint fields of the selected wall, in model order. */
 const endpointFields = [
@@ -159,31 +151,6 @@ function setCoordinate(key: 'x1' | 'y1' | 'x2' | 'y2', raw: string): void {
         <span>Length</span><span>{{ mm(wallLength(selected)) }} mm</span>
         <span>Angle</span><span>{{ wallAngleDeg(selected).toFixed(1) }}&deg;</span>
       </div>
-    </div>
-
-    <div class="text-caption text-medium-emphasis mt-3 mb-1">
-      Evenly spaced walls (applying replaces the walls above)
-    </div>
-    <div class="d-flex align-center ga-2">
-      <v-text-field
-        v-model.number="evenCountX"
-        type="number"
-        min="0"
-        step="1"
-        label="Dividers along X"
-        density="comfortable"
-        hide-details
-      />
-      <v-text-field
-        v-model.number="evenCountY"
-        type="number"
-        min="0"
-        step="1"
-        label="Dividers along Y"
-        density="comfortable"
-        hide-details
-      />
-      <v-btn variant="outlined" density="comfortable" @click="applyEvenDividers">Apply</v-btn>
     </div>
   </div>
 </template>

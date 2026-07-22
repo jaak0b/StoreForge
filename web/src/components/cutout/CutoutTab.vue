@@ -1097,7 +1097,6 @@ function editingTitle(entry: QueueEntry): string {
 
       <MoreOptions
         per-bin-fields
-        hide-dividers
         :quantity="quantity"
         @update:quantity="quantity = $event"
       />

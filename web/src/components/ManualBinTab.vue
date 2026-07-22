@@ -16,6 +16,7 @@ import BinViewport from './BinViewport.vue';
 import LabelIconField from './LabelIconField.vue';
 import ProductSelect from './ProductSelect.vue';
 import MoreOptions from './MoreOptions.vue';
+import DividerControl from './divider/DividerControl.vue';
 
 /**
  * The Manual bin tab of the add-bin card: the product designer form with a
@@ -96,6 +97,8 @@ function loadEditingEntry(entryId: string | null): void {
       labelIcon: content?.icon ?? null,
       notes: entry.notes ?? '',
     });
+    // No walls opens with dividers off; walls present opens the free editor.
+    store.inferDividerModeFromWalls();
   }
   quantity.value = entry.quantity;
   if (store.labelText2 !== '' || entry.notes !== undefined || entry.quantity > 1) {
@@ -219,23 +222,25 @@ const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generate
         <div class="d-flex align-center ga-2">
           <v-text-field
             ref="gridXField"
-            v-model.number="gridX"
+            :model-value="gridX"
             type="number"
             min="1"
             step="1"
             label="Width"
             density="comfortable"
             hide-details
+            @update:model-value="store.setGridX(Number($event))"
           />
           <span class="text-medium-emphasis">x</span>
           <v-text-field
-            v-model.number="gridY"
+            :model-value="gridY"
             type="number"
             min="1"
             step="1"
             label="Depth"
             density="comfortable"
             hide-details
+            @update:model-value="store.setGridY(Number($event))"
           />
           <span class="text-medium-emphasis">x</span>
           <v-text-field
@@ -270,6 +275,8 @@ const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generate
         v-model:icon="labelIcon"
         class="mt-4"
       />
+
+      <DividerControl v-if="!insertOnly" class="mt-4" />
 
       <MoreOptions
         per-bin-fields

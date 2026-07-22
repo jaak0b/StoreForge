@@ -458,7 +458,6 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
       <ProductSelect v-model="productChoice" v-model:fused="fused" hide-insert-only class="mt-2" />
       <MoreOptions
         per-bin-fields
-        hide-dividers
         :quantity="props.quantity"
         @update:quantity="emit('update:quantity', $event)"
       />

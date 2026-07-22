@@ -14,6 +14,17 @@ import type { LabelContent } from '../engine/plan/types';
 export type ProductChoice = 'binWithInsert' | 'bin' | 'plainBin' | 'insert';
 
 /**
+ * How the divider walls are being edited in the form. This is editing state
+ * only, never persisted: the plan format stores the wall list, and the mode is
+ * inferred from it on load (no walls means None, walls present means Custom;
+ * Grid is never inferred, since a regular grid and a hand edit that happens to
+ * be regular are indistinguishable once stored). None keeps the wall list
+ * empty; Grid keeps it generated from the two counts; Custom leaves it under
+ * the free-angle editor.
+ */
+export type DividerMode = 'none' | 'grid' | 'custom';
+
+/**
  * Parameters of the product currently being designed, plus notes (not part
  * of the geometry, but shared across the Manual bin and Screw entry tabs'
  * More options disclosure so the value persists across tab switches). For an
@@ -36,6 +47,19 @@ export const useBinDesigner = defineStore('binDesigner', {
     walls: [] as DividerWall[],
     /** Index of the wall the canvas editor has selected, or null for none. */
     selectedWallIndex: null as number | null,
+    /**
+     * Which divider editing mode the form shows. Editing state only, not part
+     * of the plan (see DividerMode). Defaults to None so a fresh design starts
+     * with no dividers and the most compact form.
+     */
+    dividerMode: 'none' as DividerMode,
+    /**
+     * The grid mode's two divider counts: countX walls across the width and
+     * countY across the depth. Only meaningful in Grid mode, where a change to
+     * either regenerates the wall list immediately.
+     */
+    dividerCountX: 0,
+    dividerCountY: 0,
     /**
      * Whether interactive divider edits are attracted to the quarter pitch
      * lattice, the bin interior, the other walls and 15 degree directions. A
@@ -169,13 +193,79 @@ export const useBinDesigner = defineStore('binDesigner', {
       divider.setWall(this, index, wall);
     },
     /**
-     * The even-dividers quick entry: generates evenly spaced walls and
-     * replaces the list with them. A generator, never a second representation,
-     * so the walls it produced stay freely editable afterwards.
+     * The even-dividers generator: generates evenly spaced walls and replaces
+     * the list with them. A generator, never a second representation, so the
+     * walls it produced stay freely editable afterwards. The single
+     * counts-to-walls path both the grid mode and the grid-to-custom seed use.
      */
     applyEvenDividers(countX: number, countY: number): void {
       this.walls = divider.evenDividerWalls(this.gridX, this.gridY, countX, countY);
       this.selectedWallIndex = null;
+    },
+    /**
+     * Regenerates the grid walls from the current counts and bin footprint.
+     * Grid mode is declarative: the wall list always reflects the current
+     * counts and the current bin size, so both a count change and a footprint
+     * change route here. A footprint that is not yet a valid bin (empty or
+     * mid-edit field) leaves the walls untouched until it parses, rather than
+     * writing a wall list against a nonsense interior.
+     */
+    applyGridDividers(): void {
+      if (
+        !Number.isFinite(this.gridX) ||
+        !Number.isFinite(this.gridY) ||
+        this.gridX < 1 ||
+        this.gridY < 1
+      ) {
+        return;
+      }
+      this.applyEvenDividers(this.dividerCountX, this.dividerCountY);
+    },
+    /** Sets the bin width in cells, regenerating the grid walls while in grid
+     * mode so they track the footprint. */
+    setGridX(value: number): void {
+      this.gridX = value;
+      if (this.dividerMode === 'grid') this.applyGridDividers();
+    },
+    /** Sets the bin depth in cells, regenerating the grid walls while in grid
+     * mode so they track the footprint. */
+    setGridY(value: number): void {
+      this.gridY = value;
+      if (this.dividerMode === 'grid') this.applyGridDividers();
+    },
+    /**
+     * Switches the divider editing mode, taking the wall list with it: None
+     * empties it, Grid regenerates it from the counts, and Custom keeps
+     * whatever is there (the grid it was just showing, or loaded walls) so the
+     * free editor picks up from the current shape.
+     */
+    setDividerMode(mode: DividerMode): void {
+      this.dividerMode = mode;
+      if (mode === 'none') {
+        this.walls = [];
+        this.selectedWallIndex = null;
+      } else if (mode === 'grid') {
+        this.applyGridDividers();
+      }
+    },
+    /** Sets a grid divider count (clamped to a non-negative integer), applying
+     * it immediately while in grid mode. */
+    setDividerCount(axis: 'x' | 'y', value: number): void {
+      const count = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+      if (axis === 'x') this.dividerCountX = count;
+      else this.dividerCountY = count;
+      if (this.dividerMode === 'grid') this.applyGridDividers();
+    },
+    /**
+     * Infers the editing mode from the loaded wall list: walls present opens
+     * the free editor (Custom), none opens with dividers off (None). Grid is
+     * never inferred, since the plan does not record that a wall list was
+     * generated. Called after an entry's walls are loaded into the form.
+     */
+    inferDividerModeFromWalls(): void {
+      this.dividerMode = this.walls.length > 0 ? 'custom' : 'none';
+      this.dividerCountX = 0;
+      this.dividerCountY = 0;
     },
   },
 });
