@@ -5,6 +5,7 @@ import { useBinDesigner } from '../../stores/binDesigner';
 import { CLEARANCE_CHOICES, HOLE_WIDTH_CHOICES, useToolTrace } from '../../stores/toolTrace';
 import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
+import { DEFAULT_DRAFT_ANGLE_DEG, validateDraftAngleDeg } from '../../engine/carve/sweep';
 import type { FingerHole } from '../../engine/trace/types';
 import LabelIconField from '../LabelIconField.vue';
 import ProductSelect from '../ProductSelect.vue';
@@ -47,6 +48,45 @@ const tab = ref<'trace' | 'bin'>('trace');
 const selectedPlacement = computed(() =>
   selectedToolId.value !== null ? trace.placementOf(selectedToolId.value) ?? null : null,
 );
+
+/**
+ * The selected tool's draft angle, edited through a local draft committed on
+ * blur or Enter: the value is validated with the shared bound (0 up to but not
+ * including 90 degrees) and only written to the placement when it passes,
+ * mirroring the cutout tab's draft-angle field. An invalid entry surfaces the
+ * bound as the field's error message and reverts to the last good value.
+ */
+const draftAngleDraft = ref<number>(DEFAULT_DRAFT_ANGLE_DEG);
+const draftAngleError = ref<string | null>(null);
+watch(
+  () => selectedPlacement.value?.draftAngleDeg ?? DEFAULT_DRAFT_ANGLE_DEG,
+  (draftAngleDeg) => {
+    draftAngleDraft.value = draftAngleDeg;
+    draftAngleError.value = null;
+  },
+  { immediate: true },
+);
+
+function commitDraftAngle(): void {
+  const toolId = selectedToolId.value;
+  const previous = selectedPlacement.value?.draftAngleDeg ?? DEFAULT_DRAFT_ANGLE_DEG;
+  const value = draftAngleDraft.value;
+  if (toolId === null || !Number.isFinite(value) || value === previous) {
+    draftAngleDraft.value = previous;
+    draftAngleError.value = null;
+    return;
+  }
+  try {
+    validateDraftAngleDeg(value);
+  } catch (error) {
+    draftAngleError.value =
+      error instanceof Error ? error.message : 'The draft angle is out of range.';
+    draftAngleDraft.value = previous;
+    return;
+  }
+  draftAngleError.value = null;
+  trace.setDraftAngle(toolId, value);
+}
 
 /**
  * The smallest footprint that fits the current layout, straight from the
@@ -114,9 +154,13 @@ function holeLengthMm(hole: FingerHole): number {
 
 const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
 
-/** One-line summary under each tool row: rotation, clearance and hole width. */
-function toolSummary(rotationDeg: number, offsetMm: number, minHoleWidthMm: number): string {
-  return `${rotationDeg} deg, ${offsetMm} mm clearance, ${minHoleWidthMm} mm min hole`;
+/**
+ * One-line summary under each tool row: draft angle, clearance and hole width.
+ * The draft angle comes from the placement (its single source, edited by the
+ * draft-angle field); clearance and hole width live on the tool.
+ */
+function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: number): string {
+  return `${draftAngleDeg} deg, ${offsetMm} mm clearance, ${minHoleWidthMm} mm min hole`;
 }
 
 </script>
@@ -139,7 +183,13 @@ function toolSummary(rotationDeg: number, offsetMm: number, minHoleWidthMm: numb
           >
             <v-list-item-title>{{ tool.name }}</v-list-item-title>
             <v-list-item-subtitle class="text-caption">
-              {{ toolSummary(tool.rotationDeg, tool.offsetMm, tool.minHoleWidthMm) }}
+              {{
+                toolSummary(
+                  trace.placementOf(tool.id)?.draftAngleDeg ?? DEFAULT_DRAFT_ANGLE_DEG,
+                  tool.offsetMm,
+                  tool.minHoleWidthMm,
+                )
+              }}
             </v-list-item-subtitle>
             <template #append>
               <v-btn
@@ -193,6 +243,19 @@ function toolSummary(rotationDeg: number, offsetMm: number, minHoleWidthMm: numb
                 hide-details
                 class="small-field"
                 @update:model-value="trace.setPocketDepth(tool.id, Number($event))"
+              />
+              <v-text-field
+                v-model.number="draftAngleDraft"
+                type="number"
+                min="0"
+                step="1"
+                label="Draft angle (degrees)"
+                density="compact"
+                hide-details="auto"
+                :error-messages="draftAngleError ?? undefined"
+                class="small-field"
+                @blur="commitDraftAngle"
+                @keydown.enter="commitDraftAngle"
               />
             </div>
             <div class="text-caption text-medium-emphasis mt-2 mb-1">Clearance (mm)</div>

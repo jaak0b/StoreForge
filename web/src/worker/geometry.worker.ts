@@ -36,7 +36,6 @@ import { parseStl } from '../engine/cutout/stlReader';
 import { meshToManifold } from '../engine/cutout/cutoutMesh';
 import { assertNever } from '../engine/plan/types';
 import {
-  CavityEditedBodyCache,
   CutoutModelCache,
   CutoutSweptCache,
   carveModelNames,
@@ -53,6 +52,12 @@ import {
   type CutoutModelKeySpec,
   type CutoutPreviewResult,
 } from './cutoutModels';
+import { CavityEditedBodyCache } from './cavityEditedBodyCache';
+import {
+  pocketCarveRecipeKey,
+  type PocketPreviewResult,
+  type PocketBinRequest,
+} from './pocketModels';
 import { cutoutModelKey, type CutoutBinParams } from '../engine/cutout/cutoutBin';
 import { persistedSolidsFor } from './persistedSolids';
 import {
@@ -141,6 +146,14 @@ const cutoutSwept = new CutoutSweptCache();
  * instead of refolding every earlier edit.
  */
 const cavityEdited = new CavityEditedBodyCache();
+
+/**
+ * The pocket flow's own edited-body memo, a separate cache from the cutout
+ * flow's above so the two flows never evict each other's edited body: only one
+ * bin is edited at a time, but keeping the caches apart means switching between
+ * a cutout bin and a pocket bin does not throw away the other's warm body.
+ */
+const pocketEdited = new CavityEditedBodyCache();
 
 /**
  * Resolve a carve request into engine params wired to the swept-solid cache,
@@ -265,6 +278,48 @@ const api = {
   async generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
     const [m, font] = await Promise.all([loadManifold(), loadFont()]);
     return transferMesh(generatePocketBinUnion(m, font, params));
+  },
+
+  /**
+   * Carve a pocket bin for the live preview, cancelling whatever preview it
+   * supersedes. The mirror of generateCutoutBinPreview: it shares the same
+   * activePreviewContext (only one bin is previewed at a time, so a pocket
+   * preview and a cutout preview never race), and it wires the pocket flow's
+   * own edited-body memo and recipe key so appending one stroke reuses the
+   * previous carve. A superseded carve comes back as an outcome rather than an
+   * error, because it is not a failure and must never reach the user as one.
+   */
+  async generatePocketBinPreview(
+    request: PocketBinRequest,
+  ): Promise<PocketPreviewResult> {
+    // Before the first await, so the predecessor is asked to stop at the
+    // earliest moment this request can ask anything at all.
+    activePreviewContext?.cancel();
+    const [m, font] = await Promise.all([loadManifold(), loadFont()]);
+    const ctx = newExecutionContext(m);
+    activePreviewContext = ctx;
+    try {
+      const meshes = generatePocketBin(
+        m,
+        font,
+        {
+          ...request,
+          editedMemo: pocketEdited,
+          editedRecipeKey: pocketCarveRecipeKey(request),
+        },
+        ctx,
+      );
+      const result: PocketPreviewResult = { outcome: 'carved', meshes };
+      return Comlink.transfer(result, partBuffers(meshes));
+    } catch (error) {
+      if (error instanceof CarveCancelledError) return { outcome: 'superseded' };
+      throw error;
+    } finally {
+      // Each request owns the context it created, whether or not it is still
+      // the active one by the time it finishes.
+      if (activePreviewContext === ctx) activePreviewContext = null;
+      ctx.delete();
+    }
   },
 
   /**

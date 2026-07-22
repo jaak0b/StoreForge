@@ -8,7 +8,7 @@ import {
   simplifyStroke,
   strokeSolid,
   flattenSolid,
-} from '../../src/engine/cutout/cavityEdits';
+} from '../../src/engine/carve/cavityEdits';
 import type { CavityEdit, Vec3Mm } from '../../src/engine/plan/types';
 
 let m: ManifoldToplevel;

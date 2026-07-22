@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cavityEditRollbackCount,
   clampLastGoodEditCount,
-} from '../../src/engine/cutout/cavityEditRollback';
+} from '../../src/engine/carve/cavityEditRollback';
 
 describe('cavityEditRollbackCount', () => {
   it('rolls back a bad edit painted after an undo, even though a running max would have equalled it', () => {

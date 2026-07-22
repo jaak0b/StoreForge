@@ -10,7 +10,9 @@ import {
   removeTool,
   replaceToolOutline,
   requiredFootprint,
+  setDraftAngle,
   setGridManually,
+  setPocketDepth,
   setToolTransform,
   stretchFingerHoleStart,
   toBinLocal,
@@ -418,6 +420,7 @@ describe('tool list and transform actions', () => {
       xMm: 3.2 + 35 + DEFAULT_CLEARANCE_MM,
       yMm: 3.2 + 6 + DEFAULT_CLEARANCE_MM,
       pocketDepthMm: 20,
+      draftAngleDeg: 0,
     });
     addTool(
       s,
@@ -460,8 +463,8 @@ describe('tool list and transform actions', () => {
     });
     const a = addTool(s, square(40, 40), 'A', 20, [], true);
     const b = addTool(s, square(150, 90), 'B', 20, [], true);
-    expect(s.placements[0]).toEqual({ toolId: a.id, xMm: 45, yMm: 45, pocketDepthMm: 20 });
-    expect(s.placements[1]).toEqual({ toolId: b.id, xMm: 155, yMm: 95, pocketDepthMm: 20 });
+    expect(s.placements[0]).toEqual({ toolId: a.id, xMm: 45, yMm: 45, pocketDepthMm: 20, draftAngleDeg: 0 });
+    expect(s.placements[1]).toEqual({ toolId: b.id, xMm: 155, yMm: 95, pocketDepthMm: 20, draftAngleDeg: 0 });
     const bin = binPlacement(s);
     expect(bin.gridX).toBe(4);
     expect(bin.gridY).toBe(3);
@@ -535,6 +538,20 @@ describe('tool list and transform actions', () => {
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
     setToolTransform(s, 'holed', { minHoleWidthMm: 3.2 });
     expect(tool.minHoleWidthMm).toBe(3.2);
+  });
+
+  it('sets a placement pocket depth and draft angle without moving the footprint', () => {
+    const s = state([barTool()], [{ toolId: 'bar', xMm: 42, yMm: 21, pocketDepthMm: 5 }], {
+      gridX: 2,
+    });
+    const before = { gridX: s.gridX, gridY: s.gridY };
+    setPocketDepth(s, 'bar', 18);
+    setDraftAngle(s, 'bar', 7);
+    expect(s.placements[0].pocketDepthMm).toBe(18);
+    expect(s.placements[0].draftAngleDeg).toBe(7);
+    // Neither depth nor draft changes the mouth of the pocket, so the derived
+    // footprint is untouched.
+    expect({ gridX: s.gridX, gridY: s.gridY }).toEqual(before);
   });
 
   it('re-sizes when a transform change swaps the layout axes', () => {

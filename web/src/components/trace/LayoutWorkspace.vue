@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
-import { generatePocketBin } from '../../workerClient';
+import {
+  generatePocketBinPreview,
+  type PocketPreviewResult,
+} from '../../workerClient';
+import { cloneEdit } from '../../stores/cavityEditSession';
+import type { CavityPaintBinding } from '../../composables/useCavityPaint';
+import {
+  useCavityEditPreview,
+  type CavityCarveOutcome,
+} from '../../composables/useCavityEditPreview';
 import type { PocketBinParams } from '../../engine/trace/pocketBin';
 import {
   binOf,
@@ -21,6 +30,7 @@ import type { PaperCorners } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
 import BinViewport from '../BinViewport.vue';
+import PaintToolbar from '../carve/PaintToolbar.vue';
 import LayoutCanvas from './LayoutCanvas.vue';
 import LayoutToolbar from './LayoutToolbar.vue';
 import AdvancedDrawer from './AdvancedDrawer.vue';
@@ -164,18 +174,102 @@ const pocketParams = computed<PocketBinParams>(() => {
     fusedLabel: fusedContent,
     tools: JSON.parse(JSON.stringify(trace.tools)),
     placements: JSON.parse(JSON.stringify(local.placements)),
+    // The manual cavity edits fold onto the pocket carve, so the preview shows
+    // them; deep-copied for the same reason the tools and placements are.
+    edits: trace.edits.map(cloneEdit),
   };
 });
+
+/**
+ * A pocket carve result with the edit count it was built from carried
+ * alongside, so a rejection knows how far to roll the edits back. The count
+ * travels with the result rather than sitting in shared state, for the same
+ * reason the cutout carve carries its model ids: a newer request can have
+ * changed the live edit list by the time an older result lands. A pocket carve
+ * adds only its meshes to the shared outcome shape.
+ */
+type PocketCarveMeta = Omit<Extract<PocketPreviewResult, { outcome: 'carved' }>, 'outcome'>;
+type PocketResultWithMeta = CavityCarveOutcome<PocketCarveMeta>;
+
+/**
+ * Carves the preview through the cancellable pocket-preview call, recording
+ * the edit count the request carried. A carve superseded by a newer request
+ * comes back as an outcome to discard, never as an error.
+ */
+async function carvePreview(params: PocketBinParams): Promise<PocketResultWithMeta> {
+  const editCount = params.edits?.length ?? 0;
+  const result = await generatePocketBinPreview({ ...params, edits: params.edits ?? [] });
+  return Object.assign(result, { editCount });
+}
 
 // The preview generation always runs so the layout is validated (the
 // worker's exact CSG containment check is the final authority over the
 // layout model's bounding-box sizing); the heavy viewport itself mounts only
 // while the 3D toggle is on. Its error alert is the single surface for
 // layout validation problems.
-const { meshes, errorMessage } = useBinPreview(
+const {
+  meshes: previewResult,
+  generating,
+  errorMessage,
+} = useBinPreview<PocketBinParams, PocketResultWithMeta>(
   () => pocketParams.value,
-  (params) => generatePocketBin(params as PocketBinParams),
+  carvePreview,
 );
+
+/** The last carve that actually landed, which is what the 3D viewport draws. */
+const carved = shallowRef<Extract<PocketResultWithMeta, { outcome: 'carved' }> | null>(null);
+
+// The shared session-to-preview wiring: the landing switch, the rejection
+// rollback into editError, the active-tool clear, and the stroke and flatten
+// commit builders. The traced flow's only own parts are drawing the landed bin
+// and clearing it when a carve fails, both passed as hooks.
+const { editError, onStrokeCommit, onFlattenCommit } = useCavityEditPreview<PocketCarveMeta>(
+  trace,
+  { generating, errorMessage, previewResult },
+  {
+    onCarved: (result) => {
+      carved.value = result;
+    },
+    // A carve that finished with an error is not showing a valid bin: clear the
+    // drawn geometry so the viewport does not keep stale pockets on screen for
+    // the user to go on painting. Mirrors the cutout tab's missing-file clear.
+    onCarveFailed: () => {
+      carved.value = null;
+    },
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Painting manual cavity edits on the 3D preview
+// ---------------------------------------------------------------------------
+
+/** Whether the paint toolbar's shortcut help popover is open. */
+const shortcutHelpOpen = ref(false);
+
+/**
+ * The paint binding handed to the display viewport: the reactive getters it
+ * reads and the callbacks it raises, all routed through the toolTrace store's
+ * embedded edit session. The step and set calls go through the session's own
+ * clamped setters, so this layer never has to know the bounds. The getters read
+ * the store at call time, so the plain object stays valid for the viewport's
+ * lifetime.
+ */
+const paintBinding: CavityPaintBinding = {
+  paintTool: () => trace.activeTool,
+  brushRadiusMm: () => trace.brushRadiusMm,
+  flattenHeightMm: () => trace.flattenHeightMm,
+  canUndo: () => trace.edits.length > 0,
+  canRedo: () => trace.redoStack.length > 0,
+  onStrokeCommit,
+  onFlattenCommit,
+  onSetTool: (tool) => trace.setActiveTool(tool),
+  onStepBrushRadius: (deltaMm) => trace.setBrushRadius(trace.brushRadiusMm + deltaMm),
+  onUndo: () => trace.undoEdit(),
+  onRedo: () => trace.redoEdit(),
+  onToggleShortcutHelp: () => {
+    shortcutHelpOpen.value = !shortcutHelpOpen.value;
+  },
+};
 
 /**
  * Why the queue action is unavailable right now, or null when it can run.
@@ -250,6 +344,10 @@ async function addToQueue(): Promise<void> {
     heightUnits: params.heightUnits,
     magnetHoles: params.magnetHoles,
     pockets,
+    // The edit session holds the current edits (rehydrated from the entry when
+    // one is being edited, empty for a fresh trace); deep-copied out of the
+    // reactive store so the saved plan holds plain JSON.
+    edits: trace.edits.map(cloneEdit),
   };
   const traceSourceId = source.traceSourceId ?? editingBin?.traceSourceId;
   const paper = source.paper ?? editingBin?.paper;
@@ -314,8 +412,22 @@ function cancelEdit(): void {
       <div v-show="!show3d" class="canvas-wrap">
         <LayoutCanvas />
       </div>
-      <div v-if="show3d" class="preview-body">
-        <BinViewport :mesh="meshes?.body ?? null" :label="meshes?.label ?? null" />
+      <div v-if="show3d" class="preview-3d">
+        <PaintToolbar
+          v-model:shortcut-help-open="shortcutHelpOpen"
+          :session="trace"
+          class="paint-bar"
+        />
+        <div class="preview-body">
+          <BinViewport
+            :mesh="carved?.meshes.body ?? null"
+            :label="carved?.meshes.label ?? null"
+            :paint="paintBinding"
+          />
+        </div>
+        <v-alert v-if="editError" type="error" density="compact" class="mt-2">
+          {{ editError }}
+        </v-alert>
       </div>
 
       <div class="canvas-hint text-caption text-medium-emphasis">
@@ -440,6 +552,14 @@ function cancelEdit(): void {
   min-height: 420px;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 8px;
+}
+
+.paint-bar {
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
 }
 
 .canvas-hint {

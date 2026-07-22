@@ -18,7 +18,6 @@
  * it is testable without the WASM: the import decision takes the preparation
  * as a parameter.
  */
-import type { Manifold } from 'manifold-3d';
 import {
   cutoutModelKey,
   cutoutSweptKey,
@@ -32,7 +31,7 @@ import {
   type SweptSolid,
   type SweptSolidMemo,
 } from '../engine/cutout/cutoutBin';
-import type { CavityEditedBodyMemo } from '../engine/cutout/cavityEdits';
+import { carveRecipeKey } from './cavityEditedBodyCache';
 import { modelNotStoredMessage } from '../engine/plan/missingModels';
 import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 import type { CavityEdit } from '../engine/plan/types';
@@ -86,7 +85,7 @@ export interface CutoutBinRequest extends SlottedBinParams {
  */
 export function cutoutCarveRecipeKey(request: CutoutBinRequest): string {
   const { models, edits: _edits, ...bin } = request;
-  return JSON.stringify({
+  return carveRecipeKey({
     bin,
     models: models.map((model) => ({
       key: cutoutModelKey(model.modelSourceId, model.unitScale, model.clearanceMm),
@@ -95,42 +94,6 @@ export function cutoutCarveRecipeKey(request: CutoutBinRequest): string {
       draftAngleDeg: model.draftAngleDeg,
     })),
   });
-}
-
-/**
- * The worker's single-entry memo for the edited body: the body after folding
- * every cavity edit onto the current carve. Unlike the model and swept
- * caches, this needs no PinRegistry, because the memoized body is only ever
- * borrowed and replaced inside the synchronous eager carve (get, fold, put
- * with no await between), so no suspended operation can observe a stale
- * handle. A single entry is enough: the memo only ever serves the append of
- * one edit onto the immediately preceding carve, so keeping more would never
- * be consulted, per the spec's single-entry contract. `clear()` is called
- * from releaseCutoutModels so a plan mutation cannot strand a body derived
- * from solids that were just released.
- */
-export class CavityEditedBodyCache implements CavityEditedBodyMemo {
-  private entry: { key: string; body: Manifold } | null = null;
-
-  get(key: string): Manifold | null {
-    return this.entry !== null && this.entry.key === key ? this.entry.body : null;
-  }
-
-  /** Stores the edited body under this key, deleting the superseded entry. */
-  put(key: string, body: Manifold): void {
-    this.entry?.body.delete();
-    this.entry = { key, body };
-  }
-
-  clear(): void {
-    this.entry?.body.delete();
-    this.entry = null;
-  }
-
-  /** How many bodies are held: 0 or 1. For diagnostics and tests. */
-  get size(): number {
-    return this.entry === null ? 0 : 1;
-  }
 }
 
 /** What the caller learns about a model the worker prepared or already had. */

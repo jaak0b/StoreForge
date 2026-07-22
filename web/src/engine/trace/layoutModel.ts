@@ -24,6 +24,7 @@ function cloneStrokes(strokes: BrushStroke[]): BrushStroke[] {
 }
 import { boundsOf, transformTool } from './edit';
 import { binInteriorSizeMm, cellsForInteriorMm, PITCH } from '../gridfinity/constants';
+import { DEFAULT_DRAFT_ANGLE_DEG } from '../carve/sweep';
 
 /**
  * Clear interior kept around the pockets when the bin footprint is
@@ -388,6 +389,7 @@ export function addTool(
       toolId: tool.id,
       ...sheetPositionOf(outline),
       pocketDepthMm,
+      draftAngleDeg: DEFAULT_DRAFT_ANGLE_DEG,
     });
   } else {
     // A new tool lands with its clearance-grown box starting at the margin
@@ -400,6 +402,7 @@ export function addTool(
       xMm: start - (b.minX - tool.offsetMm),
       yMm: start - (b.minY - tool.offsetMm),
       pocketDepthMm,
+      draftAngleDeg: DEFAULT_DRAFT_ANGLE_DEG,
     });
   }
   refit(state);
@@ -470,6 +473,7 @@ export function duplicateTool(state: LayoutState, toolId: string): TracedTool | 
     xMm: placement.xMm + 10,
     yMm: placement.yMm + 10,
     pocketDepthMm: placement.pocketDepthMm,
+    draftAngleDeg: placement.draftAngleDeg,
   });
   refit(state);
   return copy;
@@ -515,6 +519,17 @@ export function setPocketDepth(state: LayoutState, toolId: string, depthMm: numb
   const placement = state.placements.find((p) => p.toolId === toolId);
   if (placement === undefined) return;
   placement.pocketDepthMm = depthMm;
+}
+
+/**
+ * Sets a placement's pocket draft angle, in degrees. Draft leans the pocket
+ * walls outward toward the top and never changes the footprint (the mouth is
+ * the outline; the draft only widens the opening above the floor).
+ */
+export function setDraftAngle(state: LayoutState, toolId: string, draftAngleDeg: number): void {
+  const placement = state.placements.find((p) => p.toolId === toolId);
+  if (placement === undefined) return;
+  placement.draftAngleDeg = draftAngleDeg;
 }
 
 /**

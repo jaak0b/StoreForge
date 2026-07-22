@@ -7,6 +7,10 @@ import { useBinQueue } from '../../stores/binQueue';
 import { cloneEdit, useCutout } from '../../stores/cutout';
 import { useBinPreview } from '../../composables/useBinPreview';
 import {
+  useCavityEditPreview,
+  type CavityCarveOutcome,
+} from '../../composables/useCavityEditPreview';
+import {
   generateCutoutBinPreview,
   importCutoutModel,
   type CutoutBinRequest,
@@ -18,22 +22,17 @@ import { centredModelMesh, meshBounds, type MeshBounds } from '../../engine/cuto
 import {
   DEFAULT_CUTOUT_CLEARANCE_MM,
   DEFAULT_CUTOUT_SWEEP_ENABLED,
-  DEFAULT_DRAFT_ANGLE_DEG,
   maxClearanceMm,
   validateClearanceMm,
-  validateDraftAngleDeg,
   type SizeMm,
 } from '../../engine/cutout/cutoutBin';
+import { DEFAULT_DRAFT_ANGLE_DEG, validateDraftAngleDeg } from '../../engine/carve/sweep';
 import {
   fitBinToModels,
   interiorBoundsMm,
   restingPlacementMm,
 } from '../../engine/cutout/binEnvelope';
 import { proposeUnitScale } from '../../engine/cutout/unitScale';
-import {
-  cavityEditRollbackCount,
-  clampLastGoodEditCount,
-} from '../../engine/cutout/cavityEditRollback';
 import { modelNotStoredMessage, relinkCutoutModel } from '../../engine/plan/missingModels';
 import { MIN_HEIGHT_UNITS } from '../../engine/gridfinity/constants';
 import type { SlottedBinParams } from '../../engine/gridfinity/types';
@@ -44,18 +43,11 @@ import {
   type CutoutModel,
   type Product,
   type QueueEntry,
-  type Vec3Mm,
 } from '../../engine/plan/types';
-import {
-  CAVITY_EDIT_RADIUS_MIN_MM,
-  CAVITY_EDIT_RADIUS_MAX_MM,
-  FLATTEN_HEIGHT_MIN_MM,
-  FLATTEN_HEIGHT_MAX_MM,
-  isCavityEditRejectionMessage,
-} from '../../engine/cutout/cavityEdits';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import CutoutViewport from './CutoutViewport.vue';
+import PaintToolbar from '../carve/PaintToolbar.vue';
 import ModelList from './ModelList.vue';
 import ModelReadout from './ModelReadout.vue';
 import CarveProgressBar from '../CarveProgressBar.vue';
@@ -193,7 +185,10 @@ const carveModelIds = computed(() => cutout.carvableModels.map((model) => model.
  * result lands, and its footprints and warnings would map onto the wrong rows.
  * Travelling with the result, the ids always match the carve they describe.
  */
-type CarveResultWithIds = CutoutPreviewResult & { modelIds: string[]; editCount: number };
+type CutoutCarveMeta = Omit<Extract<CutoutPreviewResult, { outcome: 'carved' }>, 'outcome'> & {
+  modelIds: string[];
+};
+type CarveResultWithIds = CavityCarveOutcome<CutoutCarveMeta>;
 
 /**
  * Carves the preview, or refuses because a model's file is not on this device.
@@ -248,31 +243,26 @@ watch(previewRefusal, (refusal) => {
   if (refusal !== null) carved.value = null;
 });
 
-watch(previewResult, (result) => {
-  if (result === null) return;
-  switch (result.outcome) {
-    case 'carved':
+// The shared session-to-preview wiring: the landing switch (noteLandedCarve),
+// the rejection rollback into editError, the active-tool clear, and the stroke
+// and flatten commit builders. The cutout flow's own parts stay here as hooks:
+// drawing the landed bin and dropping the out-of-date flag, and clearing the
+// drawn bin when a carve fails.
+const { editError, onStrokeCommit, onFlattenCommit } = useCavityEditPreview<CutoutCarveMeta>(
+  cutout,
+  { generating, errorMessage, previewResult },
+  {
+    onCarved: (result) => {
       carved.value = result;
       stale.value = false;
-      // This carve reached the worker and produced a bin, so every edit it was
-      // built from is good: assigned directly, not folded into a running max,
-      // because useBinPreview only ever lands the latest ticket's outcome
-      // (regenerate's `ticket > displayedTicket` guard), so this always is the
-      // most recent landed carve. An undo can still shrink the live edit list
-      // below the count this carve was built from before its result arrives,
-      // so the count is clamped to the live length: nothing above it could be
-      // rolled back anyway, and leaving it too high would make a later
-      // rejection under-roll-back.
-      lastGoodEditCount.value = clampLastGoodEditCount(result.editCount, cutout.edits.length);
-      return;
-    case 'superseded':
-      // A newer request replaced this one before it finished. Not a failure,
-      // and not something to show: the newer carve is the one being waited for.
-      return;
-    default:
-      return assertNever(result);
-  }
-});
+    },
+    // A carve that finished with an error is not showing a valid bin, so the
+    // drawn geometry is cleared, exactly as the missing-file refusal above does.
+    onCarveFailed: () => {
+      carved.value = null;
+    },
+  },
+);
 
 /** The placed pocket sizes the last carve measured, by model id. */
 const pocketSizeById = computed<Record<string, SizeMm>>(() => {
@@ -338,36 +328,6 @@ function onPlacementCommit(moved: CutoutGhostMoved): void {
 // Painting manual cavity edits
 // ---------------------------------------------------------------------------
 
-/** Draft value of the brush radius field, committed on blur or Enter. */
-const brushRadiusDraft = ref(cutout.brushRadiusMm);
-watch(
-  () => cutout.brushRadiusMm,
-  (radiusMm) => {
-    brushRadiusDraft.value = radiusMm;
-  },
-);
-
-/** Commits the brush radius draft, then resyncs in case the store clamped it. */
-function onCommitBrushRadius(): void {
-  cutout.setBrushRadius(brushRadiusDraft.value);
-  brushRadiusDraft.value = cutout.brushRadiusMm;
-}
-
-/** Draft value of the flatten cut height field, committed on blur or Enter. */
-const flattenHeightDraft = ref(cutout.flattenHeightMm);
-watch(
-  () => cutout.flattenHeightMm,
-  (heightMm) => {
-    flattenHeightDraft.value = heightMm;
-  },
-);
-
-/** Commits the flatten cut height draft, then resyncs in case the store clamped it. */
-function onCommitFlattenHeight(): void {
-  cutout.setFlattenHeight(flattenHeightDraft.value);
-  flattenHeightDraft.value = cutout.flattenHeightMm;
-}
-
 /** Text shown for the "Clear all edits" confirmation. */
 const clearEditsDialogOpen = ref(false);
 
@@ -381,15 +341,12 @@ const shortcutHelpOpen = ref(false);
  */
 const modelsHiddenButton = ref(false);
 
-/** The cutout paint shortcuts listed in the help popover, action left, keys right. */
-const shortcutRows: { action: string; keys: string }[] = [
-  { action: 'Paint add', keys: 'B' },
-  { action: 'Paint remove', keys: 'E' },
-  { action: 'Flatten', keys: 'S' },
-  { action: 'Pointer mode', keys: 'V or Escape' },
-  { action: 'Brush size', keys: '[ and ]' },
-  { action: 'Undo', keys: 'Ctrl+Z' },
-  { action: 'Redo', keys: 'Ctrl+Y' },
+/**
+ * The cutout-specific shortcut row appended to the paint toolbar's own rows.
+ * Hiding the model ghosts is a cutout concern (the tool bin has none), so it
+ * is passed in rather than owned by the shared toolbar.
+ */
+const extraShortcutRows: { action: string; keys: string }[] = [
   { action: 'Hide models', keys: 'Hold Tab or eye button' },
 ];
 
@@ -404,85 +361,12 @@ function onStepBrushRadius(deltaMm: number): void {
 }
 
 function onConfirmClearEdits(): void {
+  // clearEdits also forgets the known-good count, so nothing is left suspect.
   cutout.clearEdits();
-  // No edits left to be suspect of.
-  lastGoodEditCount.value = 0;
   // No edit remains for the rejection alert to be about.
   editError.value = null;
   clearEditsDialogOpen.value = false;
 }
-
-/** The error a rejected edit surfaced, shown as its own alert row. */
-const editError = ref<string | null>(null);
-/**
- * The number of edits the most recently LANDED successful carve was built
- * from. Every edit at or below this count is known good: some carve has
- * folded it in without failing. This is not a running maximum: it is
- * reassigned on every landed carve, because a running maximum only ever
- * grows, so undoing an edit and then painting a bad one could leave the live
- * edit count back at an old high-water mark and the rejection rollback below
- * would never fire. Starts at whatever the plan already had (opening a saved
- * cutout bin does not need those edits re-proven), and is reset the same way
- * whenever the edit list is replaced wholesale (loading another entry,
- * clearing all edits).
- */
-const lastGoodEditCount = ref(cutout.edits.length);
-
-/**
- * Fires a paint stroke's add or remove edit. Ignored when the tool changed
- * between the gesture starting and ending, which the viewport itself should
- * not allow, but is checked here too since this is where the edit is appended.
- */
-function onStrokeCommit(points: Vec3Mm[]): void {
-  if (cutout.activeTool !== 'add' && cutout.activeTool !== 'remove') return;
-  editError.value = null;
-  cutout.appendEdit({ kind: cutout.activeTool, points, radiusMm: cutout.brushRadiusMm });
-}
-
-/** Fires a flatten click's edit. */
-function onFlattenCommit(centerMm: Vec3Mm, normalMm: Vec3Mm): void {
-  if (cutout.activeTool !== 'flatten') return;
-  editError.value = null;
-  cutout.appendEdit({
-    kind: 'flatten',
-    centerMm,
-    radiusMm: cutout.brushRadiusMm,
-    normalMm,
-    heightMm: cutout.flattenHeightMm,
-  });
-}
-
-watch(
-  () => cutout.activeTool,
-  () => {
-    editError.value = null;
-  },
-);
-
-// A manual edit that makes the carve fail must not stay applied: it would sit
-// in the undo stack looking like a normal edit while the bin it produced is
-// gone. Every edit above the last known-good count is suspect, not just the
-// one most recently appended: the debounce can coalesce two edits into one
-// carve, or a second edit can be painted while an earlier carve is still in
-// flight, and either way a single failure means none of those edits are
-// proven. All of them are rolled back together, down to the last count that
-// did carve successfully.
-//
-// Only an edit rejection (the carve reached the worker and the folded edits
-// themselves were bad) rolls edits back. Any other failure, a missing model
-// file or divider walls on a cutout bin, is not the edit's fault, so it is
-// surfaced without touching cutout.edits: rolling back would silently drop a
-// perfectly good edit because something unrelated to it failed.
-watch(generating, (isGenerating) => {
-  if (isGenerating) return;
-  const message = errorMessage.value;
-  if (message === null || !isCavityEditRejectionMessage(message)) return;
-  let toRollBack = cavityEditRollbackCount(cutout.edits.length, lastGoodEditCount.value);
-  while (toRollBack-- > 0) {
-    cutout.rollbackEdit();
-  }
-  editError.value = message;
-});
 
 // ---------------------------------------------------------------------------
 // Importing models
@@ -910,10 +794,9 @@ function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
   cutout.reset();
   cutout.gridX = bin.gridX;
   cutout.gridY = bin.gridY;
+  // setEdits also marks every loaded edit known good: they carved cleanly when
+  // the bin was saved, so they do not need re-proving.
   cutout.setEdits(bin.edits);
-  // These edits were carved successfully when the bin was saved, so they do
-  // not need re-proving; the running count starts fresh at the loaded length.
-  lastGoodEditCount.value = cutout.edits.length;
   // A rejection alert from the previous entry does not belong to this one.
   editError.value = null;
   boundsById.value = {};
@@ -1065,88 +948,12 @@ function editingTitle(entry: QueueEntry): string {
 <template>
   <v-row>
     <v-col cols="12" md="7">
-      <div class="d-flex align-center flex-wrap ga-1 mb-2">
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :color="cutout.activeTool === 'add' ? 'info' : undefined"
-          @click="cutout.setActiveTool(cutout.activeTool === 'add' ? null : 'add')"
-        >
-          <v-icon icon="mdi-brush" size="20" />
-          <v-tooltip activator="parent" location="bottom">Add material.</v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :color="cutout.activeTool === 'remove' ? 'error' : undefined"
-          @click="cutout.setActiveTool(cutout.activeTool === 'remove' ? null : 'remove')"
-        >
-          <v-icon icon="mdi-eraser" size="20" />
-          <v-tooltip activator="parent" location="bottom">Remove material.</v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :color="cutout.activeTool === 'flatten' ? 'secondary' : undefined"
-          @click="cutout.setActiveTool(cutout.activeTool === 'flatten' ? null : 'flatten')"
-        >
-          <v-icon icon="mdi-blur" size="20" />
-          <v-tooltip activator="parent" location="bottom">Flatten to bin surface.</v-tooltip>
-        </v-btn>
-        <v-text-field
-          v-model.number="brushRadiusDraft"
-          type="number"
-          label="Brush radius"
-          suffix="mm"
-          :min="CAVITY_EDIT_RADIUS_MIN_MM"
-          :max="CAVITY_EDIT_RADIUS_MAX_MM"
-          step="0.1"
-          density="compact"
-          hide-details
-          style="max-width: 130px"
-          class="ml-1"
-          @blur="onCommitBrushRadius"
-          @keydown.enter="onCommitBrushRadius"
-        />
-        <v-text-field
-          v-if="cutout.activeTool === 'flatten'"
-          v-model.number="flattenHeightDraft"
-          type="number"
-          label="Cut height"
-          suffix="mm"
-          :min="FLATTEN_HEIGHT_MIN_MM"
-          :max="FLATTEN_HEIGHT_MAX_MM"
-          step="0.5"
-          density="compact"
-          hide-details
-          style="max-width: 130px"
-          class="ml-1"
-          @blur="onCommitFlattenHeight"
-          @keydown.enter="onCommitFlattenHeight"
-        />
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :disabled="cutout.edits.length === 0"
-          @click="cutout.undoEdit()"
-        >
-          <v-icon icon="mdi-undo" size="20" />
-          <v-tooltip activator="parent" location="bottom">Undo last edit.</v-tooltip>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
-          :disabled="cutout.redoStack.length === 0"
-          @click="cutout.redoEdit()"
-        >
-          <v-icon icon="mdi-redo" size="20" />
-          <v-tooltip activator="parent" location="bottom">Redo edit.</v-tooltip>
-        </v-btn>
+      <PaintToolbar
+        v-model:shortcut-help-open="shortcutHelpOpen"
+        :session="cutout"
+        :extra-shortcut-rows="extraShortcutRows"
+        class="mb-2"
+      >
         <v-btn
           icon
           size="small"
@@ -1169,25 +976,7 @@ function editingTitle(entry: QueueEntry): string {
             Hide the model ghosts. Holding Tab does the same while held.
           </v-tooltip>
         </v-btn>
-        <v-menu v-model="shortcutHelpOpen" location="top end" :close-on-content-click="false">
-          <template #activator="{ props: menuProps }">
-            <v-btn icon size="small" variant="text" v-bind="menuProps">
-              <v-icon icon="mdi-help-circle-outline" size="20" />
-              <v-tooltip activator="parent" location="bottom">Canvas shortcuts</v-tooltip>
-            </v-btn>
-          </template>
-          <v-card min-width="280" class="pa-2">
-            <div
-              v-for="row in shortcutRows"
-              :key="row.action"
-              class="d-flex align-center justify-space-between ga-4 px-2 py-1 shortcut-row"
-            >
-              <span class="text-body-2">{{ row.action }}</span>
-              <span class="text-caption text-medium-emphasis">{{ row.keys }}</span>
-            </div>
-          </v-card>
-        </v-menu>
-      </div>
+      </PaintToolbar>
 
       <v-dialog v-model="clearEditsDialogOpen" max-width="480">
         <v-card>

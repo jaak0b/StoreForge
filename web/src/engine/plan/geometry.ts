@@ -29,9 +29,10 @@ export type PrintablePart =
       /** The models carved out of the interior, for a cutout-origin bin. */
       models?: CutoutModel[];
       /**
-       * Manual cavity edits carried on the interior, for a cutout-origin bin.
-       * Empty (never omitted) for every other origin, since the field is not
-       * optional: every export path folds it in regardless of origin.
+       * Manual cavity edits carried on the interior, for a carved-interior bin
+       * (cutout models or traced pockets). Empty (never omitted) for a plain or
+       * screw bin, since the field is not optional: every export path folds it
+       * in regardless of origin.
        */
       edits: CavityEdit[];
       /** Display name source: the paired insert's text, for slicer object names. */
@@ -51,7 +52,7 @@ export type PrintableBinPart = Extract<PrintablePart, { part: 'bin' }>;
  */
 export type BinInterior =
   | { interior: 'models'; models: CutoutModel[]; edits: CavityEdit[] }
-  | { interior: 'pockets'; pockets: BinPockets }
+  | { interior: 'pockets'; pockets: BinPockets; edits: CavityEdit[] }
   | { interior: 'walls' };
 
 /**
@@ -66,7 +67,9 @@ export function binInteriorOf(part: PrintableBinPart): BinInterior {
   if (part.models !== undefined) {
     return { interior: 'models', models: part.models, edits: part.edits };
   }
-  if (part.pockets !== undefined) return { interior: 'pockets', pockets: part.pockets };
+  if (part.pockets !== undefined) {
+    return { interior: 'pockets', pockets: part.pockets, edits: part.edits };
+  }
   return { interior: 'walls' };
 }
 
@@ -82,7 +85,7 @@ function interiorFeaturesOf(
 ): { pockets?: BinPockets; models?: CutoutModel[]; edits: CavityEdit[] } {
   switch (bin.origin) {
     case 'traced':
-      return { pockets: bin.pockets, edits: [] };
+      return { pockets: bin.pockets, edits: bin.edits };
     case 'cutout':
       return { models: bin.models, edits: bin.edits };
     case 'manual':

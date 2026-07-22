@@ -13,12 +13,13 @@ import type {
 } from '../engine/trace/types';
 import type { LayoutState } from '../engine/trace/layoutModel';
 import * as layout from '../engine/trace/layoutModel';
+import { createCavityEditSession } from './cavityEditSession';
 
 /**
  * Community shadow boards use a finger relief around 25 mm across; that
  * comfortably fits a fingertip reaching under a tool.
  */
-export const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
+const DEFAULT_FINGER_HOLE_DIAMETER_MM = 25;
 
 /**
  * Pocket clearance presets in mm around a traced outline, from a snug fit to
@@ -108,6 +109,14 @@ export const useToolTrace = defineStore('toolTrace', () => {
    * above the pocket for lifting the tool out.
    */
   const defaultDepthMm = ref(20);
+
+  /**
+   * The traced bin's manual cavity edits and their tool state, shared with the
+   * cutout flow through the same session factory. Its own instance, so the
+   * trace tab keeps an edit list and brush settings independent of the cutout
+   * tab's.
+   */
+  const editSession = createCavityEditSession();
 
   let toolCounter = 0;
 
@@ -223,6 +232,10 @@ export const useToolTrace = defineStore('toolTrace', () => {
     layout.setPocketDepth(layoutState, toolId, depthMm);
   }
 
+  function setDraftAngle(toolId: string, draftAngleDeg: number): void {
+    layout.setDraftAngle(layoutState, toolId, draftAngleDeg);
+  }
+
   function addFingerHole(toolId: string, hole: FingerHole): FingerHole | null {
     return layout.addFingerHole(layoutState, toolId, hole);
   }
@@ -280,10 +293,12 @@ export const useToolTrace = defineStore('toolTrace', () => {
     gridY.value = 1;
     gridManual.value = false;
     defaultDepthMm.value = 20;
+    editSession.resetEditSession();
     toolCounter = 0;
   }
 
   return {
+    ...editSession,
     photoUrl,
     photoBlob,
     sourceId,
@@ -319,6 +334,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     setToolTransform,
     toggleFilledHole,
     setPocketDepth,
+    setDraftAngle,
     addFingerHole,
     moveFingerHole,
     stretchFingerHole,

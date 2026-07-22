@@ -2,19 +2,33 @@
 import { computed, ref } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
-import { originOf, type QueueEntry } from '../engine/plan/types';
+import { originOf, type Group, type QueueEntry } from '../engine/plan/types';
 import {
+  describeGroup,
   describeProduct,
   downloadSubtitles,
+  type GroupDescriptor,
   type RowDescriptor,
 } from '../engine/plan/rowDescriptor';
+import { partitionQueue } from '../engine/plan/queuePartition';
 import { snapshotProduct, type BatchSelection } from '../engine/plan/batches';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
 import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
+import DeleteDrawerDialog from './DeleteDrawerDialog.vue';
 import CountStepper from './CountStepper.vue';
+
+/**
+ * One rendered queue line: a drawer group header, or a queue entry (marked
+ * grouped when it renders indented under a group header). Flattening the
+ * partition into one list keeps a single copy of the entry row markup, shared
+ * between grouped plate rows and loose rows.
+ */
+type QueueRow =
+  | { kind: 'group'; group: Group; descriptor: GroupDescriptor }
+  | { kind: 'entry'; entry: QueueEntry; grouped: boolean };
 
 /**
  * The whole app on one page: the add-bin card on top, then zero or more
@@ -25,6 +39,34 @@ import CountStepper from './CountStepper.vue';
 
 const app = useApp();
 const queue = useBinQueue();
+
+/**
+ * The queue as a flat list of group headers and entries: each drawer group's
+ * header followed by its indented plate rows, then the loose entries. Built
+ * from partitionQueue (the single grouping source) and describeGroup (the
+ * single status source).
+ */
+const queueRows = computed<QueueRow[]>(() => {
+  const { groups, loose } = partitionQueue(queue.entries, queue.groups);
+  const rows: QueueRow[] = [];
+  for (const section of groups) {
+    rows.push({
+      kind: 'group',
+      group: section.group,
+      descriptor: describeGroup(section.group, queue.entries, queue.batches),
+    });
+    for (const entry of section.entries) rows.push({ kind: 'entry', entry, grouped: true });
+  }
+  for (const entry of loose) rows.push({ kind: 'entry', entry, grouped: false });
+  return rows;
+});
+
+/** A drawer group's short caption: its plate count and drawer size. */
+function groupCaption(group: Group, descriptor: GroupDescriptor): string {
+  const input = group.payload.input;
+  const plates = `${descriptor.counts.total} ${descriptor.counts.total === 1 ? 'plate' : 'plates'}`;
+  return `${plates} · ${input.drawerWidthMm} × ${input.drawerDepthMm} mm drawer`;
+}
 
 /** The row's title, caption and icon, from the shared row descriptor. */
 function rowOf(entry: QueueEntry): RowDescriptor {
@@ -91,9 +133,20 @@ function createPlate(): void {
   plateCounts.value = new Map();
 }
 
-// Row click loads the entry into the tab that owns its origin for editing.
+// Row click: a drawer-linked plate or clip row opens its drawer's detail view
+// (editing one plate of a planned layout, or the clip row's quantity, in
+// isolation would desync the group), and every other row loads into the tab
+// that owns its origin for editing.
 function editRow(entry: QueueEntry): void {
-  app.editEntry(entry.id, originOf(entry.product));
+  const product = entry.product;
+  if (
+    (product.kind === 'baseplate' || product.kind === 'clip') &&
+    product.group !== undefined
+  ) {
+    app.openDrawer(product.group.groupId);
+  } else {
+    app.editEntry(entry.id, originOf(product));
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -122,6 +175,20 @@ async function downloadRow(entry: QueueEntry, format: 'stl' | '3mf'): Promise<vo
   } finally {
     downloadingId.value = null;
   }
+}
+
+// Deleting a drawer group from its header row runs the shared confirm dialog
+// first; confirming removes the group and its still-queued plate rows.
+const deleteTarget = ref<{ groupId: string; descriptor: GroupDescriptor } | null>(null);
+
+function askDeleteGroup(group: Group, descriptor: GroupDescriptor): void {
+  deleteTarget.value = { groupId: group.id, descriptor };
+}
+
+function confirmDeleteGroup(): void {
+  if (deleteTarget.value === null) return;
+  queue.removeGroup(deleteTarget.value.groupId);
+  deleteTarget.value = null;
 }
 
 function removeRow(entry: QueueEntry): void {
@@ -169,21 +236,52 @@ function removeRow(entry: QueueEntry): void {
     </v-alert>
 
     <v-empty-state
-      v-if="queue.entries.length === 0"
+      v-if="queueRows.length === 0"
       icon="mdi-cube-outline"
       title="Nothing queued yet"
       text="Add a part with the card above."
     />
 
     <div v-else class="d-flex flex-column ga-1">
+      <template v-for="row in queueRows">
       <div
-        v-for="entry in queue.entries"
-        :key="entry.id"
-        class="qrow"
-        :class="{ selected: selectedIds.has(entry.id) }"
+        v-if="row.kind === 'group'"
+        :key="`g-${row.group.id}`"
+        class="group-header"
         role="button"
-        @click="editRow(entry)"
+        @click="app.openDrawer(row.group.id)"
       >
+        <v-icon icon="mdi-view-grid-outline" size="18" class="mr-2 text-medium-emphasis" />
+        <span class="row-text">
+          <span class="text-body-2 font-weight-bold d-block text-truncate">{{ row.group.name }}</span>
+          <span class="group-caption">{{ groupCaption(row.group, row.descriptor) }}</span>
+        </span>
+        <v-chip size="small" variant="tonal" color="primary">
+          {{ row.descriptor.counts.done }} / {{ row.descriptor.counts.total }} printed
+        </v-chip>
+        <v-icon icon="mdi-chevron-right" size="20" class="text-medium-emphasis" />
+        <div class="row-actions d-flex ga-1 justify-end" @click.stop>
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            color="error"
+            @click="askDeleteGroup(row.group, row.descriptor)"
+          >
+            <v-icon icon="mdi-close" size="18" />
+            <v-tooltip activator="parent" location="bottom">Delete drawer</v-tooltip>
+          </v-btn>
+        </div>
+      </div>
+      <div
+        v-else
+        :key="`e-${row.entry.id}`"
+        class="qrow"
+        :class="{ selected: selectedIds.has(row.entry.id), grouped: row.grouped }"
+        role="button"
+        @click="editRow(row.entry)"
+      >
+      <template v-for="entry in [row.entry]" :key="entry.id">
         <v-checkbox-btn
           :model-value="selectedIds.has(entry.id)"
           density="compact"
@@ -274,8 +372,19 @@ function removeRow(entry: QueueEntry): void {
             <v-tooltip activator="parent" location="bottom">Remove</v-tooltip>
           </v-btn>
         </div>
+      </template>
       </div>
+      </template>
     </div>
+
+    <DeleteDrawerDialog
+      :model-value="deleteTarget !== null"
+      :queued-count="deleteTarget?.descriptor.counts.queued ?? 0"
+      :queued-clip-count="deleteTarget?.descriptor.queuedClipCount ?? 0"
+      :done-count="deleteTarget?.descriptor.counts.done ?? 0"
+      @update:model-value="(open: boolean) => { if (!open) deleteTarget = null; }"
+      @confirm="confirmDeleteGroup"
+    />
 
     <div v-if="selectedEntries.length > 0" class="create-plate-bar">
       <span class="text-body-2 mr-3">
@@ -312,6 +421,33 @@ function removeRow(entry: QueueEntry): void {
   flex: 0 0 auto;
 }
 
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border: 1px solid rgba(var(--v-theme-primary), 0.4);
+  border-radius: 10px;
+  cursor: pointer;
+  background: rgba(var(--v-theme-primary), 0.04);
+}
+
+.group-header:hover {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.08);
+}
+
+.group-caption {
+  display: block;
+  font-family: monospace;
+  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+}
+
+.qrow.grouped {
+  margin-left: 24px;
+}
+
 .qty-badge {
   font-family: monospace;
   font-size: 11.5px;
@@ -332,13 +468,16 @@ function removeRow(entry: QueueEntry): void {
   background: rgba(var(--v-theme-primary), 0.08);
 }
 
-.qrow .row-actions {
+.qrow .row-actions,
+.group-header .row-actions {
   opacity: 0;
   transition: opacity 0.1s;
 }
 
 .qrow:hover .row-actions,
-.qrow:focus-within .row-actions {
+.qrow:focus-within .row-actions,
+.group-header:hover .row-actions,
+.group-header:focus-within .row-actions {
   opacity: 1;
 }
 

@@ -24,6 +24,10 @@ import type {
 } from './engine/gridfinity/types';
 import type { PocketBinParams } from './engine/trace/pocketBin';
 import type {
+  PocketPreviewResult,
+  PocketBinRequest,
+} from './worker/pocketModels';
+import type {
   BaseplateParams,
   ConnectionClipParams,
 } from './engine/baseplate/constants';
@@ -36,6 +40,10 @@ export type {
   CutoutModelRequest,
   CutoutPreviewResult,
 } from './worker/cutoutModels';
+export type {
+  PocketPreviewResult,
+  PocketBinRequest,
+} from './worker/pocketModels';
 export type { CutoutCarveResult, CutoutUnionResult } from './engine/cutout/cutoutBin';
 export type { CustomIconValidation } from './engine/label/customIcon';
 
@@ -92,6 +100,17 @@ export async function generatePocketBin(params: PocketBinParams): Promise<PartMe
 /** Generate a pocket bin as one unioned mesh for the STL download. */
 export async function generatePocketBinUnion(params: PocketBinParams): Promise<MeshData> {
   return getWorker().generatePocketBinUnion(sanitizeForWorker(withResolvedBinInsert(params)));
+}
+
+/**
+ * Carve a pocket bin for the live preview. A carve superseded by a newer
+ * preview comes back as an outcome the caller discards, never as an error,
+ * mirroring generateCutoutBinPreview.
+ */
+export async function generatePocketBinPreview(
+  request: PocketBinRequest,
+): Promise<PocketPreviewResult> {
+  return getWorker().generatePocketBinPreview(sanitizeForWorker(withResolvedBinInsert(request)));
 }
 
 /** Generate a baseplate mesh in the geometry worker. */
