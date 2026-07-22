@@ -11,3 +11,45 @@ input[type='number'] {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+/* Every v-btn-toggle reads as one connected segmented control: a single outer
+   outline with shared rounded corners, segments flush together with a thin
+   internal divider between them, and the selected segment filled for contrast.
+   This overrides Vuetify's per-button variants (outlined/text) so one style
+   governs every group regardless of the variant or density each was authored
+   with. Selected uses the on-surface colour as a fill with surface-coloured
+   text so it stays legible on the app's dark theme. */
+.v-btn-toggle {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.v-btn-toggle .v-btn {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)) !important;
+}
+
+/* Thin divider between adjacent segments; the group's own outline supplies the
+   outer edges. */
+.v-btn-toggle .v-btn:not(:first-child) {
+  border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)) !important;
+}
+
+.v-btn-toggle .v-btn:hover:not(.v-btn--active) {
+  background-color: rgba(var(--v-theme-on-surface), 0.06) !important;
+}
+
+.v-btn-toggle .v-btn.v-btn--active {
+  background-color: rgb(var(--v-theme-on-surface)) !important;
+  color: rgb(var(--v-theme-surface)) !important;
+}
+
+/* Vuetify's outlined/text variants paint the hover and active states through an
+   overlay layer; neutralise it so the fill rules above are the only source of
+   segment colour. */
+.v-btn-toggle .v-btn .v-btn__overlay {
+  display: none;
+}

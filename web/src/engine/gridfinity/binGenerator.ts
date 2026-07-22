@@ -428,6 +428,17 @@ function buildInteriorCutter(m: ManifoldToplevel, params: BinParams): Manifold {
  * wall that ends in open interior builds it longer than it was drawn. Where
  * two walls meet, the union already welds them because the segments touch, so
  * a junction needs no extension of its own.
+ *
+ * Every non-boundary endpoint also gets a round end cap (see buildDividers): a
+ * vertical cylinder of radius DIVIDER_THICKNESS / 2 centred on the endpoint,
+ * turning each free wall into a capsule. Two walls meeting at a shared interior
+ * endpoint at any angle overlap through the disc of that cap, so the outer side
+ * of the joint welds solid instead of leaving the miter notch that two square
+ * box ends leave between them. Boundary endpoints are excluded: their extension
+ * already drives them past the outer face into the perimeter wall, where the
+ * envelope intersection trims everything (a cap included) back flush, so a cap
+ * there would add nothing and even-grid boundary-to-boundary walls stay the
+ * exact solid the count-based generator produced.
  */
 function wallFollowingBox(
   m: ManifoldToplevel,
@@ -470,12 +481,37 @@ function buildDividers(
   // manifold's union is exact on coincident faces.
   const zBottom = FLOOR_TOP;
   const height = bodyTop - zBottom;
-  const boxes = dividerWalls.map((wall) =>
+  const solids: Manifold[] = [];
+  const capRadius = DIVIDER_THICKNESS / 2;
+  for (const wall of dividerWalls) {
     // A boundary end is extended by the perimeter wall's own thickness, so it
     // reaches the outer face and the envelope intersection trims it flush.
-    wallFollowingBox(m, wall, footprint, DIVIDER_THICKNESS, height, zBottom, WALL_THICKNESS),
-  );
-  return m.Manifold.intersection(m.Manifold.union(boxes), envelope);
+    solids.push(
+      wallFollowingBox(m, wall, footprint, DIVIDER_THICKNESS, height, zBottom, WALL_THICKNESS),
+    );
+    // Round end caps weld angled junctions on their outer side. Only free
+    // (non-boundary) ends get one; a boundary end is handled by its extension.
+    const [onBoundary1, onBoundary2] = wallEndsOnInteriorBoundary(wall, footprint);
+    if (!onBoundary1) {
+      solids.push(
+        m.Manifold.cylinder(height, capRadius, capRadius, 4 * CORNER_SEGMENTS).translate(
+          wall.x1,
+          wall.y1,
+          zBottom,
+        ),
+      );
+    }
+    if (!onBoundary2) {
+      solids.push(
+        m.Manifold.cylinder(height, capRadius, capRadius, 4 * CORNER_SEGMENTS).translate(
+          wall.x2,
+          wall.y2,
+          zBottom,
+        ),
+      );
+    }
+  }
+  return m.Manifold.intersection(m.Manifold.union(solids), envelope);
 }
 
 /**

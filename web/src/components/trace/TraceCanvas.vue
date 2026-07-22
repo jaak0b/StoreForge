@@ -51,6 +51,23 @@ const cursorPx = ref<{ x: number; y: number } | null>(null);
 
 let maskPreview: ImageData | null = null;
 
+// Browser pinch-zoom magnifies the whole page, and the action island is a
+// sticky, viewport-pinned toolbar meant to stay a constant on-screen size
+// rather than balloon over the photo as the page is zoomed. There is no
+// in-app pinch handling and no CSS-transformed container to move it out of:
+// the scaling agent is the browser's own pinch, so the island is
+// counter-scaled by the inverse of the visual viewport's pinch scale. At
+// scale 1 the transform is identity, so the unzoomed anchoring is unchanged.
+const viewportScale = ref(1);
+function readViewportScale(): void {
+  viewportScale.value = window.visualViewport?.scale ?? 1;
+}
+const islandStyle = computed(() =>
+  viewportScale.value > 1
+    ? { transform: `scale(${1 / viewportScale.value})`, transformOrigin: 'bottom left' }
+    : {},
+);
+
 // View transform: zoom in [1, 8] and a pan offset in canvas pixels, applied to
 // every drawn layer so the whole view scales together. At zoom 1 the pan is
 // pinned to (0, 0) and the view matches the untransformed canvas.
@@ -453,11 +470,15 @@ function onKeyUp(event: KeyboardEvent): void {
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
+  // A pinch changes visualViewport.scale, which fires its resize event.
+  window.visualViewport?.addEventListener('resize', readViewportScale);
+  readViewportScale();
   void nextTick(draw);
 });
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
+  window.visualViewport?.removeEventListener('resize', readViewportScale);
 });
 
 function clearClicks(): void {
@@ -864,7 +885,7 @@ function acceptTool(finish: boolean): void {
       @pointerleave="onPointerLeave"
       @wheel.prevent="onWheel"
     />
-    <div class="action-island">
+    <div class="action-island" :style="islandStyle">
       <div class="d-flex align-center flex-wrap ga-2">
         <v-tooltip location="top" :disabled="!paintedAreaDropped" :text="paintDroppedMessage">
           <template #activator="{ props }">
@@ -880,6 +901,8 @@ function acceptTool(finish: boolean): void {
             </span>
           </template>
         </v-tooltip>
+      </div>
+      <div class="d-flex align-center flex-wrap ga-2 mt-2">
         <v-tooltip
           location="top"
           :disabled="!(paintedAreaDropped && outline !== null)"

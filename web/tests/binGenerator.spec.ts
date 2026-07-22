@@ -477,7 +477,7 @@ describe('interior dividers', () => {
           gridX: 3,
           walls: [
             { x1: 0, y1: -10, x2: 0, y2: 10 },
-            { x1: 3, y1: -10, x2: 3, y2: 10 },
+            { x1: 1, y1: -10, x2: 1, y2: 10 },
           ],
         }),
       ),
@@ -572,9 +572,14 @@ describe('interior dividers', () => {
   });
 
   it('builds a wall ending in open interior at the length it was drawn', () => {
-    // Both endpoints are free, so the wall is built exactly end to end. The
-    // scoop is off so the only material in the probe slab is the wall.
+    // Both endpoints are free, so the wall is built exactly end to end plus a
+    // round end cap at each free end. The scoop is off so the only material in
+    // the probe slab is the wall. On the slab's centreline the cap reaches
+    // DIVIDER_THICKNESS / 2 past the drawn endpoint: the built extent is the
+    // drawn span grown by one cap radius at each end, never the far larger
+    // reach an along-axis extension would add.
     const drawn = 8;
+    const cap = DIVIDER_THICKNESS / 2;
     const bin = buildBinManifold(
       m,
       params({
@@ -588,14 +593,14 @@ describe('interior dividers', () => {
     expect(bin.genus()).toBe(0);
     const midZ = (FLOOR_TOP + 3 * HEIGHT_UNIT) / 2;
     // A slab thinner than the wall and well clear of the perimeter, so what
-    // it catches is the wall and nothing else; its Y extent is the built
-    // length.
+    // it catches is the wall and its caps and nothing else; its Y extent is
+    // the built length including the caps.
     const slab = m.Manifold.cube([DIVIDER_THICKNESS / 2, 60, 2], true).translate(0, 0, midZ);
     const built = bin.intersect(slab);
     expect(built.isEmpty()).toBe(false);
     const box = built.boundingBox();
-    expect(box.min[1]).toBeCloseTo(-drawn, 5);
-    expect(box.max[1]).toBeCloseTo(drawn, 5);
+    expect(box.min[1]).toBeCloseTo(-drawn - cap, 5);
+    expect(box.max[1]).toBeCloseTo(drawn + cap, 5);
     built.delete();
     slab.delete();
     bin.delete();
@@ -649,6 +654,30 @@ describe('interior dividers', () => {
     );
     expect(bin.status()).toBe('NoError');
     expect(bin.genus()).toBe(0);
+    bin.delete();
+  });
+
+  it('welds two walls meeting at a non-right angle with round end caps', () => {
+    // Two free walls share one interior endpoint (the origin) at an oblique
+    // angle: one runs along X, one heads up and to the right into open
+    // interior. Their round end caps overlap through the shared endpoint, so
+    // the outer side of the oblique joint welds solid instead of leaving a
+    // miter notch. The result must stay a single watertight genus-0 solid.
+    const bin = buildBinManifold(
+      m,
+      params({
+        gridX: 2,
+        gridY: 2,
+        scoop: false,
+        walls: [
+          { x1: -20, y1: 0, x2: 0, y2: 0 },
+          { x1: 0, y1: 0, x2: 14, y2: 14 },
+        ],
+      }),
+    );
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    expect(bin.decompose().filter((part) => part.volume() > 0).length).toBe(1);
     bin.delete();
   });
 });
@@ -991,10 +1020,13 @@ describe('a built divider matches the wall that was drawn', () => {
     bin.delete();
   });
 
-  it('stops an angled wall at its free endpoint instead of running past it', () => {
+  it('stops an angled wall at its round end cap instead of running past it', () => {
     // The wall ends in open interior at both ends, so neither end may be
-    // extended. An unconditional extension would push it most of a millimetre
-    // beyond each endpoint along its own direction.
+    // extended: it is closed by a round cap of radius DIVIDER_THICKNESS / 2 and
+    // nothing more. An unconditional along-axis extension would instead push a
+    // full box most of a millimetre beyond each endpoint. The probes below
+    // straddle the cap radius to tell the two apart.
+    const cap = DIVIDER_THICKNESS / 2;
     const bin = buildBinManifold(
       m,
       params({
@@ -1010,10 +1042,10 @@ describe('a built divider matches the wall that was drawn', () => {
     const ux = 36 / length;
     const uy = 18 / length;
 
-    // Solid just inside the free endpoint.
-    const inside = m.Manifold.cube([0.3, 0.3, 2], true).translate(
-      18 - ux * 0.3,
-      9 - uy * 0.3,
+    // Solid inside the cap, a little past the drawn endpoint along the axis.
+    const inside = m.Manifold.cube([0.2, 0.2, 2], true).translate(
+      18 + ux * (cap - 0.4),
+      9 + uy * (cap - 0.4),
       midZ,
     );
     const insideHit = bin.intersect(inside);
@@ -1021,11 +1053,11 @@ describe('a built divider matches the wall that was drawn', () => {
     insideHit.delete();
     inside.delete();
 
-    // Air just beyond it, well within the 0.95 mm an unconditional extension
-    // would have added.
-    const beyond = m.Manifold.cube([0.3, 0.3, 2], true).translate(
-      18 + ux * 0.5,
-      9 + uy * 0.5,
+    // Air past the cap along the axis, still well within the reach an
+    // along-axis extension would have filled solid.
+    const beyond = m.Manifold.cube([0.2, 0.2, 2], true).translate(
+      18 + ux * (cap + 0.3),
+      9 + uy * (cap + 0.3),
       midZ,
     );
     const beyondHit = bin.intersect(beyond);

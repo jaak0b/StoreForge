@@ -36,6 +36,7 @@ import { overallHeightMm } from '../heightHint';
 import BinViewport from './BinViewport.vue';
 import ProductSelect from './ProductSelect.vue';
 import MoreOptions from './MoreOptions.vue';
+import DividerControl from './divider/DividerControl.vue';
 
 /**
  * The Screw entry tab of the add-bin card: one shorthand field ("m3x20 fhcs
@@ -331,6 +332,8 @@ watch(
       patch.selectedWallIndex = null;
     }
     store.$patch(patch);
+    // No walls opens with dividers off; walls present opens the free editor.
+    store.inferDividerModeFromWalls();
   },
   { immediate: true },
 );
@@ -399,8 +402,10 @@ watch(
   singleFootprint,
   (cells) => {
     if (cells === null) return;
-    store.gridX = cells;
-    store.gridY = 1;
+    // Routed through the setters so grid mode regenerates its walls when the
+    // derived screw footprint changes, keeping the grid declarative.
+    store.setGridX(cells);
+    store.setGridY(1);
   },
   { immediate: true },
 );
@@ -681,10 +686,11 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
 
       <ProductSelect v-model="productChoice" v-model:fused="fused" hide-bin-alone class="mt-4" />
 
+      <DividerControl v-if="!insertOnly" :notice="dividerNotice" class="mt-4" />
+
       <MoreOptions
         :per-bin-fields="false"
         :insert-only="insertOnly"
-        :divider-notice="dividerNotice"
       >
         <template #fields>
           <v-text-field

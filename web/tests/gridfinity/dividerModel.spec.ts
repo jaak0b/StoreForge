@@ -76,7 +76,7 @@ describe('validateWalls', () => {
   it('rejects two near-parallel walls closer than the compartment gap', () => {
     const walls = [
       { x1: 0, y1: -10, x2: 0, y2: 10 },
-      { x1: 3, y1: -10, x2: 3, y2: 10 },
+      { x1: 1, y1: -10, x2: 1, y2: 10 },
     ];
     const message = validateWalls(walls, 3, 1);
     expect(message).toMatch(/minimum compartment gap/);

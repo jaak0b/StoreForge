@@ -2,7 +2,6 @@
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useBinDesigner } from '../stores/binDesigner';
-import DividerEditor from './divider/DividerEditor.vue';
 
 /**
  * The "More options" disclosure shared by the Manual bin, Screw entry and
@@ -15,23 +14,19 @@ import DividerEditor from './divider/DividerEditor.vue';
  * A non-bin caller (the Baseplate tab) hides every binDesigner-bound field
  * with hideBinFields and owns the open state through the open model, filling
  * the disclosure through the fields and after slots instead.
+ *
+ * Divider walls are not here: they live in the always-visible DividerControl
+ * above the disclosure, so this holds only the second label line, quantity,
+ * magnet holes and notes.
  */
 
 const props = withDefaults(
   defineProps<{
     perBinFields: boolean;
     quantity?: number;
-    /** Hides the divider fields; a pocket bin cannot have divider walls. */
-    hideDividers?: boolean;
     /**
-     * Why the divider editor is unavailable for this entry, shown in its place.
-     * Set by a caller whose bin footprint is not a single known size, since a
-     * wall list is authored against one interior and means nothing without it.
-     */
-    dividerNotice?: string | null;
-    /**
-     * Hides every bin body option (dividers, magnet holes); an
-     * insert-only design has no bin body to configure.
+     * Hides every bin body option (magnet holes); an insert-only design has no
+     * bin body to configure.
      */
     insertOnly?: boolean;
     /**
@@ -101,12 +96,6 @@ const open = computed({
         />
         <slot name="fields" />
       </div>
-      <template v-if="!props.hideDividers && !props.insertOnly && !props.hideBinFields">
-        <div v-if="props.dividerNotice" class="text-caption text-medium-emphasis mt-4">
-          {{ props.dividerNotice }}
-        </div>
-        <DividerEditor v-else class="mt-4" />
-      </template>
       <div v-if="!props.insertOnly && !props.hideBinFields" class="mt-3">
         <v-switch
           v-model="magnetHoles"
