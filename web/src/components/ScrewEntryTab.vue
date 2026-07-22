@@ -691,7 +691,6 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
             min="2"
             step="1"
             label="Height"
-            suffix="u"
             density="comfortable"
             :disabled="isMultiple"
             :rules="heightRules"
