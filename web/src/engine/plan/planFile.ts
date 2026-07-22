@@ -90,6 +90,10 @@ export function isPositiveInteger(value: unknown, min: number): value is number 
   return typeof value === 'number' && Number.isInteger(value) && value >= min;
 }
 
+function isFiniteAtLeast(value: unknown, min: number): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min;
+}
+
 function isNumberInRange(value: unknown, min: number, max: number): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
 }
@@ -775,8 +779,8 @@ function validateBin(raw: unknown, subject: string): string | null {
   if (!isPositiveInteger(bin.gridY, 1)) {
     return `${subject}: The bin depth must be a whole number of at least 1 grid unit.`;
   }
-  if (!isPositiveInteger(bin.heightUnits, 2)) {
-    return `${subject}: The bin height must be a whole number of at least 2 height units.`;
+  if (!isFiniteAtLeast(bin.heightUnits, 2)) {
+    return `${subject}: The bin height must be a number of at least 2 height units.`;
   }
   if (typeof bin.magnetHoles !== 'boolean') {
     return `${subject}: The magnet holes setting must be true or false.`;
@@ -1543,8 +1547,8 @@ function validateLegacyParams(entry: Record<string, unknown>, subject: string): 
   if (!isPositiveInteger(entry.gridY, 1)) {
     return `${subject}: The bin depth must be a whole number of at least 1 grid unit.`;
   }
-  if (!isPositiveInteger(entry.heightUnits, 2)) {
-    return `${subject}: The bin height must be a whole number of at least 2 height units.`;
+  if (!isFiniteAtLeast(entry.heightUnits, 2)) {
+    return `${subject}: The bin height must be a number of at least 2 height units.`;
   }
   if (typeof entry.magnetHoles !== 'boolean') {
     return `${subject}: The magnet holes setting must be true or false.`;

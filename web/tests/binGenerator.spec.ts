@@ -349,6 +349,12 @@ describe('buildBinManifold', () => {
     expect(() => validateParams(params({ gridY: 1.5 }))).toThrow(/gridY/);
     expect(() => validateParams(params({ heightUnits: 1 }))).toThrow(/heightUnits/);
   });
+
+  it('accepts a fractional height but still rejects below-minimum and non-finite heights', () => {
+    expect(() => validateParams(params({ heightUnits: 5.5 }))).not.toThrow();
+    expect(() => validateParams(params({ heightUnits: 1.5 }))).toThrow(/heightUnits/);
+    expect(() => validateParams(params({ heightUnits: NaN }))).toThrow(/heightUnits/);
+  });
 });
 
 /**

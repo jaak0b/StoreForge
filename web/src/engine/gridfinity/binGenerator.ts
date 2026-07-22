@@ -595,11 +595,15 @@ export function validateParams(params: BinParams): void {
   for (const [name, value, min] of [
     ['gridX', gridX, 1],
     ['gridY', gridY, 1],
-    ['heightUnits', heightUnits, 2],
   ] as const) {
     if (!Number.isInteger(value) || value < min) {
       throw new Error(`${name} must be an integer of at least ${min}, got ${value}`);
     }
+  }
+  // Height is continuous in the geometry: any fractional number of height units
+  // is valid, so require only a finite value at or above the minimum.
+  if (!Number.isFinite(heightUnits) || heightUnits < 2) {
+    throw new Error(`heightUnits must be a finite number of at least 2, got ${heightUnits}`);
   }
   // Divider wall geometry (containment, minimum length, compartment gaps) is
   // owned by the divider model; surface its user-worded message as an error.

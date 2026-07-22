@@ -45,6 +45,7 @@ import {
   type QueueEntry,
 } from '../../engine/plan/types';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
+import { overallHeightMm } from '../../heightHint';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
 import CutoutViewport from './CutoutViewport.vue';
 import PaintToolbar from '../carve/PaintToolbar.vue';
@@ -81,6 +82,8 @@ const cutout = useCutout();
 
 const { labelText, labelIcon, heightUnits, fused, notes } = storeToRefs(designer);
 const { gridX, gridY } = storeToRefs(cutout);
+
+const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
 /**
  * Step of the clearance stepper, in mm. A user interface increment rather than
@@ -1065,11 +1068,14 @@ function editingTitle(entry: QueueEntry): string {
           v-model.number="heightUnits"
           type="number"
           :min="MIN_HEIGHT_UNITS"
-          step="1"
+          step="0.5"
           label="Height"
           density="comfortable"
           hide-details
         />
+      </div>
+      <div v-if="heightMm !== null" class="text-caption text-medium-emphasis mt-1">
+        {{ heightMm }} mm overall
       </div>
       <v-btn
         variant="outlined"

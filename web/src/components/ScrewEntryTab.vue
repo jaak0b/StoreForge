@@ -32,6 +32,7 @@ import {
   type ScrewBatch,
 } from '../engine/plan/screwListImport';
 import { applySuggestion, suggestShorthand, type ScrewSuggestion } from '../engine/plan/screwSuggest';
+import { overallHeightMm } from '../heightHint';
 import BinViewport from './BinViewport.vue';
 import ProductSelect from './ProductSelect.vue';
 import MoreOptions from './MoreOptions.vue';
@@ -65,13 +66,15 @@ const previewLoaded = ref(!smAndDown.value);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
 
-const HEIGHT_INVALID_MESSAGE = 'The height must be a whole number of at least 2 height units.';
+const HEIGHT_INVALID_MESSAGE = 'The height must be a number of at least 2 height units.';
 
-const heightValid = computed(() => Number.isInteger(heightUnits.value) && heightUnits.value >= 2);
+const heightValid = computed(() => Number.isFinite(heightUnits.value) && heightUnits.value >= 2);
 
 const heightRules = [
-  (v: number) => (Number.isInteger(v) && v >= 2) || HEIGHT_INVALID_MESSAGE,
+  (v: number) => (Number.isFinite(v) && v >= 2) || HEIGHT_INVALID_MESSAGE,
 ];
+
+const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
 function headIconPath(headType: HeadType): string {
   return iconByName(HEAD_ICON_NAME[headType]).path;
@@ -689,11 +692,13 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
             v-model.number="heightUnits"
             type="number"
             min="2"
-            step="1"
+            step="0.5"
             label="Height"
             density="comfortable"
             :disabled="isMultiple"
             :rules="heightRules"
+            :hint="heightMm === null ? undefined : `${heightMm} mm overall`"
+            persistent-hint
           />
         </template>
       </MoreOptions>
