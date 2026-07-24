@@ -58,9 +58,14 @@ let modelUrls: VisionModelUrls | null = null;
 let encoderPromise: Promise<ort.InferenceSession> | null = null;
 let decoderPromise: Promise<ort.InferenceSession> | null = null;
 
-function createSession(url: string): Promise<ort.InferenceSession> {
+async function createSession(url: string): Promise<ort.InferenceSession> {
   ort.env.wasm.wasmPaths = { wasm: ortWasmUrl };
-  return ort.InferenceSession.create(url, { executionProviders: ['wasm'] });
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Could not download the model file at ${url} (HTTP ${response.status}).`);
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
 }
 
 function loadEncoder(): Promise<ort.InferenceSession> {
@@ -69,6 +74,9 @@ function loadEncoder(): Promise<ort.InferenceSession> {
   }
   if (!encoderPromise) {
     encoderPromise = createSession(modelUrls.encoder);
+    encoderPromise.catch(() => {
+      encoderPromise = null;
+    });
   }
   return encoderPromise;
 }
@@ -79,6 +87,9 @@ function loadDecoder(): Promise<ort.InferenceSession> {
   }
   if (!decoderPromise) {
     decoderPromise = createSession(modelUrls.decoder);
+    decoderPromise.catch(() => {
+      decoderPromise = null;
+    });
   }
   return decoderPromise;
 }
