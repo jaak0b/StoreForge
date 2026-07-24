@@ -17,12 +17,15 @@ const { activeTool, sketch, chainTailId, solveState } = storeToRefs(editor);
 
 /** Multi-click tool buffers: picked mm points awaiting the tool's next click. */
 const pendingClicks = ref<MmPoint[]>([]);
+/** Hit-tested existing point id for each entry in pendingClicks, or null. */
+const pendingHitPointIds = ref<(string | null)[]>([]);
 /** A one-line hint under the toolbar naming the tool's next expected click. */
 const toolHint = ref('');
 
 function selectTool(tool: SketchTool): void {
   activeTool.value = tool;
   pendingClicks.value = [];
+  pendingHitPointIds.value = [];
   editor.endChain();
   switch (tool) {
     case 'select':
@@ -61,8 +64,14 @@ function scheduleSolve(): void {
   }, 150);
 }
 
-/** The dimension entry field: which constraint is being typed, and its text. */
-const dimensionDraft = ref<{ constraintId: string | null; text: string } | null>(null);
+/**
+ * The dimension entry field: which constraint is being typed, and its text.
+ * isNew marks a placeholder dimension inserted by beginDimensionFromSelection
+ * (mm: 10) that cancelDimensionDraft removes if abandoned without a commit.
+ */
+const dimensionDraft = ref<{ constraintId: string | null; text: string; isNew: boolean } | null>(
+  null,
+);
 
 function entityById(id: string): SketchEntity | undefined {
   return sketch.value.entities.find((e) => e.id === id);
@@ -105,7 +114,7 @@ function beginDimensionFromSelection(): void {
       'Select one line for a length, an arc or circle for a radius, two points for a distance, or two lines for an angle.';
     return;
   }
-  dimensionDraft.value = { constraintId: created, text: '' };
+  dimensionDraft.value = { constraintId: created, text: '', isNew: true };
   editor.selectedIds = [];
 }
 
@@ -121,12 +130,26 @@ function commitDimensionDraft(): void {
   scheduleSolve();
 }
 
+/**
+ * Abandons the dimension entry field. A freshly inserted placeholder
+ * dimension (mm: 10, never committed) is removed so it does not linger in
+ * the sketch; editing an existing dimension's value just closes the field.
+ */
+function cancelDimensionDraft(): void {
+  const draft = dimensionDraft.value;
+  if (draft !== null && draft.isNew && draft.constraintId !== null) {
+    editor.removeConstraint(draft.constraintId);
+    scheduleSolve();
+  }
+  dimensionDraft.value = null;
+}
+
 /** Click-to-edit on an existing on-canvas dimension label. */
 function onDimensionClick(constraintId: string): void {
   const c = sketch.value.constraints.find((k) => k.id === constraintId);
   if (c === undefined) return;
   const current = c.kind === 'angle' ? c.degrees : 'mm' in c ? c.mm : null;
-  dimensionDraft.value = { constraintId, text: current === null ? '' : String(current) };
+  dimensionDraft.value = { constraintId, text: current === null ? '' : String(current), isNew: false };
 }
 
 /** Toggles an entity in the selection; with the dimension tool active, a
@@ -249,7 +272,7 @@ function removeConflicting(constraintId: string): void {
   scheduleSolve();
 }
 
-/** The two clicked ends of the calibration line over the underlay, in image px. */
+/** The two clicked ends of the calibration line over the underlay, in current display mm. */
 const calibrationClicks = ref<MmPoint[]>([]);
 const calibrationLengthText = ref('');
 const calibrating = ref(false);
@@ -284,6 +307,7 @@ function commitCalibration(): void {
 function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
   if (calibrating.value) {
     pendingClicks.value = [];
+    pendingHitPointIds.value = [];
     calibrationClicks.value.push(at);
     if (calibrationClicks.value.length > 2) calibrationClicks.value = [at];
     return;
@@ -302,27 +326,33 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
     }
     case 'arcThreePoint': {
       pendingClicks.value.push(at);
+      pendingHitPointIds.value.push(hitPointId);
       if (pendingClicks.value.length === 3) {
         const [start, end, through] = pendingClicks.value;
-        const added = editor.addThreePointArc(start, end, through);
+        const endHitId = pendingHitPointIds.value[1] ?? undefined;
+        const added = editor.addThreePointArc(start, end, through, false, endHitId);
         if (!added) toolHint.value = 'Those three points are on one line; an arc needs a curve. Pick again.';
         pendingClicks.value = [];
+        pendingHitPointIds.value = [];
         scheduleSolve();
       }
       break;
     }
     case 'arcTangent': {
-      // Tangent continuation: a three-point arc from the chain tail whose
-      // tangency is then enforced by a tangent constraint added in Task 9's
-      // constraint toolbar; the drawing click places start and end.
+      // Tangent continuation: a three-point arc from the chain tail, with a
+      // tangent constraint added between the chain's previous segment and
+      // the new arc; the drawing click places the arc end and a through point.
       pendingClicks.value.push(at);
+      pendingHitPointIds.value.push(hitPointId);
       if (pendingClicks.value.length === 2) {
         const [end, through] = pendingClicks.value;
+        const endHitId = pendingHitPointIds.value[0] ?? undefined;
         const tail = sketch.value.entities.find((e) => e.id === chainTailId.value);
         if (tail !== undefined && tail.kind === 'point') {
-          editor.addThreePointArc({ x: tail.x, y: tail.y }, end, through);
+          editor.addThreePointArc({ x: tail.x, y: tail.y }, end, through, true, endHitId);
         }
         pendingClicks.value = [];
+        pendingHitPointIds.value = [];
         scheduleSolve();
       }
       break;
@@ -430,6 +460,8 @@ function onPointDragEnd(): void {
       autofocus
       style="max-width: 200px"
       @keyup.enter="commitDimensionDraft"
+      @keyup.esc="cancelDimensionDraft"
+      @blur="cancelDimensionDraft"
     />
     <div class="canvas-holder">
       <SketchCanvas

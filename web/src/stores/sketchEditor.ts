@@ -43,6 +43,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   const editingToolId = ref<string | null>(null);
   /** The open line/arc chain's last point id, or null when no chain is open. */
   const chainTailId = ref<string | null>(null);
+  /** Id of the last segment (line or arc) added to the open chain, or null. */
+  const chainTailSegmentId = ref<string | null>(null);
   /** Photo underlay: display only, never enters geometry. */
   const underlayUrl = ref<string | null>(null);
   const underlayOpacityPct = ref(40);
@@ -56,6 +58,21 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     return `s${idCounter}`;
   }
 
+  /**
+   * Bumped by every mutation of sketch.value. solveNow captures it before
+   * awaiting the worker and discards a stale result if it no longer matches,
+   * so a concurrent edit is never clobbered by a slower earlier solve.
+   */
+  let generation = 0;
+  function bumpGeneration(): void {
+    generation += 1;
+  }
+
+  function pointById(id: string): { x: number; y: number } | null {
+    const entity = sketch.value.entities.find((e) => e.id === id);
+    return entity !== undefined && entity.kind === 'point' ? { x: entity.x, y: entity.y } : null;
+  }
+
   function startNewSketch(): void {
     sketch.value = emptySketch();
     activeTool.value = 'select';
@@ -63,16 +80,19 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     solveState.value = { status: 'idle' };
     editingToolId.value = null;
     chainTailId.value = null;
+    chainTailSegmentId.value = null;
     underlayUrl.value = null;
     underlayOpacityPct.value = 40;
     underlayMmPerPixel.value = null;
     idCounter = 0;
+    bumpGeneration();
   }
 
   /** Opens an existing sketch (deep-copied) for editing a sketched tool. */
   function loadSketch(source: Sketch, toolId: string): void {
     startNewSketch();
     sketch.value = cloneSketch(source);
+    bumpGeneration();
     editingToolId.value = toolId;
     // Continue id numbering above any existing s<N> ids.
     for (const entity of sketch.value.entities) {
@@ -88,6 +108,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   function addPoint(at: MmPoint, construction = false): string {
     const id = nextId();
     sketch.value.entities.push({ kind: 'point', id, x: at.x, y: at.y, construction });
+    bumpGeneration();
     return id;
   }
 
@@ -98,13 +119,16 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   function appendChainPoint(at: MmPoint): string | null {
     const pointId = addPoint(at);
     if (chainTailId.value !== null) {
+      const lineId = nextId();
       sketch.value.entities.push({
         kind: 'line',
-        id: nextId(),
+        id: lineId,
         p1Id: chainTailId.value,
         p2Id: pointId,
         construction: false,
       });
+      chainTailSegmentId.value = lineId;
+      bumpGeneration();
     }
     chainTailId.value = pointId;
     return pointId;
@@ -121,11 +145,14 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       construction: false,
     });
     chainTailId.value = null;
+    chainTailSegmentId.value = null;
+    bumpGeneration();
   }
 
   /** Ends the open chain without closing it. */
   function endChain(): void {
     chainTailId.value = null;
+    chainTailSegmentId.value = null;
   }
 
   function addCircle(center: MmPoint, radiusMm: number): void {
@@ -137,29 +164,61 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       radiusMm,
       construction: false,
     });
+    bumpGeneration();
   }
 
   /**
    * Adds a three-point arc. Point order start, end, then a point the arc
-   * passes through, matching the canvas tool. Returns false for collinear
+   * passes through, matching the canvas tool. When an open chain exists, the
+   * chain tail point is reused as the arc's start (no duplicate point) and
+   * the chain continues from the arc's end; passing endPointId (an existing
+   * point the caller hit-tested, typically the chain's start) closes the
+   * chain onto it instead, the same way closeChainTo does for lines. With
+   * tangent true, a tangent constraint is added between the chain's previous
+   * segment and this arc (the arcTangent tool). Returns false for collinear
    * picks, which the workspace reports as a status row.
    */
-  function addThreePointArc(start: MmPoint, end: MmPoint, through: MmPoint): boolean {
-    const derived = arcFromThreePoints(start, through, end);
+  function addThreePointArc(
+    start: MmPoint,
+    end: MmPoint,
+    through: MmPoint,
+    tangent = false,
+    endPointId?: string,
+  ): boolean {
+    const chainStartId = chainTailId.value;
+    const chainStartPoint = chainStartId !== null ? pointById(chainStartId) : null;
+    const startAt = chainStartPoint ?? start;
+    const derived = arcFromThreePoints(startAt, through, end);
     if (derived === null) return false;
     const centerId = addPoint(derived.center);
-    const startId = addPoint(start);
-    const endId = addPoint(end);
+    const previousSegmentId = chainTailSegmentId.value;
+    const startId = chainStartId ?? addPoint(startAt);
+    const closing = endPointId !== undefined && endPointId !== startId;
+    const endId = closing ? endPointId! : addPoint(end);
+    const arcId = nextId();
     // The stored arc always runs counterclockwise from start to end; a
     // clockwise pick stores the endpoints swapped.
     sketch.value.entities.push({
       kind: 'arc',
-      id: nextId(),
+      id: arcId,
       centerId,
       startId: derived.ccw ? startId : endId,
       endId: derived.ccw ? endId : startId,
       construction: false,
     });
+    if (tangent && chainStartId !== null && previousSegmentId !== null) {
+      addConstraint({ kind: 'tangent', id: nextId(), aId: previousSegmentId, bId: arcId });
+    }
+    if (chainStartId !== null) {
+      if (closing) {
+        chainTailId.value = null;
+        chainTailSegmentId.value = null;
+      } else {
+        chainTailId.value = endId;
+        chainTailSegmentId.value = arcId;
+      }
+    }
+    bumpGeneration();
     return true;
   }
 
@@ -178,15 +237,18 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       p2Id: p2,
       construction: true,
     });
+    bumpGeneration();
     return lineId;
   }
 
   function addConstraint(constraint: SketchConstraint): void {
     sketch.value.constraints.push(constraint);
+    bumpGeneration();
   }
 
   function addDimension(dimension: SketchDimension): void {
     sketch.value.constraints.push(dimension);
+    bumpGeneration();
   }
 
   /** Rewrites a dimension's value in place (click-to-edit label). */
@@ -215,16 +277,19 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       default:
         return assertNever(dimension);
     }
+    bumpGeneration();
   }
 
   function removeConstraint(constraintId: string): void {
     sketch.value.constraints = sketch.value.constraints.filter((c) => c.id !== constraintId);
+    bumpGeneration();
   }
 
   function toggleConstruction(entityId: string): void {
     const entity = sketch.value.entities.find((e) => e.id === entityId);
     if (entity === undefined) return;
     entity.construction = !entity.construction;
+    bumpGeneration();
   }
 
   /**
@@ -233,10 +298,26 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * driven-point workflow used while a point is dragged.
    */
   async function solveNow(drag?: DragTarget): Promise<void> {
-    const result = await solveSketchInWorker(
-      JSON.parse(JSON.stringify(sketch.value)) as Sketch,
-      drag,
-    );
+    const requestGeneration = generation;
+    let result: SketchSolveResult;
+    try {
+      result = await solveSketchInWorker(
+        JSON.parse(JSON.stringify(sketch.value)) as Sketch,
+        drag,
+      );
+    } catch {
+      // A concurrent edit already superseded this request; a later solve
+      // covers the current sketch, so the failure would be stale noise.
+      if (generation !== requestGeneration) return;
+      solveState.value = {
+        status: 'failed',
+        message: 'The sketch solver could not be started. Reload the page to try again.',
+      };
+      return;
+    }
+    // The sketch changed while the worker was solving; discard the now-stale
+    // result instead of clobbering the concurrent edit.
+    if (generation !== requestGeneration) return;
     solveState.value = result;
     if (result.status === 'solved') {
       sketch.value = result.sketch;

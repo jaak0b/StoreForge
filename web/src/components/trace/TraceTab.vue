@@ -43,9 +43,29 @@ const stage = ref<1 | 2>(1);
 const traceInput = ref<'photo' | 'sketch'>('photo');
 const sketchEditor = useSketchEditor();
 
+/**
+ * Stage to return to on Cancel from the sketch workspace: the stage active
+ * before entering it, so cancelling an edit opened from the layout stage
+ * lands back on layout instead of always falling to the Photo stage.
+ */
+const sketchCancelStage = ref<1 | 2>(1);
+
+/**
+ * Starts a fresh sketch. A no-op when the sketch input is already active, so
+ * re-clicking the already-selected Draw button (or toggling away and back)
+ * does not reset in-progress work; traceInput itself is set by the toggle's
+ * own v-model.
+ */
 function startSketch(): void {
-  traceInput.value = 'sketch';
+  if (traceInput.value === 'sketch') return;
+  sketchCancelStage.value = stage.value;
   sketchEditor.startNewSketch();
+}
+
+/** Cancels the sketch workspace and returns to the stage it was opened from. */
+function cancelSketch(): void {
+  traceInput.value = 'photo';
+  stage.value = sketchCancelStage.value;
 }
 
 /** Error from the last finish attempt, shown as an alert over the workspace. */
@@ -100,6 +120,7 @@ function editSketchedTool(toolId: string): void {
       return; // photo tools re-trace through the existing path
     case 'sketch':
       sketchEditor.loadSketch(tool.source.sketch, toolId);
+      sketchCancelStage.value = stage.value;
       stage.value = 1;
       traceInput.value = 'sketch';
       return;
@@ -368,7 +389,7 @@ function restart(): void {
       />
       <SketchWorkspace
         v-else
-        @cancel="traceInput = 'photo'"
+        @cancel="cancelSketch"
         @finish="finishSketch"
       />
     </template>

@@ -374,6 +374,9 @@ export function addTool(
   clicks: SamPoint[] = [],
   placeAtSheetPosition = false,
   brushStrokes: BrushStroke[] = [],
+  // Primitive shapes (circle/rectangle) call addTool without a source, so
+  // they default to 'photo'; a dedicated primitive/basic-shape source kind
+  // is future work, tracked separately from the traced-photo workflow.
   source: ToolSource = { kind: 'photo' },
 ): TracedTool {
   const tool: TracedTool = {
