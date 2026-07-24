@@ -12,7 +12,16 @@
 // exact rounded-rect containment only within the interior corner radius, in
 // practice covered by the AUTO_SIZE_MARGIN_MM margin; a genuine miss still
 // surfaces as the preview's validation error.
-import type { BrushStroke, FingerHole, MmPoint, SamPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
+import type {
+  BrushStroke,
+  FingerHole,
+  MmPoint,
+  SamPoint,
+  TracedOutline,
+  TracedTool,
+  ToolPlacement,
+  ToolSource,
+} from './types';
 
 /** Deep-copies brush strokes so stored strokes never alias a caller's array. */
 function cloneStrokes(strokes: BrushStroke[]): BrushStroke[] {
@@ -365,6 +374,7 @@ export function addTool(
   clicks: SamPoint[] = [],
   placeAtSheetPosition = false,
   brushStrokes: BrushStroke[] = [],
+  source: ToolSource = { kind: 'photo' },
 ): TracedTool {
   const tool: TracedTool = {
     id: crypto.randomUUID(),
@@ -378,6 +388,7 @@ export function addTool(
     minHoleWidthMm: DEFAULT_MIN_HOLE_WIDTH_MM,
     filledHoleIndices: [],
     fingerHoles: [],
+    source,
   };
   state.tools.push(tool);
   if (placeAtSheetPosition) {

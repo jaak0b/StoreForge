@@ -443,6 +443,25 @@ describe('tool list and transform actions', () => {
     expect(s.gridY).toBe(1);
   });
 
+  it('stamps a new tool with the photo source by default', () => {
+    const s = state([], []);
+    const tool = addTool(
+      s,
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 20, y: 0 },
+          { x: 20, y: 20 },
+          { x: 0, y: 20 },
+        ],
+        holes: [],
+      },
+      'Tool',
+      20,
+    );
+    expect(tool.source).toEqual({ kind: 'photo' });
+  });
+
   it('places sheet-position tools where they lay on the paper, not stacked', () => {
     // Two 10 mm squares traced at sheet spots (40..50, 40..50) and
     // (150..160, 90..100): placed at their sheet positions their placements

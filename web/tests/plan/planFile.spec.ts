@@ -24,6 +24,7 @@ import type {
 } from '../../src/engine/plan/types';
 import { PLAN_FILE_VERSION } from '../../src/engine/plan/types';
 import { evenDividerWalls } from '../../src/engine/gridfinity/dividerModel';
+import { SKETCH_SCHEMA_VERSION } from '../../src/engine/sketch/model';
 
 function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
@@ -83,6 +84,7 @@ function pockets(): BinPockets {
         minHoleWidthMm: 3.2,
         filledHoleIndices: [0],
         fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
+        source: { kind: 'photo' },
       },
     ],
     placements: [{ toolId: 't1', xMm: 3, yMm: -4, pocketDepthMm: 12, draftAngleDeg: 0 }],
@@ -1773,7 +1775,7 @@ describe('cavity edits (plan version 9)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect((result.plan.entries[0].product as { bin: { edits: unknown } }).bin.edits).toEqual([]);
-    expect(result.plan.version).toBe(10);
+    expect(result.plan.version).toBe(PLAN_FILE_VERSION);
   });
 
   it('rejects an edit with a radius outside 0.2 to 50 mm', () => {
@@ -1977,5 +1979,80 @@ describe('traced bin cavity edits and pocket draft angle (plan version 10)', () 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain('draft angle');
+  });
+});
+
+describe('plan version 11: pocket tool source', () => {
+  function rawTracedEntry(): {
+    entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+  } {
+    const traced = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
+    return JSON.parse(serializePlanFile([traced], [])) as {
+      entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+    };
+  }
+
+  function parseTracedEntryWith(mutate: (tool: Record<string, unknown>) => void): PlanParseResult {
+    const raw = rawTracedEntry();
+    mutate(raw.entries[0].product.bin.pockets.tools[0]);
+    return parsePlanFile(JSON.stringify(raw));
+  }
+
+  function writeAndReparseTracedEntry(
+    mutate: (tool: Record<string, unknown>) => void,
+  ): Extract<PlanParseResult, { ok: true }>['plan'] {
+    const result = parseTracedEntryWith(mutate);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    return result.plan;
+  }
+
+  function firstPocketTool(plan: Extract<PlanParseResult, { ok: true }>['plan']): TracedBin['pockets']['tools'][0] {
+    return (plan.entries[0].product as { bin: TracedBin }).bin.pockets.tools[0];
+  }
+
+  it('defaults an absent source to photo on load', () => {
+    const plan = writeAndReparseTracedEntry((tool) => {
+      delete (tool as Record<string, unknown>).source;
+    });
+    const tool = firstPocketTool(plan);
+    expect(tool.source).toEqual({ kind: 'photo' });
+  });
+
+  it('round-trips a sketch source', () => {
+    const sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [
+        { kind: 'point', id: 'pc', x: 0, y: 0, construction: false },
+        { kind: 'circle', id: 'c1', centerId: 'pc', radiusMm: 12, construction: false },
+      ],
+      constraints: [],
+    };
+    const plan = writeAndReparseTracedEntry((tool) => {
+      (tool as Record<string, unknown>).source = { kind: 'sketch', sketch };
+    });
+    const tool = firstPocketTool(plan);
+    expect(tool.source.kind).toBe('sketch');
+    if (tool.source.kind === 'sketch') expect(tool.source.sketch).toEqual(sketch);
+  });
+
+  it('rejects a sketch source with a broken sketch', () => {
+    const result = parseTracedEntryWith((tool) => {
+      (tool as Record<string, unknown>).source = { kind: 'sketch', sketch: { schemaVersion: 1 } };
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('entities must be a list');
+    }
+  });
+
+  it('rejects an unknown source kind', () => {
+    const result = parseTracedEntryWith((tool) => {
+      (tool as Record<string, unknown>).source = { kind: 'scan' };
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('source must be a photo trace or a sketch');
+    }
   });
 });

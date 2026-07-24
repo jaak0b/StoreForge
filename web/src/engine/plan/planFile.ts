@@ -66,8 +66,10 @@ import type {
   SamPoint,
   TracedTool,
   ToolPlacement,
+  ToolSource,
 } from '../trace/types';
 import { DEFAULT_MIN_HOLE_WIDTH_MM } from '../trace/layoutModel';
+import { validateSketch, deserializeSketch } from '../sketch/model';
 
 /*
  * Validation message convention. Every validator returns null when the value
@@ -256,6 +258,25 @@ export function validatePockets(raw: unknown, subject: string): string | null {
         return `${subject}: pocket tool ${tool.id}: An elongated finger hole needs its second point, so x2 and y2 must both be numbers.`;
       }
     }
+    // source was added in plan version 11; older plans omit it, so undefined
+    // is accepted and defaulted to a photo trace on pick.
+    if (tool.source !== undefined) {
+      const source = tool.source as Record<string, unknown> | null;
+      if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+        return `${subject}: pocket tool ${tool.id}: The outline source must be an object.`;
+      }
+      if (source.kind === 'photo') {
+        // A photo source carries no further fields.
+      } else if (source.kind === 'sketch') {
+        const sketchProblem = validateSketch(
+          source.sketch,
+          `${subject}: pocket tool ${tool.id}`,
+        );
+        if (sketchProblem !== null) return sketchProblem;
+      } else {
+        return `${subject}: pocket tool ${tool.id}: The outline source must be a photo trace or a sketch.`;
+      }
+    }
   }
   if (!Array.isArray(pockets.placements)) {
     return `${subject}: The tool pockets are missing their list of placements.`;
@@ -331,6 +352,7 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
           : {}),
         diameterMm: hole.diameterMm,
       })),
+      source: pickToolSource(tool.source),
     };
   });
   const placements = (raw.placements as Record<string, unknown>[]).map(
@@ -343,6 +365,25 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
     }),
   );
   return { tools, placements };
+}
+
+/**
+ * Copies a validated tool source; absent (pre-version-11) means the tool was
+ * photo-traced, which is what every earlier plan's tools were.
+ */
+function pickToolSource(raw: unknown): ToolSource {
+  if (raw === undefined) return { kind: 'photo' };
+  const source = raw as Record<string, unknown>;
+  if (source.kind === 'sketch') {
+    const parsed = deserializeSketch(source.sketch);
+    if (!parsed.ok) {
+      // validatePockets already proved the sketch valid; reaching here is a
+      // programming error, not a user problem.
+      throw new Error(`A validated sketch failed to deserialize: ${parsed.error}`);
+    }
+    return { kind: 'sketch', sketch: parsed.sketch };
+  }
+  return { kind: 'photo' };
 }
 
 /** The six placement fields, in the order the validator reports them. */
@@ -1882,7 +1923,9 @@ export function parsePlanFile(text: string): PlanParseResult {
   // cutout bins, absent in earlier versions and defaulted to an empty list
   // on pick, and version 10 adds the group entity (a persistent drawer fill)
   // and the baseplate product's optional group link, both absent from every
-  // earlier version, so nothing else changes.
+  // earlier version, so nothing else changes. Version 11 adds the outline
+  // source on pocket tools (photo trace or embedded sketch), absent in
+  // earlier versions and defaulted to a photo trace on pick.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];

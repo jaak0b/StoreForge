@@ -9,6 +9,7 @@ import type {
   TracedOutline,
   TracedTool,
   ToolPlacement,
+  ToolSource,
   FingerHole,
 } from '../engine/trace/types';
 import type { LayoutState } from '../engine/trace/layoutModel';
@@ -163,6 +164,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     clicks: SamPoint[] = [],
     placeAtSheetPosition = false,
     brushStrokes: BrushStroke[] = [],
+    source: ToolSource = { kind: 'photo' },
   ): TracedTool {
     toolCounter += 1;
     const tool = layout.addTool(
@@ -173,6 +175,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
       clicks,
       placeAtSheetPosition,
       brushStrokes,
+      source,
     );
     selectedToolId.value = tool.id;
     return tool;

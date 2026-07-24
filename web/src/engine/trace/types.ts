@@ -1,3 +1,5 @@
+import type { Sketch } from '../sketch/model';
+
 /** Reference sheet sizes supported by the tool-trace calibration. */
 export type PaperKind = 'letter' | 'a4';
 
@@ -75,6 +77,14 @@ export interface TracedOutline {
   outer: MmPoint[];
   holes: MmPoint[][];
 }
+
+/**
+ * Where a tool's outline came from. A photo-traced tool is re-editable
+ * through its stored clicks and photo; a sketched tool embeds its editable
+ * Sketch so it can be reopened and changed later. Discriminated on kind and
+ * always branched exhaustively (assertNever), mirroring Bin.origin.
+ */
+export type ToolSource = { kind: 'photo' } | { kind: 'sketch'; sketch: Sketch };
 
 /**
  * A finger hole punched through the tool pocket so the tool can be lifted
@@ -162,6 +172,8 @@ export interface TracedTool {
    */
   filledHoleIndices: number[];
   fingerHoles: FingerHole[];
+  /** Where the outline came from: a photo trace or an embedded sketch. */
+  source: ToolSource;
 }
 
 /**

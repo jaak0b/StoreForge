@@ -656,13 +656,13 @@ export interface Group {
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 10, which is version 9 plus the group
-   * entity (a persistent drawer fill) and the baseplate product's optional
-   * group backlink. The change is additive: no field of an earlier version
-   * changes meaning, so versions 1 to 9 read exactly as before; they simply
-   * contain no group and no linked baseplate.
+   * Envelope format version. Currently 11, which is version 10 plus the
+   * outline source on pocket tools (photo trace or embedded sketch). The
+   * change is additive: no field of an earlier version changes meaning, so
+   * versions 1 to 10 read exactly as before; they simply contain no source
+   * (defaulted to a photo trace on pick).
    */
-  version: 10;
+  version: 11;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -672,4 +672,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 10;
+export const PLAN_FILE_VERSION = 11;
