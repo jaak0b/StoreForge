@@ -11,6 +11,7 @@ import { overallHeightMm } from '../../heightHint';
 import LabelIconField from '../LabelIconField.vue';
 import ProductSelect from '../ProductSelect.vue';
 import MoreOptions from '../MoreOptions.vue';
+import { editActionOf } from './toolEditAction';
 
 /**
  * The advanced drawer of the layout workspace, opened by the Edit button in
@@ -29,6 +30,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** Asks the workspace to re-trace the tool from its stored clicks. */
   retrace: [toolId: string];
+  /** Asks the workspace to reopen a sketched tool's stored sketch. */
+  editSketch: [toolId: string];
   'update:quantity': [value: number];
 }>();
 
@@ -196,7 +199,7 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
             </v-list-item-subtitle>
             <template #append>
               <v-btn
-                v-if="tool.clicks.length > 0"
+                v-if="editActionOf(tool) === 'retrace' && tool.clicks.length > 0"
                 icon
                 size="x-small"
                 variant="text"
@@ -205,6 +208,16 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
                 @click.stop="emit('retrace', tool.id)"
               >
                 <v-icon icon="mdi-magic-staff" size="16" />
+              </v-btn>
+              <v-btn
+                v-else-if="editActionOf(tool) === 'editSketch'"
+                icon
+                size="x-small"
+                variant="text"
+                title="Edit this tool's sketch."
+                @click.stop="emit('editSketch', tool.id)"
+              >
+                <v-icon icon="mdi-pencil-ruler" size="16" />
               </v-btn>
               <v-btn icon size="x-small" variant="text" @click.stop="trace.duplicateTool(tool.id)">
                 <v-icon icon="mdi-content-copy" size="16" />

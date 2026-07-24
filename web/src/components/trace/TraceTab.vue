@@ -5,11 +5,13 @@ import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
-import { binOf, type TracedBin } from '../../engine/plan/types';
+import { assertNever, binOf, type TracedBin } from '../../engine/plan/types';
 import type { PaperCorners } from '../../engine/trace/types';
 import { worldFromEntry } from '../../engine/trace/layoutModel';
 import { getPhoto } from '../../photoStore';
 import { embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
+import { extractProfile } from '../../engine/sketch/profile';
+import { cloneSketch } from '../../engine/sketch/model';
 import PhotoStage from './PhotoStage.vue';
 import TraceCanvas from './TraceCanvas.vue';
 import LayoutWorkspace from './LayoutWorkspace.vue';
@@ -46,9 +48,64 @@ function startSketch(): void {
   sketchEditor.startNewSketch();
 }
 
-function finishSketch(): void {
-  // Wired to profile extraction and the layout step in the finish task.
+/** Error from the last finish attempt, shown as an alert over the workspace. */
+const sketchFinishError = ref<string | null>(null);
+
+/**
+ * Validates the sketch through the profile extractor and drops the resulting
+ * outline into the normal tool placement step. The sketch itself travels on
+ * the tool so it can be reopened and edited later.
+ */
+async function finishSketch(): Promise<void> {
+  sketchFinishError.value = null;
+  // One final solve so the extracted profile is the solved geometry.
+  await sketchEditor.solveNow();
+  const state = sketchEditor.solveState;
+  if (state.status === 'conflicting') {
+    sketchFinishError.value =
+      'The sketch has conflicting constraints. Remove one of the constraints listed under the canvas.';
+    return;
+  }
+  if (state.status === 'failed') {
+    sketchFinishError.value = state.message;
+    return;
+  }
+  const profile = extractProfile(sketchEditor.sketch);
+  if (!profile.ok) {
+    sketchFinishError.value = profile.error;
+    return;
+  }
+  const source = { kind: 'sketch' as const, sketch: cloneSketch(sketchEditor.sketch) };
+  if (sketchEditor.editingToolId !== null) {
+    // Re-editing a sketched tool: replace its outline and sketch in place.
+    const tool = trace.tools.find((t) => t.id === sketchEditor.editingToolId);
+    if (tool !== undefined) {
+      trace.replaceToolOutline(tool.id, profile.outline, []);
+      tool.source = source;
+    }
+  } else {
+    trace.addTool(profile.outline, 'Sketched shape', [], false, [], source);
+  }
   traceInput.value = 'photo';
+  stage.value = 2;
+  trace.workspaceMode = 'layout';
+}
+
+/** Opens a sketched tool's stored sketch back in the sketch workspace. */
+function editSketchedTool(toolId: string): void {
+  const tool = trace.tools.find((t) => t.id === toolId);
+  if (tool === undefined) return;
+  switch (tool.source.kind) {
+    case 'photo':
+      return; // photo tools re-trace through the existing path
+    case 'sketch':
+      sketchEditor.loadSketch(tool.source.sketch, toolId);
+      stage.value = 1;
+      traceInput.value = 'sketch';
+      return;
+    default:
+      return assertNever(tool.source);
+  }
 }
 
 /** The queue entry being edited on this tab, or null when designing a new bin. */
@@ -296,6 +353,9 @@ function restart(): void {
       <v-alert v-if="resumeError" type="error" density="compact">
         {{ resumeError }}
       </v-alert>
+      <v-alert v-if="sketchFinishError !== null" type="error" density="compact" class="mb-2">
+        {{ sketchFinishError }}
+      </v-alert>
       <v-progress-linear v-if="resumeBusy" indeterminate />
       <v-btn-toggle v-model="traceInput" mandatory class="mb-2">
         <v-btn value="photo">Upload a photo</v-btn>
@@ -348,6 +408,7 @@ function restart(): void {
           :retrace-available="traceModeAvailable"
           @trace-another="setWorkspaceMode('trace')"
           @retrace="onRetrace"
+          @edit-sketch="editSketchedTool"
           @saved="restart"
           @cancelled="restart"
         />

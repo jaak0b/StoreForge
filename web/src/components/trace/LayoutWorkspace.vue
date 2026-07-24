@@ -56,6 +56,8 @@ const emit = defineEmits<{
   retrace: [toolId: string];
   /** Asks the workspace to switch to Trace mode for another tool. */
   traceAnother: [];
+  /** Asks the workspace to reopen a sketched tool's stored sketch. */
+  editSketch: [toolId: string];
   saved: [];
   cancelled: [];
 }>();
@@ -407,6 +409,7 @@ function cancelEdit(): void {
         v-model:drawer-open="drawerOpen"
         :retrace-available="retraceAvailable"
         @retrace="emit('retrace', $event)"
+        @edit-sketch="emit('editSketch', $event)"
         @trace-another="emit('traceAnother')"
         @add-shape="primitiveDialog = true"
       />
@@ -491,6 +494,7 @@ function cancelEdit(): void {
         :quantity="quantity"
         @update:quantity="quantity = $event"
         @retrace="emit('retrace', $event)"
+        @edit-sketch="emit('editSketch', $event)"
       />
     </div>
   </div>

@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { CLEARANCE_CHOICES, useToolTrace } from '../../stores/toolTrace';
+import { editActionOf } from './toolEditAction';
 
 /**
  * The toolbar strip docked at the top of the layout canvas. Its left half
@@ -25,6 +26,8 @@ const drawerOpen = defineModel<boolean>('drawerOpen', { required: true });
 const emit = defineEmits<{
   /** Asks the workspace to re-trace the tool from its stored clicks. */
   retrace: [toolId: string];
+  /** Asks the workspace to reopen a sketched tool's stored sketch. */
+  editSketch: [toolId: string];
   /** Asks the workspace to switch to Trace mode for another tool. */
   traceAnother: [];
   /** Opens the basic-shape dialog. */
@@ -186,11 +189,17 @@ function removeTool(): void {
               @click="trace.duplicateTool(tool.id)"
             />
             <v-list-item
-              v-if="tool.clicks.length > 0"
+              v-if="editActionOf(tool) === 'retrace' && tool.clicks.length > 0"
               prepend-icon="mdi-magic-staff"
               title="Re-trace"
               :disabled="!props.retraceAvailable"
               @click="emit('retrace', tool.id)"
+            />
+            <v-list-item
+              v-else-if="editActionOf(tool) === 'editSketch'"
+              prepend-icon="mdi-pencil-ruler"
+              title="Edit sketch"
+              @click="emit('editSketch', tool.id)"
             />
             <v-list-item
               prepend-icon="mdi-delete-outline"
