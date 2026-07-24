@@ -10,6 +10,7 @@ import {
 } from '../engine/sketch/model';
 import type { DragTarget, SketchSolveResult } from '../engine/sketch/solve';
 import type { MmPoint } from '../engine/trace/types';
+import { assertNever } from '../engine/plan/types';
 import { solveSketchInWorker } from '../sketchClient';
 
 /** The drawing tool active on the sketch canvas. */
@@ -211,10 +212,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       case 'symmetric':
         // Not dimensions; nothing to edit.
         break;
-      default: {
-        const exhaustive: never = dimension;
-        throw new Error(`Unhandled constraint kind: ${String(exhaustive)}`);
-      }
+      default:
+        return assertNever(dimension);
     }
   }
 
