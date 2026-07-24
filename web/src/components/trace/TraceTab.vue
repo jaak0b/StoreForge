@@ -13,6 +13,8 @@ import { embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
 import PhotoStage from './PhotoStage.vue';
 import TraceCanvas from './TraceCanvas.vue';
 import LayoutWorkspace from './LayoutWorkspace.vue';
+import SketchWorkspace from './sketch/SketchWorkspace.vue';
+import { useSketchEditor } from '../../stores/sketchEditor';
 
 /**
  * The Tool trace tab of the add-bin card, in two stages: a Photo stage
@@ -34,6 +36,20 @@ const { rectifiedPreview, embedReady, tools, workspaceMode } = storeToRefs(trace
 
 /** 1 shows the Photo stage, 2 the trace-and-lay-out workspace. */
 const stage = ref<1 | 2>(1);
+
+/** How the tool outline is produced on stage 1: a photo trace or a drawn sketch. */
+const traceInput = ref<'photo' | 'sketch'>('photo');
+const sketchEditor = useSketchEditor();
+
+function startSketch(): void {
+  traceInput.value = 'sketch';
+  sketchEditor.startNewSketch();
+}
+
+function finishSketch(): void {
+  // Wired to profile extraction and the layout step in the finish task.
+  traceInput.value = 'photo';
+}
 
 /** The queue entry being edited on this tab, or null when designing a new bin. */
 const editingEntry = computed(() => {
@@ -281,7 +297,20 @@ function restart(): void {
         {{ resumeError }}
       </v-alert>
       <v-progress-linear v-if="resumeBusy" indeterminate />
-      <PhotoStage @confirmed="onSheetConfirmed" @photo-replaced="onPhotoReplaced" />
+      <v-btn-toggle v-model="traceInput" mandatory class="mb-2">
+        <v-btn value="photo">Upload a photo</v-btn>
+        <v-btn value="sketch" @click="startSketch">Draw the shape</v-btn>
+      </v-btn-toggle>
+      <PhotoStage
+        v-if="traceInput === 'photo'"
+        @confirmed="onSheetConfirmed"
+        @photo-replaced="onPhotoReplaced"
+      />
+      <SketchWorkspace
+        v-else
+        @cancel="traceInput = 'photo'"
+        @finish="finishSketch"
+      />
     </template>
 
     <div v-else>
