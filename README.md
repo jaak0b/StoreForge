@@ -65,6 +65,11 @@ The stack is Vue 3, TypeScript, Vite, Vuetify, and Pinia. All geometry generatio
 Gridfinity bin geometry constants are ported from the MIT-licensed
 [kennetek/gridfinity-rebuilt-openscad](https://github.com/kennetek/gridfinity-rebuilt-openscad).
 
+The 2D sketch workspace is powered by the FreeCAD PlaneGCS constraint solver, compiled to
+WebAssembly by the LGPL-2.1-licensed
+[Salusoft89/planegcs](https://github.com/Salusoft89/planegcs). The `planegcs.wasm` binary
+ships as a separate, replaceable asset, as the LGPL requires.
+
 ## Contributing
 
 Issues and pull requests are welcome at [github.com/jaak0b/StoreForge](https://github.com/jaak0b/StoreForge).
