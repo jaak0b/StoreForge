@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, shallowRef } from 'vue';
+import { ref, shallowRef, watch } from 'vue';
 import {
   arcFromThreePoints,
   cloneSketch,
@@ -39,6 +39,13 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   const sketch = ref<Sketch>(emptySketch());
   const activeTool = ref<SketchTool>('select');
   const selectedIds = ref<string[]>([]);
+  /** Id of the constraint selected by clicking its glyph, or null. Mutually
+   * exclusive with selectedIds: selecting an entity clears this, and
+   * selectConstraint clears the entity selection. */
+  const selectedConstraintId = ref<string | null>(null);
+  /** Whether the constraint glyph layer renders on the canvas; the toolbar
+   * eye toggle flips this. Defaults shown. */
+  const glyphsVisible = ref(true);
   const solveState = shallowRef<SolveState>({ status: 'idle' });
   /** Id of the sketched tool being re-edited, or null for a new shape. */
   const editingToolId = ref<string | null>(null);
@@ -134,7 +141,14 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   function applyHistoryEntry(entry: HistoryEntry): void {
     sketch.value = entry.sketch;
     const survivingIds = new Set(entry.sketch.entities.map((e) => e.id));
+    const survivingConstraintIds = new Set(entry.sketch.constraints.map((c) => c.id));
     selectedIds.value = selectedIds.value.filter((id) => survivingIds.has(id));
+    if (
+      selectedConstraintId.value !== null &&
+      !survivingConstraintIds.has(selectedConstraintId.value)
+    ) {
+      selectedConstraintId.value = null;
+    }
     chainTailId.value = entry.chainTailId !== null && survivingIds.has(entry.chainTailId)
       ? entry.chainTailId
       : null;
@@ -187,6 +201,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     sketch.value = emptySketch();
     activeTool.value = 'select';
     selectedIds.value = [];
+    selectedConstraintId.value = null;
     solveState.value = { status: 'idle' };
     editingToolId.value = null;
     chainTailId.value = null;
@@ -469,11 +484,32 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     beginMutation();
     try {
       sketch.value.constraints = sketch.value.constraints.filter((c) => c.id !== constraintId);
+      if (selectedConstraintId.value === constraintId) selectedConstraintId.value = null;
       bumpGeneration();
     } finally {
       endMutation();
     }
   }
+
+  /** Selects a constraint (clicked via its glyph), clearing any entity
+   * selection; the watcher below clears this back when an entity is
+   * selected, so the two selections stay mutually exclusive. */
+  function selectConstraint(constraintId: string): void {
+    selectedIds.value = [];
+    selectedConstraintId.value = constraintId;
+  }
+
+  // Selecting an entity clears the constraint selection; selectConstraint
+  // clears the entity selection directly above. deep:true is required
+  // because selectedIds is mutated in place (push/splice) by several
+  // callers, not always reassigned.
+  watch(
+    selectedIds,
+    (ids) => {
+      if (ids.length > 0 && selectedConstraintId.value !== null) selectedConstraintId.value = null;
+    },
+    { deep: true, flush: 'sync' },
+  );
 
   /** The point ids a non-point entity refers to, or [] for a point itself. */
   function entityPointRefs(entity: SketchEntity): string[] {
@@ -560,6 +596,12 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       (c) => !constraintRefIds(c).some((id) => finalRemovedIds.has(id)),
     );
     selectedIds.value = selectedIds.value.filter((id) => !finalRemovedIds.has(id));
+    if (
+      selectedConstraintId.value !== null &&
+      !sketch.value.constraints.some((c) => c.id === selectedConstraintId.value)
+    ) {
+      selectedConstraintId.value = null;
+    }
     bumpGeneration();
     } finally {
       endMutation();
@@ -614,6 +656,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     sketch,
     activeTool,
     selectedIds,
+    selectedConstraintId,
+    selectConstraint,
+    glyphsVisible,
     solveState,
     editingToolId,
     chainTailId,

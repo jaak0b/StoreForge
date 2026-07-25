@@ -10,6 +10,7 @@ import {
   canToggleConstruction,
   type ApplicableConstraintKind,
 } from '../../../engine/sketch/constraintApplicability';
+import { constraintKindSentence } from '../../../engine/sketch/constraintGlyphs';
 import { assertNever } from '../../../engine/plan/types';
 
 const emit = defineEmits<{
@@ -54,6 +55,7 @@ function selectTool(tool: SketchTool): void {
   activeTool.value = tool;
   pendingClicks.value = [];
   pendingHitPointIds.value = [];
+  editor.selectedConstraintId = null;
   editor.endChain();
   switch (tool) {
     case 'select':
@@ -211,6 +213,21 @@ function onEntityClick(entityId: string): void {
     beginDimensionFromSelection();
   }
 }
+
+/** Selects the constraint behind a clicked glyph. */
+function onConstraintClick(constraintId: string): void {
+  editor.selectConstraint(constraintId);
+}
+
+/** The hint line's text: the selected constraint's kind, in a complete
+ * sentence, when a glyph is selected; otherwise the active tool's hint. */
+const displayedHint = computed<string>(() => {
+  if (editor.selectedConstraintId !== null) {
+    const c = sketch.value.constraints.find((k) => k.id === editor.selectedConstraintId);
+    if (c !== undefined) return constraintKindSentence(c);
+  }
+  return toolHint.value;
+});
 
 /** Applies a constraint to the current selection; each row names its need. */
 function applyConstraint(kind: ApplicableConstraintKind): void {
@@ -471,8 +488,15 @@ function redoAction(): void {
   scheduleSolve();
 }
 
-/** Deletes the current selection, if any, and reschedules the solve. */
+/** Deletes the current selection, if any, and reschedules the solve. A
+ * selected constraint (from clicking its glyph) takes priority, extending
+ * the same delete path the entity selection uses. */
 function deleteSelection(): void {
+  if (editor.selectedConstraintId !== null) {
+    editor.removeConstraint(editor.selectedConstraintId);
+    scheduleSolve();
+    return;
+  }
   if (editor.selectedIds.length === 0) return;
   editor.deleteEntities([...editor.selectedIds]);
   scheduleSolve();
@@ -513,6 +537,8 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     if (chainTailId.value !== null) {
       editor.endChain();
+    } else if (editor.selectedConstraintId !== null) {
+      editor.selectedConstraintId = null;
     } else if (editor.selectedIds.length > 0) {
       editor.selectedIds = [];
     }
@@ -577,11 +603,22 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         icon
         density="compact"
         variant="text"
-        :disabled="editor.selectedIds.length === 0"
+        :disabled="editor.selectedIds.length === 0 && editor.selectedConstraintId === null"
         @click="deleteSelection"
       >
         <v-icon>mdi-delete-outline</v-icon>
         <v-tooltip activator="parent" location="bottom">Delete selection</v-tooltip>
+      </v-btn>
+      <v-btn
+        icon
+        density="compact"
+        variant="text"
+        @click="editor.glyphsVisible = !editor.glyphsVisible"
+      >
+        <v-icon>{{ editor.glyphsVisible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
+        <v-tooltip activator="parent" location="bottom">
+          {{ editor.glyphsVisible ? 'Hide constraint glyphs' : 'Show constraint glyphs' }}
+        </v-tooltip>
       </v-btn>
       <v-menu :close-on-content-click="false" location="bottom end">
         <template #activator="{ props: menuProps }">
@@ -656,7 +693,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
           <v-tooltip activator="parent" location="bottom">Construction</v-tooltip>
         </v-btn>
       </div>
-      <p v-else class="tool-hint">{{ toolHint }}</p>
+      <p v-else class="tool-hint">{{ displayedHint }}</p>
     </v-toolbar>
     <v-text-field
       v-if="dimensionDraft !== null"
@@ -677,6 +714,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         @point-drag-merge="onPointDragMerge"
         @entity-click="(id: string) => onEntityClick(id)"
         @dimension-click="(id: string) => onDimensionClick(id)"
+        @constraint-click="(id: string) => onConstraintClick(id)"
       />
     </div>
     <div class="status-rows">

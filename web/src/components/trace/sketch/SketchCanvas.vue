@@ -9,6 +9,7 @@ import {
 import { assertNever } from '../../../engine/plan/types';
 import type { MmPoint } from '../../../engine/trace/types';
 import type { SketchEntity } from '../../../engine/sketch/model';
+import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 
 const emit = defineEmits<{
   /** A canvas click in mm, for the active drawing tool. */
@@ -22,6 +23,8 @@ const emit = defineEmits<{
   /** A click on a dimension label, for click-to-edit. */
   (e: 'dimensionClick', constraintId: string, at: MmPoint): void;
   (e: 'entityClick', entityId: string): void;
+  /** A click on a constraint glyph, for the constraint selection. */
+  (e: 'constraintClick', constraintId: string): void;
 }>();
 
 const editor = useSketchEditor();
@@ -29,6 +32,8 @@ const {
   sketch,
   solveState,
   selectedIds,
+  selectedConstraintId,
+  glyphsVisible,
   underlayUrl,
   underlayOpacityPct,
   underlayMmPerPixel,
@@ -215,6 +220,7 @@ function onPointerDown(event: PointerEvent): void {
   }
   if (editor.activeTool === 'select' && hit === null && !isEntityTarget(event.target)) {
     selectedIds.value = [];
+    selectedConstraintId.value = null;
   }
   emit('canvasClick', at, hit);
 }
@@ -258,6 +264,28 @@ function onPointerUp(): void {
 
 function onPointerLeave(): void {
   cursorMm.value = null;
+}
+
+/**
+ * A browser-initiated pointer cancel (e.g. a touch gesture claimed by the
+ * browser, or a stylus losing contact) mid-drag. Funnels through the same
+ * exit path as pointerup, but never merges: a cancel is treated as a plain
+ * drag end, since the pointer position at cancel time is not a deliberate
+ * release the user aimed at another point. Without this, draggingPointId and
+ * the store's beginPointDrag recording scope would stay open forever,
+ * silently suppressing every later undo snapshot.
+ */
+function onPointerCancel(): void {
+  if (pendingPointId.value !== null) {
+    pendingPointId.value = null;
+    pendingDownScreen.value = null;
+    return;
+  }
+  if (draggingPointId.value !== null) {
+    draggingPointId.value = null;
+    dragSnapTargetId.value = null;
+    emit('pointDragEnd');
+  }
 }
 
 /** The point id within the screen-pixel snap radius, or null. */
@@ -361,6 +389,126 @@ const dimensionLabels = computed(() =>
     })
     .filter((label): label is NonNullable<typeof label> => label !== null),
 );
+
+/** Glyph color: the muted default, or the selection accent when its
+ * constraint is the current selectedConstraintId. Distinct from geometry
+ * colors (blue/green/red), the entity selection accent, and the dimension
+ * label color, per the glyph design. */
+function glyphColorOf(constraintId: string): string {
+  return constraintId === selectedConstraintId.value ? '#ff9800' : '#607d8b';
+}
+
+/** Millimeters per screen pixel, re-read whenever the view changes, so glyph
+ * sizes stay constant in screen px across zoom levels (same pattern as
+ * hitStrokeWidthMm above). */
+const glyphMmPerPx = computed(() => {
+  void view.value;
+  return mmPerScreenPixel();
+});
+
+function unitVec(angleDeg: number): { ux: number; uy: number } {
+  const rad = (angleDeg * Math.PI) / 180;
+  return { ux: Math.cos(rad), uy: Math.sin(rad) };
+}
+
+interface ParallelTickGlyph { key: string; constraintId: string; x1: number; y1: number; x2: number; y2: number }
+interface PerpendicularGlyph { key: string; constraintId: string; d: string }
+interface LetterGlyph { key: string; constraintId: string; x: number; y: number; text: 'H' | 'V' }
+interface DotGlyph { key: string; constraintId: string; cx: number; cy: number; r: number }
+interface SymmetricGlyph { key: string; constraintId: string; d: string }
+
+/**
+ * Ready-to-draw glyph primitives for every constraint the sketch carries,
+ * grouped by SVG shape so the template stays simple. Built by one exhaustive
+ * switch over constraintGlyphs' kinds (assertNever guards new kinds), sized
+ * in screen px via glyphMmPerPx so glyphs read the same size at any zoom.
+ */
+const glyphShapes = computed(() => {
+  const parallelTicks: ParallelTickGlyph[] = [];
+  const rightAngles: PerpendicularGlyph[] = [];
+  const letters: LetterGlyph[] = [];
+  const tangentDots: DotGlyph[] = [];
+  const coincidentRings: DotGlyph[] = [];
+  const symmetricMarks: SymmetricGlyph[] = [];
+  const empty = { parallelTicks, rightAngles, letters, tangentDots, coincidentRings, symmetricMarks };
+  if (!glyphsVisible.value) return empty;
+
+  const scale = glyphMmPerPx.value;
+  const tickLen = scale * 5;
+  const tickGap = scale * 2.5;
+  const rightAngleSize = scale * 6;
+  const letterOffset = scale * 6;
+  const dotR = scale * 2;
+  const ringR = scale * 3.5;
+  const arrowLen = scale * 6;
+
+  for (const g of constraintGlyphs(sketch.value)) {
+    switch (g.kind) {
+      case 'parallel': {
+        const { ux, uy } = unitVec(g.angleDeg);
+        const px = -uy;
+        const py = ux;
+        for (let n = 0; n < g.tickCount; n++) {
+          const offset = (n - (g.tickCount - 1) / 2) * tickGap;
+          const cx = g.at.x + ux * offset;
+          const cy = g.at.y + uy * offset;
+          parallelTicks.push({
+            key: `${g.constraintId}-${n}`,
+            constraintId: g.constraintId,
+            x1: cx + px * tickLen,
+            y1: cy + py * tickLen,
+            x2: cx - px * tickLen,
+            y2: cy - py * tickLen,
+          });
+        }
+        break;
+      }
+      case 'perpendicular': {
+        const { ux, uy } = unitVec(g.angleDeg);
+        const px = -uy;
+        const py = ux;
+        const a = { x: g.at.x + ux * rightAngleSize, y: g.at.y + uy * rightAngleSize };
+        const b = { x: g.at.x + px * rightAngleSize, y: g.at.y + py * rightAngleSize };
+        const corner = { x: a.x + px * rightAngleSize, y: a.y + py * rightAngleSize };
+        rightAngles.push({
+          key: g.constraintId,
+          constraintId: g.constraintId,
+          d: `M ${a.x} ${a.y} L ${corner.x} ${corner.y} L ${b.x} ${b.y}`,
+        });
+        break;
+      }
+      case 'horizontal':
+        letters.push({ key: g.constraintId, constraintId: g.constraintId, x: g.at.x, y: g.at.y - letterOffset, text: 'H' });
+        break;
+      case 'vertical':
+        letters.push({ key: g.constraintId, constraintId: g.constraintId, x: g.at.x, y: g.at.y - letterOffset, text: 'V' });
+        break;
+      case 'tangent':
+        tangentDots.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: dotR });
+        break;
+      case 'coincident':
+        coincidentRings.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: ringR });
+        break;
+      case 'symmetric': {
+        const { ux, uy } = unitVec(g.angleDeg + 90);
+        const aTip = { x: g.aAt.x + ux * arrowLen, y: g.aAt.y + uy * arrowLen };
+        const bTip = { x: g.bAt.x + ux * arrowLen, y: g.bAt.y + uy * arrowLen };
+        symmetricMarks.push({
+          key: g.constraintId,
+          constraintId: g.constraintId,
+          d: `M ${g.aAt.x} ${g.aAt.y} L ${aTip.x} ${aTip.y} M ${g.bAt.x} ${g.bAt.y} L ${bTip.x} ${bTip.y}`,
+        });
+        break;
+      }
+      default:
+        assertNever(g);
+    }
+  }
+  return { parallelTicks, rightAngles, letters, tangentDots, coincidentRings, symmetricMarks };
+});
+
+const glyphStrokeWidthMm = computed(() => glyphMmPerPx.value * 1.3);
+const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
 </script>
 
 <template>
@@ -373,6 +521,7 @@ const dimensionLabels = computed(() =>
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
     @pointerleave="onPointerLeave"
+    @pointercancel="onPointerCancel"
   >
     <image
       v-if="underlayUrl !== null && underlayMmPerPixel !== null"
@@ -455,6 +604,73 @@ const dimensionLabels = computed(() =>
       >
         {{ label.text }}
       </text>
+    </g>
+    <g class="constraint-glyphs">
+      <line
+        v-for="tick in glyphShapes.parallelTicks"
+        :key="tick.key"
+        :x1="tick.x1"
+        :y1="tick.y1"
+        :x2="tick.x2"
+        :y2="tick.y2"
+        :stroke="glyphColorOf(tick.constraintId)"
+        :stroke-width="glyphStrokeWidthMm"
+        style="cursor: pointer"
+        @click.stop="emit('constraintClick', tick.constraintId)"
+      />
+      <path
+        v-for="ra in glyphShapes.rightAngles"
+        :key="ra.key"
+        :d="ra.d"
+        fill="none"
+        :stroke="glyphColorOf(ra.constraintId)"
+        :stroke-width="glyphStrokeWidthMm"
+        style="cursor: pointer"
+        @click.stop="emit('constraintClick', ra.constraintId)"
+      />
+      <text
+        v-for="letter in glyphShapes.letters"
+        :key="letter.key"
+        :x="letter.x"
+        :y="letter.y"
+        :font-size="glyphFontSizeMm"
+        text-anchor="middle"
+        :fill="glyphColorOf(letter.constraintId)"
+        style="cursor: pointer"
+        @click.stop="emit('constraintClick', letter.constraintId)"
+      >{{ letter.text }}</text>
+      <circle
+        v-for="dot in glyphShapes.tangentDots"
+        :key="dot.key"
+        :cx="dot.cx"
+        :cy="dot.cy"
+        :r="dot.r"
+        :fill="glyphColorOf(dot.constraintId)"
+        style="cursor: pointer"
+        @click.stop="emit('constraintClick', dot.constraintId)"
+      />
+      <circle
+        v-for="ring in glyphShapes.coincidentRings"
+        :key="ring.key"
+        :cx="ring.cx"
+        :cy="ring.cy"
+        :r="ring.r"
+        fill="none"
+        :stroke="glyphColorOf(ring.constraintId)"
+        :stroke-width="glyphStrokeWidthMm"
+        style="cursor: pointer"
+        @click.stop="emit('constraintClick', ring.constraintId)"
+      />
+      <path
+        v-for="mark in glyphShapes.symmetricMarks"
+        :key="mark.key"
+        :d="mark.d"
+        fill="none"
+        :stroke="glyphColorOf(mark.constraintId)"
+        :stroke-width="glyphStrokeWidthMm"
+        style="cursor: pointer"
+        @click.stop="emit('constraintClick', mark.constraintId)"
+      />
     </g>
   </svg>
 </template>

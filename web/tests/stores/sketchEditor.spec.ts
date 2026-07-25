@@ -389,6 +389,64 @@ describe('useSketchEditor', () => {
     }
   });
 
+  it('selecting a constraint clears the entity selection and vice versa', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    editor.appendChainPoint({ x: 0, y: 0 });
+    editor.appendChainPoint({ x: 10, y: 0 });
+    const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+    const constraintId = editor.nextId();
+    editor.addConstraint({ kind: 'horizontal', id: constraintId, lineId: line.id });
+
+    editor.selectConstraint(constraintId);
+    expect(editor.selectedConstraintId).toBe(constraintId);
+    expect(editor.selectedIds).toEqual([]);
+
+    editor.selectedIds = [line.id];
+    expect(editor.selectedConstraintId).toBeNull();
+
+    editor.selectConstraint(constraintId);
+    editor.selectedIds.push(line.id);
+    expect(editor.selectedConstraintId).toBeNull();
+  });
+
+  it('deleting the selected constraint removes it and clears the selection', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    editor.appendChainPoint({ x: 0, y: 0 });
+    editor.appendChainPoint({ x: 10, y: 0 });
+    const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+    const constraintId = editor.nextId();
+    editor.addConstraint({ kind: 'horizontal', id: constraintId, lineId: line.id });
+
+    editor.selectConstraint(constraintId);
+    editor.removeConstraint(constraintId);
+    expect(editor.sketch.constraints).toHaveLength(0);
+    expect(editor.selectedConstraintId).toBeNull();
+  });
+
+  it('restores recordingDepth on a cancelled drag (no merge), so a later mutation pushes exactly one more snapshot', async () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    editor.appendChainPoint({ x: 0, y: 0 });
+    const p2 = editor.appendChainPoint({ x: 10, y: 0 })!;
+    const historyBeforeDrag = editor.historyStack.length;
+
+    // A drag that a browser pointercancel interrupts: beginPointDrag opens
+    // the scope, a writeback happens, then the canvas's cancel handler ends
+    // the drag the same way pointerup would (no merge), closing the scope.
+    editor.beginPointDrag();
+    solveMock.mockImplementation(async (sketch) => ({ status: 'solved', sketch, dof: 3 }));
+    await editor.solveNow({ pointId: p2, xMm: 12, yMm: 1 });
+    editor.endPointDrag();
+    expect(editor.historyStack.length).toBe(historyBeforeDrag + 1);
+
+    // recordingDepth must be back at 0: a following mutation pushes exactly
+    // one more snapshot, not zero (still nested) and not more than one.
+    editor.addCircle({ x: 20, y: 20 }, 3);
+    expect(editor.historyStack.length).toBe(historyBeforeDrag + 2);
+  });
+
   it('caps the history stack at 100 snapshots', () => {
     const editor = useSketchEditor();
     editor.startNewSketch();
