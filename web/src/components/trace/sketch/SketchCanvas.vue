@@ -820,22 +820,27 @@ function dimensionOf(c: (typeof sketch.value.constraints)[number]): SketchDimens
 
 /** The pre-formatted label text for a dimension: R/D prefix for radius and
  * diameter, degree suffix for angle, mm suffix otherwise. Single source
- * (convention 10) for both the committed labels and the ghost preview. */
+ * (convention 10) for both the committed labels and the ghost preview. A
+ * driven (reference) dimension's value is wrapped in parentheses, matching
+ * convention/spec: "(25.00 mm)" reads as reported rather than enforced. */
 function dimensionText(dimension: SketchDimension): string {
-  switch (dimension.kind) {
-    case 'length':
-    case 'distance':
-    case 'pointLineDistance':
-      return `${formatMm(dimension.mm)} mm`;
-    case 'radius':
-      return `R ${formatMm(dimension.mm)} mm`;
-    case 'diameter':
-      return `D ${formatMm(dimension.mm)} mm`;
-    case 'angle':
-      return `${formatDegrees(dimension.degrees)} deg`;
-    default:
-      return assertNever(dimension);
-  }
+  const value = ((): string => {
+    switch (dimension.kind) {
+      case 'length':
+      case 'distance':
+      case 'pointLineDistance':
+        return `${formatMm(dimension.mm)} mm`;
+      case 'radius':
+        return `R ${formatMm(dimension.mm)} mm`;
+      case 'diameter':
+        return `D ${formatMm(dimension.mm)} mm`;
+      case 'angle':
+        return `${formatDegrees(dimension.degrees)} deg`;
+      default:
+        return assertNever(dimension);
+    }
+  })();
+  return dimension.driven === true ? `(${value})` : value;
 }
 
 interface DimensionRender {
@@ -844,6 +849,9 @@ interface DimensionRender {
   constraintId: string | null;
   graphics: DimensionGraphics;
   opacity: number;
+  /** True for a driven (reference) dimension, which renders in a distinct
+   * muted color rather than the ordinary driving-dimension ink. */
+  driven: boolean;
 }
 
 /** Graphics for every committed dimension, at its stored (or default)
@@ -858,10 +866,22 @@ const dimensionRenders = computed<DimensionRender[]>(() => {
     const labelAt = { x: anchor.x + offset.x, y: anchor.y + offset.y };
     const graphics = dimensionGraphics(sketch.value, dimension, labelAt, dimensionText(dimension));
     if (graphics === null) continue;
-    renders.push({ key: dimension.id, constraintId: dimension.id, graphics, opacity: 1 });
+    renders.push({
+      key: dimension.id,
+      constraintId: dimension.id,
+      graphics,
+      opacity: 1,
+      driven: dimension.driven === true,
+    });
   }
   return renders;
 });
+
+/** Muted text/line color for a driven (reference) dimension; the ordinary
+ * dark ink otherwise. */
+function dimensionInkColor(driven: boolean): string {
+  return driven ? '#90a4ae' : '#263238';
+}
 
 /** The dimension tool's placement ghost: a reduced-opacity preview of the
  * dimension the current resolved selection would produce, following the
@@ -908,7 +928,7 @@ const dimensionGhost = computed<DimensionRender | null>(() => {
   }
   const graphics = dimensionGraphics(sketch.value, fake, cursorMm.value, dimensionText(fake));
   if (graphics === null) return null;
-  return { key: '_ghost', constraintId: null, graphics, opacity: 0.45 };
+  return { key: '_ghost', constraintId: null, graphics, opacity: 0.45, driven: false };
 });
 
 const allDimensionRenders = computed<DimensionRender[]>(() => {
@@ -1374,7 +1394,7 @@ function removeSelectedConstraint(constraintId: string): void {
           font-size="3"
           text-anchor="middle"
           dominant-baseline="central"
-          fill="#263238"
+          :fill="dimensionInkColor(render.driven)"
           :style="render.constraintId !== null ? 'pointer-events: auto; cursor: move;' : undefined"
           @pointerdown="render.constraintId !== null && onLabelPointerDown($event, render.constraintId)"
           @dblclick="render.constraintId !== null && onLabelDblClick($event, render.constraintId)"

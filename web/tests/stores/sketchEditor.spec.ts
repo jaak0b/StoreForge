@@ -1216,4 +1216,114 @@ describe('useSketchEditor', () => {
       expect(editor.glyphsVisible).toBe(true);
     });
   });
+
+  describe('driven dimensions (convention 11)', () => {
+    it('tracks a driven dimension value to the solved geometry after every solve', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      const id = editor.nextId();
+      editor.addDimension({ kind: 'length', id, lineId: line.id, mm: 10, driven: true });
+      // The solver moves the line's endpoint to a different length; the
+      // solved sketch it hands back is what updateDrivenDimensions reads.
+      solveMock.mockImplementation(async (sketch) => {
+        const solved = JSON.parse(JSON.stringify(sketch));
+        const movedPoint = solved.entities.find((e: { kind: string; id: string }) => e.id === line.p2Id);
+        movedPoint.x = 25;
+        return { status: 'solved', sketch: solved, dof: 1 };
+      });
+      await editor.solveNow();
+      const constraint = editor.sketch.constraints.find((c) => c.id === id) as { mm: number };
+      expect(constraint.mm).toBeCloseTo(25);
+    });
+
+    it('toggles a dimension between driving and driven', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      const id = editor.nextId();
+      editor.addDimension({ kind: 'length', id, lineId: line.id, mm: 10 });
+      expect(editor.isDimensionDriven(id)).toBe(false);
+      editor.toggleDimensionDriven(id);
+      expect(editor.isDimensionDriven(id)).toBe(true);
+      editor.toggleDimensionDriven(id);
+      expect(editor.isDimensionDriven(id)).toBe(false);
+    });
+
+    it('offers to keep or remove a new dimension that over-constrains the sketch', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.selectedIds = [line.id];
+      editor.resolveDimensionAtSelection();
+      editor.placeDimensionDraft({ x: 5, y: -5 });
+      editor.dimensionDraft!.text = '30';
+      const committed = editor.commitDimensionDraft();
+      expect(committed).toBe(true);
+      const newId = editor.sketch.constraints.find((c) => c.kind === 'length')!.id;
+      solveMock.mockResolvedValue({ status: 'conflicting', conflictingConstraintIds: [newId] });
+      await editor.solveNow();
+      expect(editor.dimensionConflictOffer).toEqual({ constraintId: newId });
+    });
+
+    it('keeping the offer as a reference dimension sets driven and clears the offer', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.selectedIds = [line.id];
+      editor.resolveDimensionAtSelection();
+      editor.placeDimensionDraft({ x: 5, y: -5 });
+      editor.dimensionDraft!.text = '30';
+      editor.commitDimensionDraft();
+      const newId = editor.sketch.constraints.find((c) => c.kind === 'length')!.id;
+      solveMock.mockResolvedValue({ status: 'conflicting', conflictingConstraintIds: [newId] });
+      await editor.solveNow();
+      editor.keepDimensionConflictAsReference();
+      expect(editor.dimensionConflictOffer).toBeNull();
+      expect(editor.isDimensionDriven(newId)).toBe(true);
+    });
+
+    it('removing the offer deletes the offending dimension and clears the offer', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.selectedIds = [line.id];
+      editor.resolveDimensionAtSelection();
+      editor.placeDimensionDraft({ x: 5, y: -5 });
+      editor.dimensionDraft!.text = '30';
+      editor.commitDimensionDraft();
+      const newId = editor.sketch.constraints.find((c) => c.kind === 'length')!.id;
+      solveMock.mockResolvedValue({ status: 'conflicting', conflictingConstraintIds: [newId] });
+      await editor.solveNow();
+      editor.removeDimensionConflictOffer();
+      expect(editor.dimensionConflictOffer).toBeNull();
+      expect(editor.sketch.constraints.find((c) => c.id === newId)).toBeUndefined();
+    });
+
+    it('does not offer the conflict flow when the conflict is unrelated to the just-added dimension', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.selectedIds = [line.id];
+      editor.resolveDimensionAtSelection();
+      editor.placeDimensionDraft({ x: 5, y: -5 });
+      editor.dimensionDraft!.text = '30';
+      editor.commitDimensionDraft();
+      solveMock.mockResolvedValue({ status: 'conflicting', conflictingConstraintIds: ['someOtherId'] });
+      await editor.solveNow();
+      expect(editor.dimensionConflictOffer).toBeNull();
+    });
+  });
 });

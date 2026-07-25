@@ -36,6 +36,7 @@ import {
   measureDiameter,
   measureRadius,
   parseDimensionValue,
+  updateDrivenDimensions,
 } from '../engine/sketch/measure';
 
 /**
@@ -146,6 +147,21 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** Set when commitDimensionDraft is called with unparseable text; cleared
    * on the next successful commit or cancel. */
   const dimensionDraftError = ref<string | null>(null);
+  /**
+   * Set when a solve immediately after committing a brand-new dimension comes
+   * back conflicting and lists that new dimension among the offenders
+   * (convention 11's over-constrain flow). Offers the user a choice, shown
+   * inline in the conflict diagnostics area: keep the dimension as a
+   * reference (driven) dimension, or remove it outright. Cleared once either
+   * action resolves it, or once a later solve no longer matches.
+   */
+  const dimensionConflictOffer = ref<{ constraintId: string } | null>(null);
+  /** The id of the dimension most recently added by commitDimensionDraft, for
+   * the very next solve to check against a conflicting result. Not itself
+   * reactive state: it is consumed (read once, then cleared) by the next
+   * solveNow call, mirroring generation's "only the most recent request
+   * matters" pattern. */
+  let justAddedDimensionId: string | null = null;
 
   /**
    * A point-in-time undo entry. Chain state (chainTailId, chainTailSegmentId)
@@ -339,6 +355,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     dimensionPending.value = null;
     dimensionDraft.value = null;
     dimensionDraftError.value = null;
+    dimensionConflictOffer.value = null;
+    justAddedDimensionId = null;
     glyphsVisible.value = true;
     idCounter = 0;
     historyStack.value = [];
@@ -873,6 +891,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       const id = nextId();
       const kind = draft.radiusToggle?.kind ?? 'radius';
       addDimension(buildDimensionFromSelection(draft.pending, kind, id, value, draft.labelOffset));
+      justAddedDimensionId = id;
     } else {
       setDimensionValue(draft.constraintId, value);
     }
@@ -943,6 +962,123 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       text: String(measured),
       radiusToggle: { entityId, kind },
     };
+  }
+
+  /** True when `constraintId` names a dimension constraint (as opposed to a
+   * geometric constraint with no driven flag). */
+  function isDimensionConstraintId(constraintId: string): boolean {
+    const c = sketch.value.constraints.find((x) => x.id === constraintId);
+    if (c === undefined) return false;
+    switch (c.kind) {
+      case 'length':
+      case 'distance':
+      case 'radius':
+      case 'diameter':
+      case 'angle':
+      case 'pointLineDistance':
+        return true;
+      case 'coincident':
+      case 'horizontal':
+      case 'vertical':
+      case 'parallel':
+      case 'perpendicular':
+      case 'tangent':
+      case 'symmetric':
+        return false;
+      default:
+        return assertNever(c);
+    }
+  }
+
+  /** Whether a dimension constraint is currently driven (a reference
+   * dimension); false for an ordinary driving dimension or a non-dimension
+   * constraint id. */
+  function isDimensionDriven(constraintId: string): boolean {
+    const c = sketch.value.constraints.find((x) => x.id === constraintId);
+    if (c === undefined) return false;
+    switch (c.kind) {
+      case 'length':
+      case 'distance':
+      case 'radius':
+      case 'diameter':
+      case 'angle':
+      case 'pointLineDistance':
+        return c.driven === true;
+      case 'coincident':
+      case 'horizontal':
+      case 'vertical':
+      case 'parallel':
+      case 'perpendicular':
+      case 'tangent':
+      case 'symmetric':
+        return false;
+      default:
+        return assertNever(c);
+    }
+  }
+
+  /** Sets a dimension constraint's driven flag directly. No-op for a
+   * non-dimension constraint id (convention 2: nothing to silently fail at,
+   * there is simply no field to set). */
+  function setDimensionDriven(constraintId: string, driven: boolean): void {
+    const c = sketch.value.constraints.find((x) => x.id === constraintId);
+    if (c === undefined) return;
+    beginMutation();
+    try {
+      switch (c.kind) {
+        case 'length':
+        case 'distance':
+        case 'radius':
+        case 'diameter':
+        case 'angle':
+        case 'pointLineDistance':
+          c.driven = driven;
+          bumpGeneration();
+          break;
+        case 'coincident':
+        case 'horizontal':
+        case 'vertical':
+        case 'parallel':
+        case 'perpendicular':
+        case 'tangent':
+        case 'symmetric':
+          break;
+        default:
+          assertNever(c);
+      }
+    } finally {
+      endMutation();
+    }
+  }
+
+  /** Flips a dimension constraint's driven flag (the hint row's
+   * Driven/Driving toggle button on a selected dimension). */
+  function toggleDimensionDriven(constraintId: string): void {
+    setDimensionDriven(constraintId, !isDimensionDriven(constraintId));
+  }
+
+  /**
+   * Resolves the over-constrain offer by keeping the offending dimension as a
+   * reference (driven) dimension instead of removing it: the geometry stays
+   * driven by whatever else constrains it, and this dimension merely reports
+   * the resulting measurement. Clears the offer; the caller is expected to
+   * reschedule a solve afterward (the same convention every other mutating
+   * action here follows, since the store never solves implicitly).
+   */
+  function keepDimensionConflictAsReference(): void {
+    const offer = dimensionConflictOffer.value;
+    if (offer === null) return;
+    setDimensionDriven(offer.constraintId, true);
+    dimensionConflictOffer.value = null;
+  }
+
+  /** Resolves the over-constrain offer by removing the offending dimension
+   * outright. Clears the offer; the caller reschedules a solve. */
+  function removeDimensionConflictOffer(): void {
+    const offer = dimensionConflictOffer.value;
+    if (offer === null) return;
+    removeConstraint(offer.constraintId);
+    dimensionConflictOffer.value = null;
   }
 
   /**
@@ -1291,11 +1427,23 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     // result instead of clobbering the concurrent edit.
     if (generation !== requestGeneration) return;
     solveState.value = result;
+    // Consumed once per solve: only the solve that immediately follows the
+    // commit that set it should be checked against a conflicting result.
+    const watchedDimensionId = justAddedDimensionId;
+    justAddedDimensionId = null;
     if (result.status === 'solved') {
-      sketch.value = result.sketch;
+      sketch.value = updateDrivenDimensions(result.sketch);
       if (!dragInProgress) recomputeRegions();
-    } else if (!dragInProgress) {
-      clearRegions();
+      dimensionConflictOffer.value = null;
+    } else if (result.status === 'conflicting') {
+      dimensionConflictOffer.value =
+        watchedDimensionId !== null && result.conflictingConstraintIds.includes(watchedDimensionId)
+          ? { constraintId: watchedDimensionId }
+          : null;
+      if (!dragInProgress) clearRegions();
+    } else {
+      dimensionConflictOffer.value = null;
+      if (!dragInProgress) clearRegions();
     }
   }
 
@@ -1326,6 +1474,12 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     dimensionPending,
     dimensionDraft,
     dimensionDraftError,
+    dimensionConflictOffer,
+    isDimensionConstraintId,
+    isDimensionDriven,
+    toggleDimensionDriven,
+    keepDimensionConflictAsReference,
+    removeDimensionConflictOffer,
     resolveDimensionAtSelection,
     placeDimensionDraft,
     cancelDimensionDraft,

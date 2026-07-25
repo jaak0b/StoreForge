@@ -372,6 +372,45 @@ const displayedHint = computed<string>(() => {
   return toolHint.value;
 });
 
+/** Whether the hint row's Driven/Driving toggle button applies: a dimension
+ * constraint (not a geometric constraint) is currently selected. */
+const showDrivenToggle = computed<boolean>(
+  () => editor.selectedConstraintId !== null && editor.isDimensionConstraintId(editor.selectedConstraintId),
+);
+
+/** The toggle button's complete-sentence label/tooltip, naming the action it
+ * performs (convention 7). */
+const drivenToggleLabel = computed<string>(() => {
+  if (editor.selectedConstraintId === null) return '';
+  return editor.isDimensionDriven(editor.selectedConstraintId)
+    ? 'This dimension is a reference dimension. Click to make it drive the geometry instead.'
+    : 'This dimension drives the geometry. Click to make it a reference dimension instead.';
+});
+
+/** Flips the selected dimension's driven flag and reschedules the solve, so
+ * a dimension turned driving again is re-enforced immediately, and one turned
+ * driven stops constraining without waiting for another edit. */
+function toggleSelectedDimensionDriven(): void {
+  if (editor.selectedConstraintId === null) return;
+  editor.toggleDimensionDriven(editor.selectedConstraintId);
+  scheduleSolve();
+}
+
+/** Resolves the over-constrain offer by keeping the new dimension as a
+ * reference dimension, then reschedules the solve so the now-driven
+ * dimension stops fighting the rest of the sketch. */
+function keepConflictingDimensionAsReference(): void {
+  editor.keepDimensionConflictAsReference();
+  scheduleSolve();
+}
+
+/** Resolves the over-constrain offer by removing the new dimension outright,
+ * then reschedules the solve. */
+function removeConflictingDimension(): void {
+  editor.removeDimensionConflictOffer();
+  scheduleSolve();
+}
+
 /** Applies a constraint to the current selection; each row names its need. */
 function applyConstraint(kind: ApplicableConstraintKind): void {
   const picked = selectedEntities.value;
@@ -930,7 +969,19 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
           <v-tooltip activator="parent" location="bottom">Construction</v-tooltip>
         </v-btn>
       </div>
-      <p v-else class="tool-hint">{{ displayedHint }}</p>
+      <template v-else>
+        <p class="tool-hint">{{ displayedHint }}</p>
+        <v-btn
+          v-if="showDrivenToggle"
+          size="small"
+          density="compact"
+          variant="text"
+          @click="toggleSelectedDimensionDriven"
+        >
+          {{ editor.isDimensionDriven(editor.selectedConstraintId!) ? 'Make driving' : 'Make reference' }}
+          <v-tooltip activator="parent" location="bottom">{{ drivenToggleLabel }}</v-tooltip>
+        </v-btn>
+      </template>
     </v-toolbar>
     <v-text-field
       v-if="quickEntryKind !== null"
@@ -982,6 +1033,15 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
           Remove
         </v-btn>
       </div>
+      <div v-if="editor.dimensionConflictOffer !== null" class="conflict-offer">
+        <p class="conflict-offer-text">This dimension would over-constrain the sketch.</p>
+        <v-btn size="x-small" variant="text" @click="keepConflictingDimensionAsReference">
+          Keep it as a reference dimension
+        </v-btn>
+        <v-btn size="x-small" variant="text" @click="removeConflictingDimension">
+          Remove it
+        </v-btn>
+      </div>
     </div>
   </div>
 </template>
@@ -1030,5 +1090,14 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
 .status-label {
   color: rgba(0, 0, 0, 0.6);
   min-width: 170px;
+}
+.conflict-offer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.conflict-offer-text {
+  margin: 0;
 }
 </style>
