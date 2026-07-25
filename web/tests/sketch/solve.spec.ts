@@ -47,6 +47,80 @@ function solvedPoint(sketch: Sketch, id: string): { x: number; y: number } {
   return p;
 }
 
+describe('solveSketch supplementary angle sector', () => {
+  it('pins the supplementary sector without swinging the line to the direct-fold value', () => {
+    // l1 pinned horizontal, from (0,0) to (10,0). l2 shares l1's start point
+    // and has its own fixed length, at 60 deg (the direct-fold sector). The
+    // dimension commits the *supplementary* (120 deg) sector's own measured
+    // default; solving it must leave l2's endpoint exactly where it already
+    // is, not rotate it to a literal 120 deg direction (the bug: a raw
+    // c.degrees pass-through moves the line by 60 deg here).
+    const l2Angle = Math.PI / 3; // 60 deg
+    const p2bStart = { x: 10 * Math.cos(l2Angle), y: 10 * Math.sin(l2Angle) };
+    const sketch: Sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [
+        point('p1a', 0, 0),
+        point('p1b', 10, 0),
+        point('p2a', 0, 0),
+        point('p2b', p2bStart.x, p2bStart.y),
+        line('l1', 'p1a', 'p1b'),
+        line('l2', 'p2a', 'p2b'),
+      ],
+      constraints: [
+        { kind: 'horizontal', id: 'cH', lineId: 'l1' },
+        { kind: 'length', id: 'cLen1', lineId: 'l1', mm: 10 },
+        { kind: 'coincident', id: 'cCo', p1Id: 'p1a', p2Id: 'p2a' },
+        { kind: 'length', id: 'cLen2', lineId: 'l2', mm: 10 },
+        // The supplementary sector's own current value: direct fold is 60
+        // deg (l1 at 0, l2 at 60), so the supplementary sector reads 120.
+        { kind: 'angle', id: 'cA', l1Id: 'l1', l2Id: 'l2', degrees: 120, supplementary: true },
+      ],
+    };
+    const result = solveSketch(wrapper, sketch, { pointId: 'p1a', xMm: 0, yMm: 0 });
+    expect(result.status).toBe('solved');
+    if (result.status !== 'solved') return;
+    const p1b = solvedPoint(result.sketch, 'p1b');
+    const p2b = solvedPoint(result.sketch, 'p2b');
+    expect(p1b.x).toBeCloseTo(10, 3);
+    expect(p1b.y).toBeCloseTo(0, 3);
+    // l2's endpoint must stay at its seeded 60 deg position, not swing to a
+    // literal 120 deg direction.
+    expect(p2b.x).toBeCloseTo(p2bStart.x, 3);
+    expect(p2b.y).toBeCloseTo(p2bStart.y, 3);
+  });
+
+  it('drives a genuinely new supplementary-sector value to the correct direct-fold angle', () => {
+    const sketch: Sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [
+        point('p1a', 0, 0),
+        point('p1b', 10, 0),
+        point('p2a', 0, 0),
+        point('p2b', 10 * Math.cos(Math.PI / 3), 10 * Math.sin(Math.PI / 3)),
+        line('l1', 'p1a', 'p1b'),
+        line('l2', 'p2a', 'p2b'),
+      ],
+      constraints: [
+        { kind: 'horizontal', id: 'cH', lineId: 'l1' },
+        { kind: 'length', id: 'cLen1', lineId: 'l1', mm: 10 },
+        { kind: 'coincident', id: 'cCo', p1Id: 'p1a', p2Id: 'p2a' },
+        { kind: 'length', id: 'cLen2', lineId: 'l2', mm: 10 },
+        // Supplementary sector driven to a new value of 100: the direct
+        // fold (l2's angle off l1) should land at 180 - 100 = 80 deg.
+        { kind: 'angle', id: 'cA', l1Id: 'l1', l2Id: 'l2', degrees: 100, supplementary: true },
+      ],
+    };
+    const result = solveSketch(wrapper, sketch, { pointId: 'p1a', xMm: 0, yMm: 0 });
+    expect(result.status).toBe('solved');
+    if (result.status !== 'solved') return;
+    const p2a = solvedPoint(result.sketch, 'p2a');
+    const p2b = solvedPoint(result.sketch, 'p2b');
+    const l2Dir = (Math.atan2(p2b.y - p2a.y, p2b.x - p2a.x) * 180) / Math.PI;
+    expect(l2Dir).toBeCloseTo(80, 3);
+  });
+});
+
 describe('solveSketch axis distance', () => {
   it('enforces an x-only distance between two points, leaving y free', () => {
     const sketch: Sketch = {

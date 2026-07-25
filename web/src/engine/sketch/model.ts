@@ -162,12 +162,25 @@ export interface DiameterDimension {
   labelOffset?: LabelOffset;
   driven?: boolean;
 }
+/**
+ * When true, `degrees` is the supplementary sector's angle (180 minus the
+ * "direct fold" angle solve.ts derives from the lines' stored point order,
+ * i.e. measureAngleBetweenLines's own fold), picked live from the cursor
+ * while the dimension is placed (dimensionGraphics.ts's angleForCursorSector)
+ * and then fixed at commit; false or absent means the direct-fold sector,
+ * matching every sketch from before this flag existed. Solve.ts uses this to
+ * convert the user-facing sector value back into the correct directed
+ * l2l_angle_ll target (see its derivation comment); measure.ts's
+ * updateDrivenDimensions uses it the same way to refresh a driven angle's
+ * displayed value in the same sector the dimension was placed in.
+ */
 export interface AngleDimension {
   kind: 'angle';
   id: string;
   l1Id: string;
   l2Id: string;
   degrees: number;
+  supplementary?: boolean;
   labelOffset?: LabelOffset;
   driven?: boolean;
 }
@@ -472,6 +485,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         if (!isFiniteNumber(c.degrees)) {
           return `${subject}: The angle constraint ${c.id} needs a finite angle in degrees.`;
         }
+        if (!isValidDriven(c.supplementary)) {
+          return `${subject}: The angle constraint ${c.id}'s supplementary flag must be true or false.`;
+        }
         if (!isValidLabelOffset(c.labelOffset)) {
           return `${subject}: The angle constraint ${c.id}'s label offset must be a finite mm point.`;
         }
@@ -587,7 +603,7 @@ export function deserializeSketch(raw: unknown): SketchParseResult {
       case 'angle':
         return {
           kind: 'angle', id: c.id, l1Id: c.l1Id, l2Id: c.l2Id, degrees: c.degrees,
-          labelOffset: c.labelOffset, driven: c.driven,
+          supplementary: c.supplementary, labelOffset: c.labelOffset, driven: c.driven,
         };
       case 'pointLineDistance':
         return {

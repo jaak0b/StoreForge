@@ -922,7 +922,7 @@ const dimensionGhost = computed<DimensionRender | null>(() => {
       fake = {
         kind: 'angle', id: '_ghost', l1Id: resolved.l1Id, l2Id: resolved.l2Id,
         degrees: formatDegrees(
-          angleForCursorSector(sketch.value, resolved.l1Id, resolved.l2Id, cursorMm.value) ??
+          angleForCursorSector(sketch.value, resolved.l1Id, resolved.l2Id, cursorMm.value)?.degrees ??
             measureAngleBetweenLines(sketch.value, resolved.l1Id, resolved.l2Id),
         ),
       };

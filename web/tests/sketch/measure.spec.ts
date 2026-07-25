@@ -70,6 +70,57 @@ describe('updateDrivenDimensions', () => {
     if (c.kind === 'length') expect(c.mm).toBe(12);
   });
 
+  it('refreshes a driven supplementary angle to its own sector, not the direct fold', () => {
+    // l1 along 0 deg, l2 along 60 deg: the direct fold (measureAngleBetweenLines)
+    // is 60, so a driven dimension placed in the supplementary (120) sector
+    // must refresh back to 120, not fold to the acute 60.
+    const sketch: Sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [
+        { kind: 'point', id: 'p1a', x: 0, y: 0, construction: false },
+        { kind: 'point', id: 'p1b', x: 10, y: 0, construction: false },
+        { kind: 'point', id: 'p2a', x: 0, y: 0, construction: false },
+        {
+          kind: 'point', id: 'p2b',
+          x: 10 * Math.cos(Math.PI / 3), y: 10 * Math.sin(Math.PI / 3), construction: false,
+        },
+        { kind: 'line', id: 'l1', p1Id: 'p1a', p2Id: 'p1b', construction: false },
+        { kind: 'line', id: 'l2', p1Id: 'p2a', p2Id: 'p2b', construction: false },
+      ],
+      constraints: [
+        { kind: 'angle', id: 'cA', l1Id: 'l1', l2Id: 'l2', degrees: 999, supplementary: true, driven: true },
+      ],
+    };
+    updateDrivenDimensions(sketch);
+    const c = sketch.constraints[0];
+    expect(c.kind).toBe('angle');
+    if (c.kind === 'angle') expect(c.degrees).toBeCloseTo(120, 5);
+  });
+
+  it('refreshes a driven non-supplementary angle to the direct fold', () => {
+    const sketch: Sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [
+        { kind: 'point', id: 'p1a', x: 0, y: 0, construction: false },
+        { kind: 'point', id: 'p1b', x: 10, y: 0, construction: false },
+        { kind: 'point', id: 'p2a', x: 0, y: 0, construction: false },
+        {
+          kind: 'point', id: 'p2b',
+          x: 10 * Math.cos(Math.PI / 3), y: 10 * Math.sin(Math.PI / 3), construction: false,
+        },
+        { kind: 'line', id: 'l1', p1Id: 'p1a', p2Id: 'p1b', construction: false },
+        { kind: 'line', id: 'l2', p1Id: 'p2a', p2Id: 'p2b', construction: false },
+      ],
+      constraints: [
+        { kind: 'angle', id: 'cA', l1Id: 'l1', l2Id: 'l2', degrees: 999, driven: true },
+      ],
+    };
+    updateDrivenDimensions(sketch);
+    const c = sketch.constraints[0];
+    expect(c.kind).toBe('angle');
+    if (c.kind === 'angle') expect(c.degrees).toBeCloseTo(60, 5);
+  });
+
   it('leaves an ordinary driving dimension untouched', () => {
     const sketch: Sketch = {
       schemaVersion: SKETCH_SCHEMA_VERSION,

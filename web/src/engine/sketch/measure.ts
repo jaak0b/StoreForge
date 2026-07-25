@@ -165,7 +165,16 @@ export function updateDrivenDimensions(sketch: Sketch): Sketch {
         if (c.driven === true) c.mm = formatMm(measureDiameter(sketch, c.entityId));
         break;
       case 'angle':
-        if (c.driven === true) c.degrees = formatDegrees(measureAngleBetweenLines(sketch, c.l1Id, c.l2Id));
+        if (c.driven === true) {
+          // measureAngleBetweenLines always returns the direct-fold value
+          // (the lines' own stored point order, folded to [0,180]); a
+          // dimension placed in the supplementary sector (model.ts's
+          // AngleDimension.supplementary) must refresh to that sector's own
+          // value, its complement, not the direct fold, so a driven angle
+          // keeps reporting the same sector it was placed in.
+          const directFold = measureAngleBetweenLines(sketch, c.l1Id, c.l2Id);
+          c.degrees = formatDegrees(c.supplementary === true ? 180 - directFold : directFold);
+        }
         break;
       case 'pointLineDistance':
         if (c.driven === true) c.mm = formatMm(measurePointLineDistance(sketch, c.pointId, c.lineId));

@@ -131,31 +131,39 @@ function angleVertex(sketch: Sketch, l1Id: string, l2Id: string): MmPoint | null
 
 /**
  * The angle, in degrees, of whichever of the two lines' four quadrant
- * sectors around their intersection contains `cursor`: two intersecting
- * lines split the plane into four sectors bounded by their four rays (each
- * line contributing two opposite rays), alternating between an acute sector
- * and its supplementary obtuse sector. This is the angle-dimension's live
- * quadrant pick (Fusion semantics: the sector under the cursor is the one
- * dimensioned, acute or supplementary as that sector dictates), used both by
- * the placement ghost preview and by the store's commit path so both derive
- * the same value (convention 10). Returns null when the lines are parallel
- * (lineIntersection returns null; the caller falls back to its prior
- * behavior of the fixed 0..180 measured angle).
+ * sectors around their intersection contains `cursor`, plus whether that
+ * sector is the supplementary one (model.ts's AngleDimension.supplementary):
+ * two intersecting lines split the plane into four sectors bounded by their
+ * four rays (each line contributing two opposite rays), alternating between
+ * a "direct fold" sector (the one spanning the lines' own +d1/+d2 rays, the
+ * same value measureAngleBetweenLines folds to from the stored point order)
+ * and its supplementary sector (180 minus that). This is the angle-
+ * dimension's live quadrant pick (Fusion semantics: the sector under the
+ * cursor is the one dimensioned, acute or supplementary as that sector
+ * dictates), used both by the placement ghost preview and by the store's
+ * commit path so both derive the same value (convention 10); solve.ts uses
+ * the supplementary flag to convert the committed degrees back into the
+ * correct directed solver target (see its derivation comment). Returns null
+ * when the lines are parallel (lineIntersection returns null; the caller
+ * falls back to its prior behavior of the fixed 0..180 measured angle).
  */
 export function angleForCursorSector(
   sketch: Sketch,
   l1Id: string,
   l2Id: string,
   cursor: MmPoint,
-): number | null {
+): { degrees: number; supplementary: boolean } | null {
   const hit = lineIntersection(sketch, l1Id, l2Id);
   if (hit === null) return null;
-  const norm = (radians: number): number => {
-    const twoPi = 2 * Math.PI;
-    return ((radians % twoPi) + twoPi) % twoPi;
-  };
+  const twoPi = 2 * Math.PI;
+  const norm = (radians: number): number => ((radians % twoPi) + twoPi) % twoPi;
   const a1 = Math.atan2(hit.d1.y, hit.d1.x);
   const a2 = Math.atan2(hit.d2.y, hit.d2.x);
+  // The direct-fold magnitude: the same value measureAngleBetweenLines
+  // computes (raw a2-a1 difference, folded into [0, 180]), from the lines'
+  // own stored +d1/+d2 rays without regard to which sector the cursor is in.
+  const rawDiff = norm(a2 - a1);
+  const directFoldDeg = ((rawDiff <= Math.PI ? rawDiff : twoPi - rawDiff) * 180) / Math.PI;
   const rays = [norm(a1), norm(a1 + Math.PI), norm(a2), norm(a2 + Math.PI)].sort((x, y) => x - y);
   const cursorAngle = norm(Math.atan2(cursor.y - hit.point.y, cursor.x - hit.point.x));
   for (let i = 0; i < 4; i += 1) {
@@ -163,7 +171,13 @@ export function angleForCursorSector(
     const end = i === 3 ? rays[0] + 2 * Math.PI : rays[i + 1];
     const c = cursorAngle >= start ? cursorAngle : cursorAngle + 2 * Math.PI;
     if (c >= start && c <= end + 1e-9) {
-      return ((end - start) * 180) / Math.PI;
+      const degrees = ((end - start) * 180) / Math.PI;
+      // The sector's magnitude always equals directFoldDeg or its
+      // complement (180 - directFoldDeg), up to floating point; whichever
+      // it lands closer to determines the flag robustly under that error.
+      const supplementary =
+        Math.abs(degrees - directFoldDeg) > Math.abs(degrees - (180 - directFoldDeg));
+      return { degrees, supplementary };
     }
   }
   // Unreachable: the four sorted rays always cover the full circle, so some

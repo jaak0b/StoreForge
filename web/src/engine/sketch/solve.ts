@@ -262,16 +262,76 @@ export function solveSketch(
         }
         break;
       }
-      case 'angle':
+      case 'angle': {
+        // PlaneGCS's l2l_angle_ll is a directed constraint on the lines'
+        // stored point order: it drives atan2(l2.p2-l2.p1) minus
+        // atan2(l1.p2-l1.p1) to exactly `angle` (a continuous real value,
+        // resolved to the branch nearest the initial guess, not folded to
+        // any canonical range). Verified empirically against the wrapper.
+        //
+        // c.degrees is the user-facing SECTOR magnitude the cursor picked
+        // (dimensionGraphics.ts's angleForCursorSector) which, when
+        // c.supplementary is true, is 180 minus the "direct fold" value
+        // (the raw a2-a1 difference folded into [0, 180], the same thing
+        // measureAngleBetweenLines computes and what l2l_angle_ll's target
+        // equals in magnitude when unsigned). Passing c.degrees straight
+        // through for a supplementary sector targets the wrong directed
+        // value: e.g. lines at 0 deg and 60 deg have a direct fold of 60,
+        // so the supplementary sector reads 120, but forcing angle=120
+        // directly rotates line 2 from 60 deg to 120 deg instead of leaving
+        // it in place (the 120 deg sector, between the 60 deg and 180 deg
+        // rays, already exists at the *current* position without moving
+        // anything).
+        //
+        // Undo the fold: recover the direct-fold magnitude the solver
+        // needs (theta = 180 - degrees for a supplementary sector, degrees
+        // otherwise), then apply the current raw diff's sign so a value
+        // seeded from the live geometry targets exactly today's signed
+        // diff (zero movement), while a genuinely different typed value
+        // still drives to the branch nearest the current handedness
+        // instead of an arbitrary flip.
+        const l1Entity = byId.get(c.l1Id);
+        const l2Entity = byId.get(c.l2Id);
+        if (l1Entity === undefined || l1Entity.kind !== 'line' || l2Entity === undefined || l2Entity.kind !== 'line') {
+          return {
+            status: 'failed',
+            message: 'An angle dimension refers to a line that is not in the sketch.',
+          };
+        }
+        const p1a = byId.get(l1Entity.p1Id);
+        const p1b = byId.get(l1Entity.p2Id);
+        const p2a = byId.get(l2Entity.p1Id);
+        const p2b = byId.get(l2Entity.p2Id);
+        if (
+          p1a === undefined || p1a.kind !== 'point' ||
+          p1b === undefined || p1b.kind !== 'point' ||
+          p2a === undefined || p2a.kind !== 'point' ||
+          p2b === undefined || p2b.kind !== 'point'
+        ) {
+          return {
+            status: 'failed',
+            message: 'An angle dimension refers to geometry that is not in the sketch.',
+          };
+        }
+        const a1 = Math.atan2(p1b.y - p1a.y, p1b.x - p1a.x);
+        const a2 = Math.atan2(p2b.y - p2a.y, p2b.x - p2a.x);
+        const twoPi = 2 * Math.PI;
+        const rawDiff = ((a2 - a1) % twoPi + twoPi) % twoPi; // [0, 2*pi)
+        // Fold into (-pi, pi]: the signed current raw diff, whose sign
+        // fixes the branch (handedness) the target should match.
+        const signedCurrentDiff = rawDiff <= Math.PI ? rawDiff : rawDiff - twoPi;
+        const directFoldDeg = c.supplementary === true ? 180 - c.degrees : c.degrees;
+        const signedTargetDeg = signedCurrentDiff < 0 ? -directFoldDeg : directFoldDeg;
         primitives.push({
           id: c.id,
           type: 'l2l_angle_ll',
           l1_id: c.l1Id,
           l2_id: c.l2Id,
-          angle: (c.degrees * Math.PI) / 180,
+          angle: (signedTargetDeg * Math.PI) / 180,
           ...drivingFlag(c.driven),
         });
         break;
+      }
       case 'pointLineDistance': {
         const lineEntity = byId.get(c.lineId);
         if (lineEntity === undefined || lineEntity.kind !== 'line') {

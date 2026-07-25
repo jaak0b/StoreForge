@@ -662,12 +662,27 @@ function onCanvasClick(
       // A pending resolved selection: this click places the label at the
       // cursor and opens the inline input (SketchCanvas renders it).
       if (dimensionPending.value !== null) {
-        // A click that lands on an entity is the start of combining a second
-        // entity into the pending selection (e.g. a second line for an angle
-        // dimension); onEntityClick (fired separately for that entity, after
-        // this pointerdown-driven canvasClick) handles it. Only a genuine
-        // background click places the pending dimension's label.
-        if (!isEntityHit) editor.placeDimensionDraft(at);
+        // A click that hits an existing sketch point is the start of
+        // combining a second entity into the pending selection (a line then
+        // a point resolves to a point-line distance, a point then a point to
+        // a distance), routed through onEntityClick exactly like a
+        // line/arc/circle click. Points have no separate entityClick emitter
+        // (SketchCanvas only wires @click.stop on entity paths, not point
+        // markers, and the select-tool-only pointerdown/up drag flow never
+        // fires for the dimension tool), so this canvasClick is the only
+        // place a point click reaches the combine path; without this branch
+        // it was a dead click, since isEntityHit is true for a point hit too
+        // and the fallback below would otherwise swallow it. A click that
+        // hits a line/arc/circle instead (hitPointId null, isEntityHit true)
+        // is still handled by that entity's own entityClick emitter, fired
+        // separately after this pointerdown-driven canvasClick. Only a
+        // genuine background click (neither a point nor another entity)
+        // places the pending dimension's label.
+        if (hitPointId !== null) {
+          onEntityClick(hitPointId);
+        } else if (!isEntityHit) {
+          editor.placeDimensionDraft(at);
+        }
         break;
       }
       // No pending selection yet: a click on an existing sketch point picks

@@ -27,6 +27,7 @@ import {
   buildDimensionFromSelection,
   measuredValueForDimensionSelection,
   pickDistanceAxis,
+  resolveAngleAtCursor,
   resolveDimensionSelection,
   type DimensionSelectionKind,
 } from '../engine/sketch/dimensionSelection';
@@ -49,6 +50,8 @@ import {
  * distanceAxis is the H/V/aligned flavor pickDistanceAxis resolved at the
  * placement click, for a point-point distance draft only (undefined for
  * every other pending kind, and for the aligned flavor itself).
+ * angleSupplementary is resolveAngleAtCursor's supplementary flag from that
+ * same placement click, for an angle draft only.
  */
 export interface DimensionDraft {
   constraintId: string | null;
@@ -57,6 +60,7 @@ export interface DimensionDraft {
   text: string;
   radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null;
   distanceAxis?: 'x' | 'y';
+  angleSupplementary?: boolean;
 }
 
 /** The drawing tool active on the sketch canvas. */
@@ -846,7 +850,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * Places the dimension label at `at` (mm), the placement click's
    * position: computes the labelOffset from the pending selection's anchor,
    * seeds the draft with the current measured value, resolves the
-   * point-point distance's H/V/aligned flavor (pickDistanceAxis) from this
+   * point-point distance's H/V/aligned flavor (pickDistanceAxis) or the
+   * angle's quadrant/supplementary flavor (resolveAngleAtCursor) from this
    * same click position, and clears dimensionPending. The constraint itself
    * is not added until commitDimensionDraft: placement and commit are two
    * steps of one user gesture, but only commit is a sketch mutation, so
@@ -859,11 +864,17 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     const labelOffset: LabelOffset = { x: at.x - anchor.x, y: at.y - anchor.y };
     const radiusToggle =
       pending.kind === 'radiusOrDiameter' ? { entityId: pending.entityId, kind: 'radius' as const } : null;
-    const value = measuredDraftValue(pending, radiusToggle?.kind ?? 'radius', at);
     const distanceAxis =
       pending.kind === 'distance' ? pickDistanceAxis(sketch.value, pending.p1Id, pending.p2Id, at) : undefined;
+    const angleAtCursor =
+      pending.kind === 'angle' ? resolveAngleAtCursor(sketch.value, pending.l1Id, pending.l2Id, at) : null;
+    const value =
+      angleAtCursor !== null
+        ? formatDegrees(angleAtCursor.degrees)
+        : measuredDraftValue(pending, radiusToggle?.kind ?? 'radius', at);
     dimensionDraft.value = {
       constraintId: null, pending, labelOffset, text: String(value), radiusToggle, distanceAxis,
+      angleSupplementary: angleAtCursor?.supplementary,
     };
     dimensionDraftError.value = null;
     dimensionPending.value = null;
@@ -906,7 +917,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       const id = nextId();
       const kind = draft.radiusToggle?.kind ?? 'radius';
       addDimension(
-        buildDimensionFromSelection(draft.pending, kind, id, value, draft.labelOffset, draft.distanceAxis),
+        buildDimensionFromSelection(
+          draft.pending, kind, id, value, draft.labelOffset, draft.distanceAxis, draft.angleSupplementary,
+        ),
       );
       justAddedDimensionId = id;
     } else {

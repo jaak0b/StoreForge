@@ -157,20 +157,28 @@ describe('angleForCursorSector', () => {
     return { x: 10 * Math.cos(rad), y: 10 * Math.sin(rad) };
   }
 
-  it('reports the acute angle for the sector between the two lines (first sector)', () => {
-    expect(angleForCursorSector(sketch, 'l1', 'l2', cursorAt(30))).toBeCloseTo(60, 5);
+  it('reports the acute, direct-fold angle for the sector between the two lines (first sector)', () => {
+    const result = angleForCursorSector(sketch, 'l1', 'l2', cursorAt(30));
+    expect(result?.degrees).toBeCloseTo(60, 5);
+    expect(result?.supplementary).toBe(false);
   });
 
   it('reports the obtuse supplementary angle for the adjacent sector (second sector)', () => {
-    expect(angleForCursorSector(sketch, 'l1', 'l2', cursorAt(120))).toBeCloseTo(120, 5);
+    const result = angleForCursorSector(sketch, 'l1', 'l2', cursorAt(120));
+    expect(result?.degrees).toBeCloseTo(120, 5);
+    expect(result?.supplementary).toBe(true);
   });
 
-  it('reports the acute angle for the opposite (vertical-angle) sector (third sector)', () => {
-    expect(angleForCursorSector(sketch, 'l1', 'l2', cursorAt(210))).toBeCloseTo(60, 5);
+  it('reports the acute, direct-fold angle for the opposite (vertical-angle) sector (third sector)', () => {
+    const result = angleForCursorSector(sketch, 'l1', 'l2', cursorAt(210));
+    expect(result?.degrees).toBeCloseTo(60, 5);
+    expect(result?.supplementary).toBe(false);
   });
 
-  it('reports the obtuse angle for the fourth sector', () => {
-    expect(angleForCursorSector(sketch, 'l1', 'l2', cursorAt(300))).toBeCloseTo(120, 5);
+  it('reports the obtuse supplementary angle for the fourth sector', () => {
+    const result = angleForCursorSector(sketch, 'l1', 'l2', cursorAt(300));
+    expect(result?.degrees).toBeCloseTo(120, 5);
+    expect(result?.supplementary).toBe(true);
   });
 
   it('returns null for parallel lines, so the caller falls back to the measured angle', () => {

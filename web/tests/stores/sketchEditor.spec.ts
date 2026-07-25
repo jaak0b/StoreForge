@@ -1172,6 +1172,51 @@ describe('useSketchEditor', () => {
       expect(editor.selectedIds).toEqual([]);
     });
 
+    it('clicking an existing sketch point while a line is pending combines into a point-line distance (dead point-click fix)', () => {
+      // Reproduces SketchWorkspace's fixed onCanvasClick 'dimension' branch:
+      // with a pending selection, a point hit now routes into onEntityClick
+      // (the combine path) instead of being swallowed as an entity hit that
+      // is neither placed nor combined.
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.endChain();
+      const otherPoint = editor.addPoint({ x: 5, y: 8 });
+
+      // Click the line alone: resolves immediately to a pending length.
+      editor.selectedIds = [line.id];
+      editor.resolveDimensionAtSelection();
+      expect(editor.dimensionPending).toEqual({ kind: 'length', lineId: line.id });
+      expect(editor.selectedIds).toEqual([]);
+
+      // Simulate the fixed onCanvasClick routing a point hit into
+      // onEntityClick's re-seed-then-toggle combine logic.
+      const priorId = editor.dimensionPending!.kind === 'length' ? editor.dimensionPending!.lineId : null;
+      editor.dimensionPending = null;
+      if (priorId !== null && priorId !== otherPoint) editor.selectedIds.push(priorId);
+      editor.selectedIds.push(otherPoint);
+      const hint = editor.resolveDimensionAtSelection();
+
+      expect(hint).toContain('length');
+      expect(editor.dimensionPending).toEqual({ kind: 'pointLineDistance', pointId: otherPoint, lineId: line.id });
+      expect(editor.selectedIds).toEqual([]);
+    });
+
+    it('point-then-point resolves to a distance dimension regardless of click order', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      const p1 = editor.addPoint({ x: 0, y: 0 });
+      const p2 = editor.addPoint({ x: 10, y: 6 });
+
+      editor.selectedIds = [p2, p1];
+      const hint = editor.resolveDimensionAtSelection();
+      expect(hint).toContain('length');
+      expect(editor.dimensionPending).toEqual({ kind: 'distance', p1Id: p2, p2Id: p1 });
+      expect(editor.selectedIds).toEqual([]);
+    });
+
     it('updateLabelOffset between beginLabelDrag/endLabelDrag collapses a whole drag into one undo step', () => {
       const editor = useSketchEditor();
       editor.startNewSketch();

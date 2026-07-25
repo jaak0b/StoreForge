@@ -210,6 +210,30 @@ export function anchorForDimensionSelection(sketch: Sketch, resolved: DimensionS
 }
 
 /**
+ * The angle dimension's live cursor-picked value: the quadrant sector's
+ * degrees and whether that sector is the supplementary one
+ * (angleForCursorSector), falling back to the fixed direct-fold measured
+ * angle (supplementary false) when the lines are parallel (no
+ * intersection), matching prior behavior. Single source (convention 10) for
+ * every caller that needs both the seeded text and the persisted
+ * supplementary flag from the very same cursor read: the store's
+ * placeDimensionDraft (which needs the flag to store on the committed
+ * dimension) and measuredValueForDimensionSelection/the ghost preview
+ * (which need only the degrees).
+ */
+export function resolveAngleAtCursor(
+  sketch: Sketch,
+  l1Id: string,
+  l2Id: string,
+  cursor: MmPoint,
+): { degrees: number; supplementary: boolean } {
+  return (
+    angleForCursorSector(sketch, l1Id, l2Id, cursor) ??
+    { degrees: measureAngleBetweenLines(sketch, l1Id, l2Id), supplementary: false }
+  );
+}
+
+/**
  * The current measured value (mm, or degrees for angle) of a resolved
  * selection, for seeding the draft's default text. radiusKind picks radius
  * vs diameter for a radiusOrDiameter selection. cursor is the live placement
@@ -238,10 +262,7 @@ export function measuredValueForDimensionSelection(
         ? measureRadius(sketch, resolved.entityId)
         : measureDiameter(sketch, resolved.entityId);
     case 'angle':
-      return (
-        angleForCursorSector(sketch, resolved.l1Id, resolved.l2Id, cursor) ??
-        measureAngleBetweenLines(sketch, resolved.l1Id, resolved.l2Id)
-      );
+      return resolveAngleAtCursor(sketch, resolved.l1Id, resolved.l2Id, cursor).degrees;
     case 'pointLineDistance':
       return measurePointLineDistance(sketch, resolved.pointId, resolved.lineId);
     default:
@@ -256,7 +277,9 @@ export function measuredValueForDimensionSelection(
  * real SketchDimension (convention 10), used by the store's commit path.
  * distanceAxis is the H/V/aligned flavor pickDistanceAxis resolved at
  * placement (undefined for the ordinary aligned distance, or for any
- * resolved kind other than 'distance', which ignores it).
+ * resolved kind other than 'distance', which ignores it). angleSupplementary
+ * is resolveAngleAtCursor's supplementary flag, likewise only meaningful for
+ * an 'angle' resolution.
  */
 export function buildDimensionFromSelection(
   resolved: DimensionSelectionKind,
@@ -265,6 +288,7 @@ export function buildDimensionFromSelection(
   value: number,
   labelOffset: LabelOffset,
   distanceAxis?: 'x' | 'y',
+  angleSupplementary?: boolean,
 ): SketchDimension {
   switch (resolved.kind) {
     case 'length':
@@ -277,7 +301,10 @@ export function buildDimensionFromSelection(
     case 'radiusOrDiameter':
       return { kind: radiusKind, id, entityId: resolved.entityId, mm: value, labelOffset };
     case 'angle':
-      return { kind: 'angle', id, l1Id: resolved.l1Id, l2Id: resolved.l2Id, degrees: value, labelOffset };
+      return {
+        kind: 'angle', id, l1Id: resolved.l1Id, l2Id: resolved.l2Id, degrees: value,
+        supplementary: angleSupplementary, labelOffset,
+      };
     case 'pointLineDistance':
       return {
         kind: 'pointLineDistance', id, pointId: resolved.pointId, lineId: resolved.lineId, mm: value,
