@@ -199,7 +199,7 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
             </v-list-item-subtitle>
             <template #append>
               <v-btn
-                v-if="editActionOf(tool) === 'retrace' && tool.clicks.length > 0"
+                v-if="editActionOf(tool) === 'retrace'"
                 icon
                 size="x-small"
                 variant="text"

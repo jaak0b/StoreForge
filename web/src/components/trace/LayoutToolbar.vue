@@ -189,7 +189,7 @@ function removeTool(): void {
               @click="trace.duplicateTool(tool.id)"
             />
             <v-list-item
-              v-if="editActionOf(tool) === 'retrace' && tool.clicks.length > 0"
+              v-if="editActionOf(tool) === 'retrace'"
               prepend-icon="mdi-magic-staff"
               title="Re-trace"
               :disabled="!props.retraceAvailable"

@@ -42,14 +42,52 @@ describe('toolTrace store shadow option', () => {
       ],
       holes: [],
     };
-    const tool = trace.addTool(outline, 'Sketched shape', [], false, [], {
-      kind: 'sketch',
-      sketch,
-    });
+    const tool = trace.addTool(outline, 'Sketched shape', { kind: 'sketch', sketch });
     expect(tool.source.kind).toBe('sketch');
     if (tool.source.kind === 'sketch') {
       expect(tool.source.sketch).toEqual(sketch);
     }
     expect(trace.placements.some((p) => p.toolId === tool.id)).toBe(true);
+  });
+
+  it('adds a primitive tool with no re-edit data', () => {
+    const trace = useToolTrace();
+    const outline = {
+      outer: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ],
+      holes: [],
+    };
+    const tool = trace.addTool(outline, 'Circle', { kind: 'primitive' });
+    expect(tool.source).toEqual({ kind: 'primitive' });
+    expect('clicks' in tool).toBe(false);
+  });
+
+  it('stores a photo tool\'s clicks and strokes inside its source', () => {
+    const trace = useToolTrace();
+    const outline = {
+      outer: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ],
+      holes: [],
+    };
+    const clicks = [{ x: 5, y: 5, label: 1 as const }];
+    const tool = trace.addTool(outline, undefined, {
+      kind: 'photo',
+      sessionId: 's1',
+      clicks,
+      brushStrokes: [],
+    });
+    expect(tool.source.kind).toBe('photo');
+    if (tool.source.kind === 'photo') {
+      expect(tool.source.sessionId).toBe('s1');
+      expect(tool.source.clicks).toEqual(clicks);
+    }
   });
 });

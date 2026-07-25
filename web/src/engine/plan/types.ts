@@ -1,4 +1,4 @@
-import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trace/types';
+import type { PaperCorners, PaperKind, TracedTool, ToolPlacement, TraceSession } from '../trace/types';
 import type { DividerWall } from '../gridfinity/dividerModel';
 import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
@@ -128,13 +128,12 @@ export interface TracedBin extends BinEnvelope, CavityEditedBin {
   /** The tool pockets sunk into the bin. */
   pockets: BinPockets;
   /**
-   * Key of the original trace photo in this device's photo store. Absent for
-   * plans imported from elsewhere or bins saved before photo storage; the
-   * bin is then layout-only editable.
+   * The photographed sheets this bin's photo tools were traced on. Empty for
+   * bins with only sketched or primitive tools, and for plans imported from
+   * devices that no longer hold the photos (the photo store lookup then
+   * comes back empty and the bin is layout-only editable).
    */
-  traceSourceId?: string;
-  /** The reference-sheet setup the photo was rectified with, when known. */
-  paper?: TracePaper;
+  traceSessions: TraceSession[];
 }
 
 /**

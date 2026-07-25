@@ -11,7 +11,7 @@ export interface PixelPoint {
 
 /**
  * A freehand brush stroke painted onto the segmentation mask, in
- * rectified-image pixels (the same frame as TracedTool.clicks). An 'add'
+ * rectified-image pixels (the same frame as the photo source's clicks). An 'add'
  * stroke unions its swept-disc region into the mask; an 'erase' stroke
  * subtracts it; a 'smooth' stroke leaves the mask's set and cleared regions
  * alone and instead median-filters the mask inside its swept disc, cleaning up
@@ -79,12 +79,31 @@ export interface TracedOutline {
 }
 
 /**
- * Where a tool's outline came from. A photo-traced tool is re-editable
- * through its stored clicks and photo; a sketched tool embeds its editable
- * Sketch so it can be reopened and changed later. Discriminated on kind and
- * always branched exhaustively (assertNever), mirroring Bin.origin.
+ * Where a tool's outline came from, each variant owning its own re-edit
+ * data. A photo-traced tool names the trace session it was traced in and
+ * carries the clicks and brush strokes (rectified-image pixels of that
+ * session's sheet) that reproduce its segmentation. A sketched tool embeds
+ * its editable Sketch. A primitive tool (basic circle or rectangle) has no
+ * re-edit data at all. Discriminated on kind and always branched
+ * exhaustively (assertNever), mirroring Bin.origin.
  */
-export type ToolSource = { kind: 'photo' } | { kind: 'sketch'; sketch: Sketch };
+export type ToolSource =
+  | { kind: 'photo'; sessionId: string; clicks: SamPoint[]; brushStrokes?: BrushStroke[] }
+  | { kind: 'sketch'; sketch: Sketch }
+  | { kind: 'primitive' };
+
+/**
+ * One photographed reference sheet a tool bin's photo tools were traced on.
+ * The photo blob itself lives in this device's photo store under
+ * traceSourceId; the session carries what re-tracing needs to reproduce the
+ * exact rectified image the tools' clicks refer to. A session is saved with
+ * the bin iff at least one tool references its id.
+ */
+export interface TraceSession {
+  id: string;
+  traceSourceId: string;
+  paper: { corners: PaperCorners; kind: PaperKind };
+}
 
 /**
  * A finger hole punched through the tool pocket so the tool can be lifted
@@ -140,19 +159,6 @@ export interface TracedTool {
   id: string;
   name: string;
   outline: TracedOutline;
-  /**
-   * The click prompts (rectified-image pixels) that produced the outline,
-   * kept so re-tracing from the stored photo can restore and continue the
-   * segmentation. Empty for primitive shapes and for tools imported from
-   * plans that predate click storage.
-   */
-  clicks: SamPoint[];
-  /**
-   * Brush strokes painted onto the mask during tracing (rectified-image
-   * pixels), kept so re-tracing can restore and reapply them. Absent for
-   * primitive shapes and for tools imported from plans that predate painting.
-   */
-  brushStrokes?: BrushStroke[];
   /** Counterclockwise rotation in degrees applied about the outline centroid. */
   rotationDeg: number;
   /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. */
@@ -172,7 +178,7 @@ export interface TracedTool {
    */
   filledHoleIndices: number[];
   fingerHoles: FingerHole[];
-  /** Where the outline came from: a photo trace or an embedded sketch. */
+  /** Where the outline came from, owning that origin's re-edit data. */
   source: ToolSource;
 }
 

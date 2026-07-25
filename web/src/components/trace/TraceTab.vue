@@ -100,11 +100,10 @@ async function finishSketch(): Promise<void> {
     // Re-editing a sketched tool: replace its outline and sketch in place.
     const tool = trace.tools.find((t) => t.id === sketchEditor.editingToolId);
     if (tool !== undefined) {
-      trace.replaceToolOutline(tool.id, profile.outline, []);
-      tool.source = source;
+      trace.replaceToolOutline(tool.id, profile.outline, source);
     }
   } else {
-    trace.addTool(profile.outline, 'Sketched shape', [], false, [], source);
+    trace.addTool(profile.outline, 'Sketched shape', source);
   }
   traceInput.value = 'photo';
   stage.value = 2;
@@ -124,6 +123,8 @@ function editSketchedTool(toolId: string): void {
       stage.value = 1;
       traceInput.value = 'sketch';
       return;
+    case 'primitive':
+      return; // a primitive shape has nothing to reopen
     default:
       return assertNever(tool.source);
   }
@@ -155,12 +156,15 @@ const resumeError = ref<string | null>(null);
 async function lookUpStoredPhoto(entry: TracedBin): Promise<void> {
   storedPhoto.value = null;
   photoMissing.value = false;
-  if (entry.traceSourceId === undefined || entry.paper === undefined) {
+  // Minimal single-session scaffold: Task 4 resolves the session by the tool
+  // actually being (re)traced instead of always the first one.
+  const session = entry.traceSessions[0];
+  if (session === undefined) {
     photoMissing.value = true;
     return;
   }
   try {
-    const blob = await getPhoto(entry.traceSourceId);
+    const blob = await getPhoto(session.traceSourceId);
     storedPhoto.value = blob;
     photoMissing.value = blob === null;
   } catch (error) {
@@ -178,7 +182,8 @@ async function lookUpStoredPhoto(entry: TracedBin): Promise<void> {
 async function resumeTrace(): Promise<void> {
   const entry = editingBin.value;
   const blob = storedPhoto.value;
-  if (entry === null || blob === null || entry.paper === undefined) return;
+  const session = entry?.traceSessions[0];
+  if (entry === null || blob === null || session === undefined) return;
   resumeBusy.value = true;
   resumeError.value = null;
   try {
@@ -187,10 +192,10 @@ async function resumeTrace(): Promise<void> {
     trace.photoUrl = URL.createObjectURL(blob);
     trace.photoSize = info;
     trace.photoBlob = blob;
-    trace.sourceId = entry.traceSourceId ?? null;
-    trace.corners = JSON.parse(JSON.stringify(entry.paper.corners)) as PaperCorners;
-    trace.paperKind = entry.paper.kind;
-    const rectified = await rectifyPaper(entry.paper.corners, entry.paper.kind);
+    trace.sourceId = session.traceSourceId;
+    trace.corners = JSON.parse(JSON.stringify(session.paper.corners)) as PaperCorners;
+    trace.paperKind = session.paper.kind;
+    const rectified = await rectifyPaper(session.paper.corners, session.paper.kind);
     trace.calibration = rectified.calibration;
     trace.rectifiedPreview = rectified.preview;
     trace.embedReady = false;

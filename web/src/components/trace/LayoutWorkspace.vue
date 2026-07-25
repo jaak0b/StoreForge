@@ -137,6 +137,7 @@ function addPrimitive(): void {
       primitiveKind.value === 'circle'
         ? `Circle ${primitiveDiameter.value} mm`
         : `Rectangle ${primitiveWidth.value} x ${primitiveHeight.value} mm`,
+      { kind: 'primitive' },
     );
     primitiveDialog.value = false;
     // The new shape lands on the layout canvas.
@@ -340,6 +341,14 @@ async function addToQueue(): Promise<void> {
     editingProductBin !== null && editingProductBin.origin === 'traced'
       ? editingProductBin
       : null;
+  // Minimal single-session scaffold: Task 4 rebuilds this to collect one
+  // session per distinct photo source referenced by the bin's tools.
+  const traceSourceId = source.traceSourceId ?? editingBin?.traceSessions[0]?.traceSourceId;
+  const paper = source.paper ?? editingBin?.traceSessions[0]?.paper;
+  const traceSessions: TracedBin['traceSessions'] =
+    traceSourceId !== undefined && paper !== undefined
+      ? [{ id: crypto.randomUUID(), traceSourceId, paper }]
+      : [];
   const bin: TracedBin = {
     origin: 'traced',
     gridX: params.gridX,
@@ -351,11 +360,8 @@ async function addToQueue(): Promise<void> {
     // one is being edited, empty for a fresh trace); deep-copied out of the
     // reactive store so the saved plan holds plain JSON.
     edits: trace.edits.map(cloneEdit),
+    traceSessions,
   };
-  const traceSourceId = source.traceSourceId ?? editingBin?.traceSourceId;
-  const paper = source.paper ?? editingBin?.paper;
-  if (traceSourceId !== undefined) bin.traceSourceId = traceSourceId;
-  if (paper !== undefined) bin.paper = paper;
   let product: Product;
   if (params.fusedLabel != null) {
     product = { kind: 'binWithInsert', bin, insert: params.fusedLabel, fused: true };

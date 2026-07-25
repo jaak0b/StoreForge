@@ -3,7 +3,13 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
 import { segmentAt } from '../../visionClient';
-import type { BrushStroke, MmPoint, SamPoint, TracedOutline } from '../../engine/trace/types';
+import type {
+  BrushStroke,
+  MmPoint,
+  SamPoint,
+  TracedOutline,
+  ToolSource,
+} from '../../engine/trace/types';
 import { centroidOf, pointInPolygon } from '../../engine/trace/edit';
 import {
   MIN_ZOOM,
@@ -156,10 +162,10 @@ watch(
     if (toolId === null || segmenting.value) return;
     const tool = store.tools.find((t) => t.id === toolId);
     store.retraceRequestId = null;
-    if (tool === undefined || tool.clicks.length === 0) return;
-    points.value = JSON.parse(JSON.stringify(tool.clicks)) as SamPoint[];
-    strokes.value = tool.brushStrokes
-      ? (JSON.parse(JSON.stringify(tool.brushStrokes)) as BrushStroke[])
+    if (tool === undefined || tool.source.kind !== 'photo') return;
+    points.value = JSON.parse(JSON.stringify(tool.source.clicks)) as SamPoint[];
+    strokes.value = tool.source.brushStrokes
+      ? (JSON.parse(JSON.stringify(tool.source.brushStrokes)) as BrushStroke[])
       : [];
     retraceToolId.value = tool.id;
     void runSegment();
@@ -828,15 +834,22 @@ function acceptTool(finish: boolean): void {
   const clicks = JSON.parse(JSON.stringify(points.value)) as SamPoint[];
   const brushStrokes = JSON.parse(JSON.stringify(strokes.value)) as BrushStroke[];
   const sheetOutline = JSON.parse(JSON.stringify(outline.value)) as TracedOutline;
+  const source: ToolSource = {
+    kind: 'photo',
+    // Session id wiring lands with the active-session store state.
+    sessionId: store.sourceId ?? '',
+    clicks,
+    brushStrokes,
+  };
   let savedNumber: number;
   if (retraceToolId.value !== null) {
     const toolId = retraceToolId.value;
-    store.replaceToolOutline(toolId, outline.value, clicks, brushStrokes);
+    store.replaceToolOutline(toolId, outline.value, source);
     ghostOutlines.set(toolId, sheetOutline);
     const index = tools.value.findIndex((t) => t.id === toolId);
     savedNumber = index >= 0 ? index + 1 : tools.value.length;
   } else {
-    const tool = store.addTool(outline.value, undefined, clicks, true, brushStrokes);
+    const tool = store.addTool(outline.value, undefined, source, true);
     ghostOutlines.set(tool.id, sheetOutline);
     savedNumber = tools.value.length;
   }

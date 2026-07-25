@@ -16,7 +16,6 @@ import {
   type QueueEntry,
   type ScrewBin,
   type ScrewSpec,
-  type TracePaper,
   type Vec3Mm,
   type DividerWall,
   type Group,
@@ -58,18 +57,13 @@ import {
   type HeadType,
 } from './screwListImport';
 import type {
-  BrushStroke,
   FingerHole,
   MmPoint,
-  PaperCorners,
-  PaperKind,
-  SamPoint,
   TracedTool,
   ToolPlacement,
-  ToolSource,
 } from '../trace/types';
 import { DEFAULT_MIN_HOLE_WIDTH_MM } from '../trace/layoutModel';
-import { validateSketch, deserializeSketch } from '../sketch/model';
+import { validateSketch } from '../sketch/model';
 
 /*
  * Validation message convention. Every validator returns null when the value
@@ -325,20 +319,6 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
         outer: (outline.outer as MmPoint[]).map((p) => ({ x: p.x, y: p.y })),
         holes: (outline.holes as MmPoint[][]).map((loop) => loop.map((p) => ({ x: p.x, y: p.y }))),
       },
-      clicks: ((tool.clicks as SamPoint[] | undefined) ?? []).map((p) => ({
-        x: p.x,
-        y: p.y,
-        label: p.label,
-      })),
-      ...(tool.brushStrokes !== undefined
-        ? {
-            brushStrokes: (tool.brushStrokes as BrushStroke[]).map((s) => ({
-              mode: s.mode,
-              radiusMm: s.radiusMm,
-              points: s.points.map((p) => ({ x: p.x, y: p.y })),
-            })),
-          }
-        : {}),
       rotationDeg: tool.rotationDeg as number,
       offsetMm: tool.offsetMm as number,
       mirrored: tool.mirrored as boolean,
@@ -352,7 +332,9 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
           : {}),
         diameterMm: hole.diameterMm,
       })),
-      source: pickToolSource(tool.source),
+      // Throwaway scaffolding: Task 2 rebuilds this to reconstruct the real
+      // photo/sketch/primitive source from the raw plan.
+      source: { kind: 'primitive' },
     };
   });
   const placements = (raw.placements as Record<string, unknown>[]).map(
@@ -365,25 +347,6 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
     }),
   );
   return { tools, placements };
-}
-
-/**
- * Copies a validated tool source; absent (pre-version-11) means the tool was
- * photo-traced, which is what every earlier plan's tools were.
- */
-function pickToolSource(raw: unknown): ToolSource {
-  if (raw === undefined) return { kind: 'photo' };
-  const source = raw as Record<string, unknown>;
-  if (source.kind === 'sketch') {
-    const parsed = deserializeSketch(source.sketch);
-    if (!parsed.ok) {
-      // validatePockets already proved the sketch valid; reaching here is a
-      // programming error, not a user problem.
-      throw new Error(`A validated sketch failed to deserialize: ${parsed.error}`);
-    }
-    return { kind: 'sketch', sketch: parsed.sketch };
-  }
-  return { kind: 'photo' };
 }
 
 /** The six placement fields, in the order the validator reports them. */
@@ -671,25 +634,6 @@ export function validateTraceSource(raw: Record<string, unknown>, subject: strin
   return null;
 }
 
-/** Copies only the known TracePaper fields from a validated raw object. */
-function pickTracePaper(raw: Record<string, unknown>): TracePaper {
-  const corners = raw.corners as Record<string, { x: number; y: number }>;
-  const picked = {} as Record<string, { x: number; y: number }>;
-  for (const key of CORNER_KEYS) {
-    picked[key] = { x: corners[key].x, y: corners[key].y };
-  }
-  return { corners: picked as unknown as PaperCorners, kind: raw.kind as PaperKind };
-}
-
-/** Copies the optional trace-source fields onto a validated traced bin. */
-function assignTraceSource(
-  target: { traceSourceId?: string; paper?: TracePaper },
-  raw: Record<string, unknown>,
-): void {
-  if (raw.traceSourceId !== undefined) target.traceSourceId = raw.traceSourceId as string;
-  if (raw.paper !== undefined) target.paper = pickTracePaper(raw.paper as Record<string, unknown>);
-}
-
 const HEAD_TYPE_SET: ReadonlySet<string> = new Set<string>(HEAD_TYPES);
 
 /**
@@ -883,13 +827,14 @@ function pickBin(raw: Record<string, unknown>): Bin {
     magnetHoles: raw.magnetHoles as boolean,
   };
   if (raw.origin === 'traced') {
+    // Throwaway scaffolding: Task 2 rebuilds this to reconstruct traceSessions.
     const bin: Bin = {
       ...envelope,
       origin: 'traced',
       pockets: pickPockets(raw.pockets as Record<string, unknown>),
       edits: pickCavityEdits(raw),
+      traceSessions: [],
     };
-    assignTraceSource(bin, raw);
     return bin;
   }
   if (raw.origin === 'cutout') {
@@ -1721,13 +1666,14 @@ function legacyProductOf(
   };
   let bin: Bin;
   if (kind === 'traced') {
+    // Throwaway scaffolding: Task 2 rebuilds this to reconstruct traceSessions.
     bin = {
       ...envelope,
       origin: 'traced',
       pockets: pickPockets(raw.pockets as Record<string, unknown>),
       edits: pickCavityEdits(raw),
+      traceSessions: [],
     };
-    assignTraceSource(bin, raw);
   } else {
     const walls = pickWalls(raw);
     bin =

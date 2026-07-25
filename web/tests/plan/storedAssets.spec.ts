@@ -21,6 +21,13 @@ import type {
 // wrappers stay thin and untested, and these tests cover the
 // garbage-collection logic through fake stores.
 
+const PAPER_CORNERS = {
+  tl: { x: 0, y: 0 },
+  tr: { x: 210, y: 0 },
+  br: { x: 210, y: 297 },
+  bl: { x: 0, y: 297 },
+};
+
 function manualBin(): ManualBin {
   return {
     origin: 'manual',
@@ -52,17 +59,22 @@ function tracedBin(traceSourceId?: string): TracedBin {
             ],
             holes: [],
           },
-          clicks: [],
           rotationDeg: 0,
           offsetMm: 0,
           mirrored: false,
+          minHoleWidthMm: 0,
+          filledHoleIndices: [],
           fingerHoles: [],
+          source: { kind: 'primitive' },
         },
       ],
       placements: [{ toolId: 't1', xMm: 0, yMm: 0, pocketDepthMm: 10 }],
     },
+    traceSessions:
+      traceSourceId !== undefined
+        ? [{ id: 'sess1', traceSourceId, paper: { corners: PAPER_CORNERS, kind: 'a4' } }]
+        : [],
   };
-  if (traceSourceId !== undefined) bin.traceSourceId = traceSourceId;
   return bin;
 }
 
