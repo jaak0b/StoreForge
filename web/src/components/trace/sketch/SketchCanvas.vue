@@ -10,10 +10,12 @@ import { assertNever } from '../../../engine/plan/types';
 import type { MmPoint } from '../../../engine/trace/types';
 import type { SketchEntity } from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
+import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
 
 const emit = defineEmits<{
-  /** A canvas click in mm, for the active drawing tool. */
-  (e: 'canvasClick', at: MmPoint, hitPointId: string | null): void;
+  /** A canvas click in mm, for the active drawing tool. altKey is the Alt
+   * modifier at click time, which suppresses auto H/V inference. */
+  (e: 'canvasClick', at: MmPoint, hitPointId: string | null, altKey: boolean): void;
   /** A drag of an existing point to a new mm position (driven point). */
   (e: 'pointDrag', pointId: string, at: MmPoint): void;
   (e: 'pointDragEnd'): void;
@@ -41,6 +43,9 @@ const {
   chainTailId,
   regionFaces,
   selectedRegionId,
+  cursorMm,
+  hoveredConstraintId,
+  hoveredEntityIds,
 } = storeToRefs(editor);
 
 /** Region the pointer currently hovers, for the raised-opacity hover cue;
@@ -203,7 +208,9 @@ const entityPaths = computed(() =>
  * reports dof for the whole sketch, so the color applies sketch-wide.
  */
 function strokeOf(entity: SketchEntity): string {
-  if (selectedIds.value.includes(entity.id)) return '#ff9800';
+  if (selectedIds.value.includes(entity.id) || hoveredEntityIds.value.includes(entity.id)) {
+    return '#ff9800';
+  }
   if (entity.kind !== 'point' && entity.construction) return '#9e9e9e';
   const state = solveState.value;
   if (state.status === 'conflicting' || state.status === 'failed') return '#e53935';
@@ -212,9 +219,6 @@ function strokeOf(entity: SketchEntity): string {
 }
 
 const draggingPointId = ref<string | null>(null);
-/** Current cursor position in mm, for the open-chain rubber-band cue; null
- * once the pointer leaves the canvas. Display state only, never the model. */
-const cursorMm = ref<MmPoint | null>(null);
 /** While dragging a point, another existing point within snap range of the
  * cursor, or null; drives the drop-to-merge snap ring and the merge on
  * release. Never the dragged point itself. */
@@ -256,11 +260,12 @@ function onPointerDown(event: PointerEvent): void {
     selectedIds.value = [];
     selectedConstraintId.value = null;
   }
-  emit('canvasClick', at, hit);
+  emit('canvasClick', at, hit, event.altKey);
 }
 
 function onPointerMove(event: PointerEvent): void {
   cursorMm.value = clientToMm(event);
+  altHeld.value = event.altKey;
   if (pendingPointId.value !== null && pendingDownScreen.value !== null) {
     const dx = event.clientX - pendingDownScreen.value.x;
     const dy = event.clientY - pendingDownScreen.value.y;
@@ -366,6 +371,48 @@ const rubberBand = computed(() => {
   return { x1: chainTailPoint.value.x, y1: chainTailPoint.value.y, x2: cursorMm.value.x, y2: cursorMm.value.y };
 });
 
+/** Whether Alt is currently held, suppressing the auto H/V hint and
+ * inference; tracked from the last pointermove/keydown, display only. */
+const altHeld = ref(false);
+
+/**
+ * The pre-commit H/V hint glyph: while the line tool's rubber band falls
+ * within the auto H/V snap band (engine/sketch/autoInfer.ts) and Alt is not
+ * held, a small H or V letter shows near the cursor so the user sees the
+ * inference coming before they click. Reuses inferHVConstraint, the same
+ * function the store applies on placement, so the hint never promises a
+ * constraint the store would not actually add (convention 10).
+ */
+const hvHint = computed<{ x: number; y: number; text: 'H' | 'V' } | null>(() => {
+  if (rubberBand.value === null || altHeld.value || activeTool.value !== 'line') return null;
+  const inferred = inferHVConstraint(
+    rubberBand.value.x2 - rubberBand.value.x1,
+    rubberBand.value.y2 - rubberBand.value.y1,
+  );
+  if (inferred === null) return null;
+  return {
+    x: rubberBand.value.x2,
+    y: rubberBand.value.y2 - mmPerScreenPixel() * 14,
+    text: inferred === 'horizontal' ? 'H' : 'V',
+  };
+});
+
+/**
+ * The live length (and, for a line, angle) readout beside the rubber-band
+ * cursor while drawing. Raw labeled values (convention 8), not prose.
+ */
+const liveReadout = computed<{ x: number; y: number; text: string } | null>(() => {
+  if (rubberBand.value === null) return null;
+  const dx = rubberBand.value.x2 - rubberBand.value.x1;
+  const dy = rubberBand.value.y2 - rubberBand.value.y1;
+  const length = Math.hypot(dx, dy);
+  const lengthText = `${length.toFixed(1)} mm`;
+  const text = activeTool.value === 'line'
+    ? `${lengthText}  ${(((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360).toFixed(1)} deg`
+    : lengthText;
+  return { x: rubberBand.value.x2 + mmPerScreenPixel() * 10, y: rubberBand.value.y2 + mmPerScreenPixel() * 10, text };
+});
+
 /**
  * Invisible hit-path stroke width, in mm, for the wide click target laid
  * over each thin entity path. Screen-px-derived (12px) so the click
@@ -429,7 +476,10 @@ const dimensionLabels = computed(() =>
  * colors (blue/green/red), the entity selection accent, and the dimension
  * label color, per the glyph design. */
 function glyphColorOf(constraintId: string): string {
-  return constraintId === selectedConstraintId.value ? '#ff9800' : '#607d8b';
+  if (constraintId === selectedConstraintId.value || constraintId === hoveredConstraintId.value) {
+    return '#ff9800';
+  }
+  return '#607d8b';
 }
 
 /** Millimeters per screen pixel, re-read whenever the view changes, so glyph
@@ -638,6 +688,23 @@ const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
         stroke="#ff6f00"
         stroke-width="0.4"
       />
+      <text
+        v-if="hvHint !== null"
+        :x="hvHint.x"
+        :y="hvHint.y"
+        font-size="4"
+        text-anchor="middle"
+        fill="#ff6f00"
+        style="pointer-events: none"
+      >{{ hvHint.text }}</text>
+      <text
+        v-if="liveReadout !== null"
+        :x="liveReadout.x"
+        :y="liveReadout.y"
+        font-size="3"
+        fill="#424242"
+        style="pointer-events: none"
+      >{{ liveReadout.text }}</text>
     </g>
     <g class="dimensions">
       <text
