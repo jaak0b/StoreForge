@@ -8,6 +8,13 @@ vi.mock('../../src/sketchClient', () => ({
 
 import { useSketchEditor } from '../../src/stores/sketchEditor';
 import { extractProfile } from '../../src/engine/sketch/profile';
+import {
+  measureLineLength,
+  measureRadius,
+  measureDiameter,
+  measurePointDistance,
+  measureAngleBetweenLines,
+} from '../../src/engine/sketch/measure';
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -414,7 +421,10 @@ describe('useSketchEditor', () => {
     const editor = useSketchEditor();
     editor.startNewSketch();
     editor.appendChainPoint({ x: 0, y: 0 });
-    editor.appendChainPoint({ x: 10, y: 0 });
+    // suppressAutoHV: true, so this axis-aligned segment does not also pick
+    // up the store's own auto H/V constraint, which would leave a second
+    // horizontal constraint behind after this test's manual one is removed.
+    editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
     const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
     const constraintId = editor.nextId();
     editor.addConstraint({ kind: 'horizontal', id: constraintId, lineId: line.id });
@@ -608,6 +618,161 @@ describe('useSketchEditor', () => {
       await editor.solveNow();
       expect(editor.regionFaces).not.toBe(facesBeforeDrag);
       expect(editor.regionFaces).toHaveLength(1);
+    });
+  });
+
+  describe('measured-value defaults', () => {
+    it('measures a line length from its current solved geometry', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 30, y: 40 }, undefined, true);
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      expect(measureLineLength(editor.sketch, line.id)).toBeCloseTo(50);
+    });
+
+    it('measures a circle radius and diameter from its stored radius', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      const circleId = editor.addCircle({ x: 0, y: 0 }, 5);
+      expect(measureRadius(editor.sketch, circleId)).toBeCloseTo(5);
+      expect(measureDiameter(editor.sketch, circleId)).toBeCloseTo(10);
+    });
+
+    it('measures the distance between two points', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      const p1 = editor.addPoint({ x: 0, y: 0 });
+      const p2 = editor.addPoint({ x: 3, y: 4 });
+      expect(measurePointDistance(editor.sketch, p1, p2)).toBeCloseTo(5);
+    });
+
+    it('measures the angle between two lines', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const l1 = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.endChain();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 0, y: 10 }, undefined, true);
+      const l2 = editor.sketch.entities.filter((e) => e.kind === 'line')[1];
+      expect(measureAngleBetweenLines(editor.sketch, l1.id, l2.id)).toBeCloseTo(90);
+    });
+  });
+
+  describe('rectangle tool', () => {
+    it('creates four lines sharing corner points, with H/V constraints on the sides', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.addRectangle({ x: 0, y: 0 }, { x: 20, y: 10 });
+
+      const lines = editor.sketch.entities.filter((e) => e.kind === 'line');
+      expect(lines).toHaveLength(4);
+      const points = editor.sketch.entities.filter((e) => e.kind === 'point');
+      expect(points).toHaveLength(4);
+      // Coincident corners by construction: every point is referenced by
+      // exactly two of the four lines (its two adjacent sides).
+      for (const p of points) {
+        const refCount = lines.filter((l) => l.kind === 'line' && (l.p1Id === p.id || l.p2Id === p.id)).length;
+        expect(refCount).toBe(2);
+      }
+      const horizontals = editor.sketch.constraints.filter((c) => c.kind === 'horizontal');
+      const verticals = editor.sketch.constraints.filter((c) => c.kind === 'vertical');
+      expect(horizontals).toHaveLength(2);
+      expect(verticals).toHaveLength(2);
+    });
+  });
+
+  describe('slot tool', () => {
+    it('creates two parallel lines and two end arcs with tangent junctions and one diameter dimension', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.addSlot({ x: 0, y: 0 }, { x: 30, y: 0 }, 10);
+
+      const lines = editor.sketch.entities.filter((e) => e.kind === 'line');
+      const arcs = editor.sketch.entities.filter((e) => e.kind === 'arc');
+      expect(lines).toHaveLength(2);
+      expect(arcs).toHaveLength(2);
+
+      const parallels = editor.sketch.constraints.filter((c) => c.kind === 'parallel');
+      const tangents = editor.sketch.constraints.filter((c) => c.kind === 'tangent');
+      const diameters = editor.sketch.constraints.filter((c) => c.kind === 'diameter');
+      expect(parallels).toHaveLength(1);
+      expect(tangents).toHaveLength(4);
+      expect(diameters).toHaveLength(1);
+      expect(diameters[0].kind === 'diameter' && diameters[0].mm).toBe(10);
+
+      // Both end arcs measure radius 5 (half the width) from their geometry.
+      for (const arc of arcs) {
+        expect(measureRadius(editor.sketch, arc.id)).toBeCloseTo(5);
+      }
+    });
+  });
+
+  describe('auto H/V inference on chain placement', () => {
+    it('adds a horizontal constraint for a segment drawn within the snap band', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0.1 });
+      const horizontals = editor.sketch.constraints.filter((c) => c.kind === 'horizontal');
+      expect(horizontals).toHaveLength(1);
+    });
+
+    it('adds a vertical constraint for a segment drawn within the snap band', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 0.1, y: 10 });
+      const verticals = editor.sketch.constraints.filter((c) => c.kind === 'vertical');
+      expect(verticals).toHaveLength(1);
+    });
+
+    it('adds no H/V constraint for a segment well outside the snap band', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 10 });
+      const hv = editor.sketch.constraints.filter((c) => c.kind === 'horizontal' || c.kind === 'vertical');
+      expect(hv).toHaveLength(0);
+    });
+
+    it('suppresses the auto constraint when suppressAutoHV (Alt) is set, even inside the snap band', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const hv = editor.sketch.constraints.filter((c) => c.kind === 'horizontal' || c.kind === 'vertical');
+      expect(hv).toHaveLength(0);
+    });
+  });
+
+  describe('typed-length application', () => {
+    it('placing a chain point at a typed length adds a matching length dimension', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      // Mimics the quick-entry commit: a typed length replaces the magnitude
+      // of the current direction toward the cursor, then a length dimension
+      // pins the new segment at exactly that value.
+      const tail = editor.sketch.entities.find((e) => e.kind === 'point')!;
+      const typed = 25;
+      const cursor = { x: 10, y: 0 };
+      const dx = cursor.x - (tail as { x: number }).x;
+      const dy = cursor.y - (tail as { y: number }).y;
+      const dirLen = Math.hypot(dx, dy) || 1;
+      const target = { x: (dx / dirLen) * typed, y: (dy / dirLen) * typed };
+      editor.appendChainPoint(target);
+      expect(editor.chainTailSegmentId).not.toBeNull();
+      editor.addDimension({
+        kind: 'length', id: editor.nextId(), lineId: editor.chainTailSegmentId!, mm: typed,
+      });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      expect(measureLineLength(editor.sketch, line.id)).toBeCloseTo(typed);
+      const dims = editor.sketch.constraints.filter((c) => c.kind === 'length');
+      expect(dims).toHaveLength(1);
+      expect(dims[0].kind === 'length' && dims[0].mm).toBe(typed);
     });
   });
 });

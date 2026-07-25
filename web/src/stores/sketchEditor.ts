@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref, shallowRef, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import {
   arcFromThreePoints,
   cloneSketch,
@@ -14,6 +14,7 @@ import type { MmPoint, TracedOutline } from '../engine/trace/types';
 import { assertNever } from '../engine/plan/types';
 import { solveSketchInWorker } from '../sketchClient';
 import { extractRegions, regionToOutline, type RegionFace } from '../engine/sketch/regions';
+import { inferHVConstraint } from '../engine/sketch/autoInfer';
 
 /** The drawing tool active on the sketch canvas. */
 export type SketchTool =
@@ -22,6 +23,8 @@ export type SketchTool =
   | 'arcThreePoint'
   | 'arcTangent'
   | 'circle'
+  | 'rectangle'
+  | 'slot'
   | 'mirror'
   | 'dimension';
 
@@ -71,6 +74,22 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   const underlayOpacityPct = ref(40);
   /** Millimeters per underlay image pixel from the calibration line, or null. */
   const underlayMmPerPixel = ref<number | null>(null);
+  /** Points clicked so far by a multi-click tool (arc, circle, mirror,
+   * rectangle, slot), awaiting the tool's next click. Lives in the store
+   * (rather than component-local state) so Escape-clearing, the typed-length
+   * quick entry, and the live readout can all share the single source of
+   * truth for what a multi-click tool has picked so far (convention 10). */
+  const pendingClicks = ref<MmPoint[]>([]);
+  /** Hit-tested existing point id for each entry in pendingClicks, or null. */
+  const pendingHitPointIds = ref<(string | null)[]>([]);
+  /** Current cursor position in mm while over the canvas, or null once the
+   * pointer leaves it. Display state only, never the model; shared by the
+   * rubber-band live readout and the typed-length quick entry's direction. */
+  const cursorMm = ref<MmPoint | null>(null);
+  /** Id of the constraint the pointer is hovering (e.g. a conflict row), or
+   * null. Distinct from selectedConstraintId: hovering never changes the
+   * selection, it only drives the canvas highlight. */
+  const hoveredConstraintId = ref<string | null>(null);
 
   /**
    * A point-in-time undo entry. Chain state (chainTailId, chainTailSegmentId)
@@ -280,12 +299,18 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * creating a new one; this is how a brand-new chain started on an existing
    * point joins it, and how a chain continuing onto an existing point closes
    * two chains at a shared corner. Returns the point id used.
+   *
+   * When the new segment falls within the auto H/V snap band (see
+   * engine/sketch/autoInfer.ts), a horizontal or vertical constraint is added
+   * to the new line automatically, unless suppressAutoHV is set (the Alt-key
+   * suppression the canvas wires up).
    */
-  function appendChainPoint(at: MmPoint, pointId?: string): string | null {
+  function appendChainPoint(at: MmPoint, pointId?: string, suppressAutoHV = false): string | null {
     beginMutation();
     try {
+      const startCoord = chainTailId.value !== null ? pointById(chainTailId.value) : null;
       const usedPointId = pointId ?? addPoint(at);
-      if (chainTailId.value !== null) {
+      if (chainTailId.value !== null && startCoord !== null) {
         const lineId = nextId();
         sketch.value.entities.push({
           kind: 'line',
@@ -295,6 +320,13 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
           construction: false,
         });
         chainTailSegmentId.value = lineId;
+        if (!suppressAutoHV) {
+          const endCoord = pointById(usedPointId) ?? at;
+          const inferred = inferHVConstraint(endCoord.x - startCoord.x, endCoord.y - startCoord.y);
+          if (inferred !== null) {
+            addConstraint({ kind: inferred, id: nextId(), lineId });
+          }
+        }
         bumpGeneration();
       }
       chainTailId.value = usedPointId;
@@ -331,22 +363,167 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   }
 
   /** Adds a circle; centerPointId reuses an existing sketch point (the
-   * component's click-to-point snapping) instead of creating a new one. */
-  function addCircle(center: MmPoint, radiusMm: number, centerPointId?: string): void {
+   * component's click-to-point snapping) instead of creating a new one.
+   * Returns the new circle's id, so a caller (the typed-diameter quick
+   * entry) can add a dimension on it. */
+  function addCircle(center: MmPoint, radiusMm: number, centerPointId?: string): string {
     beginMutation();
     try {
       const centerId = centerPointId ?? addPoint(center);
+      const id = nextId();
       sketch.value.entities.push({
         kind: 'circle',
-        id: nextId(),
+        id,
         centerId,
         radiusMm,
         construction: false,
       });
       bumpGeneration();
+      return id;
     } finally {
       endMutation();
     }
+  }
+
+  /**
+   * Adds a rectangle from two opposite corners: four points, four lines
+   * sharing point ids at the corners (coincident by construction, no
+   * separate coincident constraint needed), with horizontal constraints on
+   * the top and bottom lines and vertical constraints on the two sides.
+   */
+  function addRectangle(corner1: MmPoint, corner2: MmPoint): void {
+    beginMutation();
+    try {
+      const topLeft = { x: Math.min(corner1.x, corner2.x), y: Math.min(corner1.y, corner2.y) };
+      const bottomRight = { x: Math.max(corner1.x, corner2.x), y: Math.max(corner1.y, corner2.y) };
+      const topRight = { x: bottomRight.x, y: topLeft.y };
+      const bottomLeft = { x: topLeft.x, y: bottomRight.y };
+      const p0 = addPoint(topLeft);
+      const p1 = addPoint(topRight);
+      const p2 = addPoint(bottomRight);
+      const p3 = addPoint(bottomLeft);
+      const topLineId = nextId();
+      sketch.value.entities.push({
+        kind: 'line', id: topLineId, p1Id: p0, p2Id: p1, construction: false,
+      });
+      const rightLineId = nextId();
+      sketch.value.entities.push({
+        kind: 'line', id: rightLineId, p1Id: p1, p2Id: p2, construction: false,
+      });
+      const bottomLineId = nextId();
+      sketch.value.entities.push({
+        kind: 'line', id: bottomLineId, p1Id: p2, p2Id: p3, construction: false,
+      });
+      const leftLineId = nextId();
+      sketch.value.entities.push({
+        kind: 'line', id: leftLineId, p1Id: p3, p2Id: p0, construction: false,
+      });
+      addConstraint({ kind: 'horizontal', id: nextId(), lineId: topLineId });
+      addConstraint({ kind: 'horizontal', id: nextId(), lineId: bottomLineId });
+      addConstraint({ kind: 'vertical', id: nextId(), lineId: leftLineId });
+      addConstraint({ kind: 'vertical', id: nextId(), lineId: rightLineId });
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
+  }
+
+  /**
+   * Adds a slot (the canonical elongated tool pocket / capsule shape): two
+   * parallel lines offset from the axis by half the width, and two
+   * semicircular end arcs centered on the axis endpoints. Tangent
+   * constraints at all four line/arc junctions, plus a parallel constraint
+   * between the two side lines, keep the shape a slot under drag; a single
+   * diameter dimension on one end arc drives both ends to the same width
+   * because both arcs are tangent to the very same pair of lines, so the
+   * shared line separation forces identical radius on both ends. This is
+   * done entirely with the constraint kinds model.ts already has (tangent,
+   * parallel, diameter); no separate "equal radius" constraint kind exists
+   * or is needed.
+   */
+  function addSlot(axisStart: MmPoint, axisEnd: MmPoint, widthMm: number): void {
+    beginMutation();
+    try {
+      const dx = axisEnd.x - axisStart.x;
+      const dy = axisEnd.y - axisStart.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const nx = -uy;
+      const ny = ux;
+      const r = widthMm / 2;
+
+      const centerStartId = addPoint(axisStart);
+      const centerEndId = addPoint(axisEnd);
+
+      const topStart = { x: axisStart.x + nx * r, y: axisStart.y + ny * r };
+      const bottomStart = { x: axisStart.x - nx * r, y: axisStart.y - ny * r };
+      const topEnd = { x: axisEnd.x + nx * r, y: axisEnd.y + ny * r };
+      const bottomEnd = { x: axisEnd.x - nx * r, y: axisEnd.y - ny * r };
+
+      const topStartId = addPoint(topStart);
+      const bottomStartId = addPoint(bottomStart);
+      const topEndId = addPoint(topEnd);
+      const bottomEndId = addPoint(bottomEnd);
+
+      const topLineId = nextId();
+      sketch.value.entities.push({
+        kind: 'line', id: topLineId, p1Id: topStartId, p2Id: topEndId, construction: false,
+      });
+      const bottomLineId = nextId();
+      sketch.value.entities.push({
+        kind: 'line', id: bottomLineId, p1Id: bottomStartId, p2Id: bottomEndId, construction: false,
+      });
+
+      // End arc at axisStart: the semicircle bulging away from axisEnd. The
+      // "through" point extends the axis backward past axisStart so it lies
+      // on the far side of the semicircle; arcFromThreePoints derives the
+      // orientation (ccw) from it, matching addThreePointArc's convention.
+      const outwardStart = { x: axisStart.x - ux * r, y: axisStart.y - uy * r };
+      const startArcDerived = arcFromThreePoints(topStart, outwardStart, bottomStart);
+      const startCcw = startArcDerived?.ccw ?? true;
+      const startArcId = nextId();
+      sketch.value.entities.push({
+        kind: 'arc',
+        id: startArcId,
+        centerId: centerStartId,
+        startId: startCcw ? topStartId : bottomStartId,
+        endId: startCcw ? bottomStartId : topStartId,
+        construction: false,
+      });
+
+      // End arc at axisEnd: the semicircle bulging away from axisStart.
+      const outwardEnd = { x: axisEnd.x + ux * r, y: axisEnd.y + uy * r };
+      const endArcDerived = arcFromThreePoints(topEnd, outwardEnd, bottomEnd);
+      const endCcw = endArcDerived?.ccw ?? true;
+      const endArcId = nextId();
+      sketch.value.entities.push({
+        kind: 'arc',
+        id: endArcId,
+        centerId: centerEndId,
+        startId: endCcw ? topEndId : bottomEndId,
+        endId: endCcw ? bottomEndId : topEndId,
+        construction: false,
+      });
+
+      addConstraint({ kind: 'parallel', id: nextId(), l1Id: topLineId, l2Id: bottomLineId });
+      addConstraint({ kind: 'tangent', id: nextId(), aId: topLineId, bId: startArcId });
+      addConstraint({ kind: 'tangent', id: nextId(), aId: bottomLineId, bId: startArcId });
+      addConstraint({ kind: 'tangent', id: nextId(), aId: topLineId, bId: endArcId });
+      addConstraint({ kind: 'tangent', id: nextId(), aId: bottomLineId, bId: endArcId });
+      addDimension({ kind: 'diameter', id: nextId(), entityId: startArcId, mm: widthMm });
+
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
+  }
+
+  /** Clears the multi-click tool's pending points; Escape and tool switches
+   * both go through this single path. */
+  function clearPendingClicks(): void {
+    pendingClicks.value = [];
+    pendingHitPointIds.value = [];
   }
 
   /**
@@ -554,6 +731,15 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
         return assertNever(entity);
     }
   }
+
+  /** Entity ids referenced by the hovered constraint (e.g. a hovered conflict
+   * row), for the canvas to highlight with the selection accent color; []
+   * when nothing is hovered. */
+  const hoveredEntityIds = computed<string[]>(() => {
+    if (hoveredConstraintId.value === null) return [];
+    const constraint = sketch.value.constraints.find((c) => c.id === hoveredConstraintId.value);
+    return constraint === undefined ? [] : constraintRefIds(constraint);
+  });
 
   /** Every entity or point id a constraint refers to. */
   function constraintRefIds(constraint: SketchConstraint): string[] {
@@ -777,9 +963,16 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     outlineForFinish,
     editingToolId,
     chainTailId,
+    chainTailSegmentId,
     underlayUrl,
     underlayOpacityPct,
     underlayMmPerPixel,
+    pendingClicks,
+    pendingHitPointIds,
+    cursorMm,
+    hoveredConstraintId,
+    hoveredEntityIds,
+    clearPendingClicks,
     nextId,
     startNewSketch,
     loadSketch,
@@ -788,6 +981,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     closeChainTo,
     endChain,
     addCircle,
+    addRectangle,
+    addSlot,
     addThreePointArc,
     addMirrorLine,
     addConstraint,
