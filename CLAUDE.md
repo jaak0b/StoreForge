@@ -98,6 +98,9 @@ Numbered for unambiguous reference; do not cite rule numbers in shipped source o
     want the same. A minimal local guard that duplicates existing logic is a defect, not a small change.
     Any non-trivial engine or cross-cutting change gets a short written design first (its canonical
     home, what it extends, what it must not duplicate) for owner approval before implementation.
+    Interim ("quick fix now, proper fix later") solutions are forbidden in all cases: deferred fixes
+    are forgotten and the interim state becomes permanent, so the correct structure is built
+    immediately, even when it costs a schema change or a larger diff.
 
 11. **Subagent discipline.** Give every subagent a correct, specific title; never run more than 1 Fable
     agent at a time (hard budget limit). Sonnet is fine for parallel design/research work.
