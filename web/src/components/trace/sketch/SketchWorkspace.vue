@@ -5,6 +5,11 @@ import { useSketchEditor, type SketchTool } from '../../../stores/sketchEditor';
 import SketchCanvas from './SketchCanvas.vue';
 import type { MmPoint } from '../../../engine/trace/types';
 import type { SketchEntity } from '../../../engine/sketch/model';
+import {
+  applicableConstraintKinds,
+  canToggleConstruction,
+  type ApplicableConstraintKind,
+} from '../../../engine/sketch/constraintApplicability';
 import { assertNever } from '../../../engine/plan/types';
 
 const emit = defineEmits<{
@@ -21,6 +26,29 @@ const pendingClicks = ref<MmPoint[]>([]);
 const pendingHitPointIds = ref<(string | null)[]>([]);
 /** A one-line hint under the toolbar naming the tool's next expected click. */
 const toolHint = ref('');
+
+/** Tool row buttons: icon, tooltip name, and (for tools without a clean mdi
+ * match) an inline custom icon. Order matches the toolbar's display order. */
+const toolButtons: { tool: SketchTool; label: string; icon?: string }[] = [
+  { tool: 'select', label: 'Select', icon: 'mdi-cursor-default-outline' },
+  { tool: 'line', label: 'Line', icon: 'mdi-vector-line' },
+  { tool: 'arcThreePoint', label: 'Arc', icon: 'mdi-vector-curve' },
+  { tool: 'arcTangent', label: 'Tangent arc' },
+  { tool: 'circle', label: 'Circle', icon: 'mdi-circle-outline' },
+  { tool: 'mirror', label: 'Mirror line', icon: 'mdi-reflect-horizontal' },
+  { tool: 'dimension', label: 'Dimension', icon: 'mdi-ruler' },
+];
+
+/** Icon and tooltip for each applicable-constraint button. */
+const constraintButtons: Record<ApplicableConstraintKind, { label: string; icon: string }> = {
+  horizontal: { label: 'Horizontal', icon: 'mdi-minus' },
+  vertical: { label: 'Vertical', icon: 'mdi-height' },
+  parallel: { label: 'Parallel', icon: 'mdi-equal' },
+  perpendicular: { label: 'Perpendicular', icon: 'mdi-plus' },
+  tangent: { label: 'Tangent', icon: 'mdi-vector-radius' },
+  coincident: { label: 'Coincident', icon: 'mdi-vector-point' },
+  symmetric: { label: 'Symmetric', icon: 'mdi-reflect-horizontal' },
+};
 
 function selectTool(tool: SketchTool): void {
   activeTool.value = tool;
@@ -77,6 +105,27 @@ function entityById(id: string): SketchEntity | undefined {
   return sketch.value.entities.find((e) => e.id === id);
 }
 
+/** The currently selected entities, resolved from the store's selected ids. */
+const selectedEntities = computed<SketchEntity[]>(() =>
+  editor.selectedIds.map(entityById).filter((e): e is SketchEntity => e !== undefined),
+);
+
+/** Constraint kinds the current selection admits, per model.ts's shapes. */
+const availableConstraintKinds = computed<ApplicableConstraintKind[]>(() =>
+  applicableConstraintKinds(selectedEntities.value),
+);
+
+/** Whether the construction toggle applies to the current selection. */
+const constructionApplicable = computed<boolean>(() =>
+  canToggleConstruction(selectedEntities.value),
+);
+
+/** The constraint row only renders when the selection admits at least one
+ * constraint or the construction toggle. */
+const showConstraintRow = computed<boolean>(
+  () => availableConstraintKinds.value.length > 0 || constructionApplicable.value,
+);
+
 /**
  * With the dimension tool active, a selection of one or two entities decides
  * the dimension kind: one line is a length, one arc or circle is a radius
@@ -85,7 +134,7 @@ function entityById(id: string): SketchEntity | undefined {
  * lines are an angle.
  */
 function beginDimensionFromSelection(): void {
-  const picked = editor.selectedIds.map(entityById).filter((e): e is SketchEntity => e !== undefined);
+  const picked = selectedEntities.value;
   let created: string | null = null;
   if (picked.length === 1 && picked[0].kind === 'line') {
     const id = editor.nextId();
@@ -164,17 +213,8 @@ function onEntityClick(entityId: string): void {
 }
 
 /** Applies a constraint to the current selection; each row names its need. */
-function applyConstraint(
-  kind:
-    | 'horizontal'
-    | 'vertical'
-    | 'parallel'
-    | 'perpendicular'
-    | 'tangent'
-    | 'coincident'
-    | 'symmetric',
-): void {
-  const picked = editor.selectedIds.map(entityById).filter((e): e is SketchEntity => e !== undefined);
+function applyConstraint(kind: ApplicableConstraintKind): void {
+  const picked = selectedEntities.value;
   const id = editor.nextId();
   switch (kind) {
     case 'horizontal':
@@ -397,59 +437,109 @@ function onPointDragEnd(): void {
 <template>
   <div class="sketch-workspace">
     <v-toolbar density="compact">
-      <v-btn-toggle :model-value="activeTool" mandatory>
-        <v-btn value="select" @click="selectTool('select')">Select</v-btn>
-        <v-btn value="line" @click="selectTool('line')">Line</v-btn>
-        <v-btn value="arcThreePoint" @click="selectTool('arcThreePoint')">Arc</v-btn>
-        <v-btn value="arcTangent" @click="selectTool('arcTangent')">Tangent arc</v-btn>
-        <v-btn value="circle" @click="selectTool('circle')">Circle</v-btn>
-        <v-btn value="mirror" @click="selectTool('mirror')">Mirror line</v-btn>
-        <v-btn value="dimension" @click="selectTool('dimension')">Dimension</v-btn>
-      </v-btn-toggle>
+      <v-toolbar-title>Sketch</v-toolbar-title>
       <v-spacer />
       <v-btn variant="text" @click="emit('cancel')">Cancel</v-btn>
       <v-btn color="primary" @click="emit('finish')">Use this shape</v-btn>
     </v-toolbar>
-    <v-toolbar density="compact">
-      <v-btn size="small" @click="applyConstraint('horizontal')">Horizontal</v-btn>
-      <v-btn size="small" @click="applyConstraint('vertical')">Vertical</v-btn>
-      <v-btn size="small" @click="applyConstraint('parallel')">Parallel</v-btn>
-      <v-btn size="small" @click="applyConstraint('perpendicular')">Perpendicular</v-btn>
-      <v-btn size="small" @click="applyConstraint('tangent')">Tangent</v-btn>
-      <v-btn size="small" @click="applyConstraint('coincident')">Coincident</v-btn>
-      <v-btn size="small" @click="applyConstraint('symmetric')">Symmetric</v-btn>
-      <v-btn size="small" @click="toggleConstructionOnSelection">Construction</v-btn>
+    <v-toolbar density="compact" class="tool-toolbar">
+      <v-btn-toggle :model-value="activeTool" mandatory density="compact">
+        <v-btn
+          v-for="t in toolButtons"
+          :key="t.tool"
+          :value="t.tool"
+          icon
+          density="compact"
+          @click="selectTool(t.tool)"
+        >
+          <v-icon v-if="t.icon">{{ t.icon }}</v-icon>
+          <svg
+            v-else
+            class="tangent-arc-icon"
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          >
+            <path d="M3 17 L11 17 C 16 17 16 5 21 5" />
+          </svg>
+          <v-tooltip activator="parent" location="bottom">{{ t.label }}</v-tooltip>
+        </v-btn>
+      </v-btn-toggle>
       <v-spacer />
-      <v-file-input
-        label="Reference photo"
-        density="compact"
-        hide-details
-        style="max-width: 220px"
-        accept="image/*"
-        @update:model-value="(f: File | File[] | null) => onUnderlayFile(Array.isArray(f) ? (f[0] ?? null) : f)"
-      />
-      <v-slider
-        v-if="editor.underlayUrl !== null"
-        v-model="editor.underlayOpacityPct"
-        min="0"
-        max="100"
-        step="5"
-        hide-details
-        style="max-width: 140px"
-        label="Opacity"
-      />
-      <v-btn v-if="editor.underlayUrl !== null" size="small" @click="calibrating = true; calibrationClicks = []">
-        Set photo scale
-      </v-btn>
-      <v-text-field
-        v-if="calibrating"
-        v-model="calibrationLengthText"
-        label="Line length in mm"
-        density="compact"
-        hide-details
-        style="max-width: 150px"
-        @keyup.enter="commitCalibration"
-      />
+      <v-menu :close-on-content-click="false" location="bottom end">
+        <template #activator="{ props: menuProps }">
+          <v-btn icon density="compact" variant="text" v-bind="menuProps">
+            <v-icon>mdi-image-outline</v-icon>
+            <v-tooltip activator="parent" location="bottom">Reference photo</v-tooltip>
+          </v-btn>
+        </template>
+        <v-card class="photo-menu pa-3">
+          <v-file-input
+            label="Upload photo"
+            density="compact"
+            hide-details
+            accept="image/*"
+            @update:model-value="(f: File | File[] | null) => onUnderlayFile(Array.isArray(f) ? (f[0] ?? null) : f)"
+          />
+          <v-slider
+            v-if="editor.underlayUrl !== null"
+            v-model="editor.underlayOpacityPct"
+            min="0"
+            max="100"
+            step="5"
+            hide-details
+            label="Opacity"
+            class="mt-4"
+          />
+          <v-btn
+            v-if="editor.underlayUrl !== null"
+            size="small"
+            block
+            class="mt-4"
+            @click="calibrating = true; calibrationClicks = []"
+          >
+            Set photo scale
+          </v-btn>
+          <v-text-field
+            v-if="calibrating"
+            v-model="calibrationLengthText"
+            label="Line length in mm"
+            density="compact"
+            hide-details
+            class="mt-4"
+            @keyup.enter="commitCalibration"
+          />
+        </v-card>
+      </v-menu>
+    </v-toolbar>
+    <v-toolbar v-if="showConstraintRow" density="compact" class="constraint-toolbar">
+      <div class="v-btn-toggle constraint-group">
+        <v-btn
+          v-for="kind in availableConstraintKinds"
+          :key="kind"
+          icon
+          density="compact"
+          variant="text"
+          @click="applyConstraint(kind)"
+        >
+          <v-icon>{{ constraintButtons[kind].icon }}</v-icon>
+          <v-tooltip activator="parent" location="bottom">{{ constraintButtons[kind].label }}</v-tooltip>
+        </v-btn>
+        <v-btn
+          v-if="constructionApplicable"
+          icon
+          density="compact"
+          variant="text"
+          @click="toggleConstructionOnSelection"
+        >
+          <v-icon>mdi-vector-line-dashed</v-icon>
+          <v-tooltip activator="parent" location="bottom">Construction</v-tooltip>
+        </v-btn>
+      </div>
     </v-toolbar>
     <p class="tool-hint">{{ toolHint }}</p>
     <v-text-field
@@ -494,6 +584,19 @@ function onPointDragEnd(): void {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+.tool-toolbar,
+.constraint-toolbar {
+  flex-wrap: wrap;
+  height: auto;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.photo-menu {
+  min-width: 240px;
+}
+.tangent-arc-icon {
+  display: block;
 }
 .canvas-holder {
   flex: 1;
