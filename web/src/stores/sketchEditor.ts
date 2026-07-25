@@ -7,6 +7,7 @@ import {
   type Sketch,
   type SketchConstraint,
   type SketchDimension,
+  type SketchEntity,
 } from '../engine/sketch/model';
 import type { DragTarget, SketchSolveResult } from '../engine/sketch/solve';
 import type { MmPoint } from '../engine/trace/types';
@@ -114,24 +115,28 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
 
   /**
    * Appends a point to the open line chain, creating a line from the chain
-   * tail when one exists. Returns the new point id.
+   * tail when one exists. When pointId names an existing sketch point (the
+   * component's click-to-point snapping), that point is reused instead of
+   * creating a new one; this is how a brand-new chain started on an existing
+   * point joins it, and how a chain continuing onto an existing point closes
+   * two chains at a shared corner. Returns the point id used.
    */
-  function appendChainPoint(at: MmPoint): string | null {
-    const pointId = addPoint(at);
+  function appendChainPoint(at: MmPoint, pointId?: string): string | null {
+    const usedPointId = pointId ?? addPoint(at);
     if (chainTailId.value !== null) {
       const lineId = nextId();
       sketch.value.entities.push({
         kind: 'line',
         id: lineId,
         p1Id: chainTailId.value,
-        p2Id: pointId,
+        p2Id: usedPointId,
         construction: false,
       });
       chainTailSegmentId.value = lineId;
       bumpGeneration();
     }
-    chainTailId.value = pointId;
-    return pointId;
+    chainTailId.value = usedPointId;
+    return usedPointId;
   }
 
   /** Closes the open chain onto an existing point and ends the chain. */
@@ -155,8 +160,10 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     chainTailSegmentId.value = null;
   }
 
-  function addCircle(center: MmPoint, radiusMm: number): void {
-    const centerId = addPoint(center);
+  /** Adds a circle; centerPointId reuses an existing sketch point (the
+   * component's click-to-point snapping) instead of creating a new one. */
+  function addCircle(center: MmPoint, radiusMm: number, centerPointId?: string): void {
+    const centerId = centerPointId ?? addPoint(center);
     sketch.value.entities.push({
       kind: 'circle',
       id: nextId(),
@@ -175,8 +182,11 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * point the caller hit-tested, typically the chain's start) closes the
    * chain onto it instead, the same way closeChainTo does for lines. With
    * tangent true, a tangent constraint is added between the chain's previous
-   * segment and this arc (the arcTangent tool). Returns false for collinear
-   * picks, which the workspace reports as a status row.
+   * segment and this arc (the arcTangent tool). startPointId reuses an
+   * existing sketch point for the arc's start when no chain is open (the
+   * component's click-to-point snapping); it is ignored while a chain is
+   * open, since the chain tail is the start in that case. Returns false for
+   * collinear picks, which the workspace reports as a status row.
    */
   function addThreePointArc(
     start: MmPoint,
@@ -184,6 +194,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     through: MmPoint,
     tangent = false,
     endPointId?: string,
+    startPointId?: string,
   ): boolean {
     const chainStartId = chainTailId.value;
     const chainStartPoint = chainStartId !== null ? pointById(chainStartId) : null;
@@ -192,7 +203,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     if (derived === null) return false;
     const centerId = addPoint(derived.center);
     const previousSegmentId = chainTailSegmentId.value;
-    const startId = chainStartId ?? addPoint(startAt);
+    const startId = chainStartId ?? startPointId ?? addPoint(startAt);
     const closing = endPointId !== undefined && endPointId !== startId;
     const endId = closing ? endPointId! : addPoint(end);
     const arcId = nextId();
@@ -285,6 +296,92 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     bumpGeneration();
   }
 
+  /** The point ids a non-point entity refers to, or [] for a point itself. */
+  function entityPointRefs(entity: SketchEntity): string[] {
+    switch (entity.kind) {
+      case 'point':
+        return [];
+      case 'line':
+        return [entity.p1Id, entity.p2Id];
+      case 'arc':
+        return [entity.centerId, entity.startId, entity.endId];
+      case 'circle':
+        return [entity.centerId];
+      default:
+        return assertNever(entity);
+    }
+  }
+
+  /** Every entity or point id a constraint refers to. */
+  function constraintRefIds(constraint: SketchConstraint): string[] {
+    switch (constraint.kind) {
+      case 'coincident':
+        return [constraint.p1Id, constraint.p2Id];
+      case 'horizontal':
+      case 'vertical':
+        return [constraint.lineId];
+      case 'parallel':
+      case 'perpendicular':
+        return [constraint.l1Id, constraint.l2Id];
+      case 'tangent':
+        return [constraint.aId, constraint.bId];
+      case 'symmetric':
+        return [constraint.p1Id, constraint.p2Id, constraint.mirrorLineId];
+      case 'length':
+        return [constraint.lineId];
+      case 'distance':
+        return [constraint.p1Id, constraint.p2Id];
+      case 'radius':
+      case 'diameter':
+        return [constraint.entityId];
+      case 'angle':
+        return [constraint.l1Id, constraint.l2Id];
+      default:
+        return assertNever(constraint);
+    }
+  }
+
+  /**
+   * Deletes the given entities. Points that become orphaned (endpoints of the
+   * deleted entities not referenced by any remaining entity or constraint)
+   * are removed too, so a shared endpoint between chained lines survives
+   * while a far endpoint used nowhere else does not. Every constraint that
+   * references a removed entity or a removed point is also dropped, and the
+   * removed ids are cleared from the selection.
+   */
+  function deleteEntities(ids: string[]): void {
+    if (ids.length === 0) return;
+    const removedIds = new Set(ids);
+    const removedEntities = sketch.value.entities.filter((e) => removedIds.has(e.id));
+    // Candidate points: endpoints of the deleted entities, not themselves
+    // already among the removed ids.
+    const candidatePointIds = new Set<string>();
+    for (const entity of removedEntities) {
+      for (const pointId of entityPointRefs(entity)) {
+        if (!removedIds.has(pointId)) candidatePointIds.add(pointId);
+      }
+    }
+    const remainingEntities = sketch.value.entities.filter((e) => !removedIds.has(e.id));
+    const survivingConstraints = sketch.value.constraints.filter(
+      (c) => !constraintRefIds(c).some((id) => removedIds.has(id)),
+    );
+    const orphanedPointIds = new Set<string>();
+    for (const pointId of candidatePointIds) {
+      const usedByEntity = remainingEntities.some((e) => entityPointRefs(e).includes(pointId));
+      const usedByConstraint = survivingConstraints.some((c) =>
+        constraintRefIds(c).includes(pointId),
+      );
+      if (!usedByEntity && !usedByConstraint) orphanedPointIds.add(pointId);
+    }
+    const finalRemovedIds = new Set<string>([...removedIds, ...orphanedPointIds]);
+    sketch.value.entities = sketch.value.entities.filter((e) => !finalRemovedIds.has(e.id));
+    sketch.value.constraints = sketch.value.constraints.filter(
+      (c) => !constraintRefIds(c).some((id) => finalRemovedIds.has(id)),
+    );
+    selectedIds.value = selectedIds.value.filter((id) => !finalRemovedIds.has(id));
+    bumpGeneration();
+  }
+
   function toggleConstruction(entityId: string): void {
     const entity = sketch.value.entities.find((e) => e.id === entityId);
     if (entity === undefined) return;
@@ -348,6 +445,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     addDimension,
     setDimensionValue,
     removeConstraint,
+    deleteEntities,
     toggleConstruction,
     solveNow,
   };

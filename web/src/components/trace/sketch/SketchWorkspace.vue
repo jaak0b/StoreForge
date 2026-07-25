@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSketchEditor, type SketchTool } from '../../../stores/sketchEditor';
 import SketchCanvas from './SketchCanvas.vue';
@@ -359,7 +359,7 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
       if (hitPointId !== null && chainTailId.value !== null) {
         editor.closeChainTo(hitPointId);
       } else {
-        editor.appendChainPoint(at);
+        editor.appendChainPoint(at, hitPointId ?? undefined);
       }
       scheduleSolve();
       break;
@@ -369,8 +369,9 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
       pendingHitPointIds.value.push(hitPointId);
       if (pendingClicks.value.length === 3) {
         const [start, end, through] = pendingClicks.value;
+        const startHitId = pendingHitPointIds.value[0] ?? undefined;
         const endHitId = pendingHitPointIds.value[1] ?? undefined;
-        const added = editor.addThreePointArc(start, end, through, false, endHitId);
+        const added = editor.addThreePointArc(start, end, through, false, endHitId, startHitId);
         if (!added) toolHint.value = 'Those three points are on one line; an arc needs a curve. Pick again.';
         pendingClicks.value = [];
         pendingHitPointIds.value = [];
@@ -399,10 +400,13 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
     }
     case 'circle': {
       pendingClicks.value.push(at);
+      pendingHitPointIds.value.push(hitPointId);
       if (pendingClicks.value.length === 2) {
         const [center, rim] = pendingClicks.value;
-        editor.addCircle(center, Math.hypot(rim.x - center.x, rim.y - center.y));
+        const centerHitId = pendingHitPointIds.value[0] ?? undefined;
+        editor.addCircle(center, Math.hypot(rim.x - center.x, rim.y - center.y), centerHitId);
         pendingClicks.value = [];
+        pendingHitPointIds.value = [];
         scheduleSolve();
       }
       break;
@@ -432,6 +436,43 @@ function onPointDrag(pointId: string, at: MmPoint): void {
 function onPointDragEnd(): void {
   void editor.solveNow();
 }
+
+/** Deletes the current selection, if any, and reschedules the solve. */
+function deleteSelection(): void {
+  if (editor.selectedIds.length === 0) return;
+  editor.deleteEntities([...editor.selectedIds]);
+  scheduleSolve();
+}
+
+/** True while the keyboard focus is on a text input, so Delete and Escape do
+ * not interrupt typing (a dimension value, the calibration length, and so on). */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+}
+
+/**
+ * Delete and Backspace remove the current selection. Escape cancels an open
+ * line/arc chain first; with no chain open it clears the selection instead.
+ * Only one of the two Escape behaviors happens per press.
+ */
+function onWorkspaceKeydown(event: KeyboardEvent): void {
+  if (isTypingTarget(event.target)) return;
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    deleteSelection();
+    return;
+  }
+  if (event.key === 'Escape') {
+    if (chainTailId.value !== null) {
+      editor.endChain();
+    } else if (editor.selectedIds.length > 0) {
+      editor.selectedIds = [];
+    }
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onWorkspaceKeydown));
+onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
 </script>
 
 <template>
@@ -470,6 +511,16 @@ function onPointDragEnd(): void {
         </v-btn>
       </v-btn-toggle>
       <v-spacer />
+      <v-btn
+        icon
+        density="compact"
+        variant="text"
+        :disabled="editor.selectedIds.length === 0"
+        @click="deleteSelection"
+      >
+        <v-icon>mdi-delete-outline</v-icon>
+        <v-tooltip activator="parent" location="bottom">Delete selection</v-tooltip>
+      </v-btn>
       <v-menu :close-on-content-click="false" location="bottom end">
         <template #activator="{ props: menuProps }">
           <v-btn icon density="compact" variant="text" v-bind="menuProps">

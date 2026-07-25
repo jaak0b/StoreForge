@@ -170,6 +170,64 @@ describe('useSketchEditor', () => {
     }
   });
 
+  it('deletes an entity and its orphaned far endpoint, keeping the shared point', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    const p1 = editor.appendChainPoint({ x: 0, y: 0 })!;
+    const p2 = editor.appendChainPoint({ x: 10, y: 0 })!;
+    const p3 = editor.appendChainPoint({ x: 10, y: 10 })!;
+    const line1 = editor.sketch.entities.find(
+      (e) => e.kind === 'line' && (e as { p1Id: string }).p1Id === p1,
+    )!;
+    const line2 = editor.sketch.entities.find(
+      (e) => e.kind === 'line' && (e as { p2Id: string }).p2Id === p3,
+    )!;
+    editor.addConstraint({ kind: 'horizontal', id: editor.nextId(), lineId: line1.id });
+    editor.selectedIds = [line1.id];
+    editor.deleteEntities([line1.id]);
+    const ids = new Set(editor.sketch.entities.map((e) => e.id));
+    // The shared point survives (still used by line2); the far endpoint of
+    // the deleted line does not.
+    expect(ids.has(p2)).toBe(true);
+    expect(ids.has(p1)).toBe(false);
+    expect(ids.has(line1.id)).toBe(false);
+    expect(ids.has(line2.id)).toBe(true);
+    expect(editor.sketch.constraints.some((c) => c.kind === 'horizontal')).toBe(false);
+    expect(editor.selectedIds).toEqual([]);
+    // No dangling references left for other consumers (extractProfile etc).
+    const pointIds = new Set(
+      editor.sketch.entities.filter((e) => e.kind === 'point').map((e) => e.id),
+    );
+    for (const entity of editor.sketch.entities) {
+      if (entity.kind === 'line') {
+        expect(pointIds.has(entity.p1Id)).toBe(true);
+        expect(pointIds.has(entity.p2Id)).toBe(true);
+      }
+    }
+  });
+
+  it('joins two chains at a shared corner point, producing one closed loop', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    // A plain point placed independently, the shared corner both chains reuse.
+    const corner = editor.appendChainPoint({ x: 0, y: 0 })!;
+    editor.endChain();
+    // Chain A: corner -> a2 -> a3 (left open at a3).
+    const a1 = editor.appendChainPoint({ x: 0, y: 0 }, corner)!;
+    editor.appendChainPoint({ x: 10, y: 0 });
+    const a3 = editor.appendChainPoint({ x: 10, y: 10 })!;
+    editor.endChain();
+    expect(a1).toBe(corner);
+    // Chain B: corner -> b2, then closes onto chain A's open end (a3),
+    // completing one rectangle through the shared corner point.
+    const b1 = editor.appendChainPoint({ x: 0, y: 0 }, corner)!;
+    editor.appendChainPoint({ x: 0, y: 10 });
+    editor.closeChainTo(a3);
+    expect(b1).toBe(corner);
+    const profile = extractProfile(editor.sketch);
+    expect(profile.ok).toBe(true);
+  });
+
   it('loads an existing sketch for editing a sketched tool', () => {
     const editor = useSketchEditor();
     editor.startNewSketch();

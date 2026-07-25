@@ -22,8 +22,16 @@ const emit = defineEmits<{
 }>();
 
 const editor = useSketchEditor();
-const { sketch, solveState, selectedIds, underlayUrl, underlayOpacityPct, underlayMmPerPixel } =
-  storeToRefs(editor);
+const {
+  sketch,
+  solveState,
+  selectedIds,
+  underlayUrl,
+  underlayOpacityPct,
+  underlayMmPerPixel,
+  activeTool,
+  chainTailId,
+} = storeToRefs(editor);
 
 const svgEl = ref<SVGSVGElement | null>(null);
 /** Pan/zoom over a fixed 200 mm design window; same math as the trace canvas. */
@@ -60,6 +68,34 @@ function clientToMm(event: PointerEvent | WheelEvent): MmPoint {
   point.y = event.clientY;
   const mm = point.matrixTransform(svg.getScreenCTM()!.inverse());
   return { x: mm.x, y: mm.y };
+}
+
+/**
+ * Millimeters per screen pixel from the SVG's current screen transform, so a
+ * screen-pixel pick radius (point dragging, point snapping) tracks the
+ * current zoom instead of a value fitted to one zoom level.
+ */
+function mmPerScreenPixel(): number {
+  const svg = svgEl.value;
+  const ctm = svg?.getScreenCTM() ?? null;
+  if (ctm === null || ctm.a === 0) return 1 / view.value.zoom;
+  return 1 / ctm.a;
+}
+
+/** The snap pick radius in mm: 8 screen pixels converted at the current zoom. */
+const SNAP_RADIUS_PX = 8;
+function snapRadiusMm(): number {
+  return mmPerScreenPixel() * SNAP_RADIUS_PX;
+}
+
+/** True when the pointerdown/click target is a rendered entity or point,
+ * as opposed to empty canvas background (grid, underlay, or the SVG itself). */
+function isEntityTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof SVGPathElement ||
+    target instanceof SVGCircleElement ||
+    target instanceof SVGTextElement
+  );
 }
 
 function onWheel(event: WheelEvent): void {
@@ -134,6 +170,9 @@ function strokeOf(entity: SketchEntity): string {
 }
 
 const draggingPointId = ref<string | null>(null);
+/** Current cursor position in mm, for the open-chain rubber-band cue; null
+ * once the pointer leaves the canvas. Display state only, never the model. */
+const cursorMm = ref<MmPoint | null>(null);
 
 function onPointerDown(event: PointerEvent): void {
   const at = clientToMm(event);
@@ -143,12 +182,16 @@ function onPointerDown(event: PointerEvent): void {
     (event.target as Element).setPointerCapture(event.pointerId);
     return;
   }
+  if (editor.activeTool === 'select' && hit === null && !isEntityTarget(event.target)) {
+    selectedIds.value = [];
+  }
   emit('canvasClick', at, hit);
 }
 
 function onPointerMove(event: PointerEvent): void {
+  cursorMm.value = clientToMm(event);
   if (draggingPointId.value === null) return;
-  emit('pointDrag', draggingPointId.value, clientToMm(event));
+  emit('pointDrag', draggingPointId.value, cursorMm.value);
 }
 
 function onPointerUp(): void {
@@ -158,14 +201,45 @@ function onPointerUp(): void {
   }
 }
 
-/** The point id within a 2 mm (screen-scaled) pick radius, or null. */
+function onPointerLeave(): void {
+  cursorMm.value = null;
+}
+
+/** The point id within the screen-pixel snap radius, or null. */
 function hitPoint(at: MmPoint): string | null {
-  const radius = 2 / view.value.zoom;
+  const radius = snapRadiusMm();
   for (const p of points.value) {
     if (Math.hypot(p.x - at.x, p.y - at.y) <= radius) return p.id;
   }
   return null;
 }
+
+/** Tools that place points by clicking, where an existing point should be
+ * snapped to and shown a hover ring instead of creating a duplicate. */
+const snapTargetTools = new Set(['line', 'arcThreePoint', 'arcTangent', 'circle']);
+
+/** The point the cursor currently hovers within snap range of, for the
+ * snap-indicator ring; null when the active tool does not place points. */
+const hoverSnapPointId = computed<string | null>(() => {
+  if (cursorMm.value === null || !snapTargetTools.has(activeTool.value)) return null;
+  return hitPoint(cursorMm.value);
+});
+const hoverSnapPoint = computed(() =>
+  hoverSnapPointId.value === null ? null : pointById.value.get(hoverSnapPointId.value) ?? null,
+);
+
+/** The open chain's tail point, for the highlighted-tail and rubber-band cue. */
+const chainTailPoint = computed(() =>
+  chainTailId.value === null ? null : pointById.value.get(chainTailId.value) ?? null,
+);
+
+/** The dashed rubber-band line from the open chain's tail to the cursor,
+ * shown only while a line or arc tool is active. */
+const rubberBand = computed(() => {
+  if (chainTailPoint.value === null || cursorMm.value === null) return null;
+  if (!['line', 'arcThreePoint', 'arcTangent'].includes(activeTool.value)) return null;
+  return { x1: chainTailPoint.value.x, y1: chainTailPoint.value.y, x2: cursorMm.value.x, y2: cursorMm.value.y };
+});
 
 /** Anchor position of a dimension label, midway along its geometry. */
 const dimensionLabels = computed(() =>
@@ -223,6 +297,7 @@ const dimensionLabels = computed(() =>
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
+    @pointerleave="onPointerLeave"
   >
     <image
       v-if="underlayUrl !== null && underlayMmPerPixel !== null"
@@ -260,8 +335,28 @@ const dimensionLabels = computed(() =>
         :key="p.id"
         :cx="p.x"
         :cy="p.y"
-        r="0.9"
-        :fill="strokeOf(p)"
+        :r="p.id === chainTailId ? 1.6 : 0.9"
+        :fill="p.id === chainTailId ? '#ff6f00' : strokeOf(p)"
+      />
+      <line
+        v-if="rubberBand !== null"
+        :x1="rubberBand.x1"
+        :y1="rubberBand.y1"
+        :x2="rubberBand.x2"
+        :y2="rubberBand.y2"
+        stroke="#ff6f00"
+        stroke-width="0.4"
+        stroke-dasharray="1.2 1"
+      />
+      <circle
+        v-if="hoverSnapPoint !== null"
+        class="snap-indicator"
+        :cx="hoverSnapPoint.x"
+        :cy="hoverSnapPoint.y"
+        r="2.4"
+        fill="none"
+        stroke="#ff6f00"
+        stroke-width="0.4"
       />
     </g>
     <g class="dimensions">
