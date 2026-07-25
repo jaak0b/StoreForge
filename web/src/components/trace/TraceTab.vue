@@ -185,7 +185,9 @@ async function resumeTrace(): Promise<void> {
   resumeBusy.value = true;
   resumeError.value = null;
   try {
-    trace.sessions = entry.traceSessions;
+    // Cloned: commitSessionPaper mutates a session object in place on a
+    // later re-confirm, and entry.traceSessions is the persisted plan data.
+    trace.sessions = JSON.parse(JSON.stringify(entry.traceSessions)) as typeof entry.traceSessions;
     await trace.activateSession(session.id, blob);
   } catch (error) {
     resumeError.value =
