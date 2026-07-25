@@ -9,7 +9,6 @@ import { assertNever, binOf } from '../../engine/plan/types';
 import type { TraceSession } from '../../engine/trace/types';
 import { worldFromEntry } from '../../engine/trace/layoutModel';
 import { getPhoto } from '../../photoStore';
-import { extractProfile } from '../../engine/sketch/profile';
 import { cloneSketch } from '../../engine/sketch/model';
 import PhotoStage from './PhotoStage.vue';
 import TraceCanvas from './TraceCanvas.vue';
@@ -149,9 +148,9 @@ async function finishSketch(): Promise<void> {
     sketchFinishError.value = state.message;
     return;
   }
-  const profile = extractProfile(sketchEditor.sketch);
-  if (!profile.ok) {
-    sketchFinishError.value = profile.error;
+  const picked = sketchEditor.outlineForFinish();
+  if (!picked.ok) {
+    sketchFinishError.value = picked.error;
     return;
   }
   const source = { kind: 'sketch' as const, sketch: cloneSketch(sketchEditor.sketch) };
@@ -159,10 +158,10 @@ async function finishSketch(): Promise<void> {
     // Re-editing a sketched tool: replace its outline and sketch in place.
     const tool = trace.tools.find((t) => t.id === sketchEditor.editingToolId);
     if (tool !== undefined) {
-      trace.replaceToolOutline(tool.id, profile.outline, source);
+      trace.replaceToolOutline(tool.id, picked.outline, source);
     }
   } else {
-    trace.addTool(profile.outline, 'Sketched shape', source);
+    trace.addTool(picked.outline, 'Sketched shape', source);
   }
   stage.value = 'workspace';
   trace.workspaceMode = 'layout';

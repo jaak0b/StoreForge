@@ -455,4 +455,132 @@ describe('useSketchEditor', () => {
     }
     expect(editor.historyStack.length).toBe(100);
   });
+
+  /** Draws a closed square starting at (x, y), side length 10 mm. */
+  function drawSquare(editor: ReturnType<typeof useSketchEditor>, x: number, y: number): void {
+    const first = editor.appendChainPoint({ x, y })!;
+    editor.appendChainPoint({ x: x + 10, y });
+    editor.appendChainPoint({ x: x + 10, y: y + 10 });
+    editor.appendChainPoint({ x, y: y + 10 });
+    editor.closeChainTo(first);
+  }
+
+  describe('region extraction', () => {
+    it('recomputes regions and auto-picks the single face after a solved square', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      await editor.solveNow();
+      expect(editor.solveState.status).toBe('solved');
+      expect(editor.regionFaces).toHaveLength(1);
+      expect(editor.selectedRegionId).toBe(editor.regionFaces[0].id);
+    });
+
+    it('finds two separate faces from two disjoint squares and does not auto-pick', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      expect(editor.selectedRegionId).toBeNull();
+    });
+
+    it('clears regions on a conflicting or failed solve', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(1);
+
+      solveMock.mockResolvedValue({ status: 'conflicting', conflictingConstraintIds: ['cX'] });
+      await editor.solveNow();
+      expect(editor.regionFaces).toEqual([]);
+      expect(editor.selectedRegionId).toBeNull();
+    });
+
+    it('drops a stale selection once its region disappears and auto-repicks the remaining single face', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      // Select whichever face belongs to the second (30,0) square, identified
+      // by an entity id that only that square's lines touch.
+      const secondSquareEntityIds = new Set(
+        editor.sketch.entities
+          .filter((e) => e.kind === 'point' && e.x >= 25)
+          .map((e) => e.id),
+      );
+      const secondFace = editor.regionFaces.find((f) =>
+        f.entityIds.some((id) => {
+          const entity = editor.sketch.entities.find((e) => e.id === id);
+          return (
+            entity !== undefined &&
+            (entity.kind === 'line'
+              ? secondSquareEntityIds.has(entity.p1Id) || secondSquareEntityIds.has(entity.p2Id)
+              : false)
+          );
+        }),
+      )!;
+      editor.selectRegion(secondFace.id);
+      expect(editor.selectedRegionId).toBe(secondFace.id);
+
+      // Delete the second square's lines; deleteEntities cascades to remove
+      // their now-orphaned endpoints.
+      const secondSquareLineIds = editor.sketch.entities
+        .filter(
+          (e) =>
+            e.kind === 'line' &&
+            (secondSquareEntityIds.has(e.p1Id) || secondSquareEntityIds.has(e.p2Id)),
+        )
+        .map((e) => e.id);
+      editor.deleteEntities(secondSquareLineIds);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(1);
+      // The stale id is gone, and with exactly one face left it is auto-picked.
+      expect(editor.selectedRegionId).toBe(editor.regionFaces[0].id);
+      expect(editor.selectedRegionId).not.toBe(secondFace.id);
+    });
+
+    it('outlineForFinish surfaces the no-region error, the single-face outline, and the pick-a-region message', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+
+      // Zero faces: nothing drawn yet is handled by the empty-sketch guard,
+      // which is not extraction failure per se, so open a chain instead (an
+      // unclosed line has geometry but no enclosed region).
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      await editor.solveNow();
+      const zeroFace = editor.outlineForFinish();
+      expect(zeroFace.ok).toBe(false);
+      if (!zeroFace.ok) expect(zeroFace.error.length).toBeGreaterThan(0);
+
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      await editor.solveNow();
+      const singleFace = editor.outlineForFinish();
+      expect(singleFace.ok).toBe(true);
+      if (singleFace.ok) expect(singleFace.outline.outer.length).toBeGreaterThan(0);
+
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      expect(editor.selectedRegionId).toBeNull();
+      const multiFace = editor.outlineForFinish();
+      expect(multiFace.ok).toBe(false);
+      if (!multiFace.ok) expect(multiFace.error).toMatch(/region/i);
+
+      editor.selectRegion(editor.regionFaces[0].id);
+      const picked = editor.outlineForFinish();
+      expect(picked.ok).toBe(true);
+    });
+  });
 });

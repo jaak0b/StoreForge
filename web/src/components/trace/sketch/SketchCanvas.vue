@@ -39,7 +39,41 @@ const {
   underlayMmPerPixel,
   activeTool,
   chainTailId,
+  regionFaces,
+  selectedRegionId,
 } = storeToRefs(editor);
+
+/** Region the pointer currently hovers, for the raised-opacity hover cue;
+ * display state only, never selection. */
+const hoveredRegionId = ref<string | null>(null);
+
+/** One face's outer boundary plus holes as a single SVG path, evenodd fill
+ * so the holes cut out of the outer fill. */
+function loopToPathD(loop: MmPoint[]): string {
+  if (loop.length === 0) return '';
+  return `M ${loop[0].x} ${loop[0].y} ${loop
+    .slice(1)
+    .map((p) => `L ${p.x} ${p.y}`)
+    .join(' ')} Z`;
+}
+
+const regionPaths = computed(() =>
+  regionFaces.value.map((face) => ({
+    id: face.id,
+    d: [loopToPathD(face.outer), ...face.holes.map(loopToPathD)].join(' '),
+  })),
+);
+
+/** Region shading: light CAD blue, hover raises opacity, selected reads
+ * distinct and slightly stronger (spec's "UI" section). */
+function regionFill(regionId: string): string {
+  return regionId === selectedRegionId.value ? '#1565c0' : '#1e88e5';
+}
+function regionOpacity(regionId: string): number {
+  if (regionId === selectedRegionId.value) return 0.35;
+  if (regionId === hoveredRegionId.value) return 0.22;
+  return 0.12;
+}
 
 const svgEl = ref<SVGSVGElement | null>(null);
 /** Pan/zoom over a fixed 200 mm design window; same math as the trace canvas. */
@@ -541,6 +575,21 @@ const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
         :y2="g.y2"
         stroke="#e0e0e0"
         stroke-width="0.15"
+      />
+    </g>
+    <g class="regions">
+      <path
+        v-for="r in regionPaths"
+        :key="r.id"
+        :d="r.d"
+        fill-rule="evenodd"
+        :fill="regionFill(r.id)"
+        :fill-opacity="regionOpacity(r.id)"
+        stroke="none"
+        style="cursor: pointer"
+        @click.stop="editor.selectRegion(r.id)"
+        @pointerenter="hoveredRegionId = r.id"
+        @pointerleave="hoveredRegionId = hoveredRegionId === r.id ? null : hoveredRegionId"
       />
     </g>
     <g class="entities">

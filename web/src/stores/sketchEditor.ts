@@ -10,9 +10,10 @@ import {
   type SketchEntity,
 } from '../engine/sketch/model';
 import type { DragTarget, SketchSolveResult } from '../engine/sketch/solve';
-import type { MmPoint } from '../engine/trace/types';
+import type { MmPoint, TracedOutline } from '../engine/trace/types';
 import { assertNever } from '../engine/plan/types';
 import { solveSketchInWorker } from '../sketchClient';
+import { extractRegions, regionToOutline, type RegionFace } from '../engine/sketch/regions';
 
 /** The drawing tool active on the sketch canvas. */
 export type SketchTool =
@@ -47,6 +48,18 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * eye toggle flips this. Defaults shown. */
   const glyphsVisible = ref(true);
   const solveState = shallowRef<SolveState>({ status: 'idle' });
+  /**
+   * Bounded regions of the last successfully solved, non-empty sketch, from
+   * extractRegions (engine/sketch/regions.ts). Recomputed after every solve;
+   * a conflicting or failed solve, or an empty sketch, clears this to [].
+   */
+  const regionFaces = shallowRef<RegionFace[]>([]);
+  /** The extractRegions error (construction-only geometry, no enclosed
+   * region) when the last recompute found zero faces; null otherwise. */
+  const regionsError = ref<string | null>(null);
+  /** Id of the region the user clicked, or null. Cleared whenever a
+   * recompute no longer has that id; auto-picked when exactly one face. */
+  const selectedRegionId = ref<string | null>(null);
   /** Id of the sketched tool being re-edited, or null for a new shape. */
   const editingToolId = ref<string | null>(null);
   /** The open line/arc chain's last point id, or null when no chain is open. */
@@ -203,6 +216,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     selectedIds.value = [];
     selectedConstraintId.value = null;
     solveState.value = { status: 'idle' };
+    regionFaces.value = [];
+    regionsError.value = null;
+    selectedRegionId.value = null;
     editingToolId.value = null;
     chainTailId.value = null;
     chainTailSegmentId.value = null;
@@ -620,10 +636,83 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     }
   }
 
+  /** Fallback message when regionsError is null but there are no faces
+   * (an empty sketch); mirrors profile.ts's/regions.ts's own wording. */
+  const NO_REGIONS_FALLBACK =
+    'The sketch has no enclosed region. Draw lines, arcs or a circle that close off an area.';
+  /** Shown by the finish flow when several regions exist and none is picked. */
+  const PICK_A_REGION =
+    'This sketch has more than one enclosed region. Click a region on the canvas to select it, then finish again.';
+
+  /**
+   * Recomputes regionFaces/regionsError from the current (solved) sketch.
+   * Cheap-guarded on an empty sketch. Auto-picks selectedRegionId when
+   * exactly one face results, and drops it when the recompute no longer has
+   * a face with that id (match is by id only within this one recompute).
+   */
+  function recomputeRegions(): void {
+    if (sketch.value.entities.length === 0) {
+      regionFaces.value = [];
+      regionsError.value = null;
+      selectedRegionId.value = null;
+      return;
+    }
+    const result = extractRegions(sketch.value);
+    if (!result.ok) {
+      regionFaces.value = [];
+      regionsError.value = result.error;
+      selectedRegionId.value = null;
+      return;
+    }
+    regionFaces.value = result.faces;
+    regionsError.value = null;
+    if (
+      selectedRegionId.value !== null &&
+      !result.faces.some((f) => f.id === selectedRegionId.value)
+    ) {
+      selectedRegionId.value = null;
+    }
+    if (selectedRegionId.value === null && result.faces.length === 1) {
+      selectedRegionId.value = result.faces[0].id;
+    }
+  }
+
+  /** Clears regions to the no-regions state, for a conflicting/failed solve. */
+  function clearRegions(): void {
+    regionFaces.value = [];
+    regionsError.value = null;
+    selectedRegionId.value = null;
+  }
+
+  /** Selects a region by clicking its shaded face on the canvas. */
+  function selectRegion(regionId: string): void {
+    selectedRegionId.value = regionId;
+  }
+
+  /**
+   * The outline the finish flow should use, per the region count: zero faces
+   * surfaces the extraction error (or the fallback for an empty sketch), one
+   * face is used automatically, several faces require a prior selectRegion
+   * call or this returns the user-worded pick-a-region message.
+   */
+  function outlineForFinish(): { ok: true; outline: TracedOutline } | { ok: false; error: string } {
+    if (regionFaces.value.length === 0) {
+      return { ok: false, error: regionsError.value ?? NO_REGIONS_FALLBACK };
+    }
+    if (regionFaces.value.length === 1) {
+      return { ok: true, outline: regionToOutline(regionFaces.value[0]) };
+    }
+    const selected = regionFaces.value.find((f) => f.id === selectedRegionId.value);
+    if (selected === undefined) return { ok: false, error: PICK_A_REGION };
+    return { ok: true, outline: regionToOutline(selected) };
+  }
+
   /**
    * Runs the solver in the sketch worker over the current sketch, writing
    * solved coordinates back on success. With a drag target this is the
-   * driven-point workflow used while a point is dragged.
+   * driven-point workflow used while a point is dragged. Regions are
+   * recomputed from the freshly solved sketch on success; a conflicting or
+   * failed solve clears them, since neither leaves a sketch worth extracting.
    */
   async function solveNow(drag?: DragTarget): Promise<void> {
     const requestGeneration = generation;
@@ -641,6 +730,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
         status: 'failed',
         message: 'The sketch solver could not be started. Reload the page to try again.',
       };
+      clearRegions();
       return;
     }
     // The sketch changed while the worker was solving; discard the now-stale
@@ -649,6 +739,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     solveState.value = result;
     if (result.status === 'solved') {
       sketch.value = result.sketch;
+      recomputeRegions();
+    } else {
+      clearRegions();
     }
   }
 
@@ -660,6 +753,11 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     selectConstraint,
     glyphsVisible,
     solveState,
+    regionFaces,
+    regionsError,
+    selectedRegionId,
+    selectRegion,
+    outlineForFinish,
     editingToolId,
     chainTailId,
     underlayUrl,
