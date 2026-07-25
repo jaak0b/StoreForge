@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { init_planegcs_module, GcsWrapper } from '@salusoft89/planegcs';
+import { init_planegcs_module, GcsWrapper, DebugMode } from '@salusoft89/planegcs';
 
 /**
  * Loads the PlaneGCS WASM from node_modules for node-side tests, the same
@@ -15,5 +15,9 @@ export async function loadGcsWrapper(): Promise<GcsWrapper> {
     ),
   );
   const mod = await init_planegcs_module({ locateFile: () => wasmPath });
-  return new GcsWrapper(new mod.GcsSystem());
+  const wrapper = new GcsWrapper(new mod.GcsSystem());
+  // Match the sketch worker's quiet-mode setting (web/src/worker/sketch.worker.ts) so
+  // tests exercise the same configuration and don't spam diagnostic solver output.
+  wrapper.debug_mode = DebugMode.NoDebug;
+  return wrapper;
 }

@@ -1,5 +1,5 @@
 import * as Comlink from 'comlink';
-import { init_planegcs_module, GcsWrapper, type ModuleStatic } from '@salusoft89/planegcs';
+import { init_planegcs_module, GcsWrapper, DebugMode, type ModuleStatic } from '@salusoft89/planegcs';
 import wasmUrl from '@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm?url';
 import type { Sketch } from '../engine/sketch/model';
 import { solveSketch, type DragTarget, type SketchSolveResult } from '../engine/sketch/solve';
@@ -13,9 +13,15 @@ let wrapperPromise: Promise<GcsWrapper> | null = null;
 
 function getWrapper(): Promise<GcsWrapper> {
   if (!wrapperPromise) {
-    wrapperPromise = init_planegcs_module({ locateFile: () => wasmUrl }).then(
-      (mod: ModuleStatic) => new GcsWrapper(new mod.GcsSystem()),
-    );
+    wrapperPromise = init_planegcs_module({ locateFile: () => wasmUrl }).then((mod: ModuleStatic) => {
+      const wrapper = new GcsWrapper(new mod.GcsSystem());
+      // Silence PlaneGCS's own diagnostic logging (e.g. "Sketcher::RedundantSolving-DogLeg",
+      // "Sketcher Redundant solving: N redundants") emitted on every solve; this is the
+      // package's documented quiet-mode flag, not a console override. Real errors still
+      // surface via thrown exceptions / solve status, unaffected by this setting.
+      wrapper.debug_mode = DebugMode.NoDebug;
+      return wrapper;
+    });
   }
   return wrapperPromise as Promise<GcsWrapper>;
 }
