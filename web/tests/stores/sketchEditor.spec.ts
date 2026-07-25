@@ -582,5 +582,32 @@ describe('useSketchEditor', () => {
       const picked = editor.outlineForFinish();
       expect(picked.ok).toBe(true);
     });
+
+    it('does not recompute regions during a point drag, only once the drag ends', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      const first = editor.appendChainPoint({ x: 0, y: 0 })!;
+      const p2 = editor.appendChainPoint({ x: 10, y: 0 })!;
+      editor.appendChainPoint({ x: 10, y: 10 });
+      editor.appendChainPoint({ x: 0, y: 10 });
+      editor.closeChainTo(first);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(1);
+      const facesBeforeDrag = editor.regionFaces;
+
+      editor.beginPointDrag();
+      // Two intermediate drag solves (per-pointermove writebacks): the solved
+      // sketch moves p2 to different points each time, which would change the
+      // extracted region's outer boundary if regions were recomputed here.
+      await editor.solveNow({ pointId: p2, xMm: 12, yMm: 1 });
+      expect(editor.regionFaces).toBe(facesBeforeDrag);
+      await editor.solveNow({ pointId: p2, xMm: 14, yMm: 2 });
+      expect(editor.regionFaces).toBe(facesBeforeDrag);
+
+      editor.endPointDrag();
+      await editor.solveNow();
+      expect(editor.regionFaces).not.toBe(facesBeforeDrag);
+      expect(editor.regionFaces).toHaveLength(1);
+    });
   });
 });

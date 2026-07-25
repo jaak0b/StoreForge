@@ -103,6 +103,16 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    */
   let recordingDepth = 0;
 
+  /**
+   * True from beginPointDrag until endPointDrag. solveNow's per-pointermove
+   * drag solves must not recompute regions: extractRegions rebuilds the
+   * whole O(n^2) curve arrangement, which is far too slow to run on every
+   * drag frame. The previously computed faces stay displayed (stale, but
+   * visually stable) until the drag ends and the final, non-drag solve
+   * recomputes them once.
+   */
+  let dragInProgress = false;
+
   /** Captures the current sketch and chain state as one history entry. */
   function captureHistoryEntry(): HistoryEntry {
     return {
@@ -141,11 +151,13 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    */
   function beginPointDrag(): void {
     beginMutation();
+    dragInProgress = true;
   }
 
   /** Closes the history scope opened by beginPointDrag. */
   function endPointDrag(): void {
     endMutation();
+    dragInProgress = false;
   }
 
   /** Restores a history entry: replaces the sketch and chain state, drops
@@ -713,6 +725,11 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * driven-point workflow used while a point is dragged. Regions are
    * recomputed from the freshly solved sketch on success; a conflicting or
    * failed solve clears them, since neither leaves a sketch worth extracting.
+   * Both are skipped entirely while a point drag is in progress (see
+   * dragInProgress): the drag's per-pointermove solves keep the last
+   * computed faces on screen, and the final solve after endPointDrag (called
+   * with dragInProgress already false) recomputes once for the settled
+   * sketch.
    */
   async function solveNow(drag?: DragTarget): Promise<void> {
     const requestGeneration = generation;
@@ -730,7 +747,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
         status: 'failed',
         message: 'The sketch solver could not be started. Reload the page to try again.',
       };
-      clearRegions();
+      if (!dragInProgress) clearRegions();
       return;
     }
     // The sketch changed while the worker was solving; discard the now-stale
@@ -739,8 +756,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     solveState.value = result;
     if (result.status === 'solved') {
       sketch.value = result.sketch;
-      recomputeRegions();
-    } else {
+      if (!dragInProgress) recomputeRegions();
+    } else if (!dragInProgress) {
       clearRegions();
     }
   }
