@@ -23,12 +23,12 @@ import {
   type BinPockets,
   type Product,
   type QueueEntry,
-  type TracePaper,
   type TracedBin,
 } from '../../engine/plan/types';
-import type { PaperCorners } from '../../engine/trace/types';
+import type { TraceSession } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
+import { referencedSessionIds } from '../../engine/trace/layoutModel';
 import BinViewport from '../BinViewport.vue';
 import CarveProgressBar from '../CarveProgressBar.vue';
 import PaintToolbar from '../carve/PaintToolbar.vue';
@@ -295,29 +295,30 @@ const addError = ref<string | null>(null);
 const photoNote = ref<string | null>(null);
 
 /**
- * The trace-source fields to save with the entry: when a photo with a
- * confirmed sheet is loaded, its bytes go into the photo store (a fresh
- * upload under a new id, a resumed photo under its existing one). Without a
- * photo the fields stay untouched (an edit keeps the entry's stored ones).
+ * The sessions to save with the entry: exactly those some photo tool still
+ * references, with each one's photo bytes written to the photo store first.
+ * Orphaned sessions are simply not included; persisting the plan then sweeps
+ * their stored photos. A failed photo write keeps the session out of the
+ * saved list (its tools become layout-only editable later) and says so.
  */
-async function storeTraceSource(): Promise<{ traceSourceId?: string; paper?: TracePaper }> {
-  if (trace.photoBlob === null || trace.calibration === null) return {};
-  const activeSession = trace.sessions.find((s) => s.id === trace.activeSessionId);
-  const traceSourceId = activeSession?.traceSourceId ?? crypto.randomUUID();
-  const paper: TracePaper = {
-    corners: JSON.parse(JSON.stringify(trace.calibration.corners)) as PaperCorners,
-    kind: trace.calibration.kind,
-  };
-  try {
-    await putPhoto(traceSourceId, trace.photoBlob);
-  } catch (error) {
-    // The bin is still saved; without the stored photo it is layout-only
-    // editable later, and the note says so.
-    const detail = error instanceof Error ? error.message : String(error);
-    photoNote.value = `Storing the trace photo failed (${detail}). The bin was saved, but its trace cannot be edited later without the photo.`;
-    return {};
+async function storeReferencedSessions(): Promise<TraceSession[]> {
+  const referenced = referencedSessionIds(trace.tools);
+  const saved: TraceSession[] = [];
+  for (const session of trace.sessions) {
+    if (!referenced.has(session.id)) continue;
+    const blob = trace.sessionBlobs.get(session.id);
+    if (blob !== undefined) {
+      try {
+        await putPhoto(session.traceSourceId, blob);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        photoNote.value = `Storing a trace photo failed (${detail}). The bin was saved, but tools traced on that sheet cannot be re-traced later without the photo.`;
+        continue;
+      }
+    }
+    saved.push(JSON.parse(JSON.stringify(session)) as TraceSession);
   }
-  return { traceSourceId, paper };
+  return saved;
 }
 
 async function addToQueue(): Promise<void> {
@@ -331,25 +332,10 @@ async function addToQueue(): Promise<void> {
   const params = pocketParams.value;
   const pockets: BinPockets = { tools: params.tools, placements: params.placements };
   const cleanNotes = notes.value.trim();
-  // The photo must be stored before the queue mutation: persisting the plan
+  // Sessions must be stored before the queue mutation: persisting the plan
   // sweeps stored photos no entry references, so the reference and the photo
-  // have to land in that order. During an edit without a newly loaded photo,
-  // the entry's stored trace-source fields carry over.
-  const source = await storeTraceSource();
-  const editingProductBin =
-    props.editingEntry !== null ? binOf(props.editingEntry.product) : null;
-  const editingBin =
-    editingProductBin !== null && editingProductBin.origin === 'traced'
-      ? editingProductBin
-      : null;
-  // Minimal single-session scaffold: Task 4 rebuilds this to collect one
-  // session per distinct photo source referenced by the bin's tools.
-  const traceSourceId = source.traceSourceId ?? editingBin?.traceSessions[0]?.traceSourceId;
-  const paper = source.paper ?? editingBin?.traceSessions[0]?.paper;
-  const traceSessions: TracedBin['traceSessions'] =
-    traceSourceId !== undefined && paper !== undefined
-      ? [{ id: crypto.randomUUID(), traceSourceId, paper }]
-      : [];
+  // have to land in that order.
+  const traceSessions = await storeReferencedSessions();
   const bin: TracedBin = {
     origin: 'traced',
     gridX: params.gridX,
