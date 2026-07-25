@@ -7,6 +7,7 @@ import {
   duplicateTool,
   layoutBounds,
   moveTool,
+  referencedSessionIds,
   removeTool,
   replaceToolOutline,
   requiredFootprint,
@@ -21,6 +22,7 @@ import {
   type LayoutState,
 } from '../../src/engine/trace/layoutModel';
 import type { TracedTool, ToolPlacement } from '../../src/engine/trace/types';
+import { SKETCH_SCHEMA_VERSION } from '../../src/engine/sketch/model';
 
 // Hand-derived interior figures used throughout (margin 2 mm everywhere):
 // one cell's interior is 39.6 mm, two cells give 81.6 mm, three 123.6 mm.
@@ -708,5 +710,35 @@ describe('brush strokes on tools', () => {
         { mode: 'add', radiusMm: 4, points: [{ x: 5, y: 6 }] },
       ]);
     }
+  });
+});
+
+describe('referencedSessionIds', () => {
+  it('collects exactly the session ids photo tools reference', () => {
+    const base = {
+      id: '',
+      name: 'Tool',
+      outline: { outer: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], holes: [] },
+      rotationDeg: 0,
+      offsetMm: 0,
+      mirrored: false,
+      minHoleWidthMm: 0,
+      filledHoleIndices: [],
+      fingerHoles: [],
+    };
+    const tools: TracedTool[] = [
+      { ...base, id: 't1', source: { kind: 'photo', sessionId: 's1', clicks: [] } },
+      { ...base, id: 't2', source: { kind: 'photo', sessionId: 's1', clicks: [] } },
+      { ...base, id: 't3', source: { kind: 'primitive' } },
+      {
+        ...base,
+        id: 't4',
+        source: {
+          kind: 'sketch',
+          sketch: { schemaVersion: SKETCH_SCHEMA_VERSION, entities: [], constraints: [] },
+        },
+      },
+    ];
+    expect(referencedSessionIds(tools)).toEqual(new Set(['s1']));
   });
 });

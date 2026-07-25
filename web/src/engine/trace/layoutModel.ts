@@ -28,6 +28,30 @@ function cloneSource(source: ToolSource): ToolSource {
 import { boundsOf, transformTool } from './edit';
 import { binInteriorSizeMm, cellsForInteriorMm, PITCH } from '../gridfinity/constants';
 import { DEFAULT_DRAFT_ANGLE_DEG } from '../carve/sweep';
+import { assertNever } from '../plan/types';
+
+/**
+ * The trace-session ids the given tools still reference. A session absent
+ * from this set is an orphan: it is not saved with the bin and its stored
+ * photo is swept. Exhaustive over the source kinds so a future source that
+ * references a session must be named here.
+ */
+export function referencedSessionIds(tools: readonly TracedTool[]): Set<string> {
+  const ids = new Set<string>();
+  for (const tool of tools) {
+    switch (tool.source.kind) {
+      case 'photo':
+        ids.add(tool.source.sessionId);
+        break;
+      case 'sketch':
+      case 'primitive':
+        break;
+      default:
+        assertNever(tool.source);
+    }
+  }
+  return ids;
+}
 
 /**
  * Clear interior kept around the pockets when the bin footprint is
