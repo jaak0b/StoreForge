@@ -288,3 +288,111 @@ describe('toolTrace start-over reset', () => {
     expect(trace.gridX).toBe(1);
   });
 });
+
+describe('toolTrace multi-part sketch tools', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  function square(x0: number, y0: number, size: number) {
+    return {
+      outer: [
+        { x: x0, y: y0 },
+        { x: x0 + size, y: y0 },
+        { x: x0 + size, y: y0 + size },
+        { x: x0, y: y0 + size },
+      ],
+      holes: [[
+        { x: x0 + size * 0.4, y: y0 + size * 0.6 },
+        { x: x0 + size * 0.4, y: y0 + size * 0.4 },
+        { x: x0 + size * 0.6, y: y0 + size * 0.4 },
+        { x: x0 + size * 0.6, y: y0 + size * 0.6 },
+      ]],
+    };
+  }
+
+  it('addToolParts stores every selected region as its own part', () => {
+    const trace = useToolTrace();
+    const sketch = { schemaVersion: SKETCH_SCHEMA_VERSION, entities: [], constraints: [] };
+    const tool = trace.addToolParts(
+      [square(0, 0, 20), square(30, 0, 20)],
+      'Sketched shape',
+      { kind: 'sketch', sketch },
+    );
+    expect(tool.parts).toHaveLength(2);
+    expect(trace.placements.some((p) => p.toolId === tool.id)).toBe(true);
+  });
+
+  it('re-finish rematches parts by geometry: filled holes carry over, unmatched ones drop, and the placement holds the world position', async () => {
+    const { matchPartsByGeometry, placementPreservingCentroid, sortPartsByCentroid } =
+      await import('../../src/engine/trace/edit');
+    const { recentredParts } = await import('../../src/engine/trace/layoutModel');
+
+    const trace = useToolTrace();
+    const sketch = { schemaVersion: SKETCH_SCHEMA_VERSION, entities: [], constraints: [] };
+    // A big square (dominates the combined bounding box) plus a small square
+    // tucked fully inside its extent, so recentering leaves the big square's
+    // own recentred position essentially unchanged whether the small square
+    // is present, absent, or swapped for a different one in the same corner
+    // of the bounding box. The small squares themselves recentre far enough
+    // apart (more than matchPartsByGeometry's 20 mm tolerance) not to be
+    // confused with one another.
+    const big = square(0, 0, 100);
+    const smallOld = square(40, 40, 5);
+    const smallNew = square(60, 60, 5);
+    const tool = trace.addToolParts([smallOld, big], 'Sketched shape', { kind: 'sketch', sketch });
+    // sortPartsByCentroid orders by centroid y then x: smallOld's centroid
+    // (42.5, 42.5) sorts before big's (50, 50).
+    expect(tool.parts).toHaveLength(2);
+    trace.toggleFilledHole(tool.id, 0, 0); // smallOld's hole
+    trace.toggleFilledHole(tool.id, 1, 0); // big's hole
+    expect(tool.filledHoles).toHaveLength(2);
+    // Copied out as plain numbers: placementOf returns the live reactive
+    // placement object, which moveTool below mutates in place.
+    const placementBeforeLive = trace.placementOf(tool.id)!;
+    const placementBefore = { xMm: placementBeforeLive.xMm, yMm: placementBeforeLive.yMm };
+
+    // Re-finish: the small square moves to a new corner of the same big
+    // square (smallOld is dropped, smallNew is unmatched-new); big itself is
+    // reselected unchanged. This is exactly the sequence
+    // TraceTab.finishSketch's re-finish path runs.
+    const oldParts = tool.parts;
+    const oldFilledHoles = tool.filledHoles;
+    const newRawParts = [big, smallNew];
+    const newParts = recentredParts(sortPartsByCentroid(newRawParts));
+    const matches = matchPartsByGeometry(oldParts, newParts);
+    // Exactly one part (big) survived; smallOld has no match (dropped) and
+    // smallNew is a new, unmatched part.
+    expect(matches).toHaveLength(1);
+
+    trace.replaceToolParts(tool.id, newRawParts, { kind: 'sketch', sketch });
+    expect(tool.parts).toHaveLength(2);
+    // replaceToolParts clears filledHoles as its own baseline; the re-finish
+    // flow always remaps and reapplies them right after.
+    expect(tool.filledHoles).toEqual([]);
+
+    const remapped = oldFilledHoles
+      .map((f) => {
+        const match = matches.find((m) => m.oldIndex === f.partIndex);
+        return match === undefined ? null : { partIndex: match.newIndex, holeIndex: f.holeIndex };
+      })
+      .filter((f): f is { partIndex: number; holeIndex: number } => f !== null);
+    trace.setFilledHoles(tool.id, remapped);
+
+    // Only the surviving (big-square) part's fill carried over; the dropped
+    // small-square part's fill is gone.
+    expect(tool.filledHoles).toHaveLength(1);
+    expect(tool.filledHoles[0]).toEqual({ partIndex: matches[0].newIndex, holeIndex: 0 });
+
+    const adjusted = placementPreservingCentroid(oldParts, newParts, placementBefore);
+    trace.moveTool(tool.id, adjusted.xMm, adjusted.yMm);
+    const placementAfter = trace.placementOf(tool.id)!;
+    // The combined centroid's world position is unchanged even though the
+    // tool-local parts (and their own combined centroid) moved.
+    const { combinedCentroidOf } = await import('../../src/engine/trace/edit');
+    const worldBefore = combinedCentroidOf(oldParts);
+    const worldAfter = combinedCentroidOf(newParts);
+    expect(placementAfter.xMm + worldAfter.x).toBeCloseTo(placementBefore.xMm + worldBefore.x, 6);
+    expect(placementAfter.yMm + worldAfter.y).toBeCloseTo(placementBefore.yMm + worldBefore.y, 6);
+  });
+});

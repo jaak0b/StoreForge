@@ -364,8 +364,16 @@ export function setGridManually(state: LayoutState, axis: 'x' | 'y', value: numb
   return applied;
 }
 
-/** Recentres a set of parts on their combined bounding-box middle, into tool-local mm. */
-function recentredParts(parts: TracedOutline[]): TracedOutline[] {
+/**
+ * Recentres a set of parts on their combined bounding-box middle, into
+ * tool-local mm. Exported so the sketch re-finish flow can recentre a fresh
+ * set of parts exactly the way addToolParts/replaceToolParts do, before
+ * matching them against a tool's existing (already recentred) parts by
+ * geometry: matching in the same frame both sides were centred in keeps the
+ * centroid distances meaningful instead of reflecting an unrelated sheet-vs-
+ * tool-local translation.
+ */
+export function recentredParts(parts: TracedOutline[]): TracedOutline[] {
   const bounds = boundsOfParts(parts);
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cy = (bounds.minY + bounds.maxY) / 2;
@@ -571,6 +579,24 @@ export function toggleFilledHole(
   );
   if (at === -1) tool.filledHoles.push({ partIndex, holeIndex });
   else tool.filledHoles.splice(at, 1);
+  refit(state);
+}
+
+/**
+ * Replaces a tool's manually filled holes list wholesale, e.g. after the
+ * sketch re-finish flow remaps them onto the matching new parts
+ * (matchPartsByGeometry in edit.ts). Re-sizes unless manual, mirroring
+ * toggleFilledHole (a filled hole does not itself change the footprint, but
+ * this keeps the mutation on the same path as every other tool edit).
+ */
+export function setFilledHoles(
+  state: LayoutState,
+  toolId: string,
+  filledHoles: { partIndex: number; holeIndex: number }[],
+): void {
+  const tool = state.tools.find((t) => t.id === toolId);
+  if (tool === undefined) return;
+  tool.filledHoles = filledHoles;
   refit(state);
 }
 

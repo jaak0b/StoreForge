@@ -7,7 +7,8 @@ import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { assertNever, binOf } from '../../engine/plan/types';
 import type { TraceSession } from '../../engine/trace/types';
-import { worldFromEntry } from '../../engine/trace/layoutModel';
+import { recentredParts, worldFromEntry } from '../../engine/trace/layoutModel';
+import { matchPartsByGeometry, placementPreservingCentroid, sortPartsByCentroid } from '../../engine/trace/edit';
 import { getPhoto } from '../../photoStore';
 import { cloneSketch } from '../../engine/sketch/model';
 import PhotoStage from './PhotoStage.vue';
@@ -104,17 +105,29 @@ async function openSheet(sessionId: string): Promise<void> {
   trace.workspaceMode = 'trace';
 }
 
-/** A sketch card: open the tool's stored sketch in the sketch workspace. */
-function editSketchedTool(toolId: string): void {
+/**
+ * A sketch card: open the tool's stored sketch in the sketch workspace. Once
+ * the reloaded sketch has solved and its regions have been recomputed, the
+ * regions matching the tool's existing parts (by centroid and area, the same
+ * matcher the re-finish carryover flow uses) are preselected, so reopening a
+ * sketched tool shows its parts already picked instead of forcing the user
+ * to re-pick them.
+ */
+async function editSketchedTool(toolId: string): Promise<void> {
   const tool = trace.tools.find((t) => t.id === toolId);
   if (tool === undefined) return;
   switch (tool.source.kind) {
     case 'photo':
       return; // photo tools re-trace through onRetrace instead
-    case 'sketch':
+    case 'sketch': {
       sketchEditor.loadSketch(tool.source.sketch, toolId);
       stage.value = 'sketch';
+      await sketchEditor.solveNow();
+      if (sketchEditor.solveState.status === 'solved') {
+        sketchEditor.preselectRegionsMatchingParts(tool.parts);
+      }
       return;
+    }
     case 'primitive':
       return; // a primitive shape has nothing to reopen
     default:
@@ -149,20 +162,39 @@ async function finishSketch(): Promise<void> {
     sketchFinishError.value = state.message;
     return;
   }
-  const picked = sketchEditor.outlineForFinish();
+  const picked = sketchEditor.partsForFinish();
   if (!picked.ok) {
     sketchFinishError.value = picked.error;
     return;
   }
   const source = { kind: 'sketch' as const, sketch: cloneSketch(sketchEditor.sketch) };
   if (sketchEditor.editingToolId !== null) {
-    // Re-editing a sketched tool: replace its outline and sketch in place.
+    // Re-editing a sketched tool: rematch its old parts to the new ones by
+    // geometry (in the same recentred frame replaceToolParts will place the
+    // new parts in) so the manually filled holes and the placement both
+    // carry over, then replace the parts and sketch in place.
     const tool = trace.tools.find((t) => t.id === sketchEditor.editingToolId);
     if (tool !== undefined) {
-      trace.replaceToolOutline(tool.id, picked.outline, source);
+      const oldParts = tool.parts;
+      const oldFilledHoles = tool.filledHoles;
+      const oldPlacement = trace.placementOf(tool.id);
+      const newParts = recentredParts(sortPartsByCentroid(picked.parts));
+      const matches = matchPartsByGeometry(oldParts, newParts);
+      trace.replaceToolParts(tool.id, picked.parts, source);
+      const remappedFilledHoles = oldFilledHoles
+        .map((f) => {
+          const match = matches.find((m) => m.oldIndex === f.partIndex);
+          return match === undefined ? null : { partIndex: match.newIndex, holeIndex: f.holeIndex };
+        })
+        .filter((f): f is { partIndex: number; holeIndex: number } => f !== null);
+      trace.setFilledHoles(tool.id, remappedFilledHoles);
+      if (oldPlacement !== undefined) {
+        const adjusted = placementPreservingCentroid(oldParts, newParts, oldPlacement);
+        trace.moveTool(tool.id, adjusted.xMm, adjusted.yMm);
+      }
     }
   } else {
-    trace.addTool(picked.outline, 'Sketched shape', source);
+    trace.addToolParts(picked.parts, 'Sketched shape', source);
   }
   stage.value = 'workspace';
   trace.workspaceMode = 'layout';

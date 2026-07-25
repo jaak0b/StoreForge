@@ -196,6 +196,42 @@ export const useToolTrace = defineStore('toolTrace', () => {
     layout.replaceToolOutline(layoutState, toolId, outline, source);
   }
 
+  /** Adds a tool from one or more outlines (the sketch finish flow's new-tool
+   * path, which can produce several selected regions as separate parts). */
+  function addToolParts(
+    outlines: TracedOutline[],
+    name: string | undefined,
+    source: ToolSource,
+    placeAtSheetPosition = false,
+  ): TracedTool {
+    toolCounter += 1;
+    const tool = layout.addToolParts(
+      layoutState,
+      outlines,
+      name ?? `Tool ${toolCounter}`,
+      defaultDepthMm.value,
+      source,
+      placeAtSheetPosition,
+    );
+    selectedToolId.value = tool.id;
+    return tool;
+  }
+
+  /** Replaces an existing tool's parts (the sketch re-finish path). Clears
+   * filledHoles the same as replaceToolOutline; the caller remaps them
+   * afterward via setFilledHoles when carrying them over by geometry. */
+  function replaceToolParts(toolId: string, outlines: TracedOutline[], source: ToolSource): void {
+    layout.replaceToolParts(layoutState, toolId, outlines, source);
+  }
+
+  /** Replaces a tool's manually filled holes list wholesale. */
+  function setFilledHoles(
+    toolId: string,
+    filledHoles: { partIndex: number; holeIndex: number }[],
+  ): void {
+    layout.setFilledHoles(layoutState, toolId, filledHoles);
+  }
+
   function removeTool(toolId: string): void {
     layout.removeTool(layoutState, toolId);
     if (selectedToolId.value === toolId) selectedToolId.value = null;
@@ -446,6 +482,9 @@ export const useToolTrace = defineStore('toolTrace', () => {
     defaultDepthMm,
     addTool,
     replaceToolOutline,
+    addToolParts,
+    replaceToolParts,
+    setFilledHoles,
     removeTool,
     removeSession,
     duplicateTool,

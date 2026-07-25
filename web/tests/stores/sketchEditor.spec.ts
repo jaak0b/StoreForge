@@ -514,7 +514,7 @@ describe('useSketchEditor', () => {
       await editor.solveNow();
       expect(editor.solveState.status).toBe('solved');
       expect(editor.regionFaces).toHaveLength(1);
-      expect(editor.selectedRegionId).toBe(editor.regionFaces[0].id);
+      expect(editor.selectedRegionIds).toEqual([editor.regionFaces[0].id]);
     });
 
     it('finds two separate faces from two disjoint squares and does not auto-pick', async () => {
@@ -525,7 +525,7 @@ describe('useSketchEditor', () => {
       drawSquare(editor, 30, 0);
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(2);
-      expect(editor.selectedRegionId).toBeNull();
+      expect(editor.selectedRegionIds).toEqual([]);
     });
 
     it('clears regions on a conflicting or failed solve', async () => {
@@ -538,7 +538,48 @@ describe('useSketchEditor', () => {
       solveMock.mockResolvedValue({ status: 'conflicting', conflictingConstraintIds: ['cX'] });
       await editor.solveNow();
       expect(editor.regionFaces).toEqual([]);
-      expect(editor.selectedRegionId).toBeNull();
+      expect(editor.selectedRegionIds).toEqual([]);
+    });
+
+    /** Identifies the region face containing a square drawn at (x0, y0) by an
+     * entity id only that square's own points touch, so tests can pick out
+     * "the second square's face" regardless of traversal-order id churn. */
+    function faceOfSquare(
+      editor: ReturnType<typeof useSketchEditor>,
+      x0: number,
+    ) {
+      const squareEntityIds = new Set(
+        editor.sketch.entities.filter((e) => e.kind === 'point' && e.x >= x0).map((e) => e.id),
+      );
+      return editor.regionFaces.find((f) =>
+        f.entityIds.some((id) => {
+          const entity = editor.sketch.entities.find((e) => e.id === id);
+          return (
+            entity !== undefined &&
+            entity.kind === 'line' &&
+            (squareEntityIds.has(entity.p1Id) || squareEntityIds.has(entity.p2Id))
+          );
+        }),
+      )!;
+    }
+
+    it('toggles a region into and out of a multi-region selection', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      const first = faceOfSquare(editor, 0);
+      const second = faceOfSquare(editor, 25);
+
+      editor.toggleRegionSelection(first.id);
+      expect(editor.selectedRegionIds).toEqual([first.id]);
+      editor.toggleRegionSelection(second.id);
+      expect(editor.selectedRegionIds).toEqual([first.id, second.id]);
+      editor.toggleRegionSelection(first.id);
+      expect(editor.selectedRegionIds).toEqual([second.id]);
     });
 
     it('drops a stale selection once its region disappears and auto-repicks the remaining single face', async () => {
@@ -549,29 +590,15 @@ describe('useSketchEditor', () => {
       drawSquare(editor, 30, 0);
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(2);
-      // Select whichever face belongs to the second (30,0) square, identified
-      // by an entity id that only that square's lines touch.
-      const secondSquareEntityIds = new Set(
-        editor.sketch.entities
-          .filter((e) => e.kind === 'point' && e.x >= 25)
-          .map((e) => e.id),
-      );
-      const secondFace = editor.regionFaces.find((f) =>
-        f.entityIds.some((id) => {
-          const entity = editor.sketch.entities.find((e) => e.id === id);
-          return (
-            entity !== undefined &&
-            (entity.kind === 'line'
-              ? secondSquareEntityIds.has(entity.p1Id) || secondSquareEntityIds.has(entity.p2Id)
-              : false)
-          );
-        }),
-      )!;
-      editor.selectRegion(secondFace.id);
-      expect(editor.selectedRegionId).toBe(secondFace.id);
+      const secondFace = faceOfSquare(editor, 25);
+      editor.toggleRegionSelection(secondFace.id);
+      expect(editor.selectedRegionIds).toEqual([secondFace.id]);
 
       // Delete the second square's lines; deleteEntities cascades to remove
       // their now-orphaned endpoints.
+      const secondSquareEntityIds = new Set(
+        editor.sketch.entities.filter((e) => e.kind === 'point' && e.x >= 25).map((e) => e.id),
+      );
       const secondSquareLineIds = editor.sketch.entities
         .filter(
           (e) =>
@@ -583,11 +610,11 @@ describe('useSketchEditor', () => {
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(1);
       // The stale id is gone, and with exactly one face left it is auto-picked.
-      expect(editor.selectedRegionId).toBe(editor.regionFaces[0].id);
-      expect(editor.selectedRegionId).not.toBe(secondFace.id);
+      expect(editor.selectedRegionIds).toEqual([editor.regionFaces[0].id]);
+      expect(editor.selectedRegionIds).not.toEqual([secondFace.id]);
     });
 
-    it('outlineForFinish surfaces the no-region error, the single-face outline, and the pick-a-region message', async () => {
+    it('partsForFinish surfaces the no-region error, one part per selected region, and the pick-a-region message', async () => {
       const editor = useSketchEditor();
       editor.startNewSketch();
 
@@ -597,16 +624,19 @@ describe('useSketchEditor', () => {
       editor.appendChainPoint({ x: 0, y: 0 });
       editor.appendChainPoint({ x: 10, y: 0 });
       await editor.solveNow();
-      const zeroFace = editor.outlineForFinish();
+      const zeroFace = editor.partsForFinish();
       expect(zeroFace.ok).toBe(false);
       if (!zeroFace.ok) expect(zeroFace.error.length).toBeGreaterThan(0);
 
       editor.startNewSketch();
       drawSquare(editor, 0, 0);
       await editor.solveNow();
-      const singleFace = editor.outlineForFinish();
+      const singleFace = editor.partsForFinish();
       expect(singleFace.ok).toBe(true);
-      if (singleFace.ok) expect(singleFace.outline.outer.length).toBeGreaterThan(0);
+      if (singleFace.ok) {
+        expect(singleFace.parts).toHaveLength(1);
+        expect(singleFace.parts[0].outer.length).toBeGreaterThan(0);
+      }
 
       editor.startNewSketch();
       drawSquare(editor, 0, 0);
@@ -614,17 +644,26 @@ describe('useSketchEditor', () => {
       drawSquare(editor, 30, 0);
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(2);
-      expect(editor.selectedRegionId).toBeNull();
-      const multiFace = editor.outlineForFinish();
-      expect(multiFace.ok).toBe(false);
-      if (!multiFace.ok) expect(multiFace.error).toMatch(/region/i);
+      expect(editor.selectedRegionIds).toEqual([]);
+      const multiFaceNoneSelected = editor.partsForFinish();
+      expect(multiFaceNoneSelected.ok).toBe(false);
+      if (!multiFaceNoneSelected.ok) {
+        expect(multiFaceNoneSelected.error).toMatch(/region/i);
+        expect(multiFaceNoneSelected.error).toMatch(/one or more/i);
+      }
 
-      editor.selectRegion(editor.regionFaces[0].id);
-      const picked = editor.outlineForFinish();
-      expect(picked.ok).toBe(true);
+      editor.toggleRegionSelection(editor.regionFaces[0].id);
+      const onePicked = editor.partsForFinish();
+      expect(onePicked.ok).toBe(true);
+      if (onePicked.ok) expect(onePicked.parts).toHaveLength(1);
+
+      editor.toggleRegionSelection(editor.regionFaces[1].id);
+      const bothPicked = editor.partsForFinish();
+      expect(bothPicked.ok).toBe(true);
+      if (bothPicked.ok) expect(bothPicked.parts).toHaveLength(2);
     });
 
-    it('keeps the selection across a recompute that renumbers faces but leaves the selected face geometrically unchanged', async () => {
+    it('keeps a selected region across a recompute that renumbers faces but leaves it geometrically unchanged', async () => {
       const editor = useSketchEditor();
       editor.startNewSketch();
       drawSquare(editor, 0, 0);
@@ -632,26 +671,16 @@ describe('useSketchEditor', () => {
       drawSquare(editor, 30, 0);
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(2);
-      const secondSquareEntityIds = new Set(
-        editor.sketch.entities.filter((e) => e.kind === 'point' && e.x >= 25).map((e) => e.id),
-      );
-      const secondFace = editor.regionFaces.find((f) =>
-        f.entityIds.some((id) => {
-          const entity = editor.sketch.entities.find((e) => e.id === id);
-          return (
-            entity !== undefined &&
-            (entity.kind === 'line'
-              ? secondSquareEntityIds.has(entity.p1Id) || secondSquareEntityIds.has(entity.p2Id)
-              : false)
-          );
-        }),
-      )!;
-      editor.selectRegion(secondFace.id);
-      expect(editor.selectedRegionId).toBe(secondFace.id);
+      const secondFace = faceOfSquare(editor, 25);
+      editor.toggleRegionSelection(secondFace.id);
+      expect(editor.selectedRegionIds).toEqual([secondFace.id]);
 
       // Delete the first square and redraw an identical one: its geometry is
       // unchanged, but face ids are assigned by traversal order, so this can
       // (and here does) shuffle which id belongs to the still-selected face.
+      const secondSquareEntityIds = new Set(
+        editor.sketch.entities.filter((e) => e.kind === 'point' && e.x >= 25).map((e) => e.id),
+      );
       const firstSquareLineIds = editor.sketch.entities
         .filter(
           (e) =>
@@ -665,20 +694,35 @@ describe('useSketchEditor', () => {
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(2);
 
-      const survivingSecondFace = editor.regionFaces.find((f) =>
-        f.entityIds.some((id) => {
-          const entity = editor.sketch.entities.find((e) => e.id === id);
-          return (
-            entity !== undefined &&
-            (entity.kind === 'line'
-              ? secondSquareEntityIds.has(entity.p1Id) || secondSquareEntityIds.has(entity.p2Id)
-              : false)
-          );
-        }),
-      )!;
+      const survivingSecondFace = faceOfSquare(editor, 25);
       // The selection survives, keyed on the face's geometry, whether or not
       // its id happened to change.
-      expect(editor.selectedRegionId).toBe(survivingSecondFace.id);
+      expect(editor.selectedRegionIds).toEqual([survivingSecondFace.id]);
+    });
+
+    it('survives a recompute with two regions selected, each rematched by its own geometry', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      const first = faceOfSquare(editor, 0);
+      const second = faceOfSquare(editor, 25);
+      editor.toggleRegionSelection(first.id);
+      editor.toggleRegionSelection(second.id);
+      expect(editor.selectedRegionIds).toEqual([first.id, second.id]);
+
+      // A no-op re-solve (nothing moved) still recomputes regions and must
+      // keep both selections, matched independently by geometry.
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      const survivingFirst = faceOfSquare(editor, 0);
+      const survivingSecond = faceOfSquare(editor, 25);
+      expect(editor.selectedRegionIds).toContain(survivingFirst.id);
+      expect(editor.selectedRegionIds).toContain(survivingSecond.id);
+      expect(editor.selectedRegionIds).toHaveLength(2);
     });
 
     it('clears a stale selection when the face at the same id is now a different region', async () => {
@@ -689,9 +733,9 @@ describe('useSketchEditor', () => {
       drawSquare(editor, 30, 0);
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(2);
-      const [faceA, faceB] = editor.regionFaces;
-      editor.selectRegion(faceA.id);
-      expect(editor.selectedRegionId).toBe(faceA.id);
+      const [faceA] = editor.regionFaces;
+      editor.toggleRegionSelection(faceA.id);
+      expect(editor.selectedRegionIds).toEqual([faceA.id]);
 
       // Delete the selected face's square and grow the other square so a
       // recompute could plausibly reuse faceA's id for a face at a
@@ -711,8 +755,7 @@ describe('useSketchEditor', () => {
       drawSquare(editor, 100, 100);
       await editor.solveNow();
       expect(editor.regionFaces).toHaveLength(2);
-      expect(editor.selectedRegionId).toBeNull();
-      void faceB;
+      expect(editor.selectedRegionIds).toEqual([]);
     });
 
     it('does not recompute regions during a point drag, only once the drag ends', async () => {
@@ -740,6 +783,22 @@ describe('useSketchEditor', () => {
       await editor.solveNow();
       expect(editor.regionFaces).not.toBe(facesBeforeDrag);
       expect(editor.regionFaces).toHaveLength(1);
+    });
+
+    it('preselects the regions matching a re-opened tool\'s existing parts by geometry', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      const second = faceOfSquare(editor, 25);
+
+      // A stored tool that only ever had the second square as its part; the
+      // first square's face must not be preselected alongside it.
+      editor.preselectRegionsMatchingParts([{ outer: second.outer, holes: second.holes }]);
+      expect(editor.selectedRegionIds).toEqual([second.id]);
     });
   });
 

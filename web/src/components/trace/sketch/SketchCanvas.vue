@@ -68,7 +68,7 @@ const {
   chainTailId,
   chainTailSegmentId,
   regionFaces,
-  selectedRegionId,
+  selectedRegionIds,
   cursorMm,
   hoveredConstraintId,
   hoveredEntityIds,
@@ -99,13 +99,13 @@ const regionPaths = computed(() =>
   })),
 );
 
-/** Region shading: light CAD blue, hover raises opacity, selected reads
- * distinct and slightly stronger (spec's "UI" section). */
+/** Region shading: light CAD blue, hover raises opacity, a selected region
+ * (any number can be selected at once) reads distinct and stronger. */
 function regionFill(regionId: string): string {
-  return regionId === selectedRegionId.value ? '#1565c0' : '#1e88e5';
+  return selectedRegionIds.value.includes(regionId) ? '#1565c0' : '#1e88e5';
 }
 function regionOpacity(regionId: string): number {
-  if (regionId === selectedRegionId.value) return 0.35;
+  if (selectedRegionIds.value.includes(regionId)) return 0.35;
   if (regionId === hoveredRegionId.value) return 0.22;
   return 0.12;
 }
@@ -1262,7 +1262,7 @@ function removeSelectedConstraint(constraintId: string): void {
         :fill-opacity="regionOpacity(r.id)"
         stroke="none"
         style="cursor: pointer"
-        @click.stop="editor.selectRegion(r.id)"
+        @click.stop="editor.toggleRegionSelection(r.id)"
         @pointerenter="hoveredRegionId = r.id"
         @pointerleave="hoveredRegionId = hoveredRegionId === r.id ? null : hoveredRegionId"
       />

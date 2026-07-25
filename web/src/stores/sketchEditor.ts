@@ -12,6 +12,7 @@ import {
 } from '../engine/sketch/model';
 import type { DragTarget, SketchSolveResult } from '../engine/sketch/solve';
 import type { MmPoint, TracedOutline } from '../engine/trace/types';
+import { matchPartsByGeometry } from '../engine/trace/edit';
 import { assertNever } from '../engine/plan/types';
 import { solveSketchInWorker } from '../sketchClient';
 import {
@@ -107,16 +108,17 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** The extractRegions error (construction-only geometry, no enclosed
    * region) when the last recompute found zero faces; null otherwise. */
   const regionsError = ref<string | null>(null);
-  /** Id of the region the user clicked, or null. Cleared whenever a
-   * recompute no longer has that id; auto-picked when exactly one face. */
-  const selectedRegionId = ref<string | null>(null);
-  /** Centroid and area of the currently selected face, captured alongside
-   * selectedRegionId. Face ids are assigned by traversal order, so a
-   * recompute can silently renumber faces; recomputeRegions uses this to
-   * tell "the same face kept its id" apart from "a different face now has
-   * that id", which would otherwise let the finish flow carve the wrong
-   * region. */
-  const selectedRegionGeom = ref<{ centroid: MmPoint; areaMm2: number } | null>(null);
+  /** Ids of the regions the user has clicked, in click order. A click toggles
+   * membership (clicking a selected region deselects it). Auto-selected to
+   * the sole face when exactly one exists. */
+  const selectedRegionIds = ref<string[]>([]);
+  /** Centroid and area of each currently selected face, keyed by region id,
+   * captured alongside selectedRegionIds. Face ids are assigned by traversal
+   * order, so a recompute can silently renumber faces; recomputeRegions uses
+   * this to tell "the same face kept its id" apart from "a different face
+   * now has that id", which would otherwise let the finish flow carve the
+   * wrong region. */
+  const selectedRegionGeoms = ref<Map<string, { centroid: MmPoint; areaMm2: number }>>(new Map());
   /** Id of the sketched tool being re-edited, or null for a new shape. */
   const editingToolId = ref<string | null>(null);
   /** The open line/arc chain's last point id, or null when no chain is open. */
@@ -349,8 +351,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     solveState.value = { status: 'idle' };
     regionFaces.value = [];
     regionsError.value = null;
-    selectedRegionId.value = null;
-    selectedRegionGeom.value = null;
+    selectedRegionIds.value = [];
+    selectedRegionGeoms.value = new Map();
     editingToolId.value = null;
     chainTailId.value = null;
     chainTailSegmentId.value = null;
@@ -1332,7 +1334,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     'The sketch has no enclosed region. Draw lines, arcs or a circle that close off an area.';
   /** Shown by the finish flow when several regions exist and none is picked. */
   const PICK_A_REGION =
-    'This sketch has more than one enclosed region. Click a region on the canvas to select it, then finish again.';
+    'This sketch has more than one enclosed region. Click one or more regions on the canvas to select them, then finish again.';
 
   /**
    * Recomputes regionFaces/regionsError from the current (solved) sketch.
@@ -1344,36 +1346,54 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     if (sketch.value.entities.length === 0) {
       regionFaces.value = [];
       regionsError.value = null;
-      selectedRegionId.value = null;
+      selectedRegionIds.value = [];
+      selectedRegionGeoms.value = new Map();
       return;
     }
     const result = extractRegions(sketch.value);
     if (!result.ok) {
       regionFaces.value = [];
       regionsError.value = result.error;
-      selectedRegionId.value = null;
+      selectedRegionIds.value = [];
+      selectedRegionGeoms.value = new Map();
       return;
     }
     regionFaces.value = result.faces;
     regionsError.value = null;
-    if (selectedRegionId.value !== null) {
-      const geom = selectedRegionGeom.value;
-      // Face ids are positional (assigned by traversal order), so a
-      // recompute can renumber them even when the previously selected face's
-      // geometry is unchanged, and can also hand the old id to a completely
-      // different face. Search all faces for the one that is geometrically
-      // the same face (not merely whichever face now carries the old id).
-      const stillThere = geom === null ? undefined : result.faces.find((f) => isSameFace(f, geom));
-      selectedRegionId.value = stillThere?.id ?? null;
+    // Face ids are positional (assigned by traversal order), so a recompute
+    // can renumber them even when a previously selected face's geometry is
+    // unchanged, and can also hand the old id to a completely different
+    // face. Re-match each previously selected face by geometry (not merely
+    // whichever face now carries the old id), dropping any that no longer
+    // has a match.
+    const survivingIds: string[] = [];
+    for (const oldId of selectedRegionIds.value) {
+      const geom = selectedRegionGeoms.value.get(oldId);
+      const stillThere = geom === undefined ? undefined : result.faces.find((f) => isSameFace(f, geom));
+      if (stillThere !== undefined) survivingIds.push(stillThere.id);
     }
-    if (selectedRegionId.value === null && result.faces.length === 1) {
+    if (survivingIds.length === 0 && result.faces.length === 1) {
       // Single-face sketches auto-repick even after a geometry change: with
       // only one face there is no ambiguity to get wrong.
-      selectedRegionId.value = result.faces[0].id;
+      survivingIds.push(result.faces[0].id);
     }
-    const selected = result.faces.find((f) => f.id === selectedRegionId.value) ?? null;
-    selectedRegionGeom.value =
-      selected === null ? null : { centroid: polygonCentroid(selected.outer), areaMm2: selected.areaMm2 };
+    setSelectedRegionIds(survivingIds);
+  }
+
+  /** Rebuilds selectedRegionGeoms from the current regionFaces for exactly
+   * the given ids, and assigns selectedRegionIds; the single path every
+   * selection mutation (recompute, click-toggle, preselect) goes through so
+   * the ids and their captured geometry never drift apart. */
+  function setSelectedRegionIds(ids: string[]): void {
+    selectedRegionIds.value = ids;
+    const geoms = new Map<string, { centroid: MmPoint; areaMm2: number }>();
+    for (const id of ids) {
+      const face = regionFaces.value.find((f) => f.id === id);
+      if (face !== undefined) {
+        geoms.set(id, { centroid: polygonCentroid(face.outer), areaMm2: face.areaMm2 });
+      }
+    }
+    selectedRegionGeoms.value = geoms;
   }
 
   /** True when `face` is geometrically the same region as the one described
@@ -1392,34 +1412,51 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   function clearRegions(): void {
     regionFaces.value = [];
     regionsError.value = null;
-    selectedRegionId.value = null;
-    selectedRegionGeom.value = null;
+    selectedRegionIds.value = [];
+    selectedRegionGeoms.value = new Map();
   }
 
-  /** Selects a region by clicking its shaded face on the canvas. */
-  function selectRegion(regionId: string): void {
-    selectedRegionId.value = regionId;
-    const face = regionFaces.value.find((f) => f.id === regionId) ?? null;
-    selectedRegionGeom.value =
-      face === null ? null : { centroid: polygonCentroid(face.outer), areaMm2: face.areaMm2 };
+  /** Toggles a region's selection by clicking its shaded face on the canvas:
+   * selecting it if not already selected, deselecting it otherwise. Multiple
+   * regions can be selected at once (each becomes its own part on finish). */
+  function toggleRegionSelection(regionId: string): void {
+    const ids = selectedRegionIds.value.includes(regionId)
+      ? selectedRegionIds.value.filter((id) => id !== regionId)
+      : [...selectedRegionIds.value, regionId];
+    setSelectedRegionIds(ids);
   }
 
   /**
-   * The outline the finish flow should use, per the region count: zero faces
-   * surfaces the extraction error (or the fallback for an empty sketch), one
-   * face is used automatically, several faces require a prior selectRegion
-   * call or this returns the user-worded pick-a-region message.
+   * Preselects the regions matching a re-opened tool's existing parts, by
+   * geometry (matchPartsByGeometry, the same matcher the re-finish carryover
+   * flow uses): called once, after the sketch has been reloaded and its
+   * first solve and region recompute have both landed, so a re-edited
+   * sketched tool reopens with its regions already selected instead of
+   * forcing the user to re-pick them. No-op with no faces or no parts.
    */
-  function outlineForFinish(): { ok: true; outline: TracedOutline } | { ok: false; error: string } {
+  function preselectRegionsMatchingParts(parts: readonly TracedOutline[]): void {
+    if (regionFaces.value.length === 0 || parts.length === 0) return;
+    const newOutlines = regionFaces.value.map(regionToOutline);
+    const matches = matchPartsByGeometry(parts, newOutlines);
+    setSelectedRegionIds(matches.map((m) => regionFaces.value[m.newIndex].id));
+  }
+
+  /**
+   * The parts the finish flow should use, per the region count: zero faces
+   * surfaces the extraction error (or the fallback for an empty sketch); one
+   * or more selected regions are used as separate parts (auto-selection
+   * covers the single-face case); several faces with none selected return
+   * the user-worded pick-a-region message.
+   */
+  function partsForFinish(): { ok: true; parts: TracedOutline[] } | { ok: false; error: string } {
     if (regionFaces.value.length === 0) {
       return { ok: false, error: regionsError.value ?? NO_REGIONS_FALLBACK };
     }
-    if (regionFaces.value.length === 1) {
-      return { ok: true, outline: regionToOutline(regionFaces.value[0]) };
+    if (selectedRegionIds.value.length > 0) {
+      const selected = regionFaces.value.filter((f) => selectedRegionIds.value.includes(f.id));
+      return { ok: true, parts: selected.map(regionToOutline) };
     }
-    const selected = regionFaces.value.find((f) => f.id === selectedRegionId.value);
-    if (selected === undefined) return { ok: false, error: PICK_A_REGION };
-    return { ok: true, outline: regionToOutline(selected) };
+    return { ok: false, error: PICK_A_REGION };
   }
 
   /**
@@ -1487,9 +1524,10 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     solveState,
     regionFaces,
     regionsError,
-    selectedRegionId,
-    selectRegion,
-    outlineForFinish,
+    selectedRegionIds,
+    toggleRegionSelection,
+    preselectRegionsMatchingParts,
+    partsForFinish,
     editingToolId,
     chainTailId,
     chainTailSegmentId,
