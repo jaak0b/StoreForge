@@ -228,6 +228,34 @@ describe('useSketchEditor', () => {
     expect(profile.ok).toBe(true);
   });
 
+  it('merges dragged chain ends with a coincident constraint, without duplicating it', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    // Chain A: two points, left open.
+    const a1 = editor.appendChainPoint({ x: 0, y: 0 })!;
+    const a2 = editor.appendChainPoint({ x: 10, y: 0 })!;
+    editor.endChain();
+    // Chain B: two points, left open near chain A's end.
+    const b1 = editor.appendChainPoint({ x: 10, y: 0.5 })!;
+    editor.appendChainPoint({ x: 10, y: 10 });
+    editor.endChain();
+
+    editor.addCoincidentIfAbsent(a2, b1);
+    let coincidents = editor.sketch.constraints.filter((c) => c.kind === 'coincident');
+    expect(coincidents).toHaveLength(1);
+    expect([coincidents[0].p1Id, coincidents[0].p2Id].sort()).toEqual([a2, b1].sort());
+
+    // Same pair again, reversed order: no duplicate.
+    editor.addCoincidentIfAbsent(b1, a2);
+    coincidents = editor.sketch.constraints.filter((c) => c.kind === 'coincident');
+    expect(coincidents).toHaveLength(1);
+
+    // Self-merge is a no-op.
+    editor.addCoincidentIfAbsent(a1, a1);
+    coincidents = editor.sketch.constraints.filter((c) => c.kind === 'coincident');
+    expect(coincidents).toHaveLength(1);
+  });
+
   it('loads an existing sketch for editing a sketched tool', () => {
     const editor = useSketchEditor();
     editor.startNewSketch();

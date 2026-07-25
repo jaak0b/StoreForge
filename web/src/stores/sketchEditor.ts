@@ -291,6 +291,23 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     bumpGeneration();
   }
 
+  /**
+   * Adds a coincident constraint between two points unless one already ties
+   * that unordered pair, or the two ids are the same point (a normal no-op:
+   * dropping a drag back onto itself is not an error condition). This is the
+   * drag-merge workflow: releasing a dragged point onto another point.
+   */
+  function addCoincidentIfAbsent(p1Id: string, p2Id: string): void {
+    if (p1Id === p2Id) return;
+    const exists = sketch.value.constraints.some(
+      (c) =>
+        c.kind === 'coincident' &&
+        ((c.p1Id === p1Id && c.p2Id === p2Id) || (c.p1Id === p2Id && c.p2Id === p1Id)),
+    );
+    if (exists) return;
+    addConstraint({ kind: 'coincident', id: nextId(), p1Id, p2Id });
+  }
+
   function removeConstraint(constraintId: string): void {
     sketch.value.constraints = sketch.value.constraints.filter((c) => c.id !== constraintId);
     bumpGeneration();
@@ -442,6 +459,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     addThreePointArc,
     addMirrorLine,
     addConstraint,
+    addCoincidentIfAbsent,
     addDimension,
     setDimensionValue,
     removeConstraint,

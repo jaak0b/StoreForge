@@ -16,6 +16,9 @@ const emit = defineEmits<{
   /** A drag of an existing point to a new mm position (driven point). */
   (e: 'pointDrag', pointId: string, at: MmPoint): void;
   (e: 'pointDragEnd'): void;
+  /** A dragged point released within snap range of another point; the
+   * workspace merges them with a coincident constraint. */
+  (e: 'pointDragMerge', draggedPointId: string, targetPointId: string): void;
   /** A click on a dimension label, for click-to-edit. */
   (e: 'dimensionClick', constraintId: string, at: MmPoint): void;
   (e: 'entityClick', entityId: string): void;
@@ -173,12 +176,17 @@ const draggingPointId = ref<string | null>(null);
 /** Current cursor position in mm, for the open-chain rubber-band cue; null
  * once the pointer leaves the canvas. Display state only, never the model. */
 const cursorMm = ref<MmPoint | null>(null);
+/** While dragging a point, another existing point within snap range of the
+ * cursor, or null; drives the drop-to-merge snap ring and the merge on
+ * release. Never the dragged point itself. */
+const dragSnapTargetId = ref<string | null>(null);
 
 function onPointerDown(event: PointerEvent): void {
   const at = clientToMm(event);
   const hit = hitPoint(at);
   if (editor.activeTool === 'select' && hit !== null) {
     draggingPointId.value = hit;
+    dragSnapTargetId.value = null;
     (event.target as Element).setPointerCapture(event.pointerId);
     return;
   }
@@ -192,11 +200,19 @@ function onPointerMove(event: PointerEvent): void {
   cursorMm.value = clientToMm(event);
   if (draggingPointId.value === null) return;
   emit('pointDrag', draggingPointId.value, cursorMm.value);
+  const target = hitPoint(cursorMm.value);
+  dragSnapTargetId.value = target !== null && target !== draggingPointId.value ? target : null;
 }
 
 function onPointerUp(): void {
   if (draggingPointId.value !== null) {
+    const draggedId = draggingPointId.value;
+    const targetId = dragSnapTargetId.value;
     draggingPointId.value = null;
+    dragSnapTargetId.value = null;
+    if (targetId !== null && targetId !== draggedId) {
+      emit('pointDragMerge', draggedId, targetId);
+    }
     emit('pointDragEnd');
   }
 }
@@ -228,6 +244,14 @@ const hoverSnapPoint = computed(() =>
   hoverSnapPointId.value === null ? null : pointById.value.get(hoverSnapPointId.value) ?? null,
 );
 
+/** The point behind the snap-indicator ring: either the placement-tool hover
+ * snap, or (while dragging a point with the select tool) the merge target
+ * within snap range, whichever applies. */
+const activeSnapPoint = computed(() => {
+  if (hoverSnapPoint.value !== null) return hoverSnapPoint.value;
+  return dragSnapTargetId.value === null ? null : pointById.value.get(dragSnapTargetId.value) ?? null;
+});
+
 /** The open chain's tail point, for the highlighted-tail and rubber-band cue. */
 const chainTailPoint = computed(() =>
   chainTailId.value === null ? null : pointById.value.get(chainTailId.value) ?? null,
@@ -239,6 +263,18 @@ const rubberBand = computed(() => {
   if (chainTailPoint.value === null || cursorMm.value === null) return null;
   if (!['line', 'arcThreePoint', 'arcTangent'].includes(activeTool.value)) return null;
   return { x1: chainTailPoint.value.x, y1: chainTailPoint.value.y, x2: cursorMm.value.x, y2: cursorMm.value.y };
+});
+
+/**
+ * Invisible hit-path stroke width, in mm, for the wide click target laid
+ * over each thin entity path. Screen-px-derived (12px) so the click
+ * tolerance tracks zoom instead of a value fitted to one zoom level;
+ * reading view.value inside establishes the Vue reactivity dependency that
+ * mmPerScreenPixel's DOM read alone would not.
+ */
+const hitStrokeWidthMm = computed(() => {
+  void view.value;
+  return mmPerScreenPixel() * 12;
 });
 
 /** Anchor position of a dimension label, midway along its geometry. */
@@ -320,16 +356,23 @@ const dimensionLabels = computed(() =>
       />
     </g>
     <g class="entities">
-      <path
-        v-for="{ entity, d } in entityPaths"
-        :key="entity.id"
-        :d="d"
-        fill="none"
-        :stroke="strokeOf(entity)"
-        :stroke-width="0.6"
-        :stroke-dasharray="entity.construction ? '1.5 1' : undefined"
-        @click.stop="emit('entityClick', entity.id)"
-      />
+      <template v-for="{ entity, d } in entityPaths" :key="entity.id">
+        <path
+          :d="d"
+          fill="none"
+          :stroke="strokeOf(entity)"
+          :stroke-width="0.6"
+          :stroke-dasharray="entity.construction ? '1.5 1' : undefined"
+          style="pointer-events: none"
+        />
+        <path
+          :d="d"
+          fill="none"
+          stroke="transparent"
+          :stroke-width="hitStrokeWidthMm"
+          @click.stop="emit('entityClick', entity.id)"
+        />
+      </template>
       <circle
         v-for="p in points"
         :key="p.id"
@@ -349,10 +392,10 @@ const dimensionLabels = computed(() =>
         stroke-dasharray="1.2 1"
       />
       <circle
-        v-if="hoverSnapPoint !== null"
+        v-if="activeSnapPoint !== null"
         class="snap-indicator"
-        :cx="hoverSnapPoint.x"
-        :cy="hoverSnapPoint.y"
+        :cx="activeSnapPoint.x"
+        :cy="activeSnapPoint.y"
         r="2.4"
         fill="none"
         stroke="#ff6f00"

@@ -437,6 +437,13 @@ function onPointDragEnd(): void {
   void editor.solveNow();
 }
 
+/** Merges the dragged point onto the release target with a coincident
+ * constraint, then re-solves so the merge takes effect immediately. */
+function onPointDragMerge(draggedId: string, targetId: string): void {
+  editor.addCoincidentIfAbsent(draggedId, targetId);
+  void editor.solveNow();
+}
+
 /** Deletes the current selection, if any, and reschedules the solve. */
 function deleteSelection(): void {
   if (editor.selectedIds.length === 0) return;
@@ -477,12 +484,6 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
 
 <template>
   <div class="sketch-workspace">
-    <v-toolbar density="compact">
-      <v-toolbar-title>Sketch</v-toolbar-title>
-      <v-spacer />
-      <v-btn variant="text" @click="emit('cancel')">Cancel</v-btn>
-      <v-btn color="primary" @click="emit('finish')">Use this shape</v-btn>
-    </v-toolbar>
     <v-toolbar density="compact" class="tool-toolbar">
       <v-btn-toggle :model-value="activeTool" mandatory density="compact">
         <v-btn
@@ -566,9 +567,12 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
           />
         </v-card>
       </v-menu>
+      <v-spacer />
+      <v-btn variant="text" density="compact" @click="emit('cancel')">Cancel</v-btn>
+      <v-btn color="primary" density="compact" @click="emit('finish')">Use this shape</v-btn>
     </v-toolbar>
-    <v-toolbar v-if="showConstraintRow" density="compact" class="constraint-toolbar">
-      <div class="v-btn-toggle constraint-group">
+    <v-toolbar density="compact" class="constraint-toolbar">
+      <div v-if="showConstraintRow" class="v-btn-toggle constraint-group">
         <v-btn
           v-for="kind in availableConstraintKinds"
           :key="kind"
@@ -591,8 +595,8 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
           <v-tooltip activator="parent" location="bottom">Construction</v-tooltip>
         </v-btn>
       </div>
+      <p v-else class="tool-hint">{{ toolHint }}</p>
     </v-toolbar>
-    <p class="tool-hint">{{ toolHint }}</p>
     <v-text-field
       v-if="dimensionDraft !== null"
       v-model="dimensionDraft.text"
@@ -609,6 +613,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         @canvas-click="onCanvasClick"
         @point-drag="onPointDrag"
         @point-drag-end="onPointDragEnd"
+        @point-drag-merge="onPointDragMerge"
         @entity-click="(id: string) => onEntityClick(id)"
         @dimension-click="(id: string) => onDimensionClick(id)"
       />
@@ -643,6 +648,10 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
   padding-top: 4px;
   padding-bottom: 4px;
 }
+.constraint-toolbar {
+  min-height: 48px;
+  align-items: center;
+}
 .photo-menu {
   min-width: 240px;
 }
@@ -654,7 +663,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
   min-height: 320px;
 }
 .tool-hint {
-  margin: 4px 12px;
+  margin: 0 12px;
   font-size: 0.85rem;
   color: rgba(0, 0, 0, 0.6);
 }
