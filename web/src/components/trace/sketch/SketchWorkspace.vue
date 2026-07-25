@@ -5,6 +5,7 @@ import { useSketchEditor, type SketchTool } from '../../../stores/sketchEditor';
 import SketchCanvas from './SketchCanvas.vue';
 import type { MmPoint } from '../../../engine/trace/types';
 import type { SketchEntity } from '../../../engine/sketch/model';
+import type { DimensionSelectionKind } from '../../../engine/sketch/dimensionSelection';
 import {
   applicableConstraintKinds,
   canToggleConstruction,
@@ -309,13 +310,49 @@ const showConstraintRow = computed<boolean>(
  * itself and updates dimensionPending; the toolbar hint always reflects the
  * result. Placement (the second click that positions the label) happens
  * separately in onCanvasClick, once dimensionPending is set.
+ *
+ * A single line or arc/circle resolves immediately (see
+ * resolveDimensionSelection), which normally clears selectedIds. If the
+ * dimension tool is still waiting on a placement click (dimensionPending
+ * set, selectedIds empty) and the user instead clicks a second entity, that
+ * second click is meant to combine with the first into a two-entity
+ * dimension (e.g. two non-parallel lines resolving to an angle), not to
+ * discard the first pick. Re-seed selectedIds with the pending selection's
+ * entity id so resolveDimensionAtSelection sees both entities together.
  */
 function onEntityClick(entityId: string): void {
+  if (
+    activeTool.value === 'dimension' &&
+    dimensionPending.value !== null &&
+    editor.selectedIds.length === 0
+  ) {
+    const priorId = singleEntityIdOfPending(dimensionPending.value);
+    dimensionPending.value = null;
+    if (priorId !== null && priorId !== entityId) editor.selectedIds.push(priorId);
+  }
   const at = editor.selectedIds.indexOf(entityId);
   if (at === -1) editor.selectedIds.push(entityId);
   else editor.selectedIds.splice(at, 1);
   if (activeTool.value === 'dimension') {
     toolHint.value = editor.resolveDimensionAtSelection();
+  }
+}
+
+/** The single entity id a resolved-but-unplaced dimensionPending selection
+ * came from, for onEntityClick to re-seed selectedIds when a second entity
+ * click arrives before placement; null for the two-entity kinds, which have
+ * nothing left to combine. */
+function singleEntityIdOfPending(pending: DimensionSelectionKind): string | null {
+  switch (pending.kind) {
+    case 'length':
+      return pending.lineId;
+    case 'radiusOrDiameter':
+      return pending.entityId;
+    case 'distance':
+    case 'angle':
+      return null;
+    default:
+      return assertNever(pending);
   }
 }
 
@@ -466,7 +503,12 @@ function commitCalibration(): void {
   calibrationClicks.value = [];
 }
 
-function onCanvasClick(at: MmPoint, hitPointId: string | null, suppressAutoHV = false): void {
+function onCanvasClick(
+  at: MmPoint,
+  hitPointId: string | null,
+  suppressAutoHV = false,
+  isEntityHit = false,
+): void {
   // A quick numeric entry is open (typed length/diameter, or the slot width
   // prompt): canvas clicks are ignored until it is committed or cancelled.
   if (quickEntryKind.value !== null) return;
@@ -580,7 +622,12 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null, suppressAutoHV = 
       // A pending resolved selection: this click places the label at the
       // cursor and opens the inline input (SketchCanvas renders it).
       if (dimensionPending.value !== null) {
-        editor.placeDimensionDraft(at);
+        // A click that lands on an entity is the start of combining a second
+        // entity into the pending selection (e.g. a second line for an angle
+        // dimension); onEntityClick (fired separately for that entity, after
+        // this pointerdown-driven canvasClick) handles it. Only a genuine
+        // background click places the pending dimension's label.
+        if (!isEntityHit) editor.placeDimensionDraft(at);
         break;
       }
       // No pending selection yet: a click on an existing sketch point picks

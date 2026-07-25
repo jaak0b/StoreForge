@@ -34,7 +34,7 @@ import { anchorForDimensionSelection } from '../../../engine/sketch/dimensionSel
 const emit = defineEmits<{
   /** A canvas click in mm, for the active drawing tool. altKey is the Alt
    * modifier at click time, which suppresses auto H/V inference. */
-  (e: 'canvasClick', at: MmPoint, hitPointId: string | null, altKey: boolean): void;
+  (e: 'canvasClick', at: MmPoint, hitPointId: string | null, altKey: boolean, isEntityHit: boolean): void;
   /** A drag of an existing point to a new mm position (driven point). */
   (e: 'pointDrag', pointId: string, at: MmPoint): void;
   (e: 'pointDragEnd'): void;
@@ -451,7 +451,7 @@ function onPointerDown(event: PointerEvent): void {
     selectedIds.value = [];
     selectedConstraintId.value = null;
   }
-  emit('canvasClick', at, hit, event.altKey);
+  emit('canvasClick', at, hit, event.altKey, isEntityTarget(event.target));
 }
 
 function onPointerMove(event: PointerEvent): void {
@@ -931,7 +931,7 @@ function onLabelPointerDown(event: PointerEvent, constraintId: string): void {
   event.stopPropagation();
   pendingLabelId.value = constraintId;
   pendingLabelDownScreen.value = { x: event.clientX, y: event.clientY };
-  svgEl.value!.setPointerCapture(event.pointerId);
+  (event.target as Element).setPointerCapture(event.pointerId);
 }
 
 /** Reopens the inline input on an existing dimension's label. */

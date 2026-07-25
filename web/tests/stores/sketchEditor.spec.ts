@@ -1119,6 +1119,56 @@ describe('useSketchEditor', () => {
       expect(editor.selectedIds).toEqual([]);
     });
 
+    it('two non-parallel lines selected together resolve directly to an angle dimension', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const l1 = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.endChain();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 0, y: 10 }, undefined, true);
+      const l2 = editor.sketch.entities.filter((e) => e.kind === 'line')[1];
+
+      editor.selectedIds = [l1.id, l2.id];
+      const hint = editor.resolveDimensionAtSelection();
+      expect(hint).toContain('length');
+      expect(editor.dimensionPending).toEqual({ kind: 'angle', l1Id: l1.id, l2Id: l2.id });
+      expect(editor.selectedIds).toEqual([]);
+    });
+
+    it('clicking a second, non-parallel line while a first line is pending combines into an angle dimension (Bug B routing)', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const l1 = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.endChain();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 0, y: 10 }, undefined, true);
+      const l2 = editor.sketch.entities.filter((e) => e.kind === 'line')[1];
+
+      // Click line1 alone: resolves immediately to a pending length, clearing
+      // selectedIds, exactly as the single-entity case does today.
+      editor.selectedIds = [l1.id];
+      editor.resolveDimensionAtSelection();
+      expect(editor.dimensionPending).toEqual({ kind: 'length', lineId: l1.id });
+      expect(editor.selectedIds).toEqual([]);
+
+      // Simulate the fixed SketchWorkspace.onEntityClick's re-seeding: before
+      // toggling in the newly clicked line2, it re-seeds selectedIds with the
+      // prior pending selection's entity id and clears dimensionPending.
+      const priorId = editor.dimensionPending!.kind === 'length' ? editor.dimensionPending!.lineId : null;
+      editor.dimensionPending = null;
+      if (priorId !== null && priorId !== l2.id) editor.selectedIds.push(priorId);
+      editor.selectedIds.push(l2.id);
+      const hint = editor.resolveDimensionAtSelection();
+
+      expect(hint).toContain('length');
+      expect(editor.dimensionPending).toEqual({ kind: 'angle', l1Id: l1.id, l2Id: l2.id });
+      expect(editor.selectedIds).toEqual([]);
+    });
+
     it('updateLabelOffset between beginLabelDrag/endLabelDrag collapses a whole drag into one undo step', () => {
       const editor = useSketchEditor();
       editor.startNewSketch();
