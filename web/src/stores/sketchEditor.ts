@@ -389,12 +389,18 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       chainTailId.value = null;
       chainTailSegmentId.value = null;
       bumpGeneration();
+      // The chain closed onto an existing point, completing the shape: task
+      // F returns the line/arc chain tools to select once the chain closes.
+      activeTool.value = 'select';
     } finally {
       endMutation();
     }
   }
 
-  /** Ends the open chain without closing it. */
+  /** Ends the open chain without closing it. Does not itself change
+   * activeTool: called both when a chain genuinely ends (Escape, handled by
+   * the workspace which switches to select itself) and when selectTool
+   * switches to a different tool (which must not be overridden here). */
   function endChain(): void {
     chainTailId.value = null;
     chainTailSegmentId.value = null;
@@ -417,6 +423,11 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
         construction: false,
       });
       bumpGeneration();
+      // The circle tool is one-shot: placing a circle completes it, so the
+      // active tool returns to select (task F). Covers both the immediate
+      // two-click placement and the typed-diameter quick entry, since both
+      // call this same function.
+      activeTool.value = 'select';
       return id;
     } finally {
       endMutation();
@@ -461,6 +472,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       addConstraint({ kind: 'vertical', id: nextId(), lineId: leftLineId });
       addConstraint({ kind: 'vertical', id: nextId(), lineId: rightLineId });
       bumpGeneration();
+      // The rectangle tool is one-shot: task F returns to select once the
+      // opposite corner is placed.
+      activeTool.value = 'select';
     } finally {
       endMutation();
     }
@@ -552,6 +566,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       addDimension({ kind: 'diameter', id: nextId(), entityId: startArcId, mm: widthMm });
 
       bumpGeneration();
+      // The slot tool is one-shot: task F returns to select once the width
+      // is committed (addSlot only runs after the width quick entry commits).
+      activeTool.value = 'select';
     } finally {
       endMutation();
     }
@@ -616,6 +633,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       if (closing) {
         chainTailId.value = null;
         chainTailSegmentId.value = null;
+        // The chain closed onto an existing point, completing the shape
+        // (task F), the same as closeChainTo does for a line chain.
+        activeTool.value = 'select';
       } else {
         chainTailId.value = endId;
         chainTailSegmentId.value = arcId;
@@ -646,6 +666,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
         construction: true,
       });
       bumpGeneration();
+      // The mirror-line tool is one-shot: task F returns to select once both
+      // ends are placed.
+      activeTool.value = 'select';
       return lineId;
     } finally {
       endMutation();

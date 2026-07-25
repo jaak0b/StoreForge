@@ -30,10 +30,23 @@ export interface ViewTransform {
   panY: number;
 }
 
-/** Clamps a zoom factor into the supported [MIN_ZOOM, MAX_ZOOM] range. */
-export function clampZoom(zoom: number): number {
-  if (zoom < MIN_ZOOM) return MIN_ZOOM;
-  if (zoom > MAX_ZOOM) return MAX_ZOOM;
+/** A supported zoom range, min and max inclusive. */
+export interface ZoomRange {
+  min: number;
+  max: number;
+}
+
+/** The default zoom range every caller gets unless it passes its own. */
+export const DEFAULT_ZOOM_RANGE: ZoomRange = { min: MIN_ZOOM, max: MAX_ZOOM };
+
+/**
+ * Clamps a zoom factor into a supported range, [MIN_ZOOM, MAX_ZOOM] unless the
+ * caller passes a different range (e.g. the sketch canvas's wider zoom-out
+ * range for its unbounded design space).
+ */
+export function clampZoom(zoom: number, range: ZoomRange = DEFAULT_ZOOM_RANGE): number {
+  if (zoom < range.min) return range.min;
+  if (zoom > range.max) return range.max;
   return zoom;
 }
 
@@ -86,8 +99,9 @@ export function zoomToCursor(
   anchor: Vec2,
   canvasWidth: number,
   canvasHeight: number,
+  zoomRange: ZoomRange = DEFAULT_ZOOM_RANGE,
 ): ViewTransform {
-  const zoom = clampZoom(newZoom);
+  const zoom = clampZoom(newZoom, zoomRange);
   const imagePoint = screenToImage(anchor, transform);
   const panned = {
     zoom,

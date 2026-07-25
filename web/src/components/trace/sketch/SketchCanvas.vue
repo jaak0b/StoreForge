@@ -1,10 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSketchEditor } from '../../../stores/sketchEditor';
 import {
+  MAX_ZOOM,
+  MIN_ZOOM,
+  clampPan,
+  imageToScreen,
   zoomToCursor,
+  type Vec2,
   type ViewTransform,
+  type ZoomRange,
 } from '../viewTransform';
 import { assertNever } from '../../../engine/plan/types';
 import type { MmPoint } from '../../../engine/trace/types';
@@ -91,6 +97,14 @@ const svgEl = ref<SVGSVGElement | null>(null);
 /** Pan/zoom over a fixed 200 mm design window; same math as the trace canvas. */
 const WINDOW_MM = 200;
 const view = ref<ViewTransform>({ zoom: 1, panX: 0, panY: 0 });
+/**
+ * The sketch canvas is an unbounded design space (unlike the photo trace
+ * canvas, which is bounded to the photo's pixels), so it keeps the same
+ * zoom-in cap as the trace canvas but allows zooming out much further: at
+ * least 10x the trace canvas's [1, 8] range. clampZoom/zoomToCursor accept
+ * this range instead of duplicating the clamp math locally (convention 10).
+ */
+const SKETCH_ZOOM_RANGE: ZoomRange = { min: MIN_ZOOM / 10, max: MAX_ZOOM };
 
 const viewBox = computed(() => {
   const size = WINDOW_MM / view.value.zoom;
@@ -152,19 +166,158 @@ function isEntityTarget(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * Converts a pointer/wheel event's client position to the "screen" pixel
+ * space zoomToCursor and clampPan operate in: a virtual WINDOW_MM square,
+ * pan/zoom-invariant by construction since it is the inverse of the same
+ * view.value transform the viewBox is built from (imageToScreen and
+ * screenToImage, via clientToMm, are exact inverses of each other).
+ */
+function eventToVirtualPx(event: PointerEvent | WheelEvent): Vec2 {
+  return imageToScreen(clientToMm(event), view.value);
+}
+
 function onWheel(event: WheelEvent): void {
   event.preventDefault();
   const factor = event.deltaY < 0 ? 1.2 : 1 / 1.2;
-  const anchorMm = clientToMm(event);
-  const next = zoomToCursor(
-    view.value,
-    view.value.zoom * factor,
-    { x: anchorMm.x * view.value.zoom + view.value.panX, y: anchorMm.y * view.value.zoom + view.value.panY },
-    WINDOW_MM,
-    WINDOW_MM,
-  );
-  view.value = next;
+  const anchor = eventToVirtualPx(event);
+  view.value = zoomToCursor(view.value, view.value.zoom * factor, anchor, WINDOW_MM, WINDOW_MM, SKETCH_ZOOM_RANGE);
 }
+
+/** Applies a pan offset clamped so the design window stays reachable. */
+function setPan(nextPanX: number, nextPanY: number): void {
+  const clamped = clampPan({ zoom: view.value.zoom, panX: nextPanX, panY: nextPanY }, WINDOW_MM, WINDOW_MM);
+  view.value = { zoom: view.value.zoom, panX: clamped.panX, panY: clamped.panY };
+}
+
+/** True while the space bar is held; turns a left-drag into a pan, matching
+ * TraceCanvas's convention (grab/grabbing cursor, click swallowed on release). */
+const spaceHeld = ref(false);
+/** The in-progress pan drag: the virtual-px pointer position and the pan
+ * offset captured when the drag began; null when not panning. */
+let panDrag: { startX: number; startY: number; panX: number; panY: number } | null = null;
+/** Reactive flag mirroring the panDrag closure variable, for the cursor class. */
+const panDragActive = ref(false);
+
+/**
+ * Begins a pan drag on middle-mouse-down, or on left-down while space is
+ * held. Returns true when the event started a pan so the caller skips
+ * selection, dragging or tool-click handling entirely (this canvas places
+ * points and selects directly from pointerdown rather than a separate click
+ * event, so gating here is the mirror of TraceCanvas's panConsumedClick
+ * guard: the pan swallows the gesture before any placement logic runs).
+ */
+function maybeStartPan(event: PointerEvent): boolean {
+  const isMiddle = event.button === 1;
+  const isSpaceLeft = event.button === 0 && spaceHeld.value;
+  if (!isMiddle && !isSpaceLeft) return false;
+  const vpx = eventToVirtualPx(event);
+  svgEl.value?.setPointerCapture(event.pointerId);
+  panDrag = { startX: vpx.x, startY: vpx.y, panX: view.value.panX, panY: view.value.panY };
+  panDragActive.value = true;
+  event.preventDefault();
+  return true;
+}
+
+/** Ends a pan drag, releasing capture; returns true when a pan was active. */
+function endPan(event: PointerEvent): boolean {
+  if (panDrag === null) return false;
+  panDrag = null;
+  panDragActive.value = false;
+  try {
+    svgEl.value?.releasePointerCapture(event.pointerId);
+  } catch {
+    // No capture to release; nothing to do.
+  }
+  return true;
+}
+
+/** True when focus sits in a field where Space is ordinary input. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+}
+function onSpaceKeyDown(event: KeyboardEvent): void {
+  if (event.key !== ' ' && event.code !== 'Space') return;
+  if (isEditableTarget(event.target)) return;
+  if (!spaceHeld.value) spaceHeld.value = true;
+  event.preventDefault();
+}
+function onSpaceKeyUp(event: KeyboardEvent): void {
+  if (event.key === ' ' || event.code === 'Space') spaceHeld.value = false;
+}
+onMounted(() => {
+  window.addEventListener('keydown', onSpaceKeyDown);
+  window.addEventListener('keyup', onSpaceKeyUp);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', onSpaceKeyDown);
+  window.removeEventListener('keyup', onSpaceKeyUp);
+});
+
+/** CSS cursor: grab while space-panning, grabbing mid-pan, else the default. */
+const canvasCursorClass = computed(() => {
+  if (panDragActive.value) return 'cursor-grabbing';
+  return spaceHeld.value ? 'cursor-grab' : '';
+});
+
+/** Sketch entity/underlay bounds in mm, or null when the sketch is empty. */
+function sketchBoundsMm(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (points.value.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of points.value) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  const underlayImage = svgEl.value?.querySelector('image') ?? null;
+  if (underlayImage !== null && underlayMmPerPixel.value !== null) {
+    try {
+      const bbox = (underlayImage as SVGImageElement).getBBox();
+      if (bbox.width > 0 && bbox.height > 0) {
+        const scale = underlayMmPerPixel.value;
+        minX = Math.min(minX, bbox.x * scale);
+        minY = Math.min(minY, bbox.y * scale);
+        maxX = Math.max(maxX, (bbox.x + bbox.width) * scale);
+        maxY = Math.max(maxY, (bbox.y + bbox.height) * scale);
+      }
+    } catch {
+      // The underlay image has not finished loading; frame the sketch alone.
+    }
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Frames the sketch (and the visible underlay, when present) in view with a
+ * margin, using the same viewBox convention the rest of this component relies on:
+ * center = -panX/zoom + size/4, so panX = WINDOW_MM/4 - zoom*centerX.
+ */
+const FIT_MARGIN_MM = 10;
+function fitToView(): void {
+  const bounds = sketchBoundsMm();
+  if (bounds === null) return;
+  const width = bounds.maxX - bounds.minX + FIT_MARGIN_MM * 2;
+  const height = bounds.maxY - bounds.minY + FIT_MARGIN_MM * 2;
+  const span = Math.max(width, height, 1e-6);
+  const zoom = Math.min(Math.max(WINDOW_MM / span, SKETCH_ZOOM_RANGE.min), SKETCH_ZOOM_RANGE.max);
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  view.value = {
+    zoom,
+    panX: WINDOW_MM / 4 - zoom * centerX,
+    panY: WINDOW_MM / 4 - zoom * centerY,
+  };
+}
+/** Whether the Fit button is usable: there must be something to frame. */
+const canFit = computed(() => points.value.length > 0);
+
+defineExpose({ fitToView, canFit });
 
 const points = computed(() =>
   sketch.value.entities.filter((e): e is Extract<SketchEntity, { kind: 'point' }> => e.kind === 'point'),
@@ -246,6 +399,7 @@ function dragThresholdMm(): number {
 }
 
 function onPointerDown(event: PointerEvent): void {
+  if (maybeStartPan(event)) return;
   const at = clientToMm(event);
   const hit = hitPoint(at);
   if (editor.activeTool === 'select' && hit !== null) {
@@ -271,6 +425,11 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  if (panDrag !== null) {
+    const vpx = eventToVirtualPx(event);
+    setPan(panDrag.panX + (vpx.x - panDrag.startX), panDrag.panY + (vpx.y - panDrag.startY));
+    return;
+  }
   cursorMm.value = clientToMm(event);
   altHeld.value = event.altKey;
   if (pendingPointId.value !== null && pendingDownScreen.value !== null) {
@@ -288,7 +447,8 @@ function onPointerMove(event: PointerEvent): void {
   dragSnapTargetId.value = target !== null && target !== draggingPointId.value ? target : null;
 }
 
-function onPointerUp(): void {
+function onPointerUp(event: PointerEvent): void {
+  if (endPan(event)) return;
   if (pendingPointId.value !== null) {
     const clickedId = pendingPointId.value;
     pendingPointId.value = null;
@@ -308,8 +468,9 @@ function onPointerUp(): void {
   }
 }
 
-function onPointerLeave(): void {
+function onPointerLeave(event: PointerEvent): void {
   cursorMm.value = null;
+  endPan(event);
 }
 
 /**
@@ -321,7 +482,8 @@ function onPointerLeave(): void {
  * the store's beginPointDrag recording scope would stay open forever,
  * silently suppressing every later undo snapshot.
  */
-function onPointerCancel(): void {
+function onPointerCancel(event: PointerEvent): void {
+  if (endPan(event)) return;
   if (pendingPointId.value !== null) {
     pendingPointId.value = null;
     pendingDownScreen.value = null;
@@ -637,12 +799,22 @@ interface PerpendicularGlyph { key: string; constraintId: string; d: string }
 interface LetterGlyph { key: string; constraintId: string; x: number; y: number; text: 'H' | 'V' }
 interface DotGlyph { key: string; constraintId: string; cx: number; cy: number; r: number }
 interface SymmetricGlyph { key: string; constraintId: string; d: string }
+/** An invisible, enlarged click target centred on a glyph's anchor point,
+ * screen-px sized so it stays easy to hit at any zoom regardless of how
+ * small the glyph itself renders. */
+interface GlyphHitCircle { key: string; constraintId: string; cx: number; cy: number; r: number }
+
+/** Screen pixels of the invisible hit circle's radius per glyph. */
+const GLYPH_HIT_RADIUS_PX = 16;
 
 /**
  * Ready-to-draw glyph primitives for every constraint the sketch carries,
  * grouped by SVG shape so the template stays simple. Built by one exhaustive
  * switch over constraintGlyphs' kinds (assertNever guards new kinds), sized
  * in screen px via glyphMmPerPx so glyphs read the same size at any zoom.
+ * Twice the earlier size and stroke, per the spec's readability pass; each
+ * glyph also gets an invisible enlarged hit circle in hitCircles so a click
+ * near (not just exactly on) the drawn glyph selects it.
  */
 const glyphShapes = computed(() => {
   const parallelTicks: ParallelTickGlyph[] = [];
@@ -651,17 +823,19 @@ const glyphShapes = computed(() => {
   const tangentDots: DotGlyph[] = [];
   const coincidentRings: DotGlyph[] = [];
   const symmetricMarks: SymmetricGlyph[] = [];
-  const empty = { parallelTicks, rightAngles, letters, tangentDots, coincidentRings, symmetricMarks };
+  const hitCircles: GlyphHitCircle[] = [];
+  const empty = { parallelTicks, rightAngles, letters, tangentDots, coincidentRings, symmetricMarks, hitCircles };
   if (!glyphsVisible.value) return empty;
 
   const scale = glyphMmPerPx.value;
-  const tickLen = scale * 5;
-  const tickGap = scale * 2.5;
-  const rightAngleSize = scale * 6;
-  const letterOffset = scale * 6;
-  const dotR = scale * 2;
-  const ringR = scale * 3.5;
-  const arrowLen = scale * 6;
+  const tickLen = scale * 10;
+  const tickGap = scale * 5;
+  const rightAngleSize = scale * 12;
+  const letterOffset = scale * 12;
+  const dotR = scale * 4;
+  const ringR = scale * 7;
+  const arrowLen = scale * 12;
+  const hitR = scale * GLYPH_HIT_RADIUS_PX;
 
   for (const g of constraintGlyphs(sketch.value)) {
     switch (g.kind) {
@@ -682,6 +856,7 @@ const glyphShapes = computed(() => {
             y2: cy - py * tickLen,
           });
         }
+        hitCircles.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: hitR });
         break;
       }
       case 'perpendicular': {
@@ -696,19 +871,24 @@ const glyphShapes = computed(() => {
           constraintId: g.constraintId,
           d: `M ${a.x} ${a.y} L ${corner.x} ${corner.y} L ${b.x} ${b.y}`,
         });
+        hitCircles.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: hitR });
         break;
       }
       case 'horizontal':
         letters.push({ key: g.constraintId, constraintId: g.constraintId, x: g.at.x, y: g.at.y - letterOffset, text: 'H' });
+        hitCircles.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y - letterOffset, r: hitR });
         break;
       case 'vertical':
         letters.push({ key: g.constraintId, constraintId: g.constraintId, x: g.at.x, y: g.at.y - letterOffset, text: 'V' });
+        hitCircles.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y - letterOffset, r: hitR });
         break;
       case 'tangent':
         tangentDots.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: dotR });
+        hitCircles.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: hitR });
         break;
       case 'coincident':
         coincidentRings.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: ringR });
+        hitCircles.push({ key: g.constraintId, constraintId: g.constraintId, cx: g.at.x, cy: g.at.y, r: hitR });
         break;
       case 'symmetric': {
         const { ux, uy } = unitVec(g.angleDeg + 90);
@@ -719,17 +899,47 @@ const glyphShapes = computed(() => {
           constraintId: g.constraintId,
           d: `M ${g.aAt.x} ${g.aAt.y} L ${aTip.x} ${aTip.y} M ${g.bAt.x} ${g.bAt.y} L ${bTip.x} ${bTip.y}`,
         });
+        hitCircles.push({
+          key: g.constraintId,
+          constraintId: g.constraintId,
+          cx: (g.aAt.x + g.bAt.x) / 2,
+          cy: (g.aAt.y + g.bAt.y) / 2,
+          r: hitR,
+        });
         break;
       }
       default:
         assertNever(g);
     }
   }
-  return { parallelTicks, rightAngles, letters, tangentDots, coincidentRings, symmetricMarks };
+  return { parallelTicks, rightAngles, letters, tangentDots, coincidentRings, symmetricMarks, hitCircles };
 });
 
-const glyphStrokeWidthMm = computed(() => glyphMmPerPx.value * 1.3);
-const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
+const glyphStrokeWidthMm = computed(() => glyphMmPerPx.value * 2.6);
+const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 18);
+
+/**
+ * The small x badge on the selected constraint's glyph, screen-px sized and
+ * offset from the glyph's hit-circle anchor so it does not sit on top of the
+ * glyph itself. Removes the constraint directly (editor.removeConstraint) on
+ * click rather than routing through an emit, since the canvas already owns
+ * the store instance and no workspace-level state depends on this action.
+ */
+const selectedGlyphBadge = computed<{ x: number; y: number; constraintId: string } | null>(() => {
+  if (selectedConstraintId.value === null) return null;
+  const hit = glyphShapes.value.hitCircles.find((h) => h.constraintId === selectedConstraintId.value);
+  if (hit === undefined) return null;
+  const scale = glyphMmPerPx.value;
+  return { x: hit.cx + scale * 14, y: hit.cy - scale * 14, constraintId: hit.constraintId };
+});
+const BADGE_RADIUS_PX = 7;
+const badgeRadiusMm = computed(() => glyphMmPerPx.value * BADGE_RADIUS_PX);
+const badgeFontSizeMm = computed(() => glyphMmPerPx.value * 10);
+
+/** Removes the selected constraint from its glyph's x badge. */
+function removeSelectedConstraint(constraintId: string): void {
+  editor.removeConstraint(constraintId);
+}
 </script>
 
 <template>
@@ -743,6 +953,7 @@ const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
     @pointerup="onPointerUp"
     @pointerleave="onPointerLeave"
     @pointercancel="onPointerCancel"
+    :class="canvasCursorClass"
   >
     <image
       v-if="underlayUrl !== null && underlayMmPerPixel !== null"
@@ -955,6 +1166,42 @@ const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
         style="cursor: pointer"
         @click.stop="emit('constraintClick', mark.constraintId)"
       />
+      <!-- Invisible, enlarged click targets: one per glyph, so a click near
+           (not just exactly on) the thin drawn glyph still selects it. -->
+      <circle
+        v-for="hit in glyphShapes.hitCircles"
+        :key="`hit-${hit.key}`"
+        :cx="hit.cx"
+        :cy="hit.cy"
+        :r="hit.r"
+        fill="transparent"
+        stroke="none"
+        style="cursor: pointer"
+        @click.stop="emit('constraintClick', hit.constraintId)"
+      />
+      <!-- The selected glyph's removal badge: a small x that removes the
+           constraint directly, without needing Delete or the toolbar. -->
+      <g
+        v-if="selectedGlyphBadge !== null"
+        style="cursor: pointer"
+        @click.stop="removeSelectedConstraint(selectedGlyphBadge.constraintId)"
+      >
+        <circle
+          :cx="selectedGlyphBadge.x"
+          :cy="selectedGlyphBadge.y"
+          :r="badgeRadiusMm"
+          fill="#e53935"
+        />
+        <text
+          :x="selectedGlyphBadge.x"
+          :y="selectedGlyphBadge.y"
+          :font-size="badgeFontSizeMm"
+          text-anchor="middle"
+          dominant-baseline="central"
+          fill="#ffffff"
+          style="pointer-events: none"
+        >x</text>
+      </g>
     </g>
   </svg>
 </template>
@@ -965,5 +1212,14 @@ const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
   height: 100%;
   touch-action: none;
   background: #fafafa;
+}
+
+/* Space is held to pan; show the grab cursor, grabbing while dragging,
+   matching TraceCanvas's convention. */
+.cursor-grab {
+  cursor: grab;
+}
+.cursor-grabbing {
+  cursor: grabbing;
 }
 </style>

@@ -915,6 +915,89 @@ describe('useSketchEditor', () => {
     });
   });
 
+  describe('auto-return to select on tool completion (task F)', () => {
+    it('returns one-shot tools to select after completing their shape', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+
+      editor.activeTool = 'circle';
+      editor.addCircle({ x: 0, y: 0 }, 5);
+      expect(editor.activeTool).toBe('select');
+
+      editor.activeTool = 'rectangle';
+      editor.addRectangle({ x: 0, y: 0 }, { x: 10, y: 10 });
+      expect(editor.activeTool).toBe('select');
+
+      editor.activeTool = 'slot';
+      editor.addSlot({ x: 0, y: 0 }, { x: 20, y: 0 }, 6);
+      expect(editor.activeTool).toBe('select');
+
+      editor.activeTool = 'mirror';
+      editor.addMirrorLine({ x: 0, y: 0 }, { x: 10, y: 0 });
+      expect(editor.activeTool).toBe('select');
+    });
+
+    it('returns the line chain tool to select when closeChainTo closes the chain, but not while it stays open', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.activeTool = 'line';
+      const first = editor.appendChainPoint({ x: 0, y: 0 })!;
+      editor.appendChainPoint({ x: 10, y: 0 });
+      // The chain is still open: the tool stays active.
+      expect(editor.activeTool).toBe('line');
+      editor.appendChainPoint({ x: 10, y: 10 });
+      editor.closeChainTo(first);
+      expect(editor.activeTool).toBe('select');
+    });
+
+    it('returns the arc chain tool to select when addThreePointArc closes onto an existing point', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.activeTool = 'line';
+      const origin = editor.appendChainPoint({ x: 0, y: 0 })!;
+      editor.appendChainPoint({ x: 30, y: 0 });
+      editor.appendChainPoint({ x: 30, y: 20 });
+      editor.activeTool = 'arcThreePoint';
+      // Closes the arc onto the chain's own origin point.
+      const added = editor.addThreePointArc(
+        { x: 30, y: 20 },
+        { x: 0, y: 0 },
+        { x: 15, y: 30 },
+        false,
+        origin,
+      );
+      expect(added).toBe(true);
+      expect(editor.activeTool).toBe('select');
+    });
+  });
+
+  describe('dimension tool: two selected lines (task G)', () => {
+    it('measures an angle dimension the same way beginDimensionFromSelection does for two lines', () => {
+      // Mimics SketchWorkspace's beginDimensionFromSelection: two selected
+      // lines produce an angle dimension in degrees, seeded from
+      // measureAngleBetweenLines, the same measured-default pattern the
+      // radius/diameter toggle test above uses.
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const l1 = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.endChain();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 0, y: 10 }, undefined, true);
+      const l2 = editor.sketch.entities.filter((e) => e.kind === 'line')[1];
+
+      const measured = measureAngleBetweenLines(editor.sketch, l1.id, l2.id);
+      const id = editor.nextId();
+      editor.addDimension({ kind: 'angle', id, l1Id: l1.id, l2Id: l2.id, degrees: measured });
+
+      const dims = editor.sketch.constraints.filter((c) => c.kind === 'angle');
+      expect(dims).toHaveLength(1);
+      expect(dims[0].kind === 'angle' && dims[0].degrees).toBeCloseTo(90);
+      expect(measured).toBeCloseTo(90);
+    });
+  });
+
   describe('startNewSketch resets all display state', () => {
     it('clears pending clicks, cursor, hovered constraint and restores glyph visibility', () => {
       const editor = useSketchEditor();

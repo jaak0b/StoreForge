@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSketchEditor, type SketchTool } from '../../../stores/sketchEditor';
 import SketchCanvas from './SketchCanvas.vue';
@@ -24,6 +24,10 @@ const emit = defineEmits<{
   (e: 'finish'): void;
   (e: 'cancel'): void;
 }>();
+
+/** Template ref to the canvas, so the toolbar's Fit button can call its
+ * exposed fitToView; the canvas owns the viewBox math (convention 10). */
+const sketchCanvas = ref<InstanceType<typeof SketchCanvas> | null>(null);
 
 const editor = useSketchEditor();
 const {
@@ -75,6 +79,38 @@ type QuickEntryKind = 'segmentLength' | 'diameter' | 'slotWidth';
 const quickEntryKind = ref<QuickEntryKind | null>(null);
 const quickEntryText = ref('');
 
+/** The hint text for a tool, in one place so both the explicit tool switch
+ * (selectTool) and the auto-return watcher below (task F: a one-shot or
+ * closed chain tool switching the store's activeTool back to select on its
+ * own) keep the hint in sync without duplicating the switch. */
+function hintForTool(tool: SketchTool): string {
+  switch (tool) {
+    case 'select':
+      return 'Click an entity to select it, or drag a point to move the geometry.';
+    case 'line':
+      return (
+        'Click to place each corner. Click the first point again to close the outline. ' +
+        'Type a number to set the next segment\'s length.'
+      );
+    case 'arcThreePoint':
+      return 'Click the arc start, then the arc end, then a point the arc passes through.';
+    case 'arcTangent':
+      return 'Click the end point of the arc; it continues tangent from the last chain point.';
+    case 'circle':
+      return 'Click the circle center, then a point on the circle. Type a number to set the diameter.';
+    case 'rectangle':
+      return 'Click one corner, then the opposite corner.';
+    case 'slot':
+      return 'Click the two ends of the slot axis, then type the width.';
+    case 'mirror':
+      return 'Click the two ends of the mirror line.';
+    case 'dimension':
+      return 'Click one or two entities, then type the value.';
+    default:
+      return assertNever(tool);
+  }
+}
+
 function selectTool(tool: SketchTool): void {
   activeTool.value = tool;
   editor.clearPendingClicks();
@@ -82,42 +118,22 @@ function selectTool(tool: SketchTool): void {
   quickEntryText.value = '';
   editor.selectedConstraintId = null;
   editor.endChain();
-  switch (tool) {
-    case 'select':
-      toolHint.value = 'Click an entity to select it, or drag a point to move the geometry.';
-      break;
-    case 'line':
-      toolHint.value =
-        'Click to place each corner. Click the first point again to close the outline. ' +
-        'Type a number to set the next segment\'s length.';
-      break;
-    case 'arcThreePoint':
-      toolHint.value = 'Click the arc start, then the arc end, then a point the arc passes through.';
-      break;
-    case 'arcTangent':
-      toolHint.value = 'Click the end point of the arc; it continues tangent from the last chain point.';
-      break;
-    case 'circle':
-      toolHint.value =
-        'Click the circle center, then a point on the circle. Type a number to set the diameter.';
-      break;
-    case 'rectangle':
-      toolHint.value = 'Click one corner, then the opposite corner.';
-      break;
-    case 'slot':
-      toolHint.value = 'Click the two ends of the slot axis, then type the width.';
-      break;
-    case 'mirror':
-      toolHint.value = 'Click the two ends of the mirror line.';
-      break;
-    case 'dimension':
-      toolHint.value = 'Click one or two entities, then type the value.';
-      break;
-    default:
-      assertNever(tool);
-  }
+  toolHint.value = hintForTool(tool);
 }
 selectTool('select');
+
+/**
+ * A one-shot tool (circle, rectangle, slot, mirror) or a chain tool (line,
+ * arcThreePoint, arcTangent) that closes its chain sets activeTool back to
+ * 'select' directly in the store (task F), the single place each already
+ * detects its own completion (addCircle, addRectangle, addSlot,
+ * addMirrorLine, closeChainTo, addThreePointArc's closing branch). This
+ * keeps the toolbar's hint text in sync with that store-driven switch
+ * without re-detecting completion here.
+ */
+watch(activeTool, (tool) => {
+  toolHint.value = hintForTool(tool);
+});
 
 /** Whether the quick numeric entry is currently applicable, and which kind:
  * a line tool mid-chain (segment length), a circle tool after its center
@@ -363,8 +379,13 @@ function commitDimensionDraft(): void {
   editor.setDimensionValue(dimensionDraft.value.constraintId, value);
   // Closes the mutation scope beginDimensionFromSelection opened, so its
   // addDimension and this setDimensionValue land as one undo step.
-  if (dimensionDraft.value.isNew) editor.endMutation();
+  const wasNew = dimensionDraft.value.isNew;
+  if (wasNew) editor.endMutation();
   dimensionDraft.value = null;
+  // The dimension tool is one-shot: task F returns to select once a freshly
+  // created dimension's value commits. Editing an existing dimension's value
+  // (isNew false, opened via click-to-edit) leaves the active tool alone.
+  if (wasNew) activeTool.value = 'select';
   scheduleSolve();
 }
 
@@ -792,7 +813,10 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
     if (pendingClicks.value.length > 0) {
       editor.clearPendingClicks();
     } else if (chainTailId.value !== null) {
+      // Escape ends the chain tool's open chain (task F): return to select,
+      // the same as closeChainTo does when the chain closes by clicking.
       editor.endChain();
+      selectTool('select');
     } else if (editor.selectedConstraintId !== null) {
       editor.selectedConstraintId = null;
     } else if (editor.selectedIds.length > 0) {
@@ -879,6 +903,16 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         <v-tooltip activator="parent" location="bottom">
           {{ editor.glyphsVisible ? 'Hide constraint glyphs' : 'Show constraint glyphs' }}
         </v-tooltip>
+      </v-btn>
+      <v-btn
+        icon
+        density="compact"
+        variant="text"
+        :disabled="sketchCanvas === null || !sketchCanvas.canFit"
+        @click="sketchCanvas?.fitToView()"
+      >
+        <v-icon>mdi-fit-to-page-outline</v-icon>
+        <v-tooltip activator="parent" location="bottom">Fit the sketch in view.</v-tooltip>
       </v-btn>
       <v-menu :close-on-content-click="false" location="bottom end">
         <template #activator="{ props: menuProps }">
@@ -999,6 +1033,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
     />
     <div class="canvas-holder">
       <SketchCanvas
+        ref="sketchCanvas"
         @canvas-click="onCanvasClick"
         @point-drag="onPointDrag"
         @point-drag-end="onPointDragEnd"
