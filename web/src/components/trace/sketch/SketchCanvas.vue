@@ -181,11 +181,26 @@ const cursorMm = ref<MmPoint | null>(null);
  * release. Never the dragged point itself. */
 const dragSnapTargetId = ref<string | null>(null);
 
+/** A pointerdown landed on a point with the select tool, but movement has not
+ * yet exceeded the click/drag threshold; holds the point id and the down
+ * screen position until either the threshold is crossed (drag starts) or
+ * pointerup arrives first (a click, emitted as entityClick). */
+const pendingPointId = ref<string | null>(null);
+const pendingDownScreen = ref<{ x: number; y: number } | null>(null);
+
+/** Screen-pixel movement beyond which a pointerdown-on-point becomes a drag
+ * instead of a click, converted to mm at the current zoom. */
+const DRAG_THRESHOLD_PX = 4;
+function dragThresholdMm(): number {
+  return mmPerScreenPixel() * DRAG_THRESHOLD_PX;
+}
+
 function onPointerDown(event: PointerEvent): void {
   const at = clientToMm(event);
   const hit = hitPoint(at);
   if (editor.activeTool === 'select' && hit !== null) {
-    draggingPointId.value = hit;
+    pendingPointId.value = hit;
+    pendingDownScreen.value = { x: event.clientX, y: event.clientY };
     dragSnapTargetId.value = null;
     (event.target as Element).setPointerCapture(event.pointerId);
     return;
@@ -198,6 +213,15 @@ function onPointerDown(event: PointerEvent): void {
 
 function onPointerMove(event: PointerEvent): void {
   cursorMm.value = clientToMm(event);
+  if (pendingPointId.value !== null && pendingDownScreen.value !== null) {
+    const dx = event.clientX - pendingDownScreen.value.x;
+    const dy = event.clientY - pendingDownScreen.value.y;
+    const movedScreenPx = Math.hypot(dx, dy);
+    if (movedScreenPx * mmPerScreenPixel() <= dragThresholdMm()) return;
+    draggingPointId.value = pendingPointId.value;
+    pendingPointId.value = null;
+    pendingDownScreen.value = null;
+  }
   if (draggingPointId.value === null) return;
   emit('pointDrag', draggingPointId.value, cursorMm.value);
   const target = hitPoint(cursorMm.value);
@@ -205,6 +229,13 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function onPointerUp(): void {
+  if (pendingPointId.value !== null) {
+    const clickedId = pendingPointId.value;
+    pendingPointId.value = null;
+    pendingDownScreen.value = null;
+    emit('entityClick', clickedId);
+    return;
+  }
   if (draggingPointId.value !== null) {
     const draggedId = draggingPointId.value;
     const targetId = dragSnapTargetId.value;
