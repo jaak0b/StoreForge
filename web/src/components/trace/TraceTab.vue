@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
-import { assertNever, binOf, type TracedBin } from '../../engine/plan/types';
+import { assertNever, binOf } from '../../engine/plan/types';
+import type { TraceSession } from '../../engine/trace/types';
 import { worldFromEntry } from '../../engine/trace/layoutModel';
 import { getPhoto } from '../../photoStore';
 import { extractProfile } from '../../engine/sketch/profile';
@@ -14,56 +15,116 @@ import PhotoStage from './PhotoStage.vue';
 import TraceCanvas from './TraceCanvas.vue';
 import LayoutWorkspace from './LayoutWorkspace.vue';
 import SketchWorkspace from './sketch/SketchWorkspace.vue';
+import SourceListStage from './SourceListStage.vue';
 import { useSketchEditor } from '../../stores/sketchEditor';
 
 /**
- * The Tool trace tab of the add-bin card, in two stages: a Photo stage
- * (photograph tools on a reference sheet, confirm its corners) and a
- * trace-and-lay-out workspace with two gated modes: Trace mode fills the
- * whole tab with the click-to-trace canvas, and Layout mode (reachable only
- * once at least one tool exists) is a full-bleed layout canvas with floating
- * controls and an advanced drawer (LayoutWorkspace). The trace state lives
- * in the toolTrace store so it survives tab switches; the photo itself
- * stays in the vision worker.
+ * The Tool trace tab of the add-bin card. Its home stage is a source list:
+ * one card per photographed sheet and per sketched tool, plus the actions
+ * that add a new source. Opening a card enters modal work on that one
+ * source: the Photo stage (photograph tools, confirm sheet corners), the
+ * trace-and-lay-out workspace (Trace mode fills the tab with the
+ * click-to-trace canvas; Layout mode is a full-bleed layout canvas with
+ * floating controls and an advanced drawer), or the sketch workspace. Every
+ * workspace's way back is the source list. The trace state lives in the
+ * toolTrace store so it survives tab switches; the photo itself stays in
+ * the vision worker.
  */
 
 const app = useApp();
 const designer = useBinDesigner();
 const trace = useToolTrace();
 const queue = useBinQueue();
+const sketchEditor = useSketchEditor();
 
 const { rectifiedPreview, embedReady, tools, workspaceMode } = storeToRefs(trace);
 
-/** 1 shows the Photo stage, 2 the trace-and-lay-out workspace. */
-const stage = ref<1 | 2>(1);
+/** Which screen the tab shows. Workspaces are modal work on one source. */
+const stage = ref<'sources' | 'photo' | 'sketch' | 'workspace'>('sources');
 
-/** How the tool outline is produced on stage 1: a photo trace or a drawn sketch. */
-const traceInput = ref<'photo' | 'sketch'>('photo');
-const sketchEditor = useSketchEditor();
+/** Sketched tools, one source card each. */
+const sketchTools = computed(() => trace.tools.filter((t) => t.source.kind === 'sketch'));
 
-/**
- * Stage to return to on Cancel from the sketch workspace: the stage active
- * before entering it, so cancelling an edit opened from the layout stage
- * lands back on layout instead of always falling to the Photo stage.
- */
-const sketchCancelStage = ref<1 | 2>(1);
-
-/**
- * Starts a fresh sketch. A no-op when the sketch input is already active, so
- * re-clicking the already-selected Draw button (or toggling away and back)
- * does not reset in-progress work; traceInput itself is set by the toggle's
- * own v-model.
- */
-function startSketch(): void {
-  if (traceInput.value === 'sketch') return;
-  sketchCancelStage.value = stage.value;
+/** Starts a fresh sketch from the Sources stage. */
+function drawShape(): void {
   sketchEditor.startNewSketch();
+  stage.value = 'sketch';
 }
 
-/** Cancels the sketch workspace and returns to the stage it was opened from. */
+/** Opens the photo stage to add a new sheet. */
+function addPhotoSheet(): void {
+  stage.value = 'photo';
+}
+
+/** Every workspace's way back; also the breadcrumb's first chip. */
+function backToSources(): void {
+  stage.value = 'sources';
+}
+
+/**
+ * Loads a session's photo (from the page's blob map, or the photo store)
+ * and atomically activates it. Returns false with sourcesError set when the
+ * photo is not available on this device.
+ */
+const sourcesBusy = ref(false);
+const sourcesError = ref<string | null>(null);
+
+async function ensureSessionActive(sessionId: string): Promise<boolean> {
+  if (trace.activeSessionId === sessionId && trace.embedReady) return true;
+  const session = trace.sessions.find((s) => s.id === sessionId);
+  if (session === undefined) {
+    sourcesError.value = 'That photo sheet is no longer part of this bin.';
+    return false;
+  }
+  sourcesBusy.value = true;
+  sourcesError.value = null;
+  try {
+    let blob = trace.sessionBlobs.get(sessionId) ?? null;
+    if (blob === null) blob = await getPhoto(session.traceSourceId);
+    if (blob === null) {
+      sourcesError.value =
+        'The photo of this sheet is not stored on this device, so its tools cannot be re-traced. You can still edit the layout.';
+      return false;
+    }
+    await trace.activateSession(sessionId, blob);
+    return true;
+  } catch (error) {
+    sourcesError.value =
+      error instanceof Error ? error.message : 'Restoring the trace photo failed.';
+    return false;
+  } finally {
+    sourcesBusy.value = false;
+  }
+}
+
+/** A sheet card: activate its session and open the trace workspace. */
+async function openSheet(sessionId: string): Promise<void> {
+  if (!(await ensureSessionActive(sessionId))) return;
+  stage.value = 'workspace';
+  trace.workspaceMode = 'trace';
+}
+
+/** A sketch card: open the tool's stored sketch in the sketch workspace. */
+function editSketchedTool(toolId: string): void {
+  const tool = trace.tools.find((t) => t.id === toolId);
+  if (tool === undefined) return;
+  switch (tool.source.kind) {
+    case 'photo':
+      return; // photo tools re-trace through onRetrace instead
+    case 'sketch':
+      sketchEditor.loadSketch(tool.source.sketch, toolId);
+      stage.value = 'sketch';
+      return;
+    case 'primitive':
+      return; // a primitive shape has nothing to reopen
+    default:
+      return assertNever(tool.source);
+  }
+}
+
+/** Cancelling the sketch returns to the stage that opened it: the source list. */
 function cancelSketch(): void {
-  traceInput.value = 'photo';
-  stage.value = sketchCancelStage.value;
+  stage.value = 'sources';
 }
 
 /** Error from the last finish attempt, shown as an alert over the workspace. */
@@ -103,29 +164,8 @@ async function finishSketch(): Promise<void> {
   } else {
     trace.addTool(profile.outline, 'Sketched shape', source);
   }
-  traceInput.value = 'photo';
-  stage.value = 2;
+  stage.value = 'workspace';
   trace.workspaceMode = 'layout';
-}
-
-/** Opens a sketched tool's stored sketch back in the sketch workspace. */
-function editSketchedTool(toolId: string): void {
-  const tool = trace.tools.find((t) => t.id === toolId);
-  if (tool === undefined) return;
-  switch (tool.source.kind) {
-    case 'photo':
-      return; // photo tools re-trace through the existing path
-    case 'sketch':
-      sketchEditor.loadSketch(tool.source.sketch, toolId);
-      sketchCancelStage.value = stage.value;
-      stage.value = 1;
-      traceInput.value = 'sketch';
-      return;
-    case 'primitive':
-      return; // a primitive shape has nothing to reopen
-    default:
-      return assertNever(tool.source);
-  }
 }
 
 /** The queue entry being edited on this tab, or null when designing a new bin. */
@@ -135,73 +175,11 @@ const editingEntry = computed(() => {
   return entry !== null && binOf(entry.product)?.origin === 'traced' ? entry : null;
 });
 
-/** The traced bin of the entry being edited, or null. */
-const editingBin = computed<TracedBin | null>(() => {
-  const entry = editingEntry.value;
-  if (entry === null) return null;
-  const bin = binOf(entry.product);
-  return bin !== null && bin.origin === 'traced' ? bin : null;
-});
-
-// The entry's original photo when it is still in this device's photo store,
-// loaded when an edit starts; null while unknown or when it is not stored.
-const storedPhoto = shallowRef<Blob | null>(null);
-/** True once the photo-store lookup came back empty for the edited entry. */
-const photoMissing = ref(false);
-const resumeBusy = ref(false);
-const resumeError = ref<string | null>(null);
-
-async function lookUpStoredPhoto(entry: TracedBin): Promise<void> {
-  storedPhoto.value = null;
-  photoMissing.value = false;
-  // Minimal single-session scaffold: Task 4 resolves the session by the tool
-  // actually being (re)traced instead of always the first one.
-  const session = entry.traceSessions[0];
-  if (session === undefined) {
-    photoMissing.value = true;
-    return;
-  }
-  try {
-    const blob = await getPhoto(session.traceSourceId);
-    storedPhoto.value = blob;
-    photoMissing.value = blob === null;
-  } catch (error) {
-    // Photo storage being unreadable degrades to layout-only editing.
-    console.error('Reading the stored trace photo failed.', error);
-    photoMissing.value = true;
-  }
-}
-
-/**
- * Loads the stored photo back into the vision worker, applies the entry's
- * saved sheet corners and size (no re-detection), and rectifies plus embeds
- * so the trace canvas can restore each tool's clicks.
- */
-async function resumeTrace(): Promise<void> {
-  const entry = editingBin.value;
-  const blob = storedPhoto.value;
-  const session = entry?.traceSessions[0];
-  if (entry === null || blob === null || session === undefined) return;
-  resumeBusy.value = true;
-  resumeError.value = null;
-  try {
-    // Cloned: commitSessionPaper mutates a session object in place on a
-    // later re-confirm, and entry.traceSessions is the persisted plan data.
-    trace.sessions = JSON.parse(JSON.stringify(entry.traceSessions)) as typeof entry.traceSessions;
-    await trace.activateSession(session.id, blob);
-  } catch (error) {
-    resumeError.value =
-      error instanceof Error ? error.message : 'Restoring the trace photo failed.';
-  } finally {
-    resumeBusy.value = false;
-  }
-}
-
 // Editing a traced queue row opens the workspace stage in layout mode: the
 // entry's tools, placements, footprint, height and shared options are
-// rehydrated into the trace and designer stores. The photo is looked up in
-// the photo store; when found, the trace can be resumed on demand (switching
-// to Trace mode or re-tracing a tool loads it back into the vision worker).
+// rehydrated into the trace and designer stores. Its sessions are loaded as
+// source cards; opening one (or re-tracing a tool) resolves and activates
+// that session's photo on demand through ensureSessionActive.
 watch(
   () => (app.editingKind === 'traced' ? app.editingEntryId : null),
   (entryId) => {
@@ -210,7 +188,9 @@ watch(
     if (entry === null) return;
     const bin = binOf(entry.product);
     if (bin === null || bin.origin !== 'traced') return;
-    void lookUpStoredPhoto(bin);
+    // Cloned: commitSessionPaper mutates a session object in place on a
+    // later re-confirm, and entry.traceSessions is the persisted plan data.
+    trace.sessions = JSON.parse(JSON.stringify(bin.traceSessions)) as TraceSession[];
     trace.tools = JSON.parse(JSON.stringify(bin.pockets.tools));
     // Stored placements are bin-centred; the layout model works in the world
     // frame, so place the resumed layout inside the bin's world cells.
@@ -243,7 +223,7 @@ watch(
       labelIcon: content?.icon ?? null,
       notes: entry.notes ?? '',
     });
-    stage.value = 2;
+    stage.value = 'workspace';
     trace.workspaceMode = 'layout';
   },
   { immediate: true },
@@ -255,82 +235,60 @@ const workspaceReady = computed(
     rectifiedPreview.value !== null || tools.value.length > 0 || editingEntry.value !== null,
 );
 
-/** True when Trace mode can run now or after resuming the stored photo. */
-const traceModeAvailable = computed(
-  () => embedReady.value || storedPhoto.value !== null,
-);
+/** True when some sheet exists to trace on (active now or restorable). */
+const traceModeAvailable = computed(() => trace.embedReady || trace.sessions.length > 0);
 
 function onSheetConfirmed(): void {
-  stage.value = 2;
+  // PhotoStage committed the session's paper on confirm; tracing starts now.
+  stage.value = 'workspace';
   trace.workspaceMode = 'trace';
 }
 
 // Layout mode needs at least one tool; whenever the workspace would show
 // the layout with zero tools (the last tool was removed, or the stage was
 // reached through the breadcrumb with the store still in layout mode) it
-// falls back to Trace mode if tracing is possible. Without a photo
-// (layout-only editing) the layout stays up so a basic shape can still be
-// added from the rail.
+// falls back to the source list: with no tools the workspace has nothing to
+// lay out, and the source list is now the home that offers every way
+// forward.
 watch(
   [stage, workspaceMode, () => tools.value.length],
   ([stageNow, mode, count]) => {
-    if (stageNow === 2 && count === 0 && mode === 'layout' && traceModeAvailable.value) {
-      void setWorkspaceMode('trace');
+    if (stageNow === 'workspace' && count === 0 && mode === 'layout') {
+      backToSources();
     }
   },
 );
 
-/** Switches the workspace canvas, resuming the stored photo when needed. */
-async function setWorkspaceMode(mode: 'trace' | 'layout'): Promise<void> {
-  if (mode === 'trace' && !embedReady.value) {
-    if (storedPhoto.value === null) return;
-    await resumeTrace();
-    if (!trace.embedReady) return;
-  }
-  workspaceMode.value = mode;
-}
-
-/** Re-traces a tool from its stored clicks, resuming the photo when needed. */
+/** Re-traces a photo tool: activate its own session, then open trace mode. */
 async function onRetrace(toolId: string): Promise<void> {
-  if (!embedReady.value) {
-    if (storedPhoto.value === null) return;
-    await resumeTrace();
-    if (!trace.embedReady) return;
-  }
+  const tool = trace.tools.find((t) => t.id === toolId);
+  if (tool === undefined || tool.source.kind !== 'photo') return;
+  if (!(await ensureSessionActive(tool.source.sessionId))) return;
   trace.selectedToolId = toolId;
   trace.retraceRequestId = toolId;
-  workspaceMode.value = 'trace';
+  stage.value = 'workspace';
+  trace.workspaceMode = 'trace';
 }
 
-/**
- * Opens the Photo stage. During an edit whose photo is stored but not yet
- * loaded, the photo is first restored into the workspace, so the stage shows
- * it with the saved sheet corners instead of the empty dropzone.
- */
-async function openPhotoStage(): Promise<void> {
-  if (trace.photoUrl === null && storedPhoto.value !== null) {
-    await resumeTrace();
-  }
-  stage.value = 1;
-}
-
-/**
- * A newly chosen photo has already reset the trace store. The edited entry's
- * stored photo is no longer the one in the workspace, so it is dropped here
- * too; otherwise resuming it would load the old photo back over the new one.
- */
+/** The Photo stage reported a new pending photo, clearing any prior error. */
 function onPhotoReplaced(): void {
-  storedPhoto.value = null;
-  photoMissing.value = false;
-  resumeError.value = null;
+  sourcesError.value = null;
 }
 
-/** After a save or a cancelled edit the tab starts over at the Photo stage. */
+/** The toolbar's trace-another action: back to the source list to pick a sheet. */
+function onTraceAnother(): void {
+  if (trace.sessions.length === 1) {
+    // One sheet: skip the list and go straight back to tracing on it.
+    void openSheet(trace.sessions[0].id);
+    return;
+  }
+  backToSources();
+}
+
+/** After a save or a cancelled edit the tab starts over at the source list. */
 function restart(): void {
-  stage.value = 1;
-  storedPhoto.value = null;
-  photoMissing.value = false;
-  resumeError.value = null;
+  stage.value = 'sources';
+  sourcesError.value = null;
   // The store is already reset by the rail on save and cancel; resetting
   // again is a no-op there and guarantees a blank tab from any other path.
   trace.reset();
@@ -341,85 +299,84 @@ function restart(): void {
   <div class="d-flex flex-column ga-4">
     <div class="d-flex align-center ga-1 breadcrumb">
       <v-chip
-        :variant="stage === 1 ? 'flat' : 'outlined'"
-        :color="stage === 1 ? 'primary' : undefined"
+        :variant="stage !== 'workspace' ? 'flat' : 'outlined'"
+        :color="stage !== 'workspace' ? 'primary' : undefined"
         size="small"
         label
-        @click="openPhotoStage"
+        @click="backToSources"
       >
-        Photo
+        Sources
       </v-chip>
       <v-icon icon="mdi-chevron-right" size="16" class="text-medium-emphasis" />
       <v-chip
-        :variant="stage === 2 ? 'flat' : 'outlined'"
-        :color="stage === 2 ? 'primary' : undefined"
+        :variant="stage === 'workspace' ? 'flat' : 'outlined'"
+        :color="stage === 'workspace' ? 'primary' : undefined"
         :disabled="!workspaceReady"
         size="small"
         label
-        @click="stage = 2"
+        @click="stage = 'workspace'"
       >
         Trace and lay out
       </v-chip>
     </div>
 
-    <template v-if="stage === 1">
-      <v-alert v-if="resumeError" type="error" density="compact">
-        {{ resumeError }}
+    <template v-if="stage === 'sources'">
+      <v-alert v-if="sourcesError" type="error" density="compact">
+        {{ sourcesError }}
       </v-alert>
+      <v-progress-linear v-if="sourcesBusy" indeterminate />
+      <SourceListStage
+        :sessions="trace.sessions"
+        :sketch-tools="sketchTools"
+        :busy="sourcesBusy"
+        @open-sheet="openSheet"
+        @open-sketch="editSketchedTool"
+        @add-photo="addPhotoSheet"
+        @draw-shape="drawShape"
+      />
+    </template>
+
+    <template v-else-if="stage === 'photo'">
+      <div>
+        <v-btn variant="outlined" prepend-icon="mdi-arrow-left" @click="backToSources">
+          Back to sources
+        </v-btn>
+      </div>
+      <PhotoStage @confirmed="onSheetConfirmed" @photo-replaced="onPhotoReplaced" />
+    </template>
+
+    <template v-else-if="stage === 'sketch'">
       <v-alert v-if="sketchFinishError !== null" type="error" density="compact" class="mb-2">
         {{ sketchFinishError }}
       </v-alert>
-      <v-progress-linear v-if="resumeBusy" indeterminate />
-      <v-btn-toggle v-model="traceInput" mandatory class="mb-2">
-        <v-btn value="photo">Upload a photo</v-btn>
-        <v-btn value="sketch" @click="startSketch">Draw the shape</v-btn>
-      </v-btn-toggle>
-      <PhotoStage
-        v-if="traceInput === 'photo'"
-        @confirmed="onSheetConfirmed"
-        @photo-replaced="onPhotoReplaced"
-      />
-      <SketchWorkspace
-        v-else
-        @cancel="cancelSketch"
-        @finish="finishSketch"
-      />
+      <SketchWorkspace @cancel="cancelSketch" @finish="finishSketch" />
     </template>
 
     <div v-else>
       <div v-show="workspaceMode === 'trace'">
-        <div v-if="tools.length > 0" class="mb-3">
+        <div class="mb-3">
           <v-btn
             variant="outlined"
             prepend-icon="mdi-arrow-left"
-            @click="setWorkspaceMode('layout')"
+            @click="tools.length > 0 ? (trace.workspaceMode = 'layout') : backToSources()"
           >
-            Back to layout
+            {{ tools.length > 0 ? 'Back to layout' : 'Back to sources' }}
           </v-btn>
         </div>
         <TraceCanvas v-if="embedReady" @accepted="workspaceMode = 'layout'" />
       </div>
       <div v-show="workspaceMode === 'layout'">
-        <p
-          v-if="editingEntry !== null && photoMissing && !embedReady"
-          class="text-body-2 text-medium-emphasis"
-        >
-          The original photo of this trace is not stored on this device, so its
-          tools cannot be re-traced. You can still edit the layout here.
-          Loading a new photo in the Photo stage starts a new trace and
-          discards these tools.
-        </p>
-        <v-alert v-if="resumeError" type="error" density="compact" class="mb-2">
-          {{ resumeError }}
+        <v-alert v-if="sourcesError" type="error" density="compact" class="mb-2">
+          {{ sourcesError }}
         </v-alert>
-        <p v-if="resumeBusy" class="text-body-2 text-medium-emphasis">
+        <p v-if="sourcesBusy" class="text-body-2 text-medium-emphasis">
           Restoring the stored trace photo.
         </p>
-        <v-progress-linear v-if="resumeBusy" indeterminate class="mb-2" />
+        <v-progress-linear v-if="sourcesBusy" indeterminate class="mb-2" />
         <LayoutWorkspace
           :editing-entry="editingEntry"
           :retrace-available="traceModeAvailable"
-          @trace-another="setWorkspaceMode('trace')"
+          @trace-another="onTraceAnother"
           @retrace="onRetrace"
           @edit-sketch="editSketchedTool"
           @saved="restart"

@@ -568,7 +568,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         </v-card>
       </v-menu>
       <v-spacer />
-      <v-btn variant="text" density="compact" @click="emit('cancel')">Cancel</v-btn>
+      <v-btn variant="text" density="compact" @click="emit('cancel')">Back to sources</v-btn>
       <v-btn color="primary" density="compact" @click="emit('finish')">Use this shape</v-btn>
     </v-toolbar>
     <v-toolbar density="compact" class="constraint-toolbar">

@@ -129,14 +129,14 @@ async function handleFile(file: File): Promise<void> {
   try {
     const buffer = await file.arrayBuffer();
     const info = await loadPhoto(buffer);
-    // A different photo is a different trace, so everything traced from the
-    // previous one (tools, placements, finger holes, footprint, pocket depth)
-    // is discarded and the tab starts over. The reset runs only once the file
-    // has loaded, so cancelling the picker or picking an unreadable file
-    // keeps the current trace, and it runs before the new photo's fields are
-    // written. It also revokes the previous object URL, which is why none is
-    // revoked here.
-    store.reset();
+    // A fresh trace (no tools yet) resets the whole store, as before. With
+    // existing tools the bin may hold other sources too, so this new photo
+    // only replaces the pending session; committed sessions and tools stay.
+    // The reset/session swap runs only once the file has loaded, so
+    // cancelling the picker or picking an unreadable file keeps the current
+    // trace, and it runs before the new photo's fields are written. It also
+    // revokes the previous object URL, which is why none is revoked here.
+    if (store.tools.length === 0) store.reset();
     // A freshly uploaded photo replaces any stored one on save, so it gets a
     // new photo-store id then; keep the bytes for that save.
     const url = URL.createObjectURL(file);
