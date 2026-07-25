@@ -6,10 +6,8 @@ import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { assertNever, binOf, type TracedBin } from '../../engine/plan/types';
-import type { PaperCorners } from '../../engine/trace/types';
 import { worldFromEntry } from '../../engine/trace/layoutModel';
 import { getPhoto } from '../../photoStore';
-import { embedImage, loadPhoto, rectifyPaper } from '../../visionClient';
 import { extractProfile } from '../../engine/sketch/profile';
 import { cloneSketch } from '../../engine/sketch/model';
 import PhotoStage from './PhotoStage.vue';
@@ -187,21 +185,8 @@ async function resumeTrace(): Promise<void> {
   resumeBusy.value = true;
   resumeError.value = null;
   try {
-    const info = await loadPhoto(await blob.arrayBuffer());
-    if (trace.photoUrl !== null) URL.revokeObjectURL(trace.photoUrl);
-    trace.photoUrl = URL.createObjectURL(blob);
-    trace.photoSize = info;
-    trace.photoBlob = blob;
-    trace.sourceId = session.traceSourceId;
-    trace.corners = JSON.parse(JSON.stringify(session.paper.corners)) as PaperCorners;
-    trace.paperKind = session.paper.kind;
-    const rectified = await rectifyPaper(session.paper.corners, session.paper.kind);
-    trace.calibration = rectified.calibration;
-    trace.rectifiedPreview = rectified.preview;
-    trace.embedReady = false;
-    const embed = await embedImage();
-    trace.encodeMs = embed.encodeMs;
-    trace.embedReady = true;
+    trace.sessions = entry.traceSessions;
+    await trace.activateSession(session.id, blob);
   } catch (error) {
     resumeError.value =
       error instanceof Error ? error.message : 'Restoring the trace photo failed.';

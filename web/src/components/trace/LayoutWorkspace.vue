@@ -302,7 +302,8 @@ const photoNote = ref<string | null>(null);
  */
 async function storeTraceSource(): Promise<{ traceSourceId?: string; paper?: TracePaper }> {
   if (trace.photoBlob === null || trace.calibration === null) return {};
-  const traceSourceId = trace.sourceId ?? crypto.randomUUID();
+  const activeSession = trace.sessions.find((s) => s.id === trace.activeSessionId);
+  const traceSourceId = activeSession?.traceSourceId ?? crypto.randomUUID();
   const paper: TracePaper = {
     corners: JSON.parse(JSON.stringify(trace.calibration.corners)) as PaperCorners,
     kind: trace.calibration.kind,

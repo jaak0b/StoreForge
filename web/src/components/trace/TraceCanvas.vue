@@ -831,13 +831,15 @@ function finishTracing(): void {
  */
 function acceptTool(finish: boolean): void {
   if (outline.value === null) return;
+  // The canvas only renders when embedReady, which implies an active
+  // session; this is a type guard, not a reachable branch.
+  if (store.activeSessionId === null) return;
   const clicks = JSON.parse(JSON.stringify(points.value)) as SamPoint[];
   const brushStrokes = JSON.parse(JSON.stringify(strokes.value)) as BrushStroke[];
   const sheetOutline = JSON.parse(JSON.stringify(outline.value)) as TracedOutline;
   const source: ToolSource = {
     kind: 'photo',
-    // Session id wiring lands with the active-session store state.
-    sessionId: store.sourceId ?? '',
+    sessionId: store.activeSessionId,
     clicks,
     brushStrokes,
   };

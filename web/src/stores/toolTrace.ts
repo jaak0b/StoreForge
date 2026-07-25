@@ -9,10 +9,12 @@ import type {
   ToolPlacement,
   ToolSource,
   FingerHole,
+  TraceSession,
 } from '../engine/trace/types';
 import type { LayoutState } from '../engine/trace/layoutModel';
 import * as layout from '../engine/trace/layoutModel';
 import { createCavityEditSession } from './cavityEditSession';
+import { embedImage, loadPhoto, rectifyPaper } from '../visionClient';
 
 /**
  * Community shadow boards use a finger relief around 25 mm across; that
@@ -49,11 +51,6 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const photoUrl = ref<string | null>(null);
   /** The loaded photo's original bytes, stored with the entry on save. */
   const photoBlob = shallowRef<Blob | null>(null);
-  /**
-   * Photo-store id of the loaded photo when it came from the store (resuming
-   * an edit); null for a freshly uploaded photo, which gets a new id on save.
-   */
-  const sourceId = ref<string | null>(null);
   /** Pixel size of the loaded photo. */
   const photoSize = ref<{ width: number; height: number } | null>(null);
   /** Sheet corners in photo pixels, detected or user-adjusted. */
@@ -63,10 +60,30 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const calibration = ref<PaperCalibration | null>(null);
   /** Rectified sheet preview pixels; non-reactive, redrawn on change. */
   const rectifiedPreview = shallowRef<ImageData | null>(null);
-  /** True once the MobileSAM embedding of the rectified sheet is ready. */
-  const embedReady = ref(false);
   /** Encoder wall time in ms of the last embedding run, for the readout. */
   const encodeMs = ref<number | null>(null);
+
+  /** The bin's trace sessions: every photographed sheet, saved or pending. */
+  const sessions = ref<TraceSession[]>([]);
+  /**
+   * Photo bytes by session id, for sessions whose photo is loaded on this
+   * page (a fresh upload, or a stored photo fetched for re-tracing).
+   * Deliberately a plain Map outside reactivity: blobs are multi-megabyte.
+   */
+  const sessionBlobs = new Map<string, Blob>();
+  /** The session the single-photo working state below belongs to. */
+  const activeSessionId = ref<string | null>(null);
+  /**
+   * The session id the current MobileSAM embedding was computed for. Kept
+   * separately from activeSessionId so a half-finished activation reads as
+   * not ready: embedReady is true only when the two agree, which makes it
+   * impossible for a re-trace to run against a stale sheet's calibration.
+   */
+  const embedReadySessionId = ref<string | null>(null);
+  /** True once the embedding of the ACTIVE session's rectified sheet is ready. */
+  const embedReady = computed(
+    () => activeSessionId.value !== null && embedReadySessionId.value === activeSessionId.value,
+  );
 
   const tools = ref<TracedTool[]>([]);
   const placements = ref<ToolPlacement[]>([]);
@@ -260,18 +277,101 @@ export const useToolTrace = defineStore('toolTrace', () => {
     return placements.value.find((p) => p.toolId === toolId);
   }
 
-  /** Clears everything back to a fresh Tool trace tab. */
-  function reset(): void {
-    if (photoUrl.value !== null) URL.revokeObjectURL(photoUrl.value);
+  /** Clears the single-photo working state; every activation path starts here. */
+  function clearActivePhotoState(): void {
+    if (photoUrl.value !== null && typeof URL.revokeObjectURL === 'function') {
+      URL.revokeObjectURL(photoUrl.value);
+    }
     photoUrl.value = null;
     photoBlob.value = null;
-    sourceId.value = null;
     photoSize.value = null;
     corners.value = null;
     calibration.value = null;
     rectifiedPreview.value = null;
-    embedReady.value = false;
+    embedReadySessionId.value = null;
     encodeMs.value = null;
+    activeSessionId.value = null;
+  }
+
+  /**
+   * Registers a freshly uploaded photo as a new pending session and makes it
+   * active. The session enters the sessions list once its sheet corners are
+   * confirmed (commitSessionPaper); until then it exists only as the active
+   * working state plus its blob.
+   */
+  function startPhotoSession(
+    blob: Blob,
+    url: string,
+    size: { width: number; height: number },
+  ): string {
+    clearActivePhotoState();
+    const id = crypto.randomUUID();
+    sessionBlobs.set(id, blob);
+    activeSessionId.value = id;
+    photoBlob.value = blob;
+    photoUrl.value = url;
+    photoSize.value = size;
+    return id;
+  }
+
+  /**
+   * Records the active session's confirmed paper setup from the current
+   * calibration, inserting the session into the list or updating it in place
+   * (corners re-confirmed after an adjustment).
+   */
+  function commitSessionPaper(): void {
+    const id = activeSessionId.value;
+    const cal = calibration.value;
+    if (id === null || cal === null) return;
+    const paper = {
+      corners: JSON.parse(JSON.stringify(cal.corners)) as PaperCorners,
+      kind: cal.kind,
+    };
+    const existing = sessions.value.find((s) => s.id === id);
+    if (existing !== undefined) {
+      existing.paper = paper;
+    } else {
+      sessions.value.push({ id, traceSourceId: crypto.randomUUID(), paper });
+    }
+  }
+
+  /**
+   * Atomically makes a session the active one: clears every piece of the
+   * prior sheet's state first (so nothing stale can be read mid-switch),
+   * then loads the session's photo into the vision worker, applies its saved
+   * corners without re-detection, rectifies and embeds. embedReady turns
+   * true only at the very end and only for this session. Worker failures
+   * propagate to the caller, which shows the message; the state is left
+   * cleared, never half-activated.
+   */
+  async function activateSession(sessionId: string, blob: Blob): Promise<void> {
+    const session = sessions.value.find((s) => s.id === sessionId);
+    if (session === undefined) {
+      throw new Error('The photo sheet to activate is not part of this bin.');
+    }
+    clearActivePhotoState();
+    activeSessionId.value = sessionId;
+    sessionBlobs.set(sessionId, blob);
+    const info = await loadPhoto(await blob.arrayBuffer());
+    photoBlob.value = blob;
+    photoUrl.value =
+      typeof URL.createObjectURL === 'function' ? URL.createObjectURL(blob) : null;
+    photoSize.value = info;
+    corners.value = JSON.parse(JSON.stringify(session.paper.corners)) as PaperCorners;
+    paperKind.value = session.paper.kind;
+    const rectified = await rectifyPaper(session.paper.corners, session.paper.kind);
+    calibration.value = rectified.calibration;
+    rectifiedPreview.value = rectified.preview;
+    const embed = await embedImage();
+    encodeMs.value = embed.encodeMs;
+    embedReadySessionId.value = sessionId;
+  }
+
+  /** Clears everything back to a fresh Tool trace tab. */
+  function reset(): void {
+    clearActivePhotoState();
+    sessions.value = [];
+    sessionBlobs.clear();
     tools.value = [];
     placements.value = [];
     selectedToolId.value = null;
@@ -293,14 +393,20 @@ export const useToolTrace = defineStore('toolTrace', () => {
     ...editSession,
     photoUrl,
     photoBlob,
-    sourceId,
     photoSize,
     corners,
     paperKind,
     calibration,
     rectifiedPreview,
     embedReady,
+    embedReadySessionId,
     encodeMs,
+    sessions,
+    sessionBlobs,
+    activeSessionId,
+    startPhotoSession,
+    commitSessionPaper,
+    activateSession,
     tools,
     placements,
     selectedToolId,

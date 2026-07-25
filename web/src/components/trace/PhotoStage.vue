@@ -137,15 +137,14 @@ async function handleFile(file: File): Promise<void> {
     // written. It also revokes the previous object URL, which is why none is
     // revoked here.
     store.reset();
-    photoUrl.value = URL.createObjectURL(file);
     // A freshly uploaded photo replaces any stored one on save, so it gets a
     // new photo-store id then; keep the bytes for that save.
-    store.photoBlob = file;
-    photoSize.value = info;
+    const url = URL.createObjectURL(file);
+    store.startPhotoSession(file, url, info);
     emit('photoReplaced');
     image = new Image();
     image.onload = draw;
-    image.src = photoUrl.value;
+    image.src = url;
     busyText.value = 'Looking for the sheet.';
     await runDetection();
   } catch (error) {
@@ -363,12 +362,12 @@ async function confirm(): Promise<void> {
     const result = await rectifyPaper(corners.value, paperKind.value);
     store.calibration = result.calibration;
     store.rectifiedPreview = result.preview;
-    store.embedReady = false;
+    store.commitSessionPaper();
     busyText.value =
       'Preparing the sheet for tracing. The first run downloads about 45 MB of segmentation model data.';
     const embed = await embedImage();
     store.encodeMs = embed.encodeMs;
-    store.embedReady = true;
+    store.embedReadySessionId = store.activeSessionId;
     emit('confirmed');
   } catch (error) {
     errorMessage.value =
