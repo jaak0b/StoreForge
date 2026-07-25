@@ -11,7 +11,7 @@
 import type { LabelOffset, Sketch, SketchDimension, SketchEntity } from './model';
 import type { MmPoint } from '../trace/types';
 import { assertNever } from '../plan/types';
-import { angleForCursorSector, dimensionAnchor } from './dimensionGraphics';
+import { dimensionAnchor, resolveAngleSector } from './dimensionGraphics';
 import {
   measureAngleBetweenLines,
   measureDiameter,
@@ -211,12 +211,16 @@ export function anchorForDimensionSelection(sketch: Sketch, resolved: DimensionS
 
 /**
  * The angle dimension's live cursor-picked value: the quadrant sector's
- * degrees and whether that sector is the supplementary one
- * (angleForCursorSector), falling back to the fixed direct-fold measured
- * angle (supplementary false) when the lines are parallel (no
- * intersection), matching prior behavior. Single source (convention 10) for
- * every caller that needs both the seeded text and the persisted
- * supplementary flag from the very same cursor read: the store's
+ * degrees and whether that sector is the supplementary one. Delegates to
+ * dimensionGraphics.ts's resolveAngleSector (convention 10, the single
+ * source), which biases toward the shared-vertex corner default (angle
+ * dimension rule 1) whenever the cursor sits close to one of the two lines'
+ * own rays (the ambiguous case a fresh selection's cursor typically lands
+ * in), and otherwise honors whichever sector the cursor unambiguously picks;
+ * falls back to the fixed direct-fold measured angle (supplementary false)
+ * when the lines share no vertex and are parallel, matching prior behavior.
+ * Single source for every caller that needs both the seeded text and the
+ * persisted supplementary flag from the very same cursor read: the store's
  * placeDimensionDraft (which needs the flag to store on the committed
  * dimension) and measuredValueForDimensionSelection/the ghost preview
  * (which need only the degrees).
@@ -227,10 +231,7 @@ export function resolveAngleAtCursor(
   l2Id: string,
   cursor: MmPoint,
 ): { degrees: number; supplementary: boolean } {
-  return (
-    angleForCursorSector(sketch, l1Id, l2Id, cursor) ??
-    { degrees: measureAngleBetweenLines(sketch, l1Id, l2Id), supplementary: false }
-  );
+  return resolveAngleSector(sketch, l1Id, l2Id, cursor);
 }
 
 /**

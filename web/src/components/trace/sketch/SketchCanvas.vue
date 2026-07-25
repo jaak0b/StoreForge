@@ -22,15 +22,18 @@ import {
 } from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
-import { formatMm, formatDegrees, measureAngleBetweenLines, measureLineLength, measurePointAxisDistance, measurePointDistance, measurePointLineDistance, measureRadius } from '../../../engine/sketch/measure';
+import { formatMm, formatDegrees, measureLineLength, measurePointAxisDistance, measurePointDistance, measurePointLineDistance, measureRadius } from '../../../engine/sketch/measure';
 import {
   DEFAULT_LABEL_OFFSET,
-  angleForCursorSector,
   dimensionAnchor,
   dimensionGraphics,
   type DimensionGraphics,
 } from '../../../engine/sketch/dimensionGraphics';
-import { anchorForDimensionSelection, pickDistanceAxis } from '../../../engine/sketch/dimensionSelection';
+import {
+  anchorForDimensionSelection,
+  pickDistanceAxis,
+  resolveAngleAtCursor,
+} from '../../../engine/sketch/dimensionSelection';
 
 const emit = defineEmits<{
   /** A canvas click in mm, for the active drawing tool. altKey is the Alt
@@ -922,8 +925,7 @@ const dimensionGhost = computed<DimensionRender | null>(() => {
       fake = {
         kind: 'angle', id: '_ghost', l1Id: resolved.l1Id, l2Id: resolved.l2Id,
         degrees: formatDegrees(
-          angleForCursorSector(sketch.value, resolved.l1Id, resolved.l2Id, cursorMm.value)?.degrees ??
-            measureAngleBetweenLines(sketch.value, resolved.l1Id, resolved.l2Id),
+          resolveAngleAtCursor(sketch.value, resolved.l1Id, resolved.l2Id, cursorMm.value).degrees,
         ),
       };
       break;
@@ -1380,11 +1382,18 @@ function removeSelectedConstraint(constraintId: string): void {
             stroke="#455a64" stroke-width="0.3"
           />
         </template>
-        <path
-          v-else-if="render.graphics.kind === 'angle'"
-          :d="render.graphics.arcPath"
-          fill="none" stroke="#455a64" stroke-width="0.3"
-        />
+        <template v-else-if="render.graphics.kind === 'angle'">
+          <line
+            v-for="(w, i) in render.graphics.witnessLines"
+            :key="`w${i}`"
+            :x1="w.a.x" :y1="w.a.y" :x2="w.b.x" :y2="w.b.y"
+            stroke="#607d8b" stroke-width="0.25"
+          />
+          <path
+            :d="render.graphics.arcPath"
+            fill="none" stroke="#455a64" stroke-width="0.3"
+          />
+        </template>
         <line
           v-else-if="render.graphics.kind === 'leader'"
           :x1="render.graphics.leaderLine.a.x" :y1="render.graphics.leaderLine.a.y"
