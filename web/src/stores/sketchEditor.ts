@@ -52,25 +52,49 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** Millimeters per underlay image pixel from the calibration line, or null. */
   const underlayMmPerPixel = ref<number | null>(null);
 
+  /**
+   * A point-in-time undo entry. Chain state (chainTailId, chainTailSegmentId)
+   * travels with the sketch: undoing a chain point must move the open chain's
+   * tail back with it, or the next appendChainPoint call would draw a line
+   * from a point the undo just deleted, corrupting the sketch.
+   */
+  type HistoryEntry = {
+    sketch: Sketch;
+    chainTailId: string | null;
+    chainTailSegmentId: string | null;
+  };
+
   /** Maximum number of undo steps retained, matching cavityEditSession's cap. */
   const HISTORY_CAP = 100;
-  /** Sketch snapshots to restore on undo, oldest first. Editor state, never saved. */
-  const historyStack = ref<Sketch[]>([]);
-  /** Snapshots undone and available for redo. Editor state, never saved. */
-  const redoStack = ref<Sketch[]>([]);
+  /** History entries to restore on undo, oldest first. Editor state, never saved. */
+  const historyStack = ref<HistoryEntry[]>([]);
+  /** Entries undone and available for redo. Editor state, never saved. */
+  const redoStack = ref<HistoryEntry[]>([]);
   /**
    * Nesting depth of the current top-level mutating action. A mutating store
    * function (addPoint, appendChainPoint, and so on) can call another one
    * internally (appendChainPoint calls addPoint; addThreePointArc calls
    * addConstraint for a tangent); only the outermost call should record a
    * history snapshot, so one user click undoes as one step rather than one
-   * step per internal helper call.
+   * step per internal helper call. A point drag opens the same scope for its
+   * whole gesture (see beginPointDrag), so a drag-to-merge that adds a
+   * coincident constraint mid-drag joins the drag's single undo step instead
+   * of pushing a second one.
    */
   let recordingDepth = 0;
 
-  /** Pushes the current sketch onto the undo stack and clears the redo stack. */
+  /** Captures the current sketch and chain state as one history entry. */
+  function captureHistoryEntry(): HistoryEntry {
+    return {
+      sketch: cloneSketch(sketch.value),
+      chainTailId: chainTailId.value,
+      chainTailSegmentId: chainTailSegmentId.value,
+    };
+  }
+
+  /** Pushes the current state onto the undo stack and clears the redo stack. */
   function pushHistorySnapshot(): void {
-    historyStack.value.push(cloneSketch(sketch.value));
+    historyStack.value.push(captureHistoryEntry());
     if (historyStack.value.length > HISTORY_CAP) historyStack.value.shift();
     redoStack.value = [];
   }
@@ -87,21 +111,37 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   }
 
   /**
-   * Pushes one history snapshot for a point drag. Called once, when a drag
+   * Opens the history scope for a point drag. Called once, when a drag
    * crosses the pointer-move threshold and starts, not on every pointermove:
    * the drag's live solver writebacks in solveNow must not push snapshots, so
-   * the whole drag undoes as the single step it visually was.
+   * the whole drag undoes as the single step it visually was. The scope stays
+   * open (via the same recordingDepth guard beginMutation uses) until
+   * endPointDrag closes it, so a drag-to-merge's addCoincidentIfAbsent call
+   * lands inside this one step instead of pushing its own.
    */
   function beginPointDrag(): void {
-    pushHistorySnapshot();
+    beginMutation();
   }
 
-  /** Restores a history snapshot: replaces the sketch, drops selected ids the
-   * snapshot no longer has, and bumps generation so a solve can be rescheduled. */
-  function applyHistorySnapshot(snapshot: Sketch): void {
-    sketch.value = snapshot;
-    const survivingIds = new Set(snapshot.entities.map((e) => e.id));
+  /** Closes the history scope opened by beginPointDrag. */
+  function endPointDrag(): void {
+    endMutation();
+  }
+
+  /** Restores a history entry: replaces the sketch and chain state, drops
+   * selected ids the snapshot no longer has, and bumps generation so a solve
+   * can be rescheduled. */
+  function applyHistoryEntry(entry: HistoryEntry): void {
+    sketch.value = entry.sketch;
+    const survivingIds = new Set(entry.sketch.entities.map((e) => e.id));
     selectedIds.value = selectedIds.value.filter((id) => survivingIds.has(id));
+    chainTailId.value = entry.chainTailId !== null && survivingIds.has(entry.chainTailId)
+      ? entry.chainTailId
+      : null;
+    chainTailSegmentId.value =
+      entry.chainTailSegmentId !== null && survivingIds.has(entry.chainTailSegmentId)
+        ? entry.chainTailSegmentId
+        : null;
     bumpGeneration();
   }
 
@@ -109,16 +149,16 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   function undo(): void {
     const previous = historyStack.value.pop();
     if (previous === undefined) return;
-    redoStack.value.push(cloneSketch(sketch.value));
-    applyHistorySnapshot(previous);
+    redoStack.value.push(captureHistoryEntry());
+    applyHistoryEntry(previous);
   }
 
   /** Re-applies the most recently undone snapshot. */
   function redo(): void {
     const next = redoStack.value.pop();
     if (next === undefined) return;
-    historyStack.value.push(cloneSketch(sketch.value));
-    applyHistorySnapshot(next);
+    historyStack.value.push(captureHistoryEntry());
+    applyHistoryEntry(next);
   }
 
   let idCounter = 0;
@@ -601,6 +641,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     historyStack,
     redoStack,
     beginPointDrag,
+    endPointDrag,
     undo,
     redo,
   };

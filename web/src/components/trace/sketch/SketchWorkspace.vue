@@ -442,15 +442,20 @@ function onPointDrag(pointId: string, at: MmPoint): void {
 }
 
 function onPointDragEnd(): void {
+  if (dragActive.value) editor.endPointDrag();
   dragActive.value = false;
   void editor.solveNow();
 }
 
 /** Merges the dragged point onto the release target with a coincident
- * constraint, then re-solves so the merge takes effect immediately. */
+ * constraint, then re-solves so the merge takes effect immediately. The
+ * coincident constraint is added while the drag's history scope is still
+ * open (closed after), so the merge joins the drag's single undo step
+ * instead of pushing a second one. */
 function onPointDragMerge(draggedId: string, targetId: string): void {
-  dragActive.value = false;
   editor.addCoincidentIfAbsent(draggedId, targetId);
+  if (dragActive.value) editor.endPointDrag();
+  dragActive.value = false;
   void editor.solveNow();
 }
 

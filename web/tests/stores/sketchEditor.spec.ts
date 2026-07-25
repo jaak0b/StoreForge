@@ -330,7 +330,63 @@ describe('useSketchEditor', () => {
     await editor.solveNow({ pointId: p2, xMm: 12, yMm: 1 });
     await editor.solveNow({ pointId: p2, xMm: 14, yMm: 2 });
     await editor.solveNow();
+    editor.endPointDrag();
     expect(editor.historyStack.length).toBe(historyBeforeDrag + 1);
+  });
+
+  it('pushes exactly one history snapshot for a drag that ends in a merge, and undo restores both position and removes the constraint', async () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    const a1 = editor.appendChainPoint({ x: 0, y: 0 })!;
+    const a2 = editor.appendChainPoint({ x: 10, y: 0 })!;
+    editor.endChain();
+    const b1 = editor.appendChainPoint({ x: 10, y: 5 })!;
+    editor.endChain();
+    const historyBeforeDrag = editor.historyStack.length;
+    const beforeDrag = JSON.parse(JSON.stringify(editor.sketch));
+
+    // Drag a2 toward b1 and release on it: one drag gesture, one merge.
+    editor.beginPointDrag();
+    solveMock.mockImplementation(async (sketch) => ({ status: 'solved', sketch, dof: 2 }));
+    await editor.solveNow({ pointId: a2, xMm: 10, yMm: 4.5 });
+    editor.addCoincidentIfAbsent(a2, b1);
+    editor.endPointDrag();
+
+    // One drag-to-merge gesture is one undo step, not two.
+    expect(editor.historyStack.length).toBe(historyBeforeDrag + 1);
+    expect(editor.sketch.constraints.some((c) => c.kind === 'coincident')).toBe(true);
+
+    editor.undo();
+    expect(editor.sketch).toEqual(beforeDrag);
+    expect(editor.sketch.constraints.some((c) => c.kind === 'coincident')).toBe(false);
+    expect(b1).toBeDefined();
+  });
+
+  it('restores the open chain tail on undo, so the chain continues validly from the restored point', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    const first = editor.appendChainPoint({ x: 0, y: 0 })!;
+    editor.appendChainPoint({ x: 10, y: 0 });
+    expect(editor.chainTailId).not.toBeNull();
+    const tailBeforeUndo = editor.chainTailId;
+
+    editor.undo();
+    // The chain tail moved back with the undone point; it must not still
+    // reference the now-deleted point.
+    expect(editor.chainTailId).not.toBe(tailBeforeUndo);
+    expect(editor.chainTailId).toBe(first);
+    const idsAfterUndo = new Set(editor.sketch.entities.map((e) => e.id));
+    if (editor.chainTailId !== null) expect(idsAfterUndo.has(editor.chainTailId)).toBe(true);
+
+    // Continuing the chain from the restored tail must not create a dangling reference.
+    editor.appendChainPoint({ x: 5, y: 8 });
+    for (const entity of editor.sketch.entities) {
+      if (entity.kind === 'line') {
+        expect(idsAfterUndo.has(entity.p1Id) || entity.p1Id === first).toBe(true);
+        expect(editor.sketch.entities.some((e) => e.id === entity.p1Id)).toBe(true);
+        expect(editor.sketch.entities.some((e) => e.id === entity.p2Id)).toBe(true);
+      }
+    }
   });
 
   it('caps the history stack at 100 snapshots', () => {
