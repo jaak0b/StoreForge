@@ -22,6 +22,7 @@ import {
 } from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
+import { formatMm, formatDegrees } from '../../../engine/sketch/measure';
 
 const emit = defineEmits<{
   /** A canvas click in mm, for the active drawing tool. altKey is the Alt
@@ -734,12 +735,12 @@ const dimensionLabels = computed(() =>
           if (line === undefined || line.kind !== 'line') return null;
           const a = pointById.value.get(line.p1Id)!;
           const b = pointById.value.get(line.p2Id)!;
-          return { id: c.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: `${c.mm} mm` };
+          return { id: c.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: `${formatMm(c.mm)} mm` };
         }
         case 'distance': {
           const a = pointById.value.get(c.p1Id)!;
           const b = pointById.value.get(c.p2Id)!;
-          return { id: c.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: `${c.mm} mm` };
+          return { id: c.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: `${formatMm(c.mm)} mm` };
         }
         case 'radius':
         case 'diameter': {
@@ -747,13 +748,13 @@ const dimensionLabels = computed(() =>
           if (entity === undefined || (entity.kind !== 'arc' && entity.kind !== 'circle')) return null;
           const center = pointById.value.get(entity.centerId)!;
           const prefix = c.kind === 'radius' ? 'R' : 'D';
-          return { id: c.id, x: center.x, y: center.y, text: `${prefix} ${c.mm} mm` };
+          return { id: c.id, x: center.x, y: center.y, text: `${prefix} ${formatMm(c.mm)} mm` };
         }
         case 'angle': {
           const line = sketch.value.entities.find((e) => e.id === c.l1Id);
           if (line === undefined || line.kind !== 'line') return null;
           const a = pointById.value.get(line.p1Id)!;
-          return { id: c.id, x: a.x, y: a.y, text: `${c.degrees} deg` };
+          return { id: c.id, x: a.x, y: a.y, text: `${formatDegrees(c.degrees)} deg` };
         }
         case 'coincident':
         case 'horizontal':

@@ -18,6 +18,9 @@ import {
   measureDiameter,
   measurePointDistance,
   measureAngleBetweenLines,
+  formatMm,
+  formatDegrees,
+  parseDimensionValue,
 } from '../../../engine/sketch/measure';
 
 const emit = defineEmits<{
@@ -78,6 +81,31 @@ const constraintButtons: Record<ApplicableConstraintKind, { label: string; icon:
 type QuickEntryKind = 'segmentLength' | 'diameter' | 'slotWidth';
 const quickEntryKind = ref<QuickEntryKind | null>(null);
 const quickEntryText = ref('');
+/** Set when Enter is pressed on unparseable quick-entry text; cleared as soon
+ * as the field is reopened or the text changes. Drives the field's error
+ * styling (convention 8's complete-sentence message, not a raw exception). */
+const quickEntryErrorText = ref<string | null>(null);
+
+/** Clears a shown error as soon as the user edits the text again, so the
+ * error styling reflects the last commit attempt, not stale earlier input. */
+watch(quickEntryText, () => {
+  quickEntryErrorText.value = null;
+});
+
+/** The complete-sentence validation message for a given quick-entry kind.
+ * All three kinds are millimeter values, but the switch stays exhaustive
+ * (convention 13) so a future non-mm quick entry cannot fall through
+ * unnoticed. */
+function quickEntryErrorMessage(kind: QuickEntryKind): string {
+  switch (kind) {
+    case 'segmentLength':
+    case 'diameter':
+    case 'slotWidth':
+      return 'Enter the value as a number in millimeters.';
+    default:
+      return assertNever(kind);
+  }
+}
 
 /** The hint text for a tool, in one place so both the explicit tool switch
  * (selectTool) and the auto-return watcher below (task F: a one-shot or
@@ -151,6 +179,7 @@ const quickEntryApplicable = computed<QuickEntryKind | null>(() => {
 function openQuickEntry(kind: QuickEntryKind, seedChar: string): void {
   quickEntryKind.value = kind;
   quickEntryText.value = seedChar;
+  quickEntryErrorText.value = null;
 }
 
 /** Commits the quick numeric entry, applying the typed length/diameter/width
@@ -160,8 +189,11 @@ function openQuickEntry(kind: QuickEntryKind, seedChar: string): void {
 function commitQuickEntry(): void {
   const kind = quickEntryKind.value;
   if (kind === null) return;
-  const value = Number(quickEntryText.value);
-  if (!Number.isFinite(value) || value <= 0) return;
+  const value = parseDimensionValue(quickEntryText.value);
+  if (value === null) {
+    quickEntryErrorText.value = quickEntryErrorMessage(kind);
+    return;
+  }
   switch (kind) {
     case 'segmentLength': {
       if (chainTailId.value === null) break;
@@ -210,6 +242,7 @@ function commitQuickEntry(): void {
   }
   quickEntryKind.value = null;
   quickEntryText.value = '';
+  quickEntryErrorText.value = null;
 }
 
 /** Abandons the quick numeric entry without applying anything. The slot
@@ -224,13 +257,14 @@ function cancelQuickEntry(): void {
   }
   quickEntryKind.value = null;
   quickEntryText.value = '';
+  quickEntryErrorText.value = null;
 }
 
 /** Blur commits a parseable value, same as Enter; an unparseable value on
- * blur cancels instead of leaving the field stuck open. */
+ * blur cancels instead of leaving the field stuck open (Enter is the
+ * gesture that shows the error and keeps the field open for a retry). */
 function onQuickEntryBlur(): void {
-  const value = Number(quickEntryText.value);
-  if (Number.isFinite(value) && value > 0) {
+  if (parseDimensionValue(quickEntryText.value) !== null) {
     commitQuickEntry();
   } else {
     cancelQuickEntry();
@@ -261,6 +295,28 @@ const dimensionDraft = ref<{
   isNew: boolean;
   radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null;
 } | null>(null);
+
+/** Set when Enter is pressed on unparseable dimension text; mirrors
+ * quickEntryErrorText for the dimension entry field. */
+const dimensionErrorText = ref<string | null>(null);
+
+/** The dimension entry field's complete-sentence validation message: mm for
+ * every kind but angle, degrees for angle. */
+const dimensionErrorMessage = computed<string>(() => {
+  const draft = dimensionDraft.value;
+  if (draft === null || draft.constraintId === null) return 'Enter the value as a number in millimeters.';
+  const c = sketch.value.constraints.find((k) => k.id === draft.constraintId);
+  return c !== undefined && c.kind === 'angle'
+    ? 'Enter the value as a number in degrees.'
+    : 'Enter the value as a number in millimeters.';
+});
+
+watch(
+  () => dimensionDraft.value?.text,
+  () => {
+    dimensionErrorText.value = null;
+  },
+);
 
 function entityById(id: string): SketchEntity | undefined {
   return sketch.value.entities.find((e) => e.id === id);
@@ -307,23 +363,23 @@ function beginDimensionFromSelection(): void {
   editor.beginMutation();
   if (picked.length === 1 && picked[0].kind === 'line') {
     const id = editor.nextId();
-    measured = measureLineLength(sketch.value, picked[0].id);
+    measured = formatMm(measureLineLength(sketch.value, picked[0].id));
     editor.addDimension({ kind: 'length', id, lineId: picked[0].id, mm: measured });
     created = id;
   } else if (picked.length === 1 && (picked[0].kind === 'arc' || picked[0].kind === 'circle')) {
     const id = editor.nextId();
-    measured = measureRadius(sketch.value, picked[0].id);
+    measured = formatMm(measureRadius(sketch.value, picked[0].id));
     editor.addDimension({ kind: 'radius', id, entityId: picked[0].id, mm: measured });
     created = id;
     radiusToggle = { entityId: picked[0].id, kind: 'radius' };
   } else if (picked.length === 2 && picked.every((e) => e.kind === 'point')) {
     const id = editor.nextId();
-    measured = measurePointDistance(sketch.value, picked[0].id, picked[1].id);
+    measured = formatMm(measurePointDistance(sketch.value, picked[0].id, picked[1].id));
     editor.addDimension({ kind: 'distance', id, p1Id: picked[0].id, p2Id: picked[1].id, mm: measured });
     created = id;
   } else if (picked.length === 2 && picked.every((e) => e.kind === 'line')) {
     const id = editor.nextId();
-    measured = measureAngleBetweenLines(sketch.value, picked[0].id, picked[1].id);
+    measured = formatDegrees(measureAngleBetweenLines(sketch.value, picked[0].id, picked[1].id));
     editor.addDimension({
       kind: 'angle',
       id,
@@ -359,7 +415,9 @@ function toggleRadiusDiameter(kind: 'radius' | 'diameter'): void {
   if (draft.constraintId !== null) editor.removeConstraint(draft.constraintId);
   const entityId = draft.radiusToggle.entityId;
   const id = editor.nextId();
-  const measured = kind === 'radius' ? measureRadius(sketch.value, entityId) : measureDiameter(sketch.value, entityId);
+  const measured = formatMm(
+    kind === 'radius' ? measureRadius(sketch.value, entityId) : measureDiameter(sketch.value, entityId),
+  );
   editor.addDimension({ kind, id, entityId, mm: measured });
   dimensionDraft.value = {
     constraintId: id,
@@ -371,9 +429,9 @@ function toggleRadiusDiameter(kind: 'radius' | 'diameter'): void {
 
 function commitDimensionDraft(): void {
   if (dimensionDraft.value === null || dimensionDraft.value.constraintId === null) return;
-  const value = Number(dimensionDraft.value.text);
-  if (!Number.isFinite(value) || value <= 0) {
-    toolHint.value = 'The dimension value must be a number above 0.';
+  const value = parseDimensionValue(dimensionDraft.value.text);
+  if (value === null) {
+    dimensionErrorText.value = dimensionErrorMessage.value;
     return;
   }
   editor.setDimensionValue(dimensionDraft.value.constraintId, value);
@@ -404,6 +462,7 @@ function cancelDimensionDraft(): void {
   // not there was a placeholder constraint left to remove.
   if (draft !== null && draft.isNew) editor.endMutation();
   dimensionDraft.value = null;
+  dimensionErrorText.value = null;
 }
 
 /**
@@ -414,8 +473,7 @@ function cancelDimensionDraft(): void {
  */
 function onDimensionBlur(): void {
   if (dimensionDraft.value === null) return;
-  const value = Number(dimensionDraft.value.text);
-  if (Number.isFinite(value) && value > 0) {
+  if (parseDimensionValue(dimensionDraft.value.text) !== null) {
     commitDimensionDraft();
   } else {
     cancelDimensionDraft();
@@ -424,11 +482,15 @@ function onDimensionBlur(): void {
 
 /** Click-to-edit on an existing on-canvas dimension label. A radius or
  * diameter dimension also gets the radius/diameter toggle, so an existing
- * one can be flipped without deleting and re-adding it by hand. */
+ * one can be flipped without deleting and re-adding it by hand. Reformats
+ * the stored value the same way a fresh measured default is formatted, so
+ * editing an older, unrounded dimension seeds the field with the rounded
+ * figure rather than the raw stored double. */
 function onDimensionClick(constraintId: string): void {
   const c = sketch.value.constraints.find((k) => k.id === constraintId);
   if (c === undefined) return;
-  const current = c.kind === 'angle' ? c.degrees : 'mm' in c ? c.mm : null;
+  const current =
+    c.kind === 'angle' ? formatDegrees(c.degrees) : 'mm' in c ? formatMm(c.mm) : null;
   const radiusToggle =
     c.kind === 'radius' || c.kind === 'diameter' ? { entityId: c.entityId, kind: c.kind } : null;
   dimensionDraft.value = {
@@ -995,6 +1057,8 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         label="Dimension value"
         density="compact"
         autofocus
+        :error="dimensionErrorText !== null"
+        :error-messages="dimensionErrorText ?? []"
         style="max-width: 200px"
         @keyup.enter="commitDimensionDraft"
         @keyup.esc="cancelDimensionDraft"
@@ -1026,6 +1090,8 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
       "
       density="compact"
       autofocus
+      :error="quickEntryErrorText !== null"
+      :error-messages="quickEntryErrorText ?? []"
       style="max-width: 200px"
       @keyup.enter="commitQuickEntry"
       @keyup.esc="cancelQuickEntry"

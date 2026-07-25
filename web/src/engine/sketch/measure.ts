@@ -63,6 +63,38 @@ export function measureDiameter(sketch: Sketch, entityId: string): number {
   return measureRadius(sketch, entityId) * 2;
 }
 
+/**
+ * Rounds a millimeter value to 0.01 mm for display and for seeding a
+ * measured default: committing an untouched default must store the same
+ * rounded figure the user saw (convention 10 single source, used by both the
+ * dimension entry field's measured-default seeding and the on-canvas
+ * dimension labels).
+ */
+export function formatMm(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** Rounds a degree value to 0.1 degree, for the same display/seeding uses as
+ * formatMm above. */
+export function formatDegrees(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+/**
+ * Parses a dimension field's typed text as a plain positive decimal number.
+ * Accepts a comma as the decimal separator and surrounding whitespace;
+ * rejects anything else, including a numeric prefix followed by trailing
+ * garbage ("36.5abc"), since Number()/parseFloat() would silently accept
+ * that prefix (convention 2: no silently swallowed bad input). Returns null
+ * for unparseable or non-positive input.
+ */
+export function parseDimensionValue(text: string): number | null {
+  const trimmed = text.trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 /** The current angle between two lines, in degrees, folded to 0..180. */
 export function measureAngleBetweenLines(sketch: Sketch, l1Id: string, l2Id: string): number {
   const l1 = sketch.entities.find((e) => e.id === l1Id);

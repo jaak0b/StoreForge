@@ -14,6 +14,8 @@ import {
   measureDiameter,
   measurePointDistance,
   measureAngleBetweenLines,
+  formatMm,
+  parseDimensionValue,
 } from '../../src/engine/sketch/measure';
 
 beforeEach(() => {
@@ -71,6 +73,35 @@ describe('useSketchEditor', () => {
     await editor.solveNow();
     expect(solveMock).toHaveBeenCalled();
     expect(editor.solveState.status).toBe('solved');
+  });
+
+  it('commits an untouched measured default at the rounded value the user saw', () => {
+    // Mirrors SketchWorkspace's beginDimensionFromSelection + commitDimensionDraft
+    // flow: a line whose raw length is an irrational-looking double gets a
+    // dimension seeded from the rounded measured value, and committing the
+    // draft text unedited (Enter with no typing) must store that same
+    // rounded figure, not the raw double the geometry actually measures to.
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    editor.appendChainPoint({ x: 0, y: 0 });
+    editor.appendChainPoint({ x: Math.SQRT2 * 25.87, y: 0 });
+    const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+    const rawMeasured = measureLineLength(editor.sketch, line.id);
+    expect(Number.isInteger(rawMeasured * 100)).toBe(false);
+    const seeded = formatMm(rawMeasured);
+    const id = editor.nextId();
+    editor.addDimension({ kind: 'length', id, lineId: line.id, mm: seeded });
+    // Committing the draft text unedited (String(seeded), Enter without typing).
+    const committed = parseDimensionValue(String(seeded));
+    expect(committed).not.toBeNull();
+    editor.setDimensionValue(id, committed!);
+    const constraint = editor.sketch.constraints.find((c) => c.id === id) as { mm: number };
+    expect(constraint.mm).toBe(seeded);
+    expect(constraint.mm).not.toBe(rawMeasured);
+  });
+
+  it('rejects a dimension value with trailing garbage instead of taking a numeric prefix', () => {
+    expect(parseDimensionValue('36.58743339531354SS')).toBeNull();
   });
 
   it('keeps the conflicting constraint ids for the diagnostics rows', async () => {
