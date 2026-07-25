@@ -429,19 +429,41 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
   }
 }
 
+/** True while a point drag is in progress, so the drag's history snapshot is
+ * pushed exactly once, at the first move, not on every pointermove. */
+const dragActive = ref(false);
+
 function onPointDrag(pointId: string, at: MmPoint): void {
+  if (!dragActive.value) {
+    dragActive.value = true;
+    editor.beginPointDrag();
+  }
   void editor.solveNow({ pointId, xMm: at.x, yMm: at.y });
 }
 
 function onPointDragEnd(): void {
+  dragActive.value = false;
   void editor.solveNow();
 }
 
 /** Merges the dragged point onto the release target with a coincident
  * constraint, then re-solves so the merge takes effect immediately. */
 function onPointDragMerge(draggedId: string, targetId: string): void {
+  dragActive.value = false;
   editor.addCoincidentIfAbsent(draggedId, targetId);
   void editor.solveNow();
+}
+
+/** Undoes the last sketch mutation, if any, and reschedules the solve. */
+function undoAction(): void {
+  editor.undo();
+  scheduleSolve();
+}
+
+/** Re-applies the last undone mutation, if any, and reschedules the solve. */
+function redoAction(): void {
+  editor.redo();
+  scheduleSolve();
 }
 
 /** Deletes the current selection, if any, and reschedules the solve. */
@@ -465,6 +487,20 @@ function isTypingTarget(target: EventTarget | null): boolean {
  */
 function onWorkspaceKeydown(event: KeyboardEvent): void {
   if (isTypingTarget(event.target)) return;
+  const withModifier = event.ctrlKey || event.metaKey;
+  if (withModifier && !event.shiftKey && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    undoAction();
+    return;
+  }
+  if (
+    withModifier &&
+    ((event.shiftKey && event.key.toLowerCase() === 'z') || event.key.toLowerCase() === 'y')
+  ) {
+    event.preventDefault();
+    redoAction();
+    return;
+  }
   if (event.key === 'Delete' || event.key === 'Backspace') {
     deleteSelection();
     return;
@@ -512,6 +548,26 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         </v-btn>
       </v-btn-toggle>
       <v-spacer />
+      <v-btn
+        icon
+        density="compact"
+        variant="text"
+        :disabled="editor.historyStack.length === 0"
+        @click="undoAction"
+      >
+        <v-icon>mdi-undo</v-icon>
+        <v-tooltip activator="parent" location="bottom">Undo</v-tooltip>
+      </v-btn>
+      <v-btn
+        icon
+        density="compact"
+        variant="text"
+        :disabled="editor.redoStack.length === 0"
+        @click="redoAction"
+      >
+        <v-icon>mdi-redo</v-icon>
+        <v-tooltip activator="parent" location="bottom">Redo</v-tooltip>
+      </v-btn>
       <v-btn
         icon
         density="compact"

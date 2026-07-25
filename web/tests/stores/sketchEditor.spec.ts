@@ -267,4 +267,78 @@ describe('useSketchEditor', () => {
     expect(editor.sketch.entities).toHaveLength(2);
     expect(editor.editingToolId).toBe('tool-1');
   });
+
+  it('undoes and redoes a circle add, restoring the exact sketch', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    editor.addCircle({ x: 0, y: 0 }, 5);
+    const afterAdd = JSON.parse(JSON.stringify(editor.sketch));
+    expect(editor.historyStack.length).toBe(1);
+
+    editor.undo();
+    expect(editor.sketch.entities).toHaveLength(0);
+    expect(editor.sketch.constraints).toHaveLength(0);
+    expect(editor.redoStack.length).toBe(1);
+
+    editor.redo();
+    expect(editor.sketch).toEqual(afterAdd);
+    expect(editor.redoStack.length).toBe(0);
+  });
+
+  it('undo after deleteEntities restores both entities and constraints', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    const p1 = editor.appendChainPoint({ x: 0, y: 0 })!;
+    editor.appendChainPoint({ x: 10, y: 0 });
+    const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+    editor.addConstraint({ kind: 'horizontal', id: editor.nextId(), lineId: line.id });
+    const beforeDelete = JSON.parse(JSON.stringify(editor.sketch));
+
+    editor.selectedIds = [line.id];
+    editor.deleteEntities([line.id]);
+    expect(editor.sketch.constraints).toHaveLength(0);
+
+    editor.undo();
+    expect(editor.sketch).toEqual(beforeDelete);
+    expect(editor.sketch.constraints.some((c) => c.kind === 'horizontal')).toBe(true);
+    const ids = new Set(editor.sketch.entities.map((e) => e.id));
+    expect(ids.has(p1)).toBe(true);
+  });
+
+  it('clears selection on undo when the selected id no longer exists', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    editor.addCircle({ x: 0, y: 0 }, 5);
+    const circle = editor.sketch.entities.find((e) => e.kind === 'circle')!;
+    editor.selectedIds = [circle.id];
+    editor.undo();
+    expect(editor.selectedIds).toEqual([]);
+  });
+
+  it('pushes exactly one history snapshot for a completed point drag, and none for a solver writeback', async () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    editor.appendChainPoint({ x: 0, y: 0 });
+    const p2 = editor.appendChainPoint({ x: 10, y: 0 })!;
+    const historyBeforeDrag = editor.historyStack.length;
+
+    // A drag: one beginPointDrag at drag start, followed by repeated
+    // solveNow writebacks (simulating pointermove) that must not push.
+    editor.beginPointDrag();
+    expect(editor.historyStack.length).toBe(historyBeforeDrag + 1);
+    solveMock.mockImplementation(async (sketch) => ({ status: 'solved', sketch, dof: 3 }));
+    await editor.solveNow({ pointId: p2, xMm: 12, yMm: 1 });
+    await editor.solveNow({ pointId: p2, xMm: 14, yMm: 2 });
+    await editor.solveNow();
+    expect(editor.historyStack.length).toBe(historyBeforeDrag + 1);
+  });
+
+  it('caps the history stack at 100 snapshots', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    for (let i = 0; i < 105; i++) {
+      editor.addCircle({ x: i, y: 0 }, 1);
+    }
+    expect(editor.historyStack.length).toBe(100);
+  });
 });

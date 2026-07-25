@@ -52,6 +52,75 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** Millimeters per underlay image pixel from the calibration line, or null. */
   const underlayMmPerPixel = ref<number | null>(null);
 
+  /** Maximum number of undo steps retained, matching cavityEditSession's cap. */
+  const HISTORY_CAP = 100;
+  /** Sketch snapshots to restore on undo, oldest first. Editor state, never saved. */
+  const historyStack = ref<Sketch[]>([]);
+  /** Snapshots undone and available for redo. Editor state, never saved. */
+  const redoStack = ref<Sketch[]>([]);
+  /**
+   * Nesting depth of the current top-level mutating action. A mutating store
+   * function (addPoint, appendChainPoint, and so on) can call another one
+   * internally (appendChainPoint calls addPoint; addThreePointArc calls
+   * addConstraint for a tangent); only the outermost call should record a
+   * history snapshot, so one user click undoes as one step rather than one
+   * step per internal helper call.
+   */
+  let recordingDepth = 0;
+
+  /** Pushes the current sketch onto the undo stack and clears the redo stack. */
+  function pushHistorySnapshot(): void {
+    historyStack.value.push(cloneSketch(sketch.value));
+    if (historyStack.value.length > HISTORY_CAP) historyStack.value.shift();
+    redoStack.value = [];
+  }
+
+  /** Marks the start of a mutating action; only the outermost call snapshots. */
+  function beginMutation(): void {
+    if (recordingDepth === 0) pushHistorySnapshot();
+    recordingDepth += 1;
+  }
+
+  /** Marks the end of a mutating action. */
+  function endMutation(): void {
+    recordingDepth -= 1;
+  }
+
+  /**
+   * Pushes one history snapshot for a point drag. Called once, when a drag
+   * crosses the pointer-move threshold and starts, not on every pointermove:
+   * the drag's live solver writebacks in solveNow must not push snapshots, so
+   * the whole drag undoes as the single step it visually was.
+   */
+  function beginPointDrag(): void {
+    pushHistorySnapshot();
+  }
+
+  /** Restores a history snapshot: replaces the sketch, drops selected ids the
+   * snapshot no longer has, and bumps generation so a solve can be rescheduled. */
+  function applyHistorySnapshot(snapshot: Sketch): void {
+    sketch.value = snapshot;
+    const survivingIds = new Set(snapshot.entities.map((e) => e.id));
+    selectedIds.value = selectedIds.value.filter((id) => survivingIds.has(id));
+    bumpGeneration();
+  }
+
+  /** Steps the sketch back one snapshot, moving the current state to redo. */
+  function undo(): void {
+    const previous = historyStack.value.pop();
+    if (previous === undefined) return;
+    redoStack.value.push(cloneSketch(sketch.value));
+    applyHistorySnapshot(previous);
+  }
+
+  /** Re-applies the most recently undone snapshot. */
+  function redo(): void {
+    const next = redoStack.value.pop();
+    if (next === undefined) return;
+    historyStack.value.push(cloneSketch(sketch.value));
+    applyHistorySnapshot(next);
+  }
+
   let idCounter = 0;
   /** Sketch-unique id; sequential so saved sketches diff readably. */
   function nextId(): string {
@@ -86,6 +155,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     underlayOpacityPct.value = 40;
     underlayMmPerPixel.value = null;
     idCounter = 0;
+    historyStack.value = [];
+    redoStack.value = [];
+    recordingDepth = 0;
     bumpGeneration();
   }
 
@@ -107,10 +179,15 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   }
 
   function addPoint(at: MmPoint, construction = false): string {
-    const id = nextId();
-    sketch.value.entities.push({ kind: 'point', id, x: at.x, y: at.y, construction });
-    bumpGeneration();
-    return id;
+    beginMutation();
+    try {
+      const id = nextId();
+      sketch.value.entities.push({ kind: 'point', id, x: at.x, y: at.y, construction });
+      bumpGeneration();
+      return id;
+    } finally {
+      endMutation();
+    }
   }
 
   /**
@@ -122,36 +199,46 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * two chains at a shared corner. Returns the point id used.
    */
   function appendChainPoint(at: MmPoint, pointId?: string): string | null {
-    const usedPointId = pointId ?? addPoint(at);
-    if (chainTailId.value !== null) {
-      const lineId = nextId();
-      sketch.value.entities.push({
-        kind: 'line',
-        id: lineId,
-        p1Id: chainTailId.value,
-        p2Id: usedPointId,
-        construction: false,
-      });
-      chainTailSegmentId.value = lineId;
-      bumpGeneration();
+    beginMutation();
+    try {
+      const usedPointId = pointId ?? addPoint(at);
+      if (chainTailId.value !== null) {
+        const lineId = nextId();
+        sketch.value.entities.push({
+          kind: 'line',
+          id: lineId,
+          p1Id: chainTailId.value,
+          p2Id: usedPointId,
+          construction: false,
+        });
+        chainTailSegmentId.value = lineId;
+        bumpGeneration();
+      }
+      chainTailId.value = usedPointId;
+      return usedPointId;
+    } finally {
+      endMutation();
     }
-    chainTailId.value = usedPointId;
-    return usedPointId;
   }
 
   /** Closes the open chain onto an existing point and ends the chain. */
   function closeChainTo(pointId: string): void {
     if (chainTailId.value === null || chainTailId.value === pointId) return;
-    sketch.value.entities.push({
-      kind: 'line',
-      id: nextId(),
-      p1Id: chainTailId.value,
-      p2Id: pointId,
-      construction: false,
-    });
-    chainTailId.value = null;
-    chainTailSegmentId.value = null;
-    bumpGeneration();
+    beginMutation();
+    try {
+      sketch.value.entities.push({
+        kind: 'line',
+        id: nextId(),
+        p1Id: chainTailId.value,
+        p2Id: pointId,
+        construction: false,
+      });
+      chainTailId.value = null;
+      chainTailSegmentId.value = null;
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
   }
 
   /** Ends the open chain without closing it. */
@@ -163,15 +250,20 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** Adds a circle; centerPointId reuses an existing sketch point (the
    * component's click-to-point snapping) instead of creating a new one. */
   function addCircle(center: MmPoint, radiusMm: number, centerPointId?: string): void {
-    const centerId = centerPointId ?? addPoint(center);
-    sketch.value.entities.push({
-      kind: 'circle',
-      id: nextId(),
-      centerId,
-      radiusMm,
-      construction: false,
-    });
-    bumpGeneration();
+    beginMutation();
+    try {
+      const centerId = centerPointId ?? addPoint(center);
+      sketch.value.entities.push({
+        kind: 'circle',
+        id: nextId(),
+        centerId,
+        radiusMm,
+        construction: false,
+      });
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
   }
 
   /**
@@ -201,6 +293,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     const startAt = chainStartPoint ?? start;
     const derived = arcFromThreePoints(startAt, through, end);
     if (derived === null) return false;
+    beginMutation();
+    try {
     const centerId = addPoint(derived.center);
     const previousSegmentId = chainTailSegmentId.value;
     const startId = chainStartId ?? startPointId ?? addPoint(startAt);
@@ -231,6 +325,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     }
     bumpGeneration();
     return true;
+    } finally {
+      endMutation();
+    }
   }
 
   /**
@@ -238,57 +335,77 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * selected points, the spec's mirror-line workflow.
    */
   function addMirrorLine(a: MmPoint, b: MmPoint): string {
-    const p1 = addPoint(a, true);
-    const p2 = addPoint(b, true);
-    const lineId = nextId();
-    sketch.value.entities.push({
-      kind: 'line',
-      id: lineId,
-      p1Id: p1,
-      p2Id: p2,
-      construction: true,
-    });
-    bumpGeneration();
-    return lineId;
+    beginMutation();
+    try {
+      const p1 = addPoint(a, true);
+      const p2 = addPoint(b, true);
+      const lineId = nextId();
+      sketch.value.entities.push({
+        kind: 'line',
+        id: lineId,
+        p1Id: p1,
+        p2Id: p2,
+        construction: true,
+      });
+      bumpGeneration();
+      return lineId;
+    } finally {
+      endMutation();
+    }
   }
 
   function addConstraint(constraint: SketchConstraint): void {
-    sketch.value.constraints.push(constraint);
-    bumpGeneration();
+    beginMutation();
+    try {
+      sketch.value.constraints.push(constraint);
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
   }
 
   function addDimension(dimension: SketchDimension): void {
-    sketch.value.constraints.push(dimension);
-    bumpGeneration();
+    beginMutation();
+    try {
+      sketch.value.constraints.push(dimension);
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
   }
 
   /** Rewrites a dimension's value in place (click-to-edit label). */
   function setDimensionValue(constraintId: string, value: number): void {
     const dimension = sketch.value.constraints.find((c) => c.id === constraintId);
     if (dimension === undefined) return;
-    switch (dimension.kind) {
-      case 'length':
-      case 'distance':
-      case 'radius':
-      case 'diameter':
-        dimension.mm = value;
-        break;
-      case 'angle':
-        dimension.degrees = value;
-        break;
-      case 'coincident':
-      case 'horizontal':
-      case 'vertical':
-      case 'parallel':
-      case 'perpendicular':
-      case 'tangent':
-      case 'symmetric':
-        // Not dimensions; nothing to edit.
-        break;
-      default:
-        return assertNever(dimension);
+    beginMutation();
+    try {
+      switch (dimension.kind) {
+        case 'length':
+        case 'distance':
+        case 'radius':
+        case 'diameter':
+          dimension.mm = value;
+          break;
+        case 'angle':
+          dimension.degrees = value;
+          break;
+        case 'coincident':
+        case 'horizontal':
+        case 'vertical':
+        case 'parallel':
+        case 'perpendicular':
+        case 'tangent':
+        case 'symmetric':
+          // Not dimensions; nothing to edit.
+          break;
+        default:
+          return assertNever(dimension);
+      }
+      bumpGeneration();
+    } finally {
+      endMutation();
     }
-    bumpGeneration();
   }
 
   /**
@@ -309,8 +426,13 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   }
 
   function removeConstraint(constraintId: string): void {
-    sketch.value.constraints = sketch.value.constraints.filter((c) => c.id !== constraintId);
-    bumpGeneration();
+    beginMutation();
+    try {
+      sketch.value.constraints = sketch.value.constraints.filter((c) => c.id !== constraintId);
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
   }
 
   /** The point ids a non-point entity refers to, or [] for a point itself. */
@@ -368,6 +490,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    */
   function deleteEntities(ids: string[]): void {
     if (ids.length === 0) return;
+    beginMutation();
+    try {
     const removedIds = new Set(ids);
     const removedEntities = sketch.value.entities.filter((e) => removedIds.has(e.id));
     // Candidate points: endpoints of the deleted entities, not themselves
@@ -397,13 +521,21 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     );
     selectedIds.value = selectedIds.value.filter((id) => !finalRemovedIds.has(id));
     bumpGeneration();
+    } finally {
+      endMutation();
+    }
   }
 
   function toggleConstruction(entityId: string): void {
     const entity = sketch.value.entities.find((e) => e.id === entityId);
     if (entity === undefined) return;
-    entity.construction = !entity.construction;
-    bumpGeneration();
+    beginMutation();
+    try {
+      entity.construction = !entity.construction;
+      bumpGeneration();
+    } finally {
+      endMutation();
+    }
   }
 
   /**
@@ -466,5 +598,10 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     deleteEntities,
     toggleConstruction,
     solveNow,
+    historyStack,
+    redoStack,
+    beginPointDrag,
+    undo,
+    redo,
   };
 });
