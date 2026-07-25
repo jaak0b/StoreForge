@@ -23,7 +23,11 @@ import type {
 } from '../engine/baseplate/constants';
 import { CarveCancelledError } from '../engine/gridfinity/carvedBin';
 import { normalizeCustomIcon, type CustomIconValidation } from '../engine/label/customIcon';
-import { generatePocketBin, generatePocketBinUnion } from '../engine/trace/pocketBin';
+import {
+  generatePocketBin,
+  generatePocketBinUnion,
+  generatePocketBinWithWarnings,
+} from '../engine/trace/pocketBin';
 import type { PocketBinParams } from '../engine/trace/pocketBin';
 import {
   generateCutoutBin as carveCutoutBin,
@@ -299,7 +303,7 @@ const api = {
     const ctx = newExecutionContext(m);
     activePreviewContext = ctx;
     try {
-      const meshes = generatePocketBin(
+      const { meshes, warnings } = generatePocketBinWithWarnings(
         m,
         font,
         {
@@ -309,7 +313,7 @@ const api = {
         },
         ctx,
       );
-      const result: PocketPreviewResult = { outcome: 'carved', meshes };
+      const result: PocketPreviewResult = { outcome: 'carved', meshes, warnings };
       return Comlink.transfer(result, partBuffers(meshes));
     } catch (error) {
       if (error instanceof CarveCancelledError) return { outcome: 'superseded' };

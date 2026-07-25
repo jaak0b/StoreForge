@@ -3,15 +3,29 @@ import { loadManifold } from '../helpers/manifold';
 import {
   applyClearance,
   boundsOf,
+  centroidOf,
+  combinedCentroidOf,
   cullNarrowHoles,
   fingerHoleOutline,
   holeIndexAt,
+  matchPartsByGeometry,
+  placementPreservingCentroid,
   primitiveOutline,
   resolvedToolOutline,
   signedArea,
-  transformTool,
+  sortPartsByCentroid,
+  transformOutline,
   withoutFilledHoles,
 } from '../../src/engine/trace/edit';
+
+/** transformTool's old single-outline behavior: pivot about the outline's own centroid. */
+function transformTool(
+  outline: TracedOutline,
+  rotationDeg: number,
+  mirrored: boolean,
+): TracedOutline {
+  return transformOutline(outline, rotationDeg, mirrored, centroidOf(outline.outer));
+}
 import type { MmPoint, TracedOutline, TracedTool } from '../../src/engine/trace/types';
 
 // Expected figures throughout are hand-derived literals from the fixture
@@ -275,16 +289,16 @@ describe('resolvedToolOutline', () => {
     const tool: TracedTool = {
       id: 't1',
       name: 'test rectangle',
-      outline: primitiveOutline('rectangle', { widthMm: 20, heightMm: 10 }),
+      parts: [primitiveOutline('rectangle', { widthMm: 20, heightMm: 10 })],
       rotationDeg: 90,
       offsetMm: 1,
       mirrored: false,
       minHoleWidthMm: 0,
-      filledHoleIndices: [],
-      clicks: [],
+      filledHoles: [],
       fingerHoles: [],
+      source: { kind: 'primitive' },
     };
-    const resolved = resolvedToolOutline(m, tool);
+    const [resolved] = resolvedToolOutline(m, tool);
     // 20 x 10 rectangle rotated 90 degrees stands 10 wide by 20 tall; 1 mm
     // clearance adds 2 mm to each axis, measured across the midlines.
     expect(widthAtY(resolved.outer, 0)).toBeCloseTo(12, 3);
@@ -296,16 +310,17 @@ describe('resolvedToolOutline', () => {
     const tool: TracedTool = {
       id: 't2',
       name: 'identity',
-      outline: lShape(),
+      parts: [lShape()],
       rotationDeg: 0,
       offsetMm: 0,
       mirrored: false,
       minHoleWidthMm: 0,
-      filledHoleIndices: [],
-      clicks: [],
+      filledHoles: [],
       fingerHoles: [],
+      source: { kind: 'primitive' },
     };
-    expect(resolvedToolOutline(m, tool)).toEqual(lShape());
+    const [resolved] = resolvedToolOutline(m, tool);
+    expect(resolved).toEqual(lShape());
   });
 
   it('resolves a manually filled hole away, leaving no island', async () => {
@@ -313,16 +328,17 @@ describe('resolvedToolOutline', () => {
     const tool: TracedTool = {
       id: 't3',
       name: 'filled hole',
-      outline: squareWithHole(),
+      parts: [squareWithHole()],
       rotationDeg: 0,
       offsetMm: 0,
       mirrored: false,
       minHoleWidthMm: 0,
-      filledHoleIndices: [0],
-      clicks: [],
+      filledHoles: [{ partIndex: 0, holeIndex: 0 }],
       fingerHoles: [],
+      source: { kind: 'primitive' },
     };
-    expect(resolvedToolOutline(m, tool).holes).toHaveLength(0);
+    const [resolved] = resolvedToolOutline(m, tool);
+    expect(resolved.holes).toHaveLength(0);
   });
 
   it('resolves a hole narrower than the minimum width away, leaving no island', async () => {
@@ -331,16 +347,17 @@ describe('resolvedToolOutline', () => {
       id: 't4',
       name: 'narrow slot',
       // The 1 mm wide slot hole is below a 1.6 mm minimum width.
-      outline: squareWithSlot(),
+      parts: [squareWithSlot()],
       rotationDeg: 0,
       offsetMm: 0,
       mirrored: false,
       minHoleWidthMm: 1.6,
-      filledHoleIndices: [],
-      clicks: [],
+      filledHoles: [],
       fingerHoles: [],
+      source: { kind: 'primitive' },
     };
-    expect(resolvedToolOutline(m, tool).holes).toHaveLength(0);
+    const [resolved] = resolvedToolOutline(m, tool);
+    expect(resolved.holes).toHaveLength(0);
   });
 
   it('culls a hole by width even with zero clearance', async () => {
@@ -349,16 +366,17 @@ describe('resolvedToolOutline', () => {
       id: 't5',
       name: 'wide minimum',
       // The 5 mm square hole is below a 6 mm minimum width; clearance is off.
-      outline: squareWithHole(),
+      parts: [squareWithHole()],
       rotationDeg: 0,
       offsetMm: 0,
       mirrored: false,
       minHoleWidthMm: 6,
-      filledHoleIndices: [],
-      clicks: [],
+      filledHoles: [],
       fingerHoles: [],
+      source: { kind: 'primitive' },
     };
-    expect(resolvedToolOutline(m, tool).holes).toHaveLength(0);
+    const [resolved] = resolvedToolOutline(m, tool);
+    expect(resolved.holes).toHaveLength(0);
   });
 });
 
@@ -485,5 +503,161 @@ describe('holeIndexAt', () => {
       ],
     };
     expect(holeIndexAt(overlapping, { x: 10, y: 10 })).toBe(1);
+  });
+});
+
+/** Three 10 mm squares centred at (0,0), (0,20) and (20,0). */
+function threeSquares(): TracedOutline[] {
+  const squareAt = (cx: number, cy: number): TracedOutline => ({
+    outer: [
+      { x: cx - 5, y: cy - 5 },
+      { x: cx + 5, y: cy - 5 },
+      { x: cx + 5, y: cy + 5 },
+      { x: cx - 5, y: cy + 5 },
+    ],
+    holes: [],
+  });
+  return [squareAt(0, 0), squareAt(0, 20), squareAt(20, 0)];
+}
+
+describe('sortPartsByCentroid', () => {
+  it('orders parts by centroid y then x, independent of input order', () => {
+    const parts = threeSquares();
+    // Centroids: (0,0), (0,20), (20,0). Sorted by y then x: (0,0), (20,0), (0,20).
+    const expectedOrder = [parts[0], parts[2], parts[1]];
+    for (const shuffled of [
+      [parts[0], parts[1], parts[2]],
+      [parts[2], parts[1], parts[0]],
+      [parts[1], parts[0], parts[2]],
+    ]) {
+      const sorted = sortPartsByCentroid(shuffled);
+      expect(sorted).toEqual(expectedOrder);
+    }
+  });
+});
+
+describe('combinedCentroidOf', () => {
+  it('is the area-weighted mean of equal-area parts: the plain centroid mean', () => {
+    const parts = threeSquares();
+    // Every square has the same area (100), so the combined centroid is the
+    // unweighted mean of (0,0), (0,20), (20,0): (20/3, 20/3).
+    const c = combinedCentroidOf(parts);
+    expect(c.x).toBeCloseTo(20 / 3, 9);
+    expect(c.y).toBeCloseTo(20 / 3, 9);
+  });
+
+  it('weights a larger part more heavily', () => {
+    const small = threeSquares()[0]; // 10x10 at origin, area 100
+    const big: TracedOutline = {
+      outer: [
+        { x: 15, y: -10 },
+        { x: 35, y: -10 },
+        { x: 35, y: 10 },
+        { x: 15, y: 10 },
+      ],
+      holes: [],
+    }; // 20x20 at (25, 0), area 400
+    const c = combinedCentroidOf([small, big]);
+    // Weighted mean x: (0*100 + 25*400) / 500 = 20.
+    expect(c.x).toBeCloseTo(20, 9);
+    expect(c.y).toBeCloseTo(0, 9);
+  });
+});
+
+describe('matchPartsByGeometry', () => {
+  it('matches parts by nearest centroid regardless of index order', () => {
+    const oldParts = threeSquares();
+    // The same three parts, shuffled and each nudged by under 1 mm: still the
+    // nearest match, well inside the default 20 mm tolerance.
+    const newParts = [
+      { ...oldParts[2], outer: oldParts[2].outer.map((p) => ({ x: p.x + 0.5, y: p.y })) },
+      { ...oldParts[0], outer: oldParts[0].outer.map((p) => ({ x: p.x, y: p.y + 0.5 })) },
+      { ...oldParts[1], outer: oldParts[1].outer.map((p) => ({ x: p.x, y: p.y })) },
+    ];
+    const matches = matchPartsByGeometry(oldParts, newParts);
+    expect(matches).toHaveLength(3);
+    const byOld = new Map(matches.map((m) => [m.oldIndex, m.newIndex]));
+    expect(byOld.get(0)).toBe(1);
+    expect(byOld.get(1)).toBe(2);
+    expect(byOld.get(2)).toBe(0);
+  });
+
+  it('leaves a part with no plausible match unmatched', () => {
+    const oldParts = [threeSquares()[0]];
+    const farAway: TracedOutline = {
+      outer: [
+        { x: 995, y: 995 },
+        { x: 1005, y: 995 },
+        { x: 1005, y: 1005 },
+        { x: 995, y: 1005 },
+      ],
+      holes: [],
+    };
+    const matches = matchPartsByGeometry(oldParts, [farAway]);
+    expect(matches).toHaveLength(0);
+  });
+
+  it('assigns each side at most once even with several plausible candidates', () => {
+    // Two old parts close together; two new parts close together nearby.
+    // Nearest-first greedy assignment must not double-book either side.
+    const oldParts = [threeSquares()[0], threeSquares()[1]];
+    const newParts = [
+      { ...oldParts[0], outer: oldParts[0].outer.map((p) => ({ x: p.x + 1, y: p.y })) },
+      { ...oldParts[1], outer: oldParts[1].outer.map((p) => ({ x: p.x + 1, y: p.y })) },
+    ];
+    const matches = matchPartsByGeometry(oldParts, newParts);
+    expect(matches).toHaveLength(2);
+    const oldIndices = matches.map((m) => m.oldIndex).sort();
+    const newIndices = matches.map((m) => m.newIndex).sort();
+    expect(oldIndices).toEqual([0, 1]);
+    expect(newIndices).toEqual([0, 1]);
+  });
+});
+
+describe('placementPreservingCentroid', () => {
+  it('keeps the combined centroid fixed in world space after parts change', () => {
+    const oldParts = threeSquares();
+    // Shift every new part by (10, -4) tool-local: the combined centroid
+    // shifts by the same amount in tool-local space.
+    const newParts = oldParts.map((p) => ({
+      ...p,
+      outer: p.outer.map((v) => ({ x: v.x + 10, y: v.y - 4 })),
+    }));
+    const placement = { xMm: 100, yMm: 50, extra: 'kept' };
+    const adjusted = placementPreservingCentroid(oldParts, newParts, placement);
+    expect(adjusted.extra).toBe('kept');
+    const oldWorld = {
+      x: placement.xMm + combinedCentroidOf(oldParts).x,
+      y: placement.yMm + combinedCentroidOf(oldParts).y,
+    };
+    const newWorld = {
+      x: adjusted.xMm + combinedCentroidOf(newParts).x,
+      y: adjusted.yMm + combinedCentroidOf(newParts).y,
+    };
+    expect(newWorld.x).toBeCloseTo(oldWorld.x, 9);
+    expect(newWorld.y).toBeCloseTo(oldWorld.y, 9);
+  });
+
+  it('is the identity when the parts are unchanged', () => {
+    const parts = threeSquares();
+    const placement = { xMm: 5, yMm: -3 };
+    const adjusted = placementPreservingCentroid(parts, parts, placement);
+    expect(adjusted.xMm).toBeCloseTo(5, 9);
+    expect(adjusted.yMm).toBeCloseTo(-3, 9);
+  });
+});
+
+describe('transformToolParts invariant', () => {
+  it('the combined centroid is invariant under rotation and mirroring', () => {
+    const parts = threeSquares();
+    const before = combinedCentroidOf(parts);
+    const rotated = parts.map((p) => transformOutline(p, 40, false, before));
+    const after = combinedCentroidOf(rotated);
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+    const mirrored = parts.map((p) => transformOutline(p, 0, true, before));
+    const afterMirror = combinedCentroidOf(mirrored);
+    expect(afterMirror.x).toBeCloseTo(before.x, 6);
+    expect(afterMirror.y).toBeCloseTo(before.y, 6);
   });
 });

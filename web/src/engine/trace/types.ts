@@ -126,14 +126,16 @@ export interface FingerHole {
  * A tool destined for a shadow-board pocket, as stored in a plan entry.
  * Plain JSON throughout so it serializes with the plan file.
  *
- * `outline` is the raw traced (or primitive) silhouette in tool-local mm and
- * is never mutated by editing; the editing operations are parameters applied
+ * `parts` are the raw traced (or primitive) silhouettes in tool-local mm and
+ * are never mutated by editing; the editing operations are parameters applied
  * on read. The canonical pipeline, implemented by
- * `resolvedToolOutline(m, tool)` in `engine/trace/edit.ts`, is:
+ * `resolvedToolOutline(m, tool)` in `engine/trace/edit.ts`, runs per part and
+ * returns one resolved outline per part:
  *
- *   1. mirror (across the vertical axis through the outline centroid) and
- *      rotate (`rotationDeg` counterclockwise about the same centroid),
- *   2. remove the holes named in `filledHoleIndices`,
+ *   1. mirror (across the vertical axis through the combined centroid of all
+ *      parts) and rotate (`rotationDeg` counterclockwise about the same
+ *      combined centroid),
+ *   2. remove the holes named in `filledHoles` for that part,
  *   3. cull holes narrower than `minHoleWidthMm`,
  *   4. clearance (`offsetMm` outward offset with rounded joins).
  *
@@ -158,25 +160,37 @@ export interface FingerHole {
 export interface TracedTool {
   id: string;
   name: string;
-  outline: TracedOutline;
-  /** Counterclockwise rotation in degrees applied about the outline centroid. */
+  /**
+   * The tool's silhouette as one or more disjoint outlines sharing one rigid
+   * tool-local frame: every part carries the same rotationDeg/mirrored,
+   * offsetMm and minHoleWidthMm, and no part has its own transform. Length is
+   * always at least 1; a photo, primitive or single-region tool has exactly
+   * one part. Deterministic creation order (sortPartsByCentroid in edit.ts)
+   * makes the order stable across re-traces of the same regions.
+   */
+  parts: TracedOutline[];
+  /**
+   * Counterclockwise rotation in degrees applied about the area-weighted
+   * centroid of all parts combined (combinedCentroidOf in edit.ts).
+   */
   rotationDeg: number;
-  /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. */
+  /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. Applies per part. */
   offsetMm: number;
-  /** Mirror across the vertical axis through the outline centroid. */
+  /** Mirror across the vertical axis through the combined centroid of all parts. */
   mirrored: boolean;
   /**
    * Interior holes narrower than this (their thinnest width) are filled during
    * resolve so no thin island is left standing in the pocket. 0 keeps every
-   * hole. Measured by the polygon erosion emptiness test in edit.ts.
+   * hole. Measured by the polygon erosion emptiness test in edit.ts. Applies
+   * per part.
    */
   minHoleWidthMm: number;
   /**
-   * Indices into `outline.holes` that the user manually filled, so their
-   * islands are cut away. Stable for the life of the outline; cleared on
-   * re-trace.
+   * Holes the user manually filled, addressed by which part they belong to
+   * and their index into that part's own `holes`, so their islands are cut
+   * away. Stable for the life of the parts; cleared on re-trace.
    */
-  filledHoleIndices: number[];
+  filledHoles: { partIndex: number; holeIndex: number }[];
   fingerHoles: FingerHole[];
   /** Where the outline came from, owning that origin's re-edit data. */
   source: ToolSource;

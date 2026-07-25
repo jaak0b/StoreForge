@@ -57,6 +57,22 @@ export function boundsOf(outline: TracedOutline): OutlineBounds {
   return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
 }
 
+/** Axis-aligned bounding box of every part's outer loop combined. */
+export function boundsOfParts(parts: readonly TracedOutline[]): OutlineBounds {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const part of parts) {
+    const b = boundsOf(part);
+    minX = Math.min(minX, b.minX);
+    minY = Math.min(minY, b.minY);
+    maxX = Math.max(maxX, b.maxX);
+    maxY = Math.max(maxY, b.maxY);
+  }
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
 /**
  * Area centroid of a simple polygon; falls back to the vertex mean for
  * degenerate area. The single home for this figure; other modules import it
@@ -105,26 +121,76 @@ export function pointInPolygon(point: MmPoint, loop: MmPoint[]): boolean {
 }
 
 /**
- * Rigid transform of an outline: optional mirror across the vertical axis
- * through the outer loop's area centroid, then rotation by rotationDeg
- * counterclockwise about the same centroid. Mirroring reverses each loop's
- * point order so the winding convention (outer positive, holes negative)
- * stays valid. Pure math, no CSG.
+ * Area-weighted centroid of every part combined: the single home for the
+ * point rotationDeg and mirrored pivot about (see transformToolParts) and
+ * that re-finish placement preservation keeps fixed in world space (see
+ * placementPreservingCentroid). Falls back to the unweighted mean of the
+ * parts' own centroids when every part has degenerate (near-zero) area.
  */
-export function transformTool(
+export function combinedCentroidOf(parts: readonly TracedOutline[]): MmPoint {
+  let totalArea = 0;
+  let cx = 0;
+  let cy = 0;
+  for (const part of parts) {
+    const area = Math.abs(signedArea(part.outer));
+    const c = centroidOf(part.outer);
+    totalArea += area;
+    cx += c.x * area;
+    cy += c.y * area;
+  }
+  if (totalArea < 1e-9) {
+    let sx = 0;
+    let sy = 0;
+    for (const part of parts) {
+      const c = centroidOf(part.outer);
+      sx += c.x;
+      sy += c.y;
+    }
+    return { x: sx / parts.length, y: sy / parts.length };
+  }
+  return { x: cx / totalArea, y: cy / totalArea };
+}
+
+/**
+ * Deterministic creation order for a tool's parts: sorted by each part's own
+ * centroid, y then x, so the same set of traced regions always produces the
+ * same part order regardless of the order the caller (e.g. a segmentation
+ * mask scan) found them in. The single home for the ordering; a fresh part
+ * list from `addToolParts`/`replaceToolParts` in layoutModel.ts is always
+ * passed through this first.
+ */
+export function sortPartsByCentroid(parts: readonly TracedOutline[]): TracedOutline[] {
+  return [...parts].sort((a, b) => {
+    const ca = centroidOf(a.outer);
+    const cb = centroidOf(b.outer);
+    return ca.y !== cb.y ? ca.y - cb.y : ca.x - cb.x;
+  });
+}
+
+/**
+ * Rigid transform of a single outline about an explicit pivot: optional
+ * mirror across the vertical axis through the pivot, then rotation by
+ * rotationDeg counterclockwise about the same pivot. Mirroring reverses each
+ * loop's point order so the winding convention (outer positive, holes
+ * negative) stays valid. Pure math, no CSG. The pivot is always the tool's
+ * combined centroid (see transformToolParts); this function takes it
+ * explicitly so every part of a multi-part tool pivots about the same point.
+ */
+export function transformOutline(
   outline: TracedOutline,
   rotationDeg: number,
   mirrored: boolean,
+  pivot: MmPoint,
 ): TracedOutline {
   if (rotationDeg === 0 && !mirrored) {
     // Identity short-circuit: avoids rounding the coordinates through the
-    // centroid arithmetic when nothing changes.
+    // pivot arithmetic when nothing changes.
     return {
       outer: outline.outer.map((p) => ({ ...p })),
       holes: outline.holes.map((loop) => loop.map((p) => ({ ...p }))),
     };
   }
-  const c = centroidOf(outline.outer);
+  const c = pivot;
   const rad = (rotationDeg * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
@@ -141,6 +207,24 @@ export function transformTool(
     return points;
   };
   return { outer: mapLoop(outline.outer), holes: outline.holes.map(mapLoop) };
+}
+
+/**
+ * Rigid transform of every part of a tool: mirror and rotate each part about
+ * the combined centroid of all parts (combinedCentroidOf), the single tool-
+ * local pivot every part shares. Because every part pivots about that one
+ * point, the combined centroid of the transformed parts equals the combined
+ * centroid of the originals: it is invariant under this transform, which is
+ * what makes it a stable reference for rotationDeg/mirrored and for re-finish
+ * placement preservation.
+ */
+export function transformToolParts(
+  parts: readonly TracedOutline[],
+  rotationDeg: number,
+  mirrored: boolean,
+): TracedOutline[] {
+  const pivot = combinedCentroidOf(parts);
+  return parts.map((part) => transformOutline(part, rotationDeg, mirrored, pivot));
 }
 
 /**
@@ -429,15 +513,95 @@ export function holeIndexAt(outline: TracedOutline, point: MmPoint): number | nu
 }
 
 /**
- * The canonical editing pipeline (see TracedTool in types.ts): mirror and
- * rotate, remove the manually filled holes, cull holes narrower than the
- * tool's minimum, then clearance. Returns the pocket-ready outline in
- * tool-local mm. Finger holes are not applied here; the pocket generator cuts
- * them separately.
+ * The canonical editing pipeline (see TracedTool in types.ts), run per part:
+ * mirror and rotate every part about the tool's combined centroid, remove
+ * that part's manually filled holes, cull holes narrower than the tool's
+ * minimum, then clearance. Returns one pocket-ready outline per part, in
+ * tool-local mm, in the same order as `tool.parts`. Finger holes are not
+ * applied here; the pocket generator cuts them separately.
  */
-export function resolvedToolOutline(m: ManifoldToplevel, tool: TracedTool): TracedOutline {
-  const placed = transformTool(tool.outline, tool.rotationDeg, tool.mirrored);
-  const kept = withoutFilledHoles(placed, tool.filledHoleIndices);
-  const culled = cullNarrowHoles(m, kept, tool.minHoleWidthMm);
-  return applyClearance(m, culled, tool.offsetMm);
+export function resolvedToolOutline(m: ManifoldToplevel, tool: TracedTool): TracedOutline[] {
+  const placedParts = transformToolParts(tool.parts, tool.rotationDeg, tool.mirrored);
+  return placedParts.map((placed, partIndex) => {
+    const holeIndices = tool.filledHoles
+      .filter((f) => f.partIndex === partIndex)
+      .map((f) => f.holeIndex);
+    const kept = withoutFilledHoles(placed, holeIndices);
+    const culled = cullNarrowHoles(m, kept, tool.minHoleWidthMm);
+    return applyClearance(m, culled, tool.offsetMm);
+  });
+}
+
+/**
+ * One old part matched to one new part after a re-finish, by geometry.
+ * See matchPartsByGeometry.
+ */
+export interface PartMatch {
+  oldIndex: number;
+  newIndex: number;
+}
+
+/**
+ * Matches a tool's parts before and after a re-finish (re-trace or re-sketch)
+ * by geometry: nearest centroid, unique on both sides (each old part matches
+ * at most one new part and vice versa), greedy by ascending distance. A part
+ * whose nearest counterpart lies beyond matchToleranceMm is left unmatched.
+ * Used by the re-finish flow to remap `filledHoles` onto the corresponding
+ * new part index instead of the old numeric index landing on whatever part
+ * now happens to sit there. Pure math, no CSG.
+ */
+export function matchPartsByGeometry(
+  oldParts: readonly TracedOutline[],
+  newParts: readonly TracedOutline[],
+  matchToleranceMm = 20,
+): PartMatch[] {
+  const oldCentroids = oldParts.map((p) => centroidOf(p.outer));
+  const newCentroids = newParts.map((p) => centroidOf(p.outer));
+  const candidates: { oldIndex: number; newIndex: number; distance: number }[] = [];
+  for (let i = 0; i < oldCentroids.length; i += 1) {
+    for (let j = 0; j < newCentroids.length; j += 1) {
+      const distance = Math.hypot(
+        oldCentroids[i].x - newCentroids[j].x,
+        oldCentroids[i].y - newCentroids[j].y,
+      );
+      if (distance <= matchToleranceMm) {
+        candidates.push({ oldIndex: i, newIndex: j, distance });
+      }
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance);
+  const usedOld = new Set<number>();
+  const usedNew = new Set<number>();
+  const matches: PartMatch[] = [];
+  for (const candidate of candidates) {
+    if (usedOld.has(candidate.oldIndex) || usedNew.has(candidate.newIndex)) continue;
+    usedOld.add(candidate.oldIndex);
+    usedNew.add(candidate.newIndex);
+    matches.push({ oldIndex: candidate.oldIndex, newIndex: candidate.newIndex });
+  }
+  return matches;
+}
+
+/**
+ * The placement that keeps a re-finished tool's combined centroid fixed at
+ * the same world position it held before re-finishing. combinedCentroidOf is
+ * the pivot rotationDeg/mirrored transform about, so it is invariant under
+ * that transform (see transformToolParts): the raw (untransformed) combined
+ * centroid's world position is exactly `placement plus that centroid`,
+ * independent of rotation or mirroring. Swapping in the new parts' combined
+ * centroid and solving for the placement that keeps the same world point
+ * gives this adjustment. Pure math, no CSG.
+ */
+export function placementPreservingCentroid<P extends { xMm: number; yMm: number }>(
+  oldParts: readonly TracedOutline[],
+  newParts: readonly TracedOutline[],
+  placement: P,
+): P {
+  const oldCentroid = combinedCentroidOf(oldParts);
+  const newCentroid = combinedCentroidOf(newParts);
+  return {
+    ...placement,
+    xMm: placement.xMm + oldCentroid.x - newCentroid.x,
+    yMm: placement.yMm + oldCentroid.y - newCentroid.y,
+  };
 }

@@ -27,24 +27,26 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return {
     id: 'l-tool',
     name: 'L wrench',
-    outline: {
-      outer: [
-        { x: 0, y: 0 },
-        { x: 30, y: 0 },
-        { x: 30, y: 10 },
-        { x: 10, y: 10 },
-        { x: 10, y: 22 },
-        { x: 0, y: 22 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 30, y: 0 },
+          { x: 30, y: 10 },
+          { x: 10, y: 10 },
+          { x: 10, y: 22 },
+          { x: 0, y: 22 },
+        ],
+        holes: [],
+      },
+    ],
     rotationDeg: 0,
     offsetMm: 0,
     mirrored: false,
     minHoleWidthMm: 0,
-    filledHoleIndices: [],
-    clicks: [],
+    filledHoles: [],
     fingerHoles: [],
+    source: { kind: 'primitive' },
     ...overrides,
   };
 }

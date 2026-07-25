@@ -51,19 +51,21 @@ function tracedBin(traceSourceId?: string): TracedBin {
         {
           id: 't1',
           name: 'Tool',
-          outline: {
-            outer: [
-              { x: 0, y: 0 },
-              { x: 10, y: 0 },
-              { x: 0, y: 10 },
-            ],
-            holes: [],
-          },
+          parts: [
+            {
+              outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 0, y: 10 },
+              ],
+              holes: [],
+            },
+          ],
           rotationDeg: 0,
           offsetMm: 0,
           mirrored: false,
           minHoleWidthMm: 0,
-          filledHoleIndices: [],
+          filledHoles: [],
           fingerHoles: [],
           source: { kind: 'primitive' },
         },

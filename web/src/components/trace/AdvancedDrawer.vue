@@ -6,7 +6,7 @@ import { CLEARANCE_CHOICES, HOLE_WIDTH_CHOICES, useToolTrace } from '../../store
 import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import { DEFAULT_DRAFT_ANGLE_DEG, validateDraftAngleDeg } from '../../engine/carve/sweep';
-import type { FingerHole } from '../../engine/trace/types';
+import type { FingerHole, TracedTool } from '../../engine/trace/types';
 import { overallHeightMm } from '../../heightHint';
 import LabelIconField from '../LabelIconField.vue';
 import ProductSelect from '../ProductSelect.vue';
@@ -145,6 +145,11 @@ function applyDefaultDepth(value: number): void {
 }
 
 /** True when the hole is an elongated slot rather than a circle. */
+/** Total interior holes across every part of the tool's raw (unresolved) outline. */
+function toolHoleCount(tool: TracedTool): number {
+  return tool.parts.reduce((count, part) => count + part.holes.length, 0);
+}
+
 function isSlot(hole: FingerHole): boolean {
   return hole.x2 !== undefined && hole.y2 !== undefined;
 }
@@ -317,8 +322,8 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
               pocket. 0 keeps every hole.
             </p>
             <div class="text-caption text-medium-emphasis mt-2 readout">
-              <div><span>Holes in outline</span><span>{{ tool.outline.holes.length }}</span></div>
-              <div><span>Filled</span><span>{{ tool.filledHoleIndices.length }}</span></div>
+              <div><span>Holes in outline</span><span>{{ toolHoleCount(tool) }}</span></div>
+              <div><span>Filled</span><span>{{ tool.filledHoles.length }}</span></div>
             </div>
             <v-switch
               :model-value="tool.mirrored"

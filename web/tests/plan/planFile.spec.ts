@@ -85,27 +85,29 @@ function pockets(
       {
         id: 't1',
         name: 'Wrench',
-        outline: {
-          outer: [
-            { x: -10, y: -5 },
-            { x: 10, y: -5 },
-            { x: 10, y: 5 },
-            { x: -10, y: 5 },
-          ],
-          holes: [
-            [
-              { x: -2, y: -1 },
-              { x: -2, y: 1 },
-              { x: 2, y: 1 },
-              { x: 2, y: -1 },
+        parts: [
+          {
+            outer: [
+              { x: -10, y: -5 },
+              { x: 10, y: -5 },
+              { x: 10, y: 5 },
+              { x: -10, y: 5 },
             ],
-          ],
-        },
+            holes: [
+              [
+                { x: -2, y: -1 },
+                { x: -2, y: 1 },
+                { x: 2, y: 1 },
+                { x: 2, y: -1 },
+              ],
+            ],
+          },
+        ],
         rotationDeg: 90,
         offsetMm: 0.5,
         mirrored: true,
         minHoleWidthMm: 3.2,
-        filledHoleIndices: [0],
+        filledHoles: [{ partIndex: 0, holeIndex: 0 }],
         fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
         source,
       },
@@ -746,7 +748,7 @@ describe('trace sources in plan files', () => {
       entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
     };
     delete raw.entries[0].product.bin.pockets.tools[0].minHoleWidthMm;
-    delete raw.entries[0].product.bin.pockets.tools[0].filledHoleIndices;
+    delete raw.entries[0].product.bin.pockets.tools[0].filledHoles;
     const result = parsePlanFile(JSON.stringify({ ...raw, version: 4, batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -754,7 +756,7 @@ describe('trace sources in plan files', () => {
       const bin = result.plan.entries[0].product as { bin: TracedBin };
       // The layout model's default minimum hole width, and no filled holes.
       expect(bin.bin.pockets.tools[0].minHoleWidthMm).toBe(1.6);
-      expect(bin.bin.pockets.tools[0].filledHoleIndices).toEqual([]);
+      expect(bin.bin.pockets.tools[0].filledHoles).toEqual([]);
     }
   });
 
@@ -774,14 +776,14 @@ describe('trace sources in plan files', () => {
     ).toBe('entry t1: pocket tool t1: The minimum hole width must be a number of at least 0 mm.');
   });
 
-  it('rejects a filled hole index outside the outline holes', () => {
+  it('rejects a filled hole naming a hole index outside its part', () => {
     const bad = pockets();
-    // The fixture tool has one hole, so index 1 refers to nothing.
-    bad.tools[0].filledHoleIndices = [1];
+    // The fixture tool's one part has one hole, so hole index 1 refers to nothing.
+    bad.tools[0].filledHoles = [{ partIndex: 0, holeIndex: 1 }];
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      "entry t1: pocket tool t1: The filled hole list must contain whole numbers referring to the tool's own holes.",
+      "entry t1: pocket tool t1: A filled hole must name a whole part index and a whole hole index that refer to the tool's own parts and holes.",
     );
   });
 
@@ -992,7 +994,7 @@ describe('pockets in plan files', () => {
 
   it('rejects an outline with fewer than 3 outer points', () => {
     const bad = pockets();
-    bad.tools[0].outline.outer = [
+    bad.tools[0].parts[0].outer = [
       { x: 0, y: 0 },
       { x: 1, y: 0 },
     ];
@@ -1001,7 +1003,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: pocket tool t1: The outline needs at least 3 outer points.',
+      'entry t1: pocket tool t1: A traced part needs at least 3 outer points.',
     );
   });
 
@@ -1213,7 +1215,7 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
         {
           id: 't1',
           name: 'Wrench',
-          outline: pockets().tools[0].outline,
+          outline: pockets().tools[0].parts[0],
           clicks: [
             { x: 120, y: 80, label: 1 },
             { x: 40, y: 30, label: 0 },
@@ -2213,12 +2215,12 @@ describe('plan v11 trace sessions', () => {
     return {
       id,
       name: 'Tool',
-      outline: squareOutline,
+      parts: [squareOutline],
       rotationDeg: 0,
       offsetMm: 1.5,
       mirrored: false,
       minHoleWidthMm: 0,
-      filledHoleIndices: [],
+      filledHoles: [],
       fingerHoles: [],
     };
   }

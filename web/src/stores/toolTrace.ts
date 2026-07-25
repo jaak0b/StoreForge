@@ -257,8 +257,8 @@ export const useToolTrace = defineStore('toolTrace', () => {
     layout.setToolTransform(layoutState, toolId, patch);
   }
 
-  function toggleFilledHole(toolId: string, holeIndex: number): void {
-    layout.toggleFilledHole(layoutState, toolId, holeIndex);
+  function toggleFilledHole(toolId: string, partIndex: number, holeIndex: number): void {
+    layout.toggleFilledHole(layoutState, toolId, partIndex, holeIndex);
   }
 
   function setPocketDepth(toolId: string, depthMm: number): void {

@@ -52,8 +52,8 @@ export interface PocketBinParams extends SlottedBinParams {
 /** A tool resolved and moved into bin-local mm, ready to cut as a pocket. */
 export interface PlacedPocket {
   tool: TracedTool;
-  /** The tool's resolved outline, translated into bin-local mm. */
-  outline: TracedOutline;
+  /** The tool's resolved parts, translated into bin-local mm. */
+  outlines: TracedOutline[];
   /** The tool's finger holes, translated into bin-local mm. */
   fingerHoles: FingerHole[];
   pocketDepthMm: number;
@@ -62,7 +62,7 @@ export interface PlacedPocket {
 }
 
 /**
- * Resolve each placement against its tool and translate the resolved outline
+ * Resolve each placement against its tool and translate the resolved parts
  * and finger holes into bin-local mm (bin centred on the origin). A placement
  * naming a missing tool is a user-fixable plan problem and errors with a
  * user-worded message.
@@ -80,17 +80,17 @@ export function placeTools(
         'A pocket refers to a tool that is no longer in the plan. Remove that pocket and place the tool again.',
       );
     }
-    const resolved = resolvedToolOutline(m, tool);
+    const resolvedParts = resolvedToolOutline(m, tool);
     const move = (p: MmPoint): MmPoint => ({
       x: p.x + placement.xMm,
       y: p.y + placement.yMm,
     });
     return {
       tool,
-      outline: {
+      outlines: resolvedParts.map((resolved) => ({
         outer: resolved.outer.map(move),
         holes: resolved.holes.map((loop) => loop.map(move)),
-      },
+      })),
       fingerHoles: tool.fingerHoles.map((hole) => ({
         ...hole,
         x: hole.x + placement.xMm,
@@ -114,6 +114,25 @@ function outlineSection(m: ManifoldToplevel, outline: TracedOutline): CrossSecti
 }
 
 /**
+ * Cross-section of every part of a placed pocket combined, as one EvenOdd
+ * fill over all parts' outer-plus-holes loops. Because a tool's parts are
+ * disjoint by construction, one EvenOdd fill over their concatenated loops is
+ * exactly the union of each part's own EvenOdd fill, so this stands in for
+ * "the tool's whole footprint" everywhere the pre-multi-part code used a
+ * single outline's section.
+ */
+function outlinesSection(m: ManifoldToplevel, outlines: TracedOutline[]): CrossSection {
+  const loops: MmPoint[][] = [];
+  for (const outline of outlines) {
+    loops.push(outline.outer, ...outline.holes);
+  }
+  const polygons: SimplePolygon[] = loops.map((loop) =>
+    loop.map((p) => [p.x, p.y] as [number, number]),
+  );
+  return new m.CrossSection(polygons, 'EvenOdd');
+}
+
+/**
  * How far a drafted pocket's walls flare outward at the rim, in mm: a wall
  * leaning outward by the draft angle over the pocket's depth moves the rim
  * out by tan(angle) times depth. 0 for a straight (angle 0) pocket.
@@ -130,7 +149,7 @@ function draftFlareMm(placed: PlacedPocket): number {
  * spends). At draft angle 0 this is the base outline itself.
  */
 function draftedOutlineSection(m: ManifoldToplevel, placed: PlacedPocket): CrossSection {
-  const base = outlineSection(m, placed.outline);
+  const base = outlinesSection(m, placed.outlines);
   const flareMm = draftFlareMm(placed);
   if (flareMm === 0) return base;
   const grown = base.offset(
@@ -157,7 +176,7 @@ function placedCutSection(
 ): CrossSection {
   let section = atRim
     ? draftedOutlineSection(m, placed)
-    : outlineSection(m, placed.outline);
+    : outlinesSection(m, placed.outlines);
   for (const hole of placed.fingerHoles) {
     const circle = outlineSection(m, fingerHoleOutline(hole));
     const merged = section.add(circle);
@@ -184,17 +203,31 @@ function sectionsOverlap(a: CrossSection, b: CrossSection): boolean {
 }
 
 /**
+ * Result of validating a pocket layout: warnings about legal but probably
+ * unintended overlaps between different tools' pockets. Returned, never
+ * thrown: two tools' pockets merging into one cavity is the user's decision
+ * to make, mirroring the cutout flow's CutoutPlacementWarning.
+ */
+export interface PocketLayoutValidation {
+  warnings: string[];
+}
+
+/**
  * Validate a pocket layout against the bin parameters: pockets cannot share a
  * bin with divider walls, every pocket depth must stay above the interior
- * floor, every pocket (outline and finger holes) must stay inside the
- * interior cavity, and pockets must not overlap each other. All violations
- * are user-fixable and error with user-worded messages.
+ * floor, and every pocket (outline and finger holes) must stay inside the
+ * interior cavity. These are user-fixable and error with user-worded
+ * messages. An overlap between two DIFFERENT tools' pockets is no longer an
+ * error: it returns as a warning, since the two pockets simply merge into one
+ * printed cavity. Parts belonging to the same tool are never compared against
+ * each other (they are disjoint by construction and combined into one
+ * cross-section per tool by outlinesSection).
  */
 export function validatePocketLayout(
   m: ManifoldToplevel,
   params: BinParams & { labelSlot?: boolean } & Pick<SlottedBinParams, 'fusedLabel'>,
   placed: PlacedPocket[],
-): void {
+): PocketLayoutValidation {
   if (params.walls.length > 0) {
     throw new Error(
       'Tool pockets cannot be combined with divider walls. Remove the dividers to add pockets.',
@@ -225,6 +258,7 @@ export function validatePocketLayout(
   const structure = labelStructureStrip(m, params);
   const slotStrip = structure?.section ?? null;
   const structureName = structure?.name ?? '';
+  const warnings: string[] = [];
   try {
     // Whether a violation of a rim-level check disappears when the pocket's
     // base outline is judged instead: then the draft flare alone is the cause,
@@ -270,6 +304,10 @@ export function validatePocketLayout(
         );
       }
     }
+    // Different tools' pockets are allowed to overlap: they merge into one
+    // printed cavity, which is legal but probably worth flagging. Parts of
+    // the same tool are never compared here since i and j always name two
+    // distinct placements (distinct tools), never two parts of one tool.
     for (let i = 0; i < placed.length; i += 1) {
       for (let j = i + 1; j < placed.length; j += 1) {
         const a = draftedOutlineSection(m, placed[i]);
@@ -278,21 +316,9 @@ export function validatePocketLayout(
         a.delete();
         b.delete();
         if (overlapping) {
-          let flareCause = false;
-          if (draftFlareMm(placed[i]) > 0 || draftFlareMm(placed[j]) > 0) {
-            const baseA = outlineSection(m, placed[i].outline);
-            const baseB = outlineSection(m, placed[j].outline);
-            flareCause = !sectionsOverlap(baseA, baseB);
-            baseA.delete();
-            baseB.delete();
-          }
-          throw new Error(
-            flareCause
-              ? `The pockets for "${placed[i].tool.name}" and "${placed[j].tool.name}" ` +
-                'overlap at the rim because of their draft flare. Move them apart or ' +
-                'reduce the draft angles.'
-              : `The pockets for "${placed[i].tool.name}" and "${placed[j].tool.name}" overlap. ` +
-                'Move them apart.',
+          warnings.push(
+            `The pockets for "${placed[i].tool.name}" and "${placed[j].tool.name}" overlap ` +
+              'and will merge into one cavity.',
           );
         }
       }
@@ -302,6 +328,7 @@ export function validatePocketLayout(
     slotStrip?.delete();
     for (const section of cutSections) section.delete();
   }
+  return { warnings };
 }
 
 /**
@@ -320,13 +347,39 @@ export function validatePocketLayout(
  * when the user supersedes it; an export passes nothing, exactly as the cutout
  * flow does.
  */
+/** What a pocket-bin carve produces beyond the solid itself: see PocketLayoutValidation. */
+export interface PocketCarve {
+  body: Manifold;
+  warnings: string[];
+}
+
 export function buildPocketBinBody(
   m: ManifoldToplevel,
   params: PocketBinParams,
   ctx?: ExecutionContext,
 ): Manifold {
+  // Overlap between different tools' pockets is a warning, not a blocker: the
+  // carve proceeds and the merged region simply prints as one cavity. This
+  // straight-through build (used by the final single-shot mesh and STL
+  // exports, which have nothing to show a warning on) discards them, exactly
+  // as it always proceeded past a legal overlap before this rule existed; a
+  // caller that needs them calls buildPocketBinBodyWithWarnings instead.
+  return buildPocketBinBodyWithWarnings(m, params, ctx).body;
+}
+
+/**
+ * Build the pocket-bin body along with its non-blocking placement warnings
+ * (currently just cross-tool pocket overlaps). See buildPocketBinBody for the
+ * build itself; this is the same build, with the warnings threaded out for a
+ * caller (the live preview) that can show them.
+ */
+export function buildPocketBinBodyWithWarnings(
+  m: ManifoldToplevel,
+  params: PocketBinParams,
+  ctx?: ExecutionContext,
+): PocketCarve {
   const placed = placeTools(m, params.tools, params.placements);
-  validatePocketLayout(m, params, placed);
+  const { warnings } = validatePocketLayout(m, params, placed);
 
   const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const solidTop = bodyTop + LIP_HEIGHT;
@@ -334,7 +387,7 @@ export function buildPocketBinBody(
   const cutters: Manifold[] = [];
   for (const pocket of placed) {
     const pocketBottom = bodyTop - pocket.pocketDepthMm;
-    const section = outlineSection(m, pocket.outline);
+    const section = outlinesSection(m, pocket.outlines);
     const extruded = section
       .extrude(solidTop + CARVE_OVERLAP_EPS - pocketBottom)
       .translate(0, 0, pocketBottom);
@@ -381,7 +434,7 @@ export function buildPocketBinBody(
           })
         : applyCavityEditsMemoized(m, body, makeBinSolid, edits);
   }
-  return body;
+  return { body, warnings };
 }
 
 /**
@@ -396,6 +449,28 @@ export function generatePocketBin(
   ctx?: ExecutionContext,
 ): PartMeshes {
   return finishBinPartMeshes(m, font, buildPocketBinBody(m, params, ctx), params);
+}
+
+/** What a pocket-bin preview carve produces beyond its meshes: see PocketCarve. */
+export interface PocketMeshesResult {
+  meshes: PartMeshes;
+  warnings: string[];
+}
+
+/**
+ * Generate a pocket bin's preview meshes along with its non-blocking
+ * placement warnings. The live preview flow's own entry point; the
+ * single-shot mesh and STL exports use generatePocketBin/generatePocketBinUnion
+ * instead, which have nothing to show a warning on.
+ */
+export function generatePocketBinWithWarnings(
+  m: ManifoldToplevel,
+  font: Font,
+  params: PocketBinParams,
+  ctx?: ExecutionContext,
+): PocketMeshesResult {
+  const { body, warnings } = buildPocketBinBodyWithWarnings(m, params, ctx);
+  return { meshes: finishBinPartMeshes(m, font, body, params), warnings };
 }
 
 /**

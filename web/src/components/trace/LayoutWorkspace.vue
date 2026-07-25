@@ -280,6 +280,13 @@ const paintBinding: CavityPaintBinding = {
  * The button is disabled with this as its tooltip, so an invalid layout can
  * never be queued.
  */
+/**
+ * Non-blocking placement warnings from the last landed carve (currently just
+ * cross-tool pocket overlaps): informational only, never disables Add to
+ * queue, mirroring the cutout tab's own warning rows.
+ */
+const pocketWarnings = computed<string[]>(() => carved.value?.warnings ?? []);
+
 const submitBlocker = computed<string | null>(() => {
   if (trace.placements.length === 0) {
     return 'Trace and place at least one tool before adding the bin.';
@@ -448,6 +455,15 @@ function cancelEdit(): void {
       <div class="queue-float">
         <v-alert v-if="errorMessage" type="error" density="compact" class="mb-2 float-alert">
           {{ errorMessage }}
+        </v-alert>
+        <v-alert
+          v-for="(warning, i) in pocketWarnings"
+          :key="i"
+          type="warning"
+          density="compact"
+          class="mb-2 float-alert"
+        >
+          {{ warning }}
         </v-alert>
         <v-alert v-if="addError" type="warning" density="compact" class="mb-2 float-alert">
           {{ addError }}

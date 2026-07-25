@@ -132,13 +132,14 @@ function tracedBin(overrides: Partial<TracedBin> = {}): TracedBin {
       {
         id: 't1',
         name: 'wrench',
-        outline: { outer: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 4 }, { x: 0, y: 4 }], holes: [] },
-        clicks: [],
+        parts: [
+          { outer: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 4 }, { x: 0, y: 4 }], holes: [] },
+        ],
         rotationDeg: 0,
         offsetMm: 0.5,
         mirrored: false,
         minHoleWidthMm: 0,
-        filledHoleIndices: [],
+        filledHoles: [],
         fingerHoles: [],
       },
     ],

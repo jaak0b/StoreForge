@@ -34,24 +34,26 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return {
     id: 'l-tool',
     name: 'L wrench',
-    outline: {
-      outer: [
-        { x: 0, y: 0 },
-        { x: 30, y: 0 },
-        { x: 30, y: 10 },
-        { x: 10, y: 10 },
-        { x: 10, y: 22 },
-        { x: 0, y: 22 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 30, y: 0 },
+          { x: 30, y: 10 },
+          { x: 10, y: 10 },
+          { x: 10, y: 22 },
+          { x: 0, y: 22 },
+        ],
+        holes: [],
+      },
+    ],
     rotationDeg: 0,
     offsetMm: 0,
     mirrored: false,
     minHoleWidthMm: 0,
-    filledHoleIndices: [],
-    clicks: [],
+    filledHoles: [],
     fingerHoles: [],
+    source: { kind: 'primitive' },
     ...overrides,
   };
 }
@@ -65,22 +67,24 @@ function holedPlate(overrides: Partial<TracedTool> = {}): TracedTool {
   return lTool({
     id: 'plate',
     name: 'Holed plate',
-    outline: {
-      outer: [
-        { x: 0, y: 0 },
-        { x: 30, y: 0 },
-        { x: 30, y: 22 },
-        { x: 0, y: 22 },
-      ],
-      holes: [
-        [
-          { x: 12, y: 8 },
-          { x: 12, y: 14 },
-          { x: 18, y: 14 },
-          { x: 18, y: 8 },
+    parts: [
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 30, y: 0 },
+          { x: 30, y: 22 },
+          { x: 0, y: 22 },
         ],
-      ],
-    },
+        holes: [
+          [
+            { x: 12, y: 8 },
+            { x: 12, y: 14 },
+            { x: 18, y: 14 },
+            { x: 18, y: 8 },
+          ],
+        ],
+      },
+    ],
     ...overrides,
   });
 }
@@ -242,13 +246,13 @@ describe('buildPocketBinBody', () => {
 
   it('keeps an unfilled hole as an island in the placed pocket outline', () => {
     const [placed] = placeTools(m, [holedPlate()], [{ ...centeredL, toolId: 'plate' }]);
-    expect(placed.outline.holes).toHaveLength(1);
+    expect(placed.outlines[0].holes).toHaveLength(1);
   });
 
   it('drops a manually filled hole from the placed pocket outline', () => {
-    const tool = holedPlate({ filledHoleIndices: [0] });
+    const tool = holedPlate({ filledHoles: [{ partIndex: 0, holeIndex: 0 }] });
     const [placed] = placeTools(m, [tool], [{ ...centeredL, toolId: 'plate' }]);
-    expect(placed.outline.holes).toHaveLength(0);
+    expect(placed.outlines[0].holes).toHaveLength(0);
   });
 
   it('cuts away the island of a filled hole so the pocket floor is clear there', () => {
@@ -262,7 +266,7 @@ describe('buildPocketBinBody', () => {
     const filled = buildPocketBinBody(
       m,
       params({
-        tools: [holedPlate({ filledHoleIndices: [0] })],
+        tools: [holedPlate({ filledHoles: [{ partIndex: 0, holeIndex: 0 }] })],
         placements: [{ ...centeredL, toolId: 'plate' }],
       }),
     );
@@ -286,13 +290,27 @@ describe('buildPocketBinBody', () => {
     ).toThrow(/into the bin wall/);
   });
 
-  it('rejects overlapping pockets', () => {
+  it('warns rather than rejects overlapping pockets between different tools, and still carves', () => {
     const tools = [lTool(), lTool({ id: 'l-2', name: 'Second wrench' })];
     const placements: ToolPlacement[] = [
       centeredL,
       { toolId: 'l-2', xMm: -10, yMm: -5.1, pocketDepthMm: 5, draftAngleDeg: 0 },
     ];
-    expect(() => buildPocketBinBody(m, params({ tools, placements }))).toThrow(/overlap/);
+    const placed = placeTools(m, tools, placements);
+    const { warnings } = validatePocketLayout(m, params({ tools, placements }), placed);
+    expect(warnings.some((w) => /overlap/.test(w))).toBe(true);
+    expect(() => buildPocketBinBody(m, params({ tools, placements }))).not.toThrow();
+  });
+
+  it('stays watertight when two tools overlapping pockets merge into one cavity', () => {
+    const tools = [lTool(), lTool({ id: 'l-2', name: 'Second wrench' })];
+    const placements: ToolPlacement[] = [
+      centeredL,
+      { toolId: 'l-2', xMm: -10, yMm: -5.1, pocketDepthMm: 5, draftAngleDeg: 0 },
+    ];
+    const body = buildPocketBinBody(m, params({ tools, placements }));
+    expect(body.status()).toBe('NoError');
+    body.delete();
   });
 
   it('rejects a placement whose tool is missing from the plan', () => {
@@ -354,7 +372,7 @@ function circleTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return lTool({
     id: 'circle',
     name: 'Round gauge',
-    outline: primitiveOutline('circle', { diameterMm: 20 }),
+    parts: [primitiveOutline('circle', { diameterMm: 20 })],
     ...overrides,
   });
 }
@@ -477,16 +495,18 @@ describe('drafted pocket walls', () => {
     expect(() => buildPocketBinBody(m, accepted)).not.toThrow();
   });
 
-  it('rejects pockets whose drafted rims overlap, naming the flare', () => {
+  it('warns rather than rejects pockets whose drafted rims overlap because of draft flare', () => {
     const tools = [circleTool(), circleTool({ id: 'circle-2', name: 'Second gauge' })];
     // 1 mm apart at the base, but each rim flares 1.82 mm outward.
     const placements: ToolPlacement[] = [
       { ...circlePlacement, xMm: -10.5, draftAngleDeg: 20 },
       { ...circlePlacement, toolId: 'circle-2', xMm: 10.5, draftAngleDeg: 20 },
     ];
-    expect(() => buildPocketBinBody(m, params({ tools, placements }))).toThrow(
-      /draft flare/,
-    );
+    const flaredParams = params({ tools, placements });
+    const placed = placeTools(m, tools, placements);
+    const { warnings } = validatePocketLayout(m, flaredParams, placed);
+    expect(warnings.some((w) => /overlap/.test(w))).toBe(true);
+    expect(() => buildPocketBinBody(m, flaredParams)).not.toThrow();
     const apartAtZero: ToolPlacement[] = placements.map((p) => ({ ...p, draftAngleDeg: 0 }));
     expect(() =>
       buildPocketBinBody(m, params({ tools, placements: apartAtZero })),

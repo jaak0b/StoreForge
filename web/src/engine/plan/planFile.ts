@@ -203,18 +203,36 @@ export function validatePockets(
     if (typeof tool.name !== 'string') {
       return `${subject}: pocket tool ${tool.id}: The tool name must be text.`;
     }
-    const outline = tool.outline as Record<string, unknown> | null | undefined;
-    if (typeof outline !== 'object' || outline === null || Array.isArray(outline)) {
-      return `${subject}: pocket tool ${tool.id}: The outline must be an object.`;
+    // A version 11 tool carries one or more disjoint parts; a version 10 or
+    // earlier tool carries a single `outline` field, migrated to a one-part
+    // `parts` list by pickPockets. Accept whichever this tool has.
+    let partsRaw: unknown[];
+    if (Array.isArray(tool.parts)) {
+      partsRaw = tool.parts;
+      if (partsRaw.length === 0) {
+        return `${subject}: pocket tool ${tool.id}: The tool needs at least one traced part.`;
+      }
+    } else if (tool.outline !== undefined) {
+      partsRaw = [tool.outline];
+    } else {
+      return `${subject}: pocket tool ${tool.id}: The tool is missing its traced parts.`;
     }
-    if (!isMmPointList(outline.outer) || (outline.outer as MmPoint[]).length < 3) {
-      return `${subject}: pocket tool ${tool.id}: The outline needs at least 3 outer points.`;
-    }
-    if (
-      !Array.isArray(outline.holes) ||
-      !outline.holes.every((loop) => isMmPointList(loop) && loop.length >= 3)
-    ) {
-      return `${subject}: pocket tool ${tool.id}: Each outline hole must be a list of points.`;
+    const partHoleCounts: number[] = [];
+    for (const rawPart of partsRaw) {
+      const part = rawPart as Record<string, unknown> | null | undefined;
+      if (typeof part !== 'object' || part === null || Array.isArray(part)) {
+        return `${subject}: pocket tool ${tool.id}: A traced part must be an object.`;
+      }
+      if (!isMmPointList(part.outer) || (part.outer as MmPoint[]).length < 3) {
+        return `${subject}: pocket tool ${tool.id}: A traced part needs at least 3 outer points.`;
+      }
+      if (
+        !Array.isArray(part.holes) ||
+        !part.holes.every((loop) => isMmPointList(loop) && loop.length >= 3)
+      ) {
+        return `${subject}: pocket tool ${tool.id}: Each part's hole must be a list of points.`;
+      }
+      partHoleCounts.push((part.holes as unknown[]).length);
     }
     if (!isFiniteNumber(tool.rotationDeg)) {
       return `${subject}: pocket tool ${tool.id}: The rotation angle must be a number.`;
@@ -225,16 +243,39 @@ export function validatePockets(
     if (typeof tool.mirrored !== 'boolean') {
       return `${subject}: pocket tool ${tool.id}: The mirrored setting must be true or false.`;
     }
-    // minHoleWidthMm and filledHoleIndices were added after the first traced
-    // entries shipped; older plans omit them, so undefined is accepted and
-    // defaulted (the default width, no filled holes) on load.
+    // minHoleWidthMm and the filled-hole list were added after the first
+    // traced entries shipped; older plans omit them, so undefined is
+    // accepted and defaulted (the default width, no filled holes) on load.
     if (tool.minHoleWidthMm !== undefined) {
       if (!isFiniteNumber(tool.minHoleWidthMm) || tool.minHoleWidthMm < 0) {
         return `${subject}: pocket tool ${tool.id}: The minimum hole width must be a number of at least 0 mm.`;
       }
     }
-    if (tool.filledHoleIndices !== undefined) {
-      const holeCount = (outline.holes as unknown[]).length;
+    if (tool.filledHoles !== undefined) {
+      if (!Array.isArray(tool.filledHoles)) {
+        return `${subject}: pocket tool ${tool.id}: The filled hole list must be a list.`;
+      }
+      for (const rawFilled of tool.filledHoles) {
+        const filled = rawFilled as Record<string, unknown> | null;
+        const partIndex = filled?.partIndex;
+        const holeIndex = filled?.holeIndex;
+        if (
+          typeof filled !== 'object' ||
+          filled === null ||
+          !Number.isInteger(partIndex) ||
+          (partIndex as number) < 0 ||
+          (partIndex as number) >= partHoleCounts.length ||
+          !Number.isInteger(holeIndex) ||
+          (holeIndex as number) < 0 ||
+          (holeIndex as number) >= partHoleCounts[partIndex as number]
+        ) {
+          return `${subject}: pocket tool ${tool.id}: A filled hole must name a whole part index and a whole hole index that refer to the tool's own parts and holes.`;
+        }
+      }
+    } else if (tool.filledHoleIndices !== undefined) {
+      // Version 10 or earlier (single-part) filled holes: whole numbers into
+      // the tool's one outline's holes, migrated onto part 0 by pickPockets.
+      const holeCount = partHoleCounts[0] ?? 0;
       if (
         !Array.isArray(tool.filledHoleIndices) ||
         !tool.filledHoleIndices.every(
@@ -424,19 +465,36 @@ export function pickPockets(
   migratedSessionId: string | null,
 ): BinPockets {
   const tools = (raw.tools as Record<string, unknown>[]).map((tool): TracedTool => {
-    const outline = tool.outline as Record<string, unknown>;
+    // Version 11 carries `parts`; version 10 or earlier carries one `outline`,
+    // wrapped here into a one-element parts list.
+    const rawParts = (
+      Array.isArray(tool.parts) ? tool.parts : [tool.outline]
+    ) as Record<string, unknown>[];
+    const parts = rawParts.map((part) => ({
+      outer: (part.outer as MmPoint[]).map((p) => ({ x: p.x, y: p.y })),
+      holes: (part.holes as MmPoint[][]).map((loop) => loop.map((p) => ({ x: p.x, y: p.y }))),
+    }));
+    const filledHoles =
+      tool.filledHoles !== undefined
+        ? (tool.filledHoles as { partIndex: number; holeIndex: number }[]).map((f) => ({
+            partIndex: f.partIndex,
+            holeIndex: f.holeIndex,
+          }))
+        : // Version 10 or earlier: whole numbers into the tool's one outline,
+          // which is now part 0.
+          ((tool.filledHoleIndices as number[] | undefined) ?? []).map((holeIndex) => ({
+            partIndex: 0,
+            holeIndex,
+          }));
     return {
       id: tool.id as string,
       name: tool.name as string,
-      outline: {
-        outer: (outline.outer as MmPoint[]).map((p) => ({ x: p.x, y: p.y })),
-        holes: (outline.holes as MmPoint[][]).map((loop) => loop.map((p) => ({ x: p.x, y: p.y }))),
-      },
+      parts,
       rotationDeg: tool.rotationDeg as number,
       offsetMm: tool.offsetMm as number,
       mirrored: tool.mirrored as boolean,
       minHoleWidthMm: (tool.minHoleWidthMm as number | undefined) ?? DEFAULT_MIN_HOLE_WIDTH_MM,
-      filledHoleIndices: ((tool.filledHoleIndices as number[] | undefined) ?? []).slice(),
+      filledHoles,
       fingerHoles: (tool.fingerHoles as FingerHole[]).map((hole) => ({
         x: hole.x,
         y: hole.y,

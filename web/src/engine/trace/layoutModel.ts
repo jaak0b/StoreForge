@@ -25,7 +25,7 @@ import type {
 function cloneSource(source: ToolSource): ToolSource {
   return JSON.parse(JSON.stringify(source)) as ToolSource;
 }
-import { boundsOf, transformTool } from './edit';
+import { boundsOfParts, sortPartsByCentroid, transformToolParts } from './edit';
 import { binInteriorSizeMm, cellsForInteriorMm, PITCH } from '../gridfinity/constants';
 import { DEFAULT_DRAFT_ANGLE_DEG } from '../carve/sweep';
 import { assertNever } from '../plan/types';
@@ -149,7 +149,7 @@ export function layoutBounds(tools: TracedTool[], placements: ToolPlacement[]): 
         'A pocket refers to a tool that is no longer in the plan. Remove that pocket and place the tool again.',
       );
     }
-    const b = boundsOf(transformTool(tool.outline, tool.rotationDeg, tool.mirrored));
+    const b = boundsOfParts(transformToolParts(tool.parts, tool.rotationDeg, tool.mirrored));
     minX = Math.min(minX, b.minX - tool.offsetMm + placement.xMm);
     maxX = Math.max(maxX, b.maxX + tool.offsetMm + placement.xMm);
     minY = Math.min(minY, b.minY - tool.offsetMm + placement.yMm);
@@ -364,55 +364,59 @@ export function setGridManually(state: LayoutState, axis: 'x' | 'y', value: numb
   return applied;
 }
 
-/** Recentres an outline on its bounding-box middle, into tool-local mm. */
-function recentred(outline: TracedOutline): TracedOutline {
-  const bounds = boundsOf(outline);
+/** Recentres a set of parts on their combined bounding-box middle, into tool-local mm. */
+function recentredParts(parts: TracedOutline[]): TracedOutline[] {
+  const bounds = boundsOfParts(parts);
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cy = (bounds.minY + bounds.maxY) / 2;
   const recentre = (p: MmPoint): MmPoint => ({ x: p.x - cx, y: p.y - cy });
-  return {
-    outer: outline.outer.map(recentre),
-    holes: outline.holes.map((loop) => loop.map(recentre)),
-  };
+  return parts.map((part) => ({
+    outer: part.outer.map(recentre),
+    holes: part.holes.map((loop) => loop.map(recentre)),
+  }));
 }
 
 /**
- * Adds a tool from an outline in sheet mm: the outline is recentered so
- * tool-local coordinates sit about the origin. With placeAtSheetPosition the
- * placement restores the outline's sheet coordinates in the world frame, so
- * the layout opens with the tools arranged as they lay on the paper; without
- * it (primitive shapes, which carry no sheet position) the tool lands inside
- * cell 0. Re-sizes unless manual.
+ * Adds a tool from one or more outlines in sheet mm (see TracedTool.parts):
+ * the parts are ordered deterministically (sortPartsByCentroid) then
+ * recentred together so tool-local coordinates sit about their combined
+ * origin. With placeAtSheetPosition the placement restores the parts' sheet
+ * coordinates in the world frame, so the layout opens with the tools arranged
+ * as they lay on the paper; without it (primitive shapes, which carry no
+ * sheet position) the tool lands inside cell 0. Re-sizes unless manual.
  */
-export function addTool(
+export function addToolParts(
   state: LayoutState,
-  outline: TracedOutline,
+  outlines: TracedOutline[],
   name: string,
   pocketDepthMm: number,
   source: ToolSource,
   placeAtSheetPosition = false,
 ): TracedTool {
+  if (outlines.length === 0) {
+    throw new Error('A tool needs at least one traced part.');
+  }
+  const ordered = sortPartsByCentroid(outlines);
   const tool: TracedTool = {
     id: crypto.randomUUID(),
     name,
-    outline: recentred(outline),
+    parts: recentredParts(ordered),
     rotationDeg: 0,
     offsetMm: DEFAULT_CLEARANCE_MM,
     mirrored: false,
     minHoleWidthMm: DEFAULT_MIN_HOLE_WIDTH_MM,
-    filledHoleIndices: [],
+    filledHoles: [],
     fingerHoles: [],
     source: cloneSource(source),
   };
   state.tools.push(tool);
   if (placeAtSheetPosition) {
-    // Recentring subtracted the outline's bounding-box middle, so adding it
-    // back as the placement offset restores every point's sheet coordinates
-    // exactly (equivalently: the outline's area centroid lands at its sheet
-    // centroid).
+    // Recentring subtracted the parts' combined bounding-box middle, so
+    // adding it back as the placement offset restores every point's sheet
+    // coordinates exactly.
     state.placements.push({
       toolId: tool.id,
-      ...sheetPositionOf(outline),
+      ...sheetPositionOf(ordered),
       pocketDepthMm,
       draftAngleDeg: DEFAULT_DRAFT_ANGLE_DEG,
     });
@@ -420,7 +424,7 @@ export function addTool(
     // A new tool lands with its clearance-grown box starting at the margin
     // inside cell 0's interior, so it covers the fewest fixed grid cells its
     // size allows instead of straddling the cell boundary at the origin.
-    const b = boundsOf(tool.outline);
+    const b = boundsOfParts(tool.parts);
     const start = (PITCH - binInteriorSizeMm(1)) / 2 + AUTO_SIZE_MARGIN_MM;
     state.placements.push({
       toolId: tool.id,
@@ -434,39 +438,64 @@ export function addTool(
   return tool;
 }
 
-/** The placement offset that restores a sheet-frame outline's coordinates. */
-function sheetPositionOf(sheetOutline: TracedOutline): { xMm: number; yMm: number } {
-  const b = boundsOf(sheetOutline);
+/** Adds a single-part tool from one outline in sheet mm. See addToolParts. */
+export function addTool(
+  state: LayoutState,
+  outline: TracedOutline,
+  name: string,
+  pocketDepthMm: number,
+  source: ToolSource,
+  placeAtSheetPosition = false,
+): TracedTool {
+  return addToolParts(state, [outline], name, pocketDepthMm, source, placeAtSheetPosition);
+}
+
+/** The placement offset that restores a sheet-frame part set's coordinates. */
+function sheetPositionOf(sheetParts: TracedOutline[]): { xMm: number; yMm: number } {
+  const b = boundsOfParts(sheetParts);
   return { xMm: (b.minX + b.maxX) / 2, yMm: (b.minY + b.maxY) / 2 };
 }
 
 /**
- * Replaces an existing tool's outline and clicks after re-tracing it from
- * the stored photo; the name and editing parameters stay. The placement
- * moves to the new outline's sheet position (manual moves since the original
- * accept are not tracked, so the re-traced spot on the paper wins). The
- * manually filled holes are cleared because they indexed the old outline's
- * holes; the minimum hole width (a width policy, not an index) stays.
- * Re-sizes unless manual.
+ * Replaces an existing tool's parts and clicks after re-tracing it from the
+ * stored photo; the name and editing parameters stay. The placement moves to
+ * the new parts' sheet position (manual moves since the original accept are
+ * not tracked, so the re-traced spot on the paper wins). The manually filled
+ * holes are cleared because they indexed the old parts' holes; the minimum
+ * hole width (a width policy, not an index) stays. Re-sizes unless manual.
  */
+export function replaceToolParts(
+  state: LayoutState,
+  toolId: string,
+  outlines: TracedOutline[],
+  source: ToolSource,
+): void {
+  if (outlines.length === 0) {
+    throw new Error('A tool needs at least one traced part.');
+  }
+  const tool = state.tools.find((t) => t.id === toolId);
+  if (tool === undefined) return;
+  const ordered = sortPartsByCentroid(outlines);
+  tool.parts = recentredParts(ordered);
+  tool.source = cloneSource(source);
+  tool.filledHoles = [];
+  const placement = state.placements.find((p) => p.toolId === toolId);
+  if (placement !== undefined) {
+    const position = sheetPositionOf(ordered);
+    placement.xMm = position.xMm;
+    placement.yMm = position.yMm;
+  }
+  refit(state);
+}
+
+/** Replaces a single-part tool's outline after a re-trace. See replaceToolParts. */
 export function replaceToolOutline(
   state: LayoutState,
   toolId: string,
   outline: TracedOutline,
   source: ToolSource,
 ): void {
-  const tool = state.tools.find((t) => t.id === toolId);
-  if (tool === undefined) return;
-  tool.outline = recentred(outline);
-  tool.source = cloneSource(source);
-  tool.filledHoleIndices = [];
-  const placement = state.placements.find((p) => p.toolId === toolId);
-  if (placement !== undefined) {
-    const position = sheetPositionOf(outline);
-    placement.xMm = position.xMm;
-    placement.yMm = position.yMm;
-  }
-  refit(state);
+  replaceToolParts(state, toolId, [outline], source);
 }
 
 /** Removes a tool and its placement. Re-sizes unless manual. */
@@ -521,19 +550,27 @@ export function setToolTransform(
 }
 
 /**
- * Toggles whether the hole at holeIndex (an index into the tool's raw outline
- * holes) is manually filled. Filling a hole cuts its island away in the
- * pocket. An index outside the outline's holes is ignored. Re-sizes unless
- * manual (a filled hole does not change the footprint, but this keeps the
- * mutation on the same path as the others).
+ * Toggles whether the hole at holeIndex (an index into part partIndex's own
+ * raw holes) is manually filled. Filling a hole cuts its island away in the
+ * pocket. A part or hole index outside the tool's parts is ignored. Re-sizes
+ * unless manual (a filled hole does not change the footprint, but this keeps
+ * the mutation on the same path as the others).
  */
-export function toggleFilledHole(state: LayoutState, toolId: string, holeIndex: number): void {
+export function toggleFilledHole(
+  state: LayoutState,
+  toolId: string,
+  partIndex: number,
+  holeIndex: number,
+): void {
   const tool = state.tools.find((t) => t.id === toolId);
   if (tool === undefined) return;
-  if (holeIndex < 0 || holeIndex >= tool.outline.holes.length) return;
-  const at = tool.filledHoleIndices.indexOf(holeIndex);
-  if (at === -1) tool.filledHoleIndices.push(holeIndex);
-  else tool.filledHoleIndices.splice(at, 1);
+  const part = tool.parts[partIndex];
+  if (part === undefined || holeIndex < 0 || holeIndex >= part.holes.length) return;
+  const at = tool.filledHoles.findIndex(
+    (f) => f.partIndex === partIndex && f.holeIndex === holeIndex,
+  );
+  if (at === -1) tool.filledHoles.push({ partIndex, holeIndex });
+  else tool.filledHoles.splice(at, 1);
   refit(state);
 }
 

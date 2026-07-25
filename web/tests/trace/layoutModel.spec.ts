@@ -35,24 +35,26 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return {
     id: 'l-tool',
     name: 'L wrench',
-    outline: {
-      outer: [
-        { x: 0, y: 0 },
-        { x: 30, y: 0 },
-        { x: 30, y: 10 },
-        { x: 10, y: 10 },
-        { x: 10, y: 25 },
-        { x: 0, y: 25 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 30, y: 0 },
+          { x: 30, y: 10 },
+          { x: 10, y: 10 },
+          { x: 10, y: 25 },
+          { x: 0, y: 25 },
+        ],
+        holes: [],
+      },
+    ],
     rotationDeg: 0,
     offsetMm: 0,
     mirrored: false,
     minHoleWidthMm: 0,
-    filledHoleIndices: [],
-    clicks: [],
+    filledHoles: [],
     fingerHoles: [],
+    source: { kind: 'primitive' },
     ...overrides,
   };
 }
@@ -62,28 +64,30 @@ function twoHoleTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return lTool({
     id: 'holed',
     name: 'Holed plate',
-    outline: {
-      outer: [
-        { x: 0, y: 0 },
-        { x: 20, y: 0 },
-        { x: 20, y: 20 },
-        { x: 0, y: 20 },
-      ],
-      holes: [
-        [
-          { x: 3, y: 8 },
-          { x: 3, y: 12 },
-          { x: 7, y: 12 },
-          { x: 7, y: 8 },
+    parts: [
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 20, y: 0 },
+          { x: 20, y: 20 },
+          { x: 0, y: 20 },
         ],
-        [
-          { x: 13, y: 8 },
-          { x: 13, y: 12 },
-          { x: 17, y: 12 },
-          { x: 17, y: 8 },
+        holes: [
+          [
+            { x: 3, y: 8 },
+            { x: 3, y: 12 },
+            { x: 7, y: 12 },
+            { x: 7, y: 8 },
+          ],
+          [
+            { x: 13, y: 8 },
+            { x: 13, y: 12 },
+            { x: 17, y: 12 },
+            { x: 17, y: 8 },
+          ],
         ],
-      ],
-    },
+      },
+    ],
     ...overrides,
   });
 }
@@ -93,15 +97,17 @@ function barTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return lTool({
     id: 'bar',
     name: 'Bar',
-    outline: {
-      outer: [
-        { x: -35, y: -6 },
-        { x: 35, y: -6 },
-        { x: 35, y: 6 },
-        { x: -35, y: 6 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: -35, y: -6 },
+          { x: 35, y: -6 },
+          { x: 35, y: 6 },
+          { x: -35, y: 6 },
+        ],
+        holes: [],
+      },
+    ],
     ...overrides,
   });
 }
@@ -111,15 +117,17 @@ function squareTool(id: string): TracedTool {
   return lTool({
     id,
     name: `Square ${id}`,
-    outline: {
-      outer: [
-        { x: -5, y: -5 },
-        { x: 5, y: -5 },
-        { x: 5, y: 5 },
-        { x: -5, y: 5 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: -5, y: -5 },
+          { x: 5, y: -5 },
+          { x: 5, y: 5 },
+          { x: -5, y: 5 },
+        ],
+        holes: [],
+      },
+    ],
   });
 }
 
@@ -556,7 +564,7 @@ describe('tool list and transform actions', () => {
       { kind: 'primitive' },
     );
     expect(tool.minHoleWidthMm).toBe(DEFAULT_MIN_HOLE_WIDTH_MM);
-    expect(tool.filledHoleIndices).toEqual([]);
+    expect(tool.filledHoles).toEqual([]);
   });
 
   it('updates a tool minimum hole width through setToolTransform', () => {
@@ -601,24 +609,28 @@ describe('toggleFilledHole', () => {
   it('adds then removes a hole index on repeated toggles', () => {
     const tool = twoHoleTool();
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
-    toggleFilledHole(s, 'holed', 1);
-    expect(tool.filledHoleIndices).toEqual([1]);
-    toggleFilledHole(s, 'holed', 1);
-    expect(tool.filledHoleIndices).toEqual([]);
+    toggleFilledHole(s, 'holed', 0, 1);
+    expect(tool.filledHoles).toEqual([{ partIndex: 0, holeIndex: 1 }]);
+    toggleFilledHole(s, 'holed', 0, 1);
+    expect(tool.filledHoles).toEqual([]);
   });
 
   it('ignores an index outside the tool holes', () => {
     const tool = twoHoleTool();
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
-    toggleFilledHole(s, 'holed', 2);
-    toggleFilledHole(s, 'holed', -1);
-    expect(tool.filledHoleIndices).toEqual([]);
+    toggleFilledHole(s, 'holed', 0, 2);
+    toggleFilledHole(s, 'holed', 0, -1);
+    toggleFilledHole(s, 'holed', 1, 0);
+    expect(tool.filledHoles).toEqual([]);
   });
 });
 
 describe('replaceToolOutline hole fields', () => {
   it('clears filled holes but keeps the minimum hole width', () => {
-    const tool = twoHoleTool({ filledHoleIndices: [1], minHoleWidthMm: 3.2 });
+    const tool = twoHoleTool({
+      filledHoles: [{ partIndex: 0, holeIndex: 1 }],
+      minHoleWidthMm: 3.2,
+    });
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
     replaceToolOutline(s, 'holed', {
       outer: [
@@ -629,7 +641,7 @@ describe('replaceToolOutline hole fields', () => {
       ],
       holes: [],
     }, { kind: 'primitive' });
-    expect(tool.filledHoleIndices).toEqual([]);
+    expect(tool.filledHoles).toEqual([]);
     expect(tool.minHoleWidthMm).toBe(3.2);
   });
 });
@@ -668,7 +680,7 @@ describe('brush strokes on tools', () => {
   });
 
   it('replaces brush strokes and clears filled holes on re-trace', () => {
-    const tool = twoHoleTool({ filledHoleIndices: [0] });
+    const tool = twoHoleTool({ filledHoles: [{ partIndex: 0, holeIndex: 0 }] });
     tool.source = {
       kind: 'photo',
       sessionId: 's1',
@@ -688,7 +700,7 @@ describe('brush strokes on tools', () => {
         { mode: 'erase', radiusMm: 3, points: [{ x: 2, y: 2 }] },
       ]);
     }
-    expect(tool.filledHoleIndices).toEqual([]);
+    expect(tool.filledHoles).toEqual([]);
   });
 
   it('copies brush strokes onto a duplicated tool', () => {
@@ -718,12 +730,12 @@ describe('referencedSessionIds', () => {
     const base = {
       id: '',
       name: 'Tool',
-      outline: { outer: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], holes: [] },
+      parts: [{ outer: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], holes: [] }],
       rotationDeg: 0,
       offsetMm: 0,
       mirrored: false,
       minHoleWidthMm: 0,
-      filledHoleIndices: [],
+      filledHoles: [],
       fingerHoles: [],
     };
     const tools: TracedTool[] = [
