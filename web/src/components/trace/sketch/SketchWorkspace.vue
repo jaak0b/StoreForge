@@ -12,6 +12,12 @@ import {
 } from '../../../engine/sketch/constraintApplicability';
 import { constraintKindSentence } from '../../../engine/sketch/constraintGlyphs';
 import { assertNever } from '../../../engine/plan/types';
+import {
+  measureLineLength,
+  measureRadius,
+  measurePointDistance,
+  measureAngleBetweenLines,
+} from '../../../engine/sketch/measure';
 
 const emit = defineEmits<{
   (e: 'finish'): void;
@@ -19,12 +25,17 @@ const emit = defineEmits<{
 }>();
 
 const editor = useSketchEditor();
-const { activeTool, sketch, chainTailId, solveState } = storeToRefs(editor);
+const {
+  activeTool,
+  sketch,
+  chainTailId,
+  chainTailSegmentId,
+  solveState,
+  pendingClicks,
+  pendingHitPointIds,
+  cursorMm,
+} = storeToRefs(editor);
 
-/** Multi-click tool buffers: picked mm points awaiting the tool's next click. */
-const pendingClicks = ref<MmPoint[]>([]);
-/** Hit-tested existing point id for each entry in pendingClicks, or null. */
-const pendingHitPointIds = ref<(string | null)[]>([]);
 /** A one-line hint under the toolbar naming the tool's next expected click. */
 const toolHint = ref('');
 
@@ -36,6 +47,8 @@ const toolButtons: { tool: SketchTool; label: string; icon?: string }[] = [
   { tool: 'arcThreePoint', label: 'Arc', icon: 'mdi-vector-curve' },
   { tool: 'arcTangent', label: 'Tangent arc' },
   { tool: 'circle', label: 'Circle', icon: 'mdi-circle-outline' },
+  { tool: 'rectangle', label: 'Rectangle', icon: 'mdi-rectangle-outline' },
+  { tool: 'slot', label: 'Slot', icon: 'mdi-capsule' },
   { tool: 'mirror', label: 'Mirror line', icon: 'mdi-reflect-horizontal' },
   { tool: 'dimension', label: 'Dimension', icon: 'mdi-ruler' },
 ];
@@ -51,10 +64,21 @@ const constraintButtons: Record<ApplicableConstraintKind, { label: string; icon:
   symmetric: { label: 'Symmetric', icon: 'mdi-reflect-horizontal' },
 };
 
+/**
+ * The quick numeric entry: typing digits while the line or circle tool is
+ * mid-placement, or the width prompt that opens automatically after the
+ * slot tool's second click. One shared small input drives all three, per
+ * the spec's "same inline numeric input pattern".
+ */
+type QuickEntryKind = 'segmentLength' | 'diameter' | 'slotWidth';
+const quickEntryKind = ref<QuickEntryKind | null>(null);
+const quickEntryText = ref('');
+
 function selectTool(tool: SketchTool): void {
   activeTool.value = tool;
-  pendingClicks.value = [];
-  pendingHitPointIds.value = [];
+  editor.clearPendingClicks();
+  quickEntryKind.value = null;
+  quickEntryText.value = '';
   editor.selectedConstraintId = null;
   editor.endChain();
   switch (tool) {
@@ -62,7 +86,9 @@ function selectTool(tool: SketchTool): void {
       toolHint.value = 'Click an entity to select it, or drag a point to move the geometry.';
       break;
     case 'line':
-      toolHint.value = 'Click to place each corner. Click the first point again to close the outline.';
+      toolHint.value =
+        'Click to place each corner. Click the first point again to close the outline. ' +
+        'Type a number to set the next segment\'s length.';
       break;
     case 'arcThreePoint':
       toolHint.value = 'Click the arc start, then the arc end, then a point the arc passes through.';
@@ -71,10 +97,17 @@ function selectTool(tool: SketchTool): void {
       toolHint.value = 'Click the end point of the arc; it continues tangent from the last chain point.';
       break;
     case 'circle':
-      toolHint.value = 'Click the circle center, then a point on the circle.';
+      toolHint.value =
+        'Click the circle center, then a point on the circle. Type a number to set the diameter.';
+      break;
+    case 'rectangle':
+      toolHint.value = 'Click one corner, then the opposite corner.';
+      break;
+    case 'slot':
+      toolHint.value = 'Click the two ends of the slot axis, then type the width.';
       break;
     case 'mirror':
-      toolHint.value = 'Click the two ends of the mirror line, then the two points to keep symmetric.';
+      toolHint.value = 'Click the two ends of the mirror line.';
       break;
     case 'dimension':
       toolHint.value = 'Click one or two entities, then type the value.';
@@ -84,6 +117,94 @@ function selectTool(tool: SketchTool): void {
   }
 }
 selectTool('select');
+
+/** Whether the quick numeric entry is currently applicable, and which kind:
+ * a line tool mid-chain (segment length), a circle tool after its center
+ * click (diameter), or a slot tool after both axis clicks (width prompt). */
+const quickEntryApplicable = computed<QuickEntryKind | null>(() => {
+  if (activeTool.value === 'line' && chainTailId.value !== null) return 'segmentLength';
+  if (activeTool.value === 'circle' && pendingClicks.value.length === 1) return 'diameter';
+  if (activeTool.value === 'slot' && pendingClicks.value.length === 2) return 'slotWidth';
+  return null;
+});
+
+/** Opens the quick numeric entry for the given kind, seeded with the first
+ * typed character (or empty, for the slot width prompt which opens on its
+ * own rather than on a keypress). */
+function openQuickEntry(kind: QuickEntryKind, seedChar: string): void {
+  quickEntryKind.value = kind;
+  quickEntryText.value = seedChar;
+}
+
+/** Commits the quick numeric entry, applying the typed length/diameter/width
+ * to the segment, circle or slot being placed, and adding the matching
+ * dimension constraint. Silently ignores an unparseable value (the field
+ * stays open for another attempt); Escape is the only way to abandon it. */
+function commitQuickEntry(): void {
+  const kind = quickEntryKind.value;
+  if (kind === null) return;
+  const value = Number(quickEntryText.value);
+  if (!Number.isFinite(value) || value <= 0) return;
+  switch (kind) {
+    case 'segmentLength': {
+      if (chainTailId.value === null) break;
+      const tail = sketch.value.entities.find((e) => e.id === chainTailId.value);
+      if (tail === undefined || tail.kind !== 'point') break;
+      const cursor = cursorMm.value ?? { x: tail.x + value, y: tail.y };
+      const dx = cursor.x - tail.x;
+      const dy = cursor.y - tail.y;
+      const dirLen = Math.hypot(dx, dy) || 1;
+      const target = { x: tail.x + (dx / dirLen) * value, y: tail.y + (dy / dirLen) * value };
+      editor.appendChainPoint(target);
+      if (chainTailSegmentId.value !== null) {
+        editor.addDimension({
+          kind: 'length', id: editor.nextId(), lineId: chainTailSegmentId.value, mm: value,
+        });
+      }
+      scheduleSolve();
+      break;
+    }
+    case 'diameter': {
+      if (pendingClicks.value.length !== 1) break;
+      const center = pendingClicks.value[0];
+      const centerHitId = pendingHitPointIds.value[0] ?? undefined;
+      const circleId = editor.addCircle(center, value / 2, centerHitId);
+      editor.addDimension({ kind: 'diameter', id: editor.nextId(), entityId: circleId, mm: value });
+      editor.clearPendingClicks();
+      scheduleSolve();
+      break;
+    }
+    case 'slotWidth': {
+      if (pendingClicks.value.length !== 2) break;
+      const [a, b] = pendingClicks.value;
+      editor.addSlot(a, b, value);
+      editor.clearPendingClicks();
+      scheduleSolve();
+      break;
+    }
+    default:
+      assertNever(kind);
+  }
+  quickEntryKind.value = null;
+  quickEntryText.value = '';
+}
+
+/** Abandons the quick numeric entry without applying anything. */
+function cancelQuickEntry(): void {
+  quickEntryKind.value = null;
+  quickEntryText.value = '';
+}
+
+/** Blur commits a parseable value, same as Enter; an unparseable value on
+ * blur cancels instead of leaving the field stuck open. */
+function onQuickEntryBlur(): void {
+  const value = Number(quickEntryText.value);
+  if (Number.isFinite(value) && value > 0) {
+    commitQuickEntry();
+  } else {
+    cancelQuickEntry();
+  }
+}
 
 let solveTimer: ReturnType<typeof setTimeout> | null = null;
 /** Runs the solver shortly after every edit, coalescing rapid changes. */
@@ -138,26 +259,31 @@ const showConstraintRow = computed<boolean>(
 function beginDimensionFromSelection(): void {
   const picked = selectedEntities.value;
   let created: string | null = null;
+  let measured = 10;
   if (picked.length === 1 && picked[0].kind === 'line') {
     const id = editor.nextId();
-    editor.addDimension({ kind: 'length', id, lineId: picked[0].id, mm: 10 });
+    measured = measureLineLength(sketch.value, picked[0].id);
+    editor.addDimension({ kind: 'length', id, lineId: picked[0].id, mm: measured });
     created = id;
   } else if (picked.length === 1 && (picked[0].kind === 'arc' || picked[0].kind === 'circle')) {
     const id = editor.nextId();
-    editor.addDimension({ kind: 'radius', id, entityId: picked[0].id, mm: 10 });
+    measured = measureRadius(sketch.value, picked[0].id);
+    editor.addDimension({ kind: 'radius', id, entityId: picked[0].id, mm: measured });
     created = id;
   } else if (picked.length === 2 && picked.every((e) => e.kind === 'point')) {
     const id = editor.nextId();
-    editor.addDimension({ kind: 'distance', id, p1Id: picked[0].id, p2Id: picked[1].id, mm: 10 });
+    measured = measurePointDistance(sketch.value, picked[0].id, picked[1].id);
+    editor.addDimension({ kind: 'distance', id, p1Id: picked[0].id, p2Id: picked[1].id, mm: measured });
     created = id;
   } else if (picked.length === 2 && picked.every((e) => e.kind === 'line')) {
     const id = editor.nextId();
+    measured = measureAngleBetweenLines(sketch.value, picked[0].id, picked[1].id);
     editor.addDimension({
       kind: 'angle',
       id,
       l1Id: picked[0].id,
       l2Id: picked[1].id,
-      degrees: 90,
+      degrees: measured,
     });
     created = id;
   } else {
@@ -165,7 +291,10 @@ function beginDimensionFromSelection(): void {
       'Select one line for a length, an arc or circle for a radius, two points for a distance, or two lines for an angle.';
     return;
   }
-  dimensionDraft.value = { constraintId: created, text: '', isNew: true };
+  // Pre-filled with the measured current value: Enter without editing locks
+  // the dimension at the size it already is, instead of the solver yanking
+  // the geometry to an arbitrary placeholder.
+  dimensionDraft.value = { constraintId: created, text: String(measured), isNew: true };
   editor.selectedIds = [];
 }
 
@@ -182,9 +311,9 @@ function commitDimensionDraft(): void {
 }
 
 /**
- * Abandons the dimension entry field. A freshly inserted placeholder
- * dimension (mm: 10, never committed) is removed so it does not linger in
- * the sketch; editing an existing dimension's value just closes the field.
+ * Abandons the dimension entry field (Escape only). A freshly inserted
+ * placeholder dimension (never committed) is removed so it does not linger
+ * in the sketch; editing an existing dimension's value just closes the field.
  */
 function cancelDimensionDraft(): void {
   const draft = dimensionDraft.value;
@@ -193,6 +322,22 @@ function cancelDimensionDraft(): void {
     scheduleSolve();
   }
   dimensionDraft.value = null;
+}
+
+/**
+ * Blur commits a parseable value, same as Enter; only an unparseable value on
+ * blur falls back to canceling (Escape is the deliberate cancel gesture).
+ * This stops the solver seeing a placeholder mid-entry: losing focus with a
+ * typed, valid number now locks the dimension at that value.
+ */
+function onDimensionBlur(): void {
+  if (dimensionDraft.value === null) return;
+  const value = Number(dimensionDraft.value.text);
+  if (Number.isFinite(value) && value > 0) {
+    commitDimensionDraft();
+  } else {
+    cancelDimensionDraft();
+  }
 }
 
 /** Click-to-edit on an existing on-canvas dimension label. */
@@ -361,10 +506,12 @@ function commitCalibration(): void {
   calibrationClicks.value = [];
 }
 
-function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
+function onCanvasClick(at: MmPoint, hitPointId: string | null, suppressAutoHV = false): void {
+  // A quick numeric entry is open (typed length/diameter, or the slot width
+  // prompt): canvas clicks are ignored until it is committed or cancelled.
+  if (quickEntryKind.value !== null) return;
   if (calibrating.value) {
-    pendingClicks.value = [];
-    pendingHitPointIds.value = [];
+    editor.clearPendingClicks();
     calibrationClicks.value.push(at);
     if (calibrationClicks.value.length > 2) calibrationClicks.value = [at];
     return;
@@ -376,7 +523,7 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
       if (hitPointId !== null && chainTailId.value !== null) {
         editor.closeChainTo(hitPointId);
       } else {
-        editor.appendChainPoint(at, hitPointId ?? undefined);
+        editor.appendChainPoint(at, hitPointId ?? undefined, suppressAutoHV);
       }
       scheduleSolve();
       break;
@@ -428,12 +575,32 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null): void {
       }
       break;
     }
+    case 'rectangle': {
+      pendingClicks.value.push(at);
+      if (pendingClicks.value.length === 2) {
+        const [a, b] = pendingClicks.value;
+        editor.addRectangle(a, b);
+        editor.clearPendingClicks();
+        scheduleSolve();
+      }
+      break;
+    }
+    case 'slot': {
+      pendingClicks.value.push(at);
+      // The width prompt opens on its own once both axis ends are picked,
+      // rather than waiting for a keypress like the line/circle quick entry;
+      // pendingClicks stays populated until commitQuickEntry consumes it.
+      if (pendingClicks.value.length === 2) {
+        openQuickEntry('slotWidth', '');
+      }
+      break;
+    }
     case 'mirror': {
       pendingClicks.value.push(at);
       if (pendingClicks.value.length === 2) {
         const [a, b] = pendingClicks.value;
         editor.addMirrorLine(a, b);
-        pendingClicks.value = [];
+        editor.clearPendingClicks();
         scheduleSolve();
       }
       break;
@@ -514,6 +681,12 @@ function isTypingTarget(target: EventTarget | null): boolean {
  * line/arc chain first; with no chain open it clears the selection instead.
  * Only one of the two Escape behaviors happens per press.
  */
+/** A single digit, decimal point or minus sign: the first keystroke that
+ * opens the typed-length/diameter quick entry. */
+function isNumericStartKey(key: string): boolean {
+  return /^[0-9.]$/.test(key);
+}
+
 function onWorkspaceKeydown(event: KeyboardEvent): void {
   if (isTypingTarget(event.target)) return;
   const withModifier = event.ctrlKey || event.metaKey;
@@ -535,13 +708,22 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
     return;
   }
   if (event.key === 'Escape') {
-    if (chainTailId.value !== null) {
+    // Clears the multi-click tool's pending picks first, so Escape during a
+    // three-point arc or mirror line drops the partial pick instead of only
+    // ending the line/arc chain (or doing nothing, for tools with no chain).
+    if (pendingClicks.value.length > 0) {
+      editor.clearPendingClicks();
+    } else if (chainTailId.value !== null) {
       editor.endChain();
     } else if (editor.selectedConstraintId !== null) {
       editor.selectedConstraintId = null;
     } else if (editor.selectedIds.length > 0) {
       editor.selectedIds = [];
     }
+    return;
+  }
+  if (quickEntryKind.value === null && quickEntryApplicable.value !== null && isNumericStartKey(event.key)) {
+    openQuickEntry(quickEntryApplicable.value, event.key);
   }
 }
 
@@ -704,7 +886,24 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
       style="max-width: 200px"
       @keyup.enter="commitDimensionDraft"
       @keyup.esc="cancelDimensionDraft"
-      @blur="cancelDimensionDraft"
+      @blur="onDimensionBlur"
+    />
+    <v-text-field
+      v-if="quickEntryKind !== null"
+      v-model="quickEntryText"
+      :label="
+        quickEntryKind === 'segmentLength'
+          ? 'Segment length in mm'
+          : quickEntryKind === 'diameter'
+            ? 'Circle diameter in mm'
+            : 'Slot width in mm'
+      "
+      density="compact"
+      autofocus
+      style="max-width: 200px"
+      @keyup.enter="commitQuickEntry"
+      @keyup.esc="cancelQuickEntry"
+      @blur="onQuickEntryBlur"
     />
     <div class="canvas-holder">
       <SketchCanvas
@@ -718,7 +917,13 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
       />
     </div>
     <div class="status-rows">
-      <div v-for="(row, i) in statusRows" :key="i" class="status-row">
+      <div
+        v-for="(row, i) in statusRows"
+        :key="i"
+        class="status-row"
+        @mouseenter="row.label === 'Conflicting constraint' && (editor.hoveredConstraintId = row.value)"
+        @mouseleave="row.label === 'Conflicting constraint' && (editor.hoveredConstraintId = null)"
+      >
         <span class="status-label">{{ row.label }}</span>
         <span class="status-value">{{ row.value }}</span>
         <v-btn
