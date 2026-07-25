@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useSketchEditor } from '../../../stores/sketchEditor';
 import {
@@ -14,7 +14,7 @@ import {
 } from '../viewTransform';
 import { assertNever } from '../../../engine/plan/types';
 import type { MmPoint } from '../../../engine/trace/types';
-import type { SketchEntity } from '../../../engine/sketch/model';
+import type { SketchDimension, SketchEntity } from '../../../engine/sketch/model';
 import {
   arcFromThreePoints,
   arcTangentToPoint,
@@ -22,7 +22,14 @@ import {
 } from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
-import { formatMm, formatDegrees } from '../../../engine/sketch/measure';
+import { formatMm, formatDegrees, measureAngleBetweenLines, measureLineLength, measurePointDistance, measureRadius } from '../../../engine/sketch/measure';
+import {
+  DEFAULT_LABEL_OFFSET,
+  dimensionAnchor,
+  dimensionGraphics,
+  type DimensionGraphics,
+} from '../../../engine/sketch/dimensionGraphics';
+import { anchorForDimensionSelection } from '../../../engine/sketch/dimensionSelection';
 
 const emit = defineEmits<{
   /** A canvas click in mm, for the active drawing tool. altKey is the Alt
@@ -34,9 +41,11 @@ const emit = defineEmits<{
   /** A dragged point released within snap range of another point; the
    * workspace merges them with a coincident constraint. */
   (e: 'pointDragMerge', draggedPointId: string, targetPointId: string): void;
-  /** A click on a dimension label, for click-to-edit. */
-  (e: 'dimensionClick', constraintId: string, at: MmPoint): void;
   (e: 'entityClick', entityId: string): void;
+  /** A dimension mutation (draft commit, or a radius/diameter toggle on an
+   * already-committed dimension) that changed the sketch and needs a solve.
+   * Solve debouncing (scheduleSolve) lives in SketchWorkspace, not here. */
+  (e: 'requestSolve'): void;
   /** A click on a constraint glyph, for the constraint selection. */
   (e: 'constraintClick', constraintId: string): void;
 }>();
@@ -60,6 +69,9 @@ const {
   hoveredConstraintId,
   hoveredEntityIds,
   pendingClicks,
+  dimensionPending,
+  dimensionDraft,
+  dimensionDraftError,
 } = storeToRefs(editor);
 
 /** Region the pointer currently hovers, for the raised-opacity hover cue;
@@ -129,6 +141,23 @@ const gridLines = computed(() => {
   }
   return lines;
 });
+
+/** Converts an mm sketch point to pixels relative to the svg element's own
+ * top-left, the coordinate space the absolutely-positioned dimension input
+ * overlay is placed in (the overlay is a sibling of the svg inside the same
+ * relatively-positioned wrapper). Exact inverse of clientToMm's transform. */
+function mmToScreenPx(at: MmPoint): { x: number; y: number } {
+  const svg = svgEl.value;
+  if (svg === null) return { x: 0, y: 0 };
+  const ctm = svg.getScreenCTM();
+  if (ctm === null) return { x: 0, y: 0 };
+  const point = svg.createSVGPoint();
+  point.x = at.x;
+  point.y = at.y;
+  const screen = point.matrixTransform(ctm);
+  const rect = svg.getBoundingClientRect();
+  return { x: screen.x - rect.left, y: screen.y - rect.top };
+}
 
 function clientToMm(event: PointerEvent | WheelEvent): MmPoint {
   const svg = svgEl.value!;
@@ -433,6 +462,25 @@ function onPointerMove(event: PointerEvent): void {
   }
   cursorMm.value = clientToMm(event);
   altHeld.value = event.altKey;
+  if (pendingLabelId.value !== null && pendingLabelDownScreen.value !== null) {
+    const dx = event.clientX - pendingLabelDownScreen.value.x;
+    const dy = event.clientY - pendingLabelDownScreen.value.y;
+    if (Math.hypot(dx, dy) * mmPerScreenPixel() <= dragThresholdMm()) return;
+    draggingLabelId.value = pendingLabelId.value;
+    pendingLabelId.value = null;
+    pendingLabelDownScreen.value = null;
+    editor.beginLabelDrag();
+  }
+  if (draggingLabelId.value !== null) {
+    const anchor = dimensionAnchorById(draggingLabelId.value);
+    if (anchor !== null) {
+      editor.updateLabelOffset(draggingLabelId.value, {
+        x: cursorMm.value.x - anchor.x,
+        y: cursorMm.value.y - anchor.y,
+      });
+    }
+    return;
+  }
   if (pendingPointId.value !== null && pendingDownScreen.value !== null) {
     const dx = event.clientX - pendingDownScreen.value.x;
     const dy = event.clientY - pendingDownScreen.value.y;
@@ -450,6 +498,18 @@ function onPointerMove(event: PointerEvent): void {
 
 function onPointerUp(event: PointerEvent): void {
   if (endPan(event)) return;
+  if (pendingLabelId.value !== null) {
+    // A plain click on the label with no drag: does nothing on its own
+    // (double-click, handled separately, reopens the inline input).
+    pendingLabelId.value = null;
+    pendingLabelDownScreen.value = null;
+    return;
+  }
+  if (draggingLabelId.value !== null) {
+    draggingLabelId.value = null;
+    editor.endLabelDrag();
+    return;
+  }
   if (pendingPointId.value !== null) {
     const clickedId = pendingPointId.value;
     pendingPointId.value = null;
@@ -485,6 +545,16 @@ function onPointerLeave(event: PointerEvent): void {
  */
 function onPointerCancel(event: PointerEvent): void {
   if (endPan(event)) return;
+  if (pendingLabelId.value !== null) {
+    pendingLabelId.value = null;
+    pendingLabelDownScreen.value = null;
+    return;
+  }
+  if (draggingLabelId.value !== null) {
+    draggingLabelId.value = null;
+    editor.endLabelDrag();
+    return;
+  }
   if (pendingPointId.value !== null) {
     pendingPointId.value = null;
     pendingDownScreen.value = null;
@@ -725,51 +795,216 @@ const hitStrokeWidthMm = computed(() => {
   return mmPerScreenPixel() * 12;
 });
 
-/** Anchor position of a dimension label, midway along its geometry. */
-const dimensionLabels = computed(() =>
-  sketch.value.constraints
-    .map((c) => {
-      switch (c.kind) {
-        case 'length': {
-          const line = sketch.value.entities.find((e) => e.id === c.lineId);
-          if (line === undefined || line.kind !== 'line') return null;
-          const a = pointById.value.get(line.p1Id)!;
-          const b = pointById.value.get(line.p2Id)!;
-          return { id: c.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: `${formatMm(c.mm)} mm` };
-        }
-        case 'distance': {
-          const a = pointById.value.get(c.p1Id)!;
-          const b = pointById.value.get(c.p2Id)!;
-          return { id: c.id, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, text: `${formatMm(c.mm)} mm` };
-        }
-        case 'radius':
-        case 'diameter': {
-          const entity = sketch.value.entities.find((e) => e.id === c.entityId);
-          if (entity === undefined || (entity.kind !== 'arc' && entity.kind !== 'circle')) return null;
-          const center = pointById.value.get(entity.centerId)!;
-          const prefix = c.kind === 'radius' ? 'R' : 'D';
-          return { id: c.id, x: center.x, y: center.y, text: `${prefix} ${formatMm(c.mm)} mm` };
-        }
-        case 'angle': {
-          const line = sketch.value.entities.find((e) => e.id === c.l1Id);
-          if (line === undefined || line.kind !== 'line') return null;
-          const a = pointById.value.get(line.p1Id)!;
-          return { id: c.id, x: a.x, y: a.y, text: `${formatDegrees(c.degrees)} deg` };
-        }
-        case 'coincident':
-        case 'horizontal':
-        case 'vertical':
-        case 'parallel':
-        case 'perpendicular':
-        case 'tangent':
-        case 'symmetric':
-          return null;
-        default:
-          return assertNever(c);
-      }
-    })
-    .filter((label): label is NonNullable<typeof label> => label !== null),
+/** The dimension-kind subset of the sketch's constraints. */
+function dimensionOf(c: (typeof sketch.value.constraints)[number]): SketchDimension | null {
+  switch (c.kind) {
+    case 'length':
+    case 'distance':
+    case 'radius':
+    case 'diameter':
+    case 'angle':
+      return c;
+    case 'coincident':
+    case 'horizontal':
+    case 'vertical':
+    case 'parallel':
+    case 'perpendicular':
+    case 'tangent':
+    case 'symmetric':
+      return null;
+    default:
+      return assertNever(c);
+  }
+}
+
+/** The pre-formatted label text for a dimension: R/D prefix for radius and
+ * diameter, degree suffix for angle, mm suffix otherwise. Single source
+ * (convention 10) for both the committed labels and the ghost preview. */
+function dimensionText(dimension: SketchDimension): string {
+  switch (dimension.kind) {
+    case 'length':
+    case 'distance':
+      return `${formatMm(dimension.mm)} mm`;
+    case 'radius':
+      return `R ${formatMm(dimension.mm)} mm`;
+    case 'diameter':
+      return `D ${formatMm(dimension.mm)} mm`;
+    case 'angle':
+      return `${formatDegrees(dimension.degrees)} deg`;
+    default:
+      return assertNever(dimension);
+  }
+}
+
+interface DimensionRender {
+  key: string;
+  /** null for the placement ghost preview: not a real, editable dimension. */
+  constraintId: string | null;
+  graphics: DimensionGraphics;
+  opacity: number;
+}
+
+/** Graphics for every committed dimension, at its stored (or default)
+ * label position. */
+const dimensionRenders = computed<DimensionRender[]>(() => {
+  const renders: DimensionRender[] = [];
+  for (const c of sketch.value.constraints) {
+    const dimension = dimensionOf(c);
+    if (dimension === null) continue;
+    const anchor = dimensionAnchor(sketch.value, dimension);
+    const offset = dimension.labelOffset ?? DEFAULT_LABEL_OFFSET;
+    const labelAt = { x: anchor.x + offset.x, y: anchor.y + offset.y };
+    const graphics = dimensionGraphics(sketch.value, dimension, labelAt, dimensionText(dimension));
+    if (graphics === null) continue;
+    renders.push({ key: dimension.id, constraintId: dimension.id, graphics, opacity: 1 });
+  }
+  return renders;
+});
+
+/** The dimension tool's placement ghost: a reduced-opacity preview of the
+ * dimension the current resolved selection would produce, following the
+ * cursor until the placement click. Reuses dimensionGraphics exactly like
+ * the committed renderer, so the preview never promises a shape the commit
+ * would not actually draw (convention 10). */
+const dimensionGhost = computed<DimensionRender | null>(() => {
+  if (dimensionPending.value === null || cursorMm.value === null) return null;
+  const resolved = dimensionPending.value;
+  let fake: SketchDimension;
+  switch (resolved.kind) {
+    case 'length':
+      fake = {
+        kind: 'length', id: '_ghost', lineId: resolved.lineId,
+        mm: formatMm(measureLineLength(sketch.value, resolved.lineId)),
+      };
+      break;
+    case 'distance':
+      fake = {
+        kind: 'distance', id: '_ghost', p1Id: resolved.p1Id, p2Id: resolved.p2Id,
+        mm: formatMm(measurePointDistance(sketch.value, resolved.p1Id, resolved.p2Id)),
+      };
+      break;
+    case 'radiusOrDiameter':
+      fake = {
+        kind: 'radius', id: '_ghost', entityId: resolved.entityId,
+        mm: formatMm(measureRadius(sketch.value, resolved.entityId)),
+      };
+      break;
+    case 'angle':
+      fake = {
+        kind: 'angle', id: '_ghost', l1Id: resolved.l1Id, l2Id: resolved.l2Id,
+        degrees: formatDegrees(measureAngleBetweenLines(sketch.value, resolved.l1Id, resolved.l2Id)),
+      };
+      break;
+    default:
+      return assertNever(resolved);
+  }
+  const graphics = dimensionGraphics(sketch.value, fake, cursorMm.value, dimensionText(fake));
+  if (graphics === null) return null;
+  return { key: '_ghost', constraintId: null, graphics, opacity: 0.45 };
+});
+
+const allDimensionRenders = computed<DimensionRender[]>(() => {
+  const list = [...dimensionRenders.value];
+  if (dimensionGhost.value !== null) list.push(dimensionGhost.value);
+  return list;
+});
+
+/** Screen-px sized arrowhead: a small filled triangle, tip at the origin,
+ * pointing along +x in local coordinates before the caller's rotate. */
+const arrowSizeMm = computed(() => {
+  void view.value;
+  return mmPerScreenPixel();
+});
+function arrowPathD(): string {
+  const len = arrowSizeMm.value * 9;
+  const half = arrowSizeMm.value * 3;
+  return `M 0 0 L ${-len} ${-half} L ${-len} ${half} Z`;
+}
+
+/** True while `constraintId` names a dimension label being dragged, for the
+ * committed vs. ghost pointer-events distinction. */
+const draggingLabelId = ref<string | null>(null);
+const pendingLabelId = ref<string | null>(null);
+const pendingLabelDownScreen = ref<{ x: number; y: number } | null>(null);
+
+function onLabelPointerDown(event: PointerEvent, constraintId: string): void {
+  event.stopPropagation();
+  pendingLabelId.value = constraintId;
+  pendingLabelDownScreen.value = { x: event.clientX, y: event.clientY };
+  svgEl.value!.setPointerCapture(event.pointerId);
+}
+
+/** Reopens the inline input on an existing dimension's label. */
+function onLabelDblClick(event: MouseEvent, constraintId: string): void {
+  event.stopPropagation();
+  editor.openDimensionDraftForEdit(constraintId);
+}
+
+/** The mm point a dimension's labelOffset is measured from, for updating it
+ * mid-drag; null when the constraint no longer resolves to a dimension. */
+function dimensionAnchorById(constraintId: string): MmPoint | null {
+  const c = sketch.value.constraints.find((x) => x.id === constraintId);
+  const dimension = c === undefined ? null : dimensionOf(c);
+  return dimension === null ? null : dimensionAnchor(sketch.value, dimension);
+}
+
+/** The inline dimension entry field's on-screen position: the draft's
+ * anchor (from its pending selection, or its already-committed constraint)
+ * plus its labelOffset, converted to client-relative pixels the same way
+ * mmToScreenPx does. Recomputed on pan/zoom via view.value. */
+const draftInputEl = ref<HTMLInputElement | null>(null);
+/** Focuses and fully selects the inline input's text whenever a draft opens,
+ * so Enter without editing commits the pre-filled measured value and typing
+ * immediately replaces it, per the spec's "text pre-selected". */
+watch(
+  () => dimensionDraft.value !== null,
+  (open) => {
+    if (!open) return;
+    void nextTick(() => {
+      draftInputEl.value?.focus();
+      draftInputEl.value?.select();
+    });
+  },
 );
+
+/** Commits the draft on Enter; a failed parse leaves the input open with the
+ * store's error message shown (dimensionDraftError), same convention as the
+ * rest of the app's numeric-entry fields. */
+function onDraftEnter(): void {
+  if (editor.commitDimensionDraft()) emit('requestSolve');
+}
+/** Blur commits a parseable value, same as Enter; an unparseable value on
+ * blur cancels instead of leaving the field stuck open (Escape is the
+ * deliberate cancel gesture; blur is not, so it should not strand an
+ * invisible error message the user can no longer see). */
+function onDraftBlur(): void {
+  if (dimensionDraft.value === null) return;
+  if (editor.commitDimensionDraft()) {
+    emit('requestSolve');
+  } else {
+    editor.cancelDimensionDraft();
+  }
+}
+
+/** The radius/diameter toggle beside the inline input. */
+function onDraftToggleRadiusDiameter(kind: 'radius' | 'diameter'): void {
+  const wasCommitted = dimensionDraft.value?.constraintId !== null;
+  editor.toggleDraftRadiusDiameter(kind);
+  if (wasCommitted) emit('requestSolve');
+}
+
+const draftScreenPos = computed<{ x: number; y: number } | null>(() => {
+  void view.value;
+  const draft = dimensionDraft.value;
+  if (draft === null) return null;
+  const anchor =
+    draft.pending !== null
+      ? anchorForDimensionSelection(sketch.value, draft.pending)
+      : dimensionAnchorById(draft.constraintId ?? '');
+  if (anchor === null) return null;
+  const at = { x: anchor.x + draft.labelOffset.x, y: anchor.y + draft.labelOffset.y };
+  return mmToScreenPx(at);
+});
 
 /** Glyph color: the muted default, or the selection accent when its
  * constraint is the current selectedConstraintId. Distinct from geometry
@@ -944,6 +1179,7 @@ function removeSelectedConstraint(constraintId: string): void {
 </script>
 
 <template>
+  <div class="sketch-canvas-wrapper">
   <svg
     ref="svgEl"
     class="sketch-canvas"
@@ -1087,19 +1323,55 @@ function removeSelectedConstraint(constraintId: string): void {
       >{{ liveReadout.text }}</text>
     </g>
     <g class="dimensions">
-      <text
-        v-for="label in dimensionLabels"
-        :key="label.id"
-        :x="label.x"
-        :y="label.y - 1.5"
-        font-size="3"
-        text-anchor="middle"
-        fill="#6a1b9a"
-        style="cursor: pointer"
-        @click.stop="emit('dimensionClick', label.id, { x: label.x, y: label.y })"
+      <g
+        v-for="render in allDimensionRenders"
+        :key="render.key"
+        :opacity="render.opacity"
+        style="pointer-events: none"
       >
-        {{ label.text }}
-      </text>
+        <template v-if="render.graphics.kind === 'linear'">
+          <line
+            v-for="(w, i) in render.graphics.witnessLines"
+            :key="`w${i}`"
+            :x1="w.a.x" :y1="w.a.y" :x2="w.b.x" :y2="w.b.y"
+            stroke="#607d8b" stroke-width="0.25"
+          />
+          <line
+            :x1="render.graphics.dimensionLine.a.x" :y1="render.graphics.dimensionLine.a.y"
+            :x2="render.graphics.dimensionLine.b.x" :y2="render.graphics.dimensionLine.b.y"
+            stroke="#455a64" stroke-width="0.3"
+          />
+        </template>
+        <path
+          v-else-if="render.graphics.kind === 'angle'"
+          :d="render.graphics.arcPath"
+          fill="none" stroke="#455a64" stroke-width="0.3"
+        />
+        <line
+          v-else-if="render.graphics.kind === 'leader'"
+          :x1="render.graphics.leaderLine.a.x" :y1="render.graphics.leaderLine.a.y"
+          :x2="render.graphics.leaderLine.b.x" :y2="render.graphics.leaderLine.b.y"
+          stroke="#455a64" stroke-width="0.3"
+        />
+        <path
+          v-for="(arrow, i) in render.graphics.arrowheads"
+          :key="`a${i}`"
+          :d="arrowPathD()"
+          fill="#455a64"
+          :transform="`translate(${arrow.at.x} ${arrow.at.y}) rotate(${arrow.angleDeg})`"
+        />
+        <text
+          :x="render.graphics.textAt.x"
+          :y="render.graphics.textAt.y"
+          font-size="3"
+          text-anchor="middle"
+          dominant-baseline="central"
+          fill="#263238"
+          :style="render.constraintId !== null ? 'pointer-events: auto; cursor: move;' : undefined"
+          @pointerdown="render.constraintId !== null && onLabelPointerDown($event, render.constraintId)"
+          @dblclick="render.constraintId !== null && onLabelDblClick($event, render.constraintId)"
+        >{{ render.graphics.text }}</text>
+      </g>
     </g>
     <g class="constraint-glyphs">
       <line
@@ -1205,9 +1477,47 @@ function removeSelectedConstraint(constraintId: string): void {
       </g>
     </g>
   </svg>
+  <div
+    v-if="dimensionDraft !== null && draftScreenPos !== null"
+    class="dimension-draft-overlay"
+    :style="{ left: `${draftScreenPos.x}px`, top: `${draftScreenPos.y}px` }"
+  >
+    <input
+      ref="draftInputEl"
+      v-model="dimensionDraft.text"
+      class="dimension-draft-input"
+      :class="{ 'dimension-draft-input--error': dimensionDraftError !== null }"
+      type="text"
+      inputmode="decimal"
+      @keyup.enter="onDraftEnter"
+      @keyup.esc="editor.cancelDimensionDraft()"
+      @blur="onDraftBlur"
+    />
+    <div v-if="dimensionDraftError !== null" class="dimension-draft-error">{{ dimensionDraftError }}</div>
+    <div v-if="dimensionDraft.radiusToggle !== null" class="dimension-draft-toggle">
+      <button
+        type="button"
+        :class="{ active: dimensionDraft.radiusToggle.kind === 'radius' }"
+        @mousedown.prevent
+        @click="onDraftToggleRadiusDiameter('radius')"
+      >Radius</button>
+      <button
+        type="button"
+        :class="{ active: dimensionDraft.radiusToggle.kind === 'diameter' }"
+        @mousedown.prevent
+        @click="onDraftToggleRadiusDiameter('diameter')"
+      >Diameter</button>
+    </div>
+  </div>
+  </div>
 </template>
 
 <style scoped>
+.sketch-canvas-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
 .sketch-canvas {
   width: 100%;
   height: 100%;
@@ -1222,5 +1532,55 @@ function removeSelectedConstraint(constraintId: string): void {
 }
 .cursor-grabbing {
   cursor: grabbing;
+}
+
+/* The dimension tool's inline entry field: absolutely positioned over the
+   canvas at the dimension label's screen position (draftScreenPos), rather
+   than the old under-toolbar field. */
+.dimension-draft-overlay {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.dimension-draft-input {
+  width: 84px;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  text-align: center;
+  border: 1px solid #90a4ae;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #263238;
+}
+.dimension-draft-input--error {
+  border-color: #e53935;
+}
+.dimension-draft-error {
+  font-size: 0.7rem;
+  color: #e53935;
+  background: #ffffff;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+.dimension-draft-toggle {
+  display: flex;
+  gap: 2px;
+}
+.dimension-draft-toggle button {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border: 1px solid #90a4ae;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #455a64;
+  cursor: pointer;
+}
+.dimension-draft-toggle button.active {
+  background: #455a64;
+  color: #ffffff;
 }
 </style>

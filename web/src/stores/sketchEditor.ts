@@ -4,6 +4,7 @@ import {
   arcFromThreePoints,
   cloneSketch,
   emptySketch,
+  type LabelOffset,
   type Sketch,
   type SketchConstraint,
   type SketchDimension,
@@ -21,6 +22,36 @@ import {
   type RegionFace,
 } from '../engine/sketch/regions';
 import { inferHVConstraint } from '../engine/sketch/autoInfer';
+import {
+  anchorForDimensionSelection,
+  buildDimensionFromSelection,
+  measuredValueForDimensionSelection,
+  resolveDimensionSelection,
+  type DimensionSelectionKind,
+} from '../engine/sketch/dimensionSelection';
+import { DEFAULT_LABEL_OFFSET } from '../engine/sketch/dimensionGraphics';
+import {
+  formatDegrees,
+  formatMm,
+  measureDiameter,
+  measureRadius,
+  parseDimensionValue,
+} from '../engine/sketch/measure';
+
+/**
+ * The dimension tool's in-progress entry: a placement not yet committed
+ * (constraintId null, pending set to what the selection resolved to) or an
+ * existing dimension reopened for editing (constraintId set, pending null).
+ * radiusToggle names the measured entity when the dimension is a radius or
+ * diameter, for the toggle buttons beside the inline input; null otherwise.
+ */
+export interface DimensionDraft {
+  constraintId: string | null;
+  pending: DimensionSelectionKind | null;
+  labelOffset: LabelOffset;
+  text: string;
+  radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null;
+}
 
 /** The drawing tool active on the sketch canvas. */
 export type SketchTool =
@@ -103,6 +134,18 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * null. Distinct from selectedConstraintId: hovering never changes the
    * selection, it only drives the canvas highlight. */
   const hoveredConstraintId = ref<string | null>(null);
+  /** The dimension tool's resolved-but-not-yet-placed selection (one line,
+   * one arc/circle, two points or two non-parallel lines), or null. Set by
+   * resolveDimensionAtSelection, consumed by placeDimensionDraft on the next
+   * canvas click, shared between SketchWorkspace (click routing) and
+   * SketchCanvas (the ghost preview) the same way pendingClicks is. */
+  const dimensionPending = ref<DimensionSelectionKind | null>(null);
+  /** The dimension tool's open inline entry (new placement or an existing
+   * dimension reopened by double-click), or null. */
+  const dimensionDraft = ref<DimensionDraft | null>(null);
+  /** Set when commitDimensionDraft is called with unparseable text; cleared
+   * on the next successful commit or cancel. */
+  const dimensionDraftError = ref<string | null>(null);
 
   /**
    * A point-in-time undo entry. Chain state (chainTailId, chainTailSegmentId)
@@ -293,6 +336,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     pendingHitPointIds.value = [];
     cursorMm.value = null;
     hoveredConstraintId.value = null;
+    dimensionPending.value = null;
+    dimensionDraft.value = null;
+    dimensionDraftError.value = null;
     glyphsVisible.value = true;
     idCounter = 0;
     historyStack.value = [];
@@ -730,6 +776,220 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   }
 
   /**
+   * Resolves the dimension tool's current entity selection (selectedIds) to
+   * a pending dimension kind, per resolveDimensionSelection's pair rules.
+   * When the selection is complete (two entities, or one line/arc/circle)
+   * the selection is cleared and dimensionPending is set to the result
+   * (null for the unsupported two-parallel-lines pair, which only leaves a
+   * hint). An incomplete pick (e.g. one point of a two-point distance)
+   * leaves the selection open for a second click. Returns the hint text for
+   * the toolbar's hint row; SketchWorkspace is the only caller and the only
+   * place that still needs a mutable hint string.
+   */
+  function resolveDimensionAtSelection(): string {
+    const picked = selectedIds.value
+      .map((id) => sketch.value.entities.find((e) => e.id === id))
+      .filter((e): e is SketchEntity => e !== undefined);
+    if (picked.length === 0) {
+      dimensionPending.value = null;
+      return (
+        'Select one line for a length, an arc or circle for a radius, two points for a distance, ' +
+        'or two lines for an angle.'
+      );
+    }
+    const result = resolveDimensionSelection(sketch.value, picked);
+    const terminal = picked.length >= 2 || result.resolved !== null;
+    if (!terminal) return result.hint;
+    selectedIds.value = [];
+    dimensionPending.value = result.resolved;
+    return result.hint;
+  }
+
+  /** The measured default value for a resolved selection, mm-rounded for
+   * every kind but angle (degree-rounded), matching formatMm/formatDegrees's
+   * existing seeding convention. */
+  function measuredDraftValue(pending: DimensionSelectionKind, radiusKind: 'radius' | 'diameter'): number {
+    const raw = measuredValueForDimensionSelection(sketch.value, pending, radiusKind);
+    return pending.kind === 'angle' ? formatDegrees(raw) : formatMm(raw);
+  }
+
+  /**
+   * Places the dimension label at `at` (mm), the placement click's
+   * position: computes the labelOffset from the pending selection's anchor,
+   * seeds the draft with the current measured value, and clears
+   * dimensionPending. The constraint itself is not added until
+   * commitDimensionDraft: placement and commit are two steps of one user
+   * gesture, but only commit is a sketch mutation, so Escape before commit
+   * needs nothing to undo.
+   */
+  function placeDimensionDraft(at: MmPoint): void {
+    const pending = dimensionPending.value;
+    if (pending === null) return;
+    const anchor = anchorForDimensionSelection(sketch.value, pending);
+    const labelOffset: LabelOffset = { x: at.x - anchor.x, y: at.y - anchor.y };
+    const radiusToggle =
+      pending.kind === 'radiusOrDiameter' ? { entityId: pending.entityId, kind: 'radius' as const } : null;
+    const value = measuredDraftValue(pending, radiusToggle?.kind ?? 'radius');
+    dimensionDraft.value = { constraintId: null, pending, labelOffset, text: String(value), radiusToggle };
+    dimensionDraftError.value = null;
+    dimensionPending.value = null;
+  }
+
+  /** Abandons the open draft without mutating the sketch: a new (not yet
+   * committed) draft never added a constraint, and editing an existing
+   * dimension's value only writes on commit, never on cancel. */
+  function cancelDimensionDraft(): void {
+    dimensionDraft.value = null;
+    dimensionDraftError.value = null;
+  }
+
+  /**
+   * Parses and commits the draft's typed text: adds a new dimension
+   * (constraintId null) or rewrites an existing one's value. Returns false
+   * and sets dimensionDraftError for unparseable text, leaving the draft
+   * open for another attempt (mirrors the rest of the app's numeric-entry
+   * fields); returns true once the mutation has landed.
+   */
+  function commitDimensionDraft(): boolean {
+    const draft = dimensionDraft.value;
+    if (draft === null) return false;
+    const value = parseDimensionValue(draft.text);
+    if (value === null) {
+      const isAngle =
+        draft.pending?.kind === 'angle' ||
+        (draft.constraintId !== null &&
+          sketch.value.constraints.find((c) => c.id === draft.constraintId)?.kind === 'angle');
+      dimensionDraftError.value = isAngle
+        ? 'Enter the value as a number in degrees.'
+        : 'Enter the value as a number in millimeters.';
+      return false;
+    }
+    if (draft.constraintId === null) {
+      if (draft.pending === null) {
+        dimensionDraft.value = null;
+        return false;
+      }
+      const id = nextId();
+      const kind = draft.radiusToggle?.kind ?? 'radius';
+      addDimension(buildDimensionFromSelection(draft.pending, kind, id, value, draft.labelOffset));
+    } else {
+      setDimensionValue(draft.constraintId, value);
+    }
+    dimensionDraft.value = null;
+    dimensionDraftError.value = null;
+    return true;
+  }
+
+  /**
+   * Opens the draft to edit an already-committed dimension (double-click on
+   * its label). Reformats the stored value the same way a fresh measured
+   * default is, so editing an older, unrounded dimension seeds the field
+   * with the rounded figure; keeps the existing labelOffset so editing the
+   * value alone does not move the label.
+   */
+  function openDimensionDraftForEdit(constraintId: string): void {
+    const c = sketch.value.constraints.find((x) => x.id === constraintId);
+    if (c === undefined) return;
+    if (
+      c.kind !== 'length' &&
+      c.kind !== 'distance' &&
+      c.kind !== 'radius' &&
+      c.kind !== 'diameter' &&
+      c.kind !== 'angle'
+    ) {
+      return;
+    }
+    const current = c.kind === 'angle' ? formatDegrees(c.degrees) : formatMm(c.mm);
+    const radiusToggle =
+      c.kind === 'radius' || c.kind === 'diameter' ? { entityId: c.entityId, kind: c.kind } : null;
+    dimensionDraft.value = {
+      constraintId,
+      pending: null,
+      labelOffset: c.labelOffset ?? DEFAULT_LABEL_OFFSET,
+      text: String(current),
+      radiusToggle,
+    };
+    dimensionDraftError.value = null;
+  }
+
+  /**
+   * Swaps the draft's radius/diameter choice. Before commit (constraintId
+   * null) this only flips the draft's local state and reseeds the measured
+   * default for the new kind; for an already-committed dimension it removes
+   * the old constraint and adds the other kind on the same entity and label
+   * position, so a click-to-edit dimension can still be flipped without
+   * deleting and re-adding it by hand.
+   */
+  function toggleDraftRadiusDiameter(kind: 'radius' | 'diameter'): void {
+    const draft = dimensionDraft.value;
+    if (draft === null || draft.radiusToggle === null || draft.radiusToggle.kind === kind) return;
+    const entityId = draft.radiusToggle.entityId;
+    const measured = formatMm(
+      kind === 'radius' ? measureRadius(sketch.value, entityId) : measureDiameter(sketch.value, entityId),
+    );
+    if (draft.constraintId === null) {
+      dimensionDraft.value = { ...draft, text: String(measured), radiusToggle: { entityId, kind } };
+      return;
+    }
+    removeConstraint(draft.constraintId);
+    const id = nextId();
+    addDimension({ kind, id, entityId, mm: measured, labelOffset: draft.labelOffset });
+    dimensionDraft.value = {
+      constraintId: id,
+      pending: null,
+      labelOffset: draft.labelOffset,
+      text: String(measured),
+      radiusToggle: { entityId, kind },
+    };
+  }
+
+  /**
+   * Opens the history scope for a dimension label drag, mirroring
+   * beginPointDrag but with no solver involvement: dragging a label never
+   * touches geometry, so the whole gesture is just repeated updateLabelOffset
+   * calls inside one undo step.
+   */
+  function beginLabelDrag(): void {
+    beginMutation();
+  }
+
+  /** Closes the history scope opened by beginLabelDrag. */
+  function endLabelDrag(): void {
+    endMutation();
+  }
+
+  /** Moves a dimension's label to the given mm offset from its anchor
+   * (dimensionAnchor in dimensionGraphics.ts). Called on every pointermove of
+   * a label drag, between beginLabelDrag and endLabelDrag, so the whole drag
+   * lands as the single undo step those two open and close; never runs the
+   * solver (convention: label position is display-only, never solved). */
+  function updateLabelOffset(constraintId: string, offset: LabelOffset): void {
+    const c = sketch.value.constraints.find((x) => x.id === constraintId);
+    if (c === undefined) return;
+    switch (c.kind) {
+      case 'length':
+      case 'distance':
+      case 'radius':
+      case 'diameter':
+      case 'angle':
+        c.labelOffset = offset;
+        bumpGeneration();
+        break;
+      case 'coincident':
+      case 'horizontal':
+      case 'vertical':
+      case 'parallel':
+      case 'perpendicular':
+      case 'tangent':
+      case 'symmetric':
+        // Not dimensions; no label to move.
+        break;
+      default:
+        assertNever(c);
+    }
+  }
+
+  /**
    * Adds a coincident constraint between two points unless one already ties
    * that unordered pair, or the two ids are the same point (a normal no-op:
    * dropping a drag back onto itself is not an error condition). This is the
@@ -1058,6 +1318,15 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     cursorMm,
     hoveredConstraintId,
     hoveredEntityIds,
+    dimensionPending,
+    dimensionDraft,
+    dimensionDraftError,
+    resolveDimensionAtSelection,
+    placeDimensionDraft,
+    cancelDimensionDraft,
+    commitDimensionDraft,
+    openDimensionDraftForEdit,
+    toggleDraftRadiusDiameter,
     clearPendingClicks,
     nextId,
     startNewSketch,
@@ -1075,6 +1344,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     addCoincidentIfAbsent,
     addDimension,
     setDimensionValue,
+    beginLabelDrag,
+    endLabelDrag,
+    updateLabelOffset,
     removeConstraint,
     deleteEntities,
     toggleConstruction,

@@ -1029,6 +1029,122 @@ describe('useSketchEditor', () => {
     });
   });
 
+  describe('dimension tool rebuild: place-then-commit, edit, escape, label drag', () => {
+    it('resolves a single line to a pending length, places it at a click, and commits with a labelOffset', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+
+      editor.selectedIds = [line.id];
+      const hint = editor.resolveDimensionAtSelection();
+      expect(hint).toContain('length');
+      expect(editor.dimensionPending).toEqual({ kind: 'length', lineId: line.id });
+      expect(editor.selectedIds).toEqual([]);
+
+      // Placement click above the line's midpoint (5, 0): the labelOffset is
+      // the click position minus the length dimension's anchor (the line's
+      // midpoint), per LabelOffset's documented convention.
+      editor.placeDimensionDraft({ x: 5, y: -8 });
+      expect(editor.dimensionPending).toBeNull();
+      expect(editor.dimensionDraft).not.toBeNull();
+      expect(editor.dimensionDraft!.constraintId).toBeNull();
+      expect(editor.dimensionDraft!.text).toBe('10');
+      expect(editor.dimensionDraft!.labelOffset).toEqual({ x: 0, y: -8 });
+
+      // Commit with an edited value: the constraint is added only now, with
+      // the typed value and the placed labelOffset.
+      editor.dimensionDraft!.text = '25';
+      expect(editor.commitDimensionDraft()).toBe(true);
+      expect(editor.dimensionDraft).toBeNull();
+      const dims = editor.sketch.constraints.filter((c) => c.kind === 'length');
+      expect(dims).toHaveLength(1);
+      expect(dims[0].kind === 'length' && dims[0].mm).toBe(25);
+      expect(dims[0].kind === 'length' && dims[0].labelOffset).toEqual({ x: 0, y: -8 });
+    });
+
+    it('double-click (openDimensionDraftForEdit) reopens an existing dimension and commit updates its value only', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      const id = editor.nextId();
+      editor.addDimension({ kind: 'length', id, lineId: line.id, mm: 10, labelOffset: { x: 1, y: 2 } });
+
+      editor.openDimensionDraftForEdit(id);
+      expect(editor.dimensionDraft).toMatchObject({ constraintId: id, pending: null, text: '10' });
+      editor.dimensionDraft!.text = '42';
+      expect(editor.commitDimensionDraft()).toBe(true);
+
+      const dim = editor.sketch.constraints.find((c) => c.id === id)!;
+      expect(dim.kind === 'length' && dim.mm).toBe(42);
+      // The label position is untouched by an edit that only changes value.
+      expect(dim.kind === 'length' && dim.labelOffset).toEqual({ x: 1, y: 2 });
+    });
+
+    it('cancelDimensionDraft after a placement leaves no constraint behind (Escape before commit)', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+
+      editor.selectedIds = [line.id];
+      editor.resolveDimensionAtSelection();
+      editor.placeDimensionDraft({ x: 5, y: -8 });
+      expect(editor.dimensionDraft).not.toBeNull();
+
+      editor.cancelDimensionDraft();
+      expect(editor.dimensionDraft).toBeNull();
+      expect(editor.sketch.constraints.filter((c) => c.kind === 'length')).toHaveLength(0);
+    });
+
+    it('two parallel lines surface a hint and never resolve to a dimension', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const l1 = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.endChain();
+      editor.appendChainPoint({ x: 0, y: 5 });
+      editor.appendChainPoint({ x: 10, y: 5 }, undefined, true);
+      const l2 = editor.sketch.entities.filter((e) => e.kind === 'line')[1];
+
+      editor.selectedIds = [l1.id, l2.id];
+      const hint = editor.resolveDimensionAtSelection();
+      expect(hint).toBe('Select a point and a line for a distance.');
+      expect(editor.dimensionPending).toBeNull();
+      expect(editor.selectedIds).toEqual([]);
+    });
+
+    it('updateLabelOffset between beginLabelDrag/endLabelDrag collapses a whole drag into one undo step', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 }, undefined, true);
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      const id = editor.nextId();
+      editor.addDimension({ kind: 'length', id, lineId: line.id, mm: 10, labelOffset: { x: 0, y: -8 } });
+      const historyBeforeDrag = editor.historyStack.length;
+
+      editor.beginLabelDrag();
+      editor.updateLabelOffset(id, { x: 2, y: -8 });
+      editor.updateLabelOffset(id, { x: 4, y: -6 });
+      editor.updateLabelOffset(id, { x: 6, y: -4 });
+      editor.endLabelDrag();
+
+      expect(editor.historyStack.length).toBe(historyBeforeDrag + 1);
+      const dim = editor.sketch.constraints.find((c) => c.id === id)!;
+      expect(dim.kind === 'length' && dim.labelOffset).toEqual({ x: 6, y: -4 });
+
+      editor.undo();
+      const reverted = editor.sketch.constraints.find((c) => c.id === id)!;
+      expect(reverted.kind === 'length' && reverted.labelOffset).toEqual({ x: 0, y: -8 });
+    });
+  });
+
   describe('startNewSketch resets all display state', () => {
     it('clears pending clicks, cursor, hovered constraint and restores glyph visibility', () => {
       const editor = useSketchEditor();

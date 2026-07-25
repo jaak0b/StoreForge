@@ -12,16 +12,7 @@ import {
 } from '../../../engine/sketch/constraintApplicability';
 import { constraintKindSentence } from '../../../engine/sketch/constraintGlyphs';
 import { assertNever } from '../../../engine/plan/types';
-import {
-  measureLineLength,
-  measureRadius,
-  measureDiameter,
-  measurePointDistance,
-  measureAngleBetweenLines,
-  formatMm,
-  formatDegrees,
-  parseDimensionValue,
-} from '../../../engine/sketch/measure';
+import { parseDimensionValue } from '../../../engine/sketch/measure';
 
 const emit = defineEmits<{
   (e: 'finish'): void;
@@ -42,6 +33,7 @@ const {
   pendingClicks,
   pendingHitPointIds,
   cursorMm,
+  dimensionPending,
 } = storeToRefs(editor);
 
 /** A one-line hint under the toolbar naming the tool's next expected click. */
@@ -133,7 +125,10 @@ function hintForTool(tool: SketchTool): string {
     case 'mirror':
       return 'Click the two ends of the mirror line.';
     case 'dimension':
-      return 'Click one or two entities, then type the value.';
+      return (
+        'Click one line, arc or circle for a length or radius, or two entities for a distance or angle. ' +
+        'Click again to place the label, then type the value.'
+      );
     default:
       return assertNever(tool);
   }
@@ -146,6 +141,8 @@ function selectTool(tool: SketchTool): void {
   quickEntryText.value = '';
   editor.selectedConstraintId = null;
   editor.endChain();
+  dimensionPending.value = null;
+  editor.cancelDimensionDraft();
   toolHint.value = hintForTool(tool);
 }
 selectTool('select');
@@ -280,44 +277,6 @@ function scheduleSolve(): void {
   }, 150);
 }
 
-/**
- * The dimension entry field: which constraint is being typed, and its text.
- * isNew marks a placeholder dimension inserted by beginDimensionFromSelection
- * that cancelDimensionDraft removes if abandoned without a commit. radiusToggle
- * is set only for a freshly created radius/diameter dimension (one arc or
- * circle selected): it names the measured entity so the radius/diameter
- * buttons can swap the constraint kind in place and reseed the text with the
- * matching measured value.
- */
-const dimensionDraft = ref<{
-  constraintId: string | null;
-  text: string;
-  isNew: boolean;
-  radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null;
-} | null>(null);
-
-/** Set when Enter is pressed on unparseable dimension text; mirrors
- * quickEntryErrorText for the dimension entry field. */
-const dimensionErrorText = ref<string | null>(null);
-
-/** The dimension entry field's complete-sentence validation message: mm for
- * every kind but angle, degrees for angle. */
-const dimensionErrorMessage = computed<string>(() => {
-  const draft = dimensionDraft.value;
-  if (draft === null || draft.constraintId === null) return 'Enter the value as a number in millimeters.';
-  const c = sketch.value.constraints.find((k) => k.id === draft.constraintId);
-  return c !== undefined && c.kind === 'angle'
-    ? 'Enter the value as a number in degrees.'
-    : 'Enter the value as a number in millimeters.';
-});
-
-watch(
-  () => dimensionDraft.value?.text,
-  () => {
-    dimensionErrorText.value = null;
-  },
-);
-
 function entityById(id: string): SketchEntity | undefined {
   return sketch.value.entities.find((e) => e.id === id);
 }
@@ -344,171 +303,19 @@ const showConstraintRow = computed<boolean>(
 );
 
 /**
- * With the dimension tool active, a selection of one or two entities decides
- * the dimension kind: one line is a length, one arc or circle is a radius
- * (with a radius/diameter toggle in the entry row, radius the default), two
- * points are a distance, two lines are an angle.
+ * Toggles an entity in the selection. With the dimension tool active, this
+ * routes through the store's resolveDimensionAtSelection: a selection that
+ * resolves to a dimension kind (or the two-parallel-lines fallback) clears
+ * itself and updates dimensionPending; the toolbar hint always reflects the
+ * result. Placement (the second click that positions the label) happens
+ * separately in onCanvasClick, once dimensionPending is set.
  */
-function beginDimensionFromSelection(): void {
-  const picked = selectedEntities.value;
-  let created: string | null = null;
-  let measured = 10;
-  let radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null = null;
-  // Opens a mutation scope that stays open until commitDimensionDraft or
-  // cancelDimensionDraft closes it below, so the addDimension here and the
-  // eventual setDimensionValue on commit collapse into one undo step for
-  // what is, from the user's perspective, a single gesture (pick entities,
-  // type a value). Closed again immediately below when no dimension ends up
-  // being created (an unsupported selection).
-  editor.beginMutation();
-  if (picked.length === 1 && picked[0].kind === 'line') {
-    const id = editor.nextId();
-    measured = formatMm(measureLineLength(sketch.value, picked[0].id));
-    editor.addDimension({ kind: 'length', id, lineId: picked[0].id, mm: measured });
-    created = id;
-  } else if (picked.length === 1 && (picked[0].kind === 'arc' || picked[0].kind === 'circle')) {
-    const id = editor.nextId();
-    measured = formatMm(measureRadius(sketch.value, picked[0].id));
-    editor.addDimension({ kind: 'radius', id, entityId: picked[0].id, mm: measured });
-    created = id;
-    radiusToggle = { entityId: picked[0].id, kind: 'radius' };
-  } else if (picked.length === 2 && picked.every((e) => e.kind === 'point')) {
-    const id = editor.nextId();
-    measured = formatMm(measurePointDistance(sketch.value, picked[0].id, picked[1].id));
-    editor.addDimension({ kind: 'distance', id, p1Id: picked[0].id, p2Id: picked[1].id, mm: measured });
-    created = id;
-  } else if (picked.length === 2 && picked.every((e) => e.kind === 'line')) {
-    const id = editor.nextId();
-    measured = formatDegrees(measureAngleBetweenLines(sketch.value, picked[0].id, picked[1].id));
-    editor.addDimension({
-      kind: 'angle',
-      id,
-      l1Id: picked[0].id,
-      l2Id: picked[1].id,
-      degrees: measured,
-    });
-    created = id;
-  } else {
-    editor.endMutation();
-    toolHint.value =
-      'Select one line for a length, an arc or circle for a radius, two points for a distance, or two lines for an angle.';
-    return;
-  }
-  // Pre-filled with the measured current value: Enter without editing locks
-  // the dimension at the size it already is, instead of the solver yanking
-  // the geometry to an arbitrary placeholder.
-  dimensionDraft.value = { constraintId: created, text: String(measured), isNew: true, radiusToggle };
-  editor.selectedIds = [];
-}
-
-/**
- * Swaps a freshly created radius dimension to diameter or back, by removing
- * the old constraint and adding the other kind on the same entity, reseeded
- * from the matching measured value. Only available for a radiusToggle draft
- * (one arc or circle selected), and only while the draft is still new
- * (isNew): the toggle exists to pick the kind before the first commit, not
- * to convert an already-committed dimension in place.
- */
-function toggleRadiusDiameter(kind: 'radius' | 'diameter'): void {
-  const draft = dimensionDraft.value;
-  if (draft === null || draft.radiusToggle === null || draft.radiusToggle.kind === kind) return;
-  if (draft.constraintId !== null) editor.removeConstraint(draft.constraintId);
-  const entityId = draft.radiusToggle.entityId;
-  const id = editor.nextId();
-  const measured = formatMm(
-    kind === 'radius' ? measureRadius(sketch.value, entityId) : measureDiameter(sketch.value, entityId),
-  );
-  editor.addDimension({ kind, id, entityId, mm: measured });
-  dimensionDraft.value = {
-    constraintId: id,
-    text: String(measured),
-    isNew: draft.isNew,
-    radiusToggle: { entityId, kind },
-  };
-}
-
-function commitDimensionDraft(): void {
-  if (dimensionDraft.value === null || dimensionDraft.value.constraintId === null) return;
-  const value = parseDimensionValue(dimensionDraft.value.text);
-  if (value === null) {
-    dimensionErrorText.value = dimensionErrorMessage.value;
-    return;
-  }
-  editor.setDimensionValue(dimensionDraft.value.constraintId, value);
-  // Closes the mutation scope beginDimensionFromSelection opened, so its
-  // addDimension and this setDimensionValue land as one undo step.
-  const wasNew = dimensionDraft.value.isNew;
-  if (wasNew) editor.endMutation();
-  dimensionDraft.value = null;
-  // The dimension tool is one-shot: task F returns to select once a freshly
-  // created dimension's value commits. Editing an existing dimension's value
-  // (isNew false, opened via click-to-edit) leaves the active tool alone.
-  if (wasNew) activeTool.value = 'select';
-  scheduleSolve();
-}
-
-/**
- * Abandons the dimension entry field (Escape only). A freshly inserted
- * placeholder dimension (never committed) is removed so it does not linger
- * in the sketch; editing an existing dimension's value just closes the field.
- */
-function cancelDimensionDraft(): void {
-  const draft = dimensionDraft.value;
-  if (draft !== null && draft.isNew && draft.constraintId !== null) {
-    editor.removeConstraint(draft.constraintId);
-    scheduleSolve();
-  }
-  // Closes the mutation scope beginDimensionFromSelection opened, whether or
-  // not there was a placeholder constraint left to remove.
-  if (draft !== null && draft.isNew) editor.endMutation();
-  dimensionDraft.value = null;
-  dimensionErrorText.value = null;
-}
-
-/**
- * Blur commits a parseable value, same as Enter; only an unparseable value on
- * blur falls back to canceling (Escape is the deliberate cancel gesture).
- * This stops the solver seeing a placeholder mid-entry: losing focus with a
- * typed, valid number now locks the dimension at that value.
- */
-function onDimensionBlur(): void {
-  if (dimensionDraft.value === null) return;
-  if (parseDimensionValue(dimensionDraft.value.text) !== null) {
-    commitDimensionDraft();
-  } else {
-    cancelDimensionDraft();
-  }
-}
-
-/** Click-to-edit on an existing on-canvas dimension label. A radius or
- * diameter dimension also gets the radius/diameter toggle, so an existing
- * one can be flipped without deleting and re-adding it by hand. Reformats
- * the stored value the same way a fresh measured default is formatted, so
- * editing an older, unrounded dimension seeds the field with the rounded
- * figure rather than the raw stored double. */
-function onDimensionClick(constraintId: string): void {
-  const c = sketch.value.constraints.find((k) => k.id === constraintId);
-  if (c === undefined) return;
-  const current =
-    c.kind === 'angle' ? formatDegrees(c.degrees) : 'mm' in c ? formatMm(c.mm) : null;
-  const radiusToggle =
-    c.kind === 'radius' || c.kind === 'diameter' ? { entityId: c.entityId, kind: c.kind } : null;
-  dimensionDraft.value = {
-    constraintId,
-    text: current === null ? '' : String(current),
-    isNew: false,
-    radiusToggle,
-  };
-}
-
-/** Toggles an entity in the selection; with the dimension tool active, a
- * selection that suffices immediately opens the dimension entry field. */
 function onEntityClick(entityId: string): void {
   const at = editor.selectedIds.indexOf(entityId);
   if (at === -1) editor.selectedIds.push(entityId);
   else editor.selectedIds.splice(at, 1);
-  if (activeTool.value === 'dimension' && editor.selectedIds.length > 0) {
-    beginDimensionFromSelection();
+  if (activeTool.value === 'dimension') {
+    toolHint.value = editor.resolveDimensionAtSelection();
   }
 }
 
@@ -663,6 +470,9 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null, suppressAutoHV = 
   // A quick numeric entry is open (typed length/diameter, or the slot width
   // prompt): canvas clicks are ignored until it is committed or cancelled.
   if (quickEntryKind.value !== null) return;
+  // The dimension inline input is open: a canvas click must not also start a
+  // new placement underneath it.
+  if (editor.dimensionDraft !== null) return;
   if (calibrating.value) {
     editor.clearPendingClicks();
     calibrationClicks.value.push(at);
@@ -766,9 +576,20 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null, suppressAutoHV = 
       }
       break;
     }
-    case 'dimension':
-      // Entity clicks drive dimensioning (Task 9); a bare canvas click does nothing.
+    case 'dimension': {
+      // A pending resolved selection: this click places the label at the
+      // cursor and opens the inline input (SketchCanvas renders it).
+      if (dimensionPending.value !== null) {
+        editor.placeDimensionDraft(at);
+        break;
+      }
+      // No pending selection yet: a click on an existing sketch point picks
+      // it, the same way a line/arc/circle click does via entityClick (see
+      // SketchCanvas's per-entity click handlers). A bare background click
+      // does nothing.
+      if (hitPointId !== null) onEntityClick(hitPointId);
       break;
+    }
     default:
       assertNever(activeTool.value);
   }
@@ -869,6 +690,15 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
     return;
   }
   if (event.key === 'Escape') {
+    // The dimension inline input intercepts Escape itself via @keyup.esc
+    // (isTypingTarget above returns before this handler runs while it has
+    // focus); this branch only covers a pending resolved selection awaiting
+    // its placement click, which has no input focused yet.
+    if (dimensionPending.value !== null) {
+      dimensionPending.value = null;
+      editor.selectedIds = [];
+      return;
+    }
     // Clears the multi-click tool's pending picks first, so Escape during a
     // three-point arc or mirror line drops the partial pick instead of only
     // ending the line/arc chain (or doing nothing, for tools with no chain).
@@ -883,6 +713,9 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
       editor.selectedConstraintId = null;
     } else if (editor.selectedIds.length > 0) {
       editor.selectedIds = [];
+    } else if (activeTool.value === 'dimension') {
+      // Nothing pending or selected: Escape exits the dimension tool to select.
+      selectTool('select');
     }
     return;
   }
@@ -1051,33 +884,6 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
       </div>
       <p v-else class="tool-hint">{{ displayedHint }}</p>
     </v-toolbar>
-    <div v-if="dimensionDraft !== null" class="dimension-draft-row">
-      <v-text-field
-        v-model="dimensionDraft.text"
-        label="Dimension value"
-        density="compact"
-        autofocus
-        :error="dimensionErrorText !== null"
-        :error-messages="dimensionErrorText ?? []"
-        style="max-width: 200px"
-        @keyup.enter="commitDimensionDraft"
-        @keyup.esc="cancelDimensionDraft"
-        @blur="onDimensionBlur"
-      />
-      <v-btn-toggle
-        v-if="dimensionDraft.radiusToggle !== null"
-        :model-value="dimensionDraft.radiusToggle.kind"
-        density="compact"
-        mandatory
-        @update:model-value="(kind: 'radius' | 'diameter') => toggleRadiusDiameter(kind)"
-      >
-        <!-- mousedown.prevent keeps focus in the dimension text field so the
-             toggle click never triggers onDimensionBlur (which would commit
-             and unmount this row before the click registers). -->
-        <v-btn value="radius" size="small" @mousedown.prevent>Radius</v-btn>
-        <v-btn value="diameter" size="small" @mousedown.prevent>Diameter</v-btn>
-      </v-btn-toggle>
-    </div>
     <v-text-field
       v-if="quickEntryKind !== null"
       v-model="quickEntryText"
@@ -1105,8 +911,8 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         @point-drag-end="onPointDragEnd"
         @point-drag-merge="onPointDragMerge"
         @entity-click="(id: string) => onEntityClick(id)"
-        @dimension-click="(id: string) => onDimensionClick(id)"
         @constraint-click="(id: string) => onConstraintClick(id)"
+        @request-solve="scheduleSolve"
       />
     </div>
     <div class="status-rows">
@@ -1158,11 +964,6 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
 .canvas-holder {
   flex: 1;
   min-height: 320px;
-}
-.dimension-draft-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 .tool-hint {
   margin: 0 12px;

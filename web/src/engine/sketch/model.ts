@@ -95,11 +95,29 @@ export interface SymmetricConstraint {
   p2Id: string;
   mirrorLineId: string;
 }
+/**
+ * Where a dimension's label is drawn, as a millimeter offset from that
+ * dimension kind's anchor point (documented per kind below since each kind
+ * anchors somewhere different): length/distance anchor at the midpoint of
+ * the two measured points, radius/diameter anchor at the curve's center,
+ * angle anchor at the two lines' intersection point (or, when the lines are
+ * parallel and never meet, the midpoint of their four endpoints). Optional
+ * so an older sketch without a placed label still deserializes; the renderer
+ * falls back to a small default offset when absent. Set once when the
+ * dimension is placed (dimensionGraphics.ts / SketchWorkspace's placement
+ * click) and afterward only by dragging the label (sketchEditor's
+ * updateLabelOffset), never by the solver.
+ */
+export interface LabelOffset {
+  x: number;
+  y: number;
+}
 export interface LengthDimension {
   kind: 'length';
   id: string;
   lineId: string;
   mm: number;
+  labelOffset?: LabelOffset;
 }
 export interface DistanceDimension {
   kind: 'distance';
@@ -107,18 +125,21 @@ export interface DistanceDimension {
   p1Id: string;
   p2Id: string;
   mm: number;
+  labelOffset?: LabelOffset;
 }
 export interface RadiusDimension {
   kind: 'radius';
   id: string;
   entityId: string;
   mm: number;
+  labelOffset?: LabelOffset;
 }
 export interface DiameterDimension {
   kind: 'diameter';
   id: string;
   entityId: string;
   mm: number;
+  labelOffset?: LabelOffset;
 }
 export interface AngleDimension {
   kind: 'angle';
@@ -126,6 +147,7 @@ export interface AngleDimension {
   l1Id: string;
   l2Id: string;
   degrees: number;
+  labelOffset?: LabelOffset;
 }
 
 export type SketchConstraint =
@@ -172,6 +194,15 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+/** True when `value` is either absent (an older sketch with no placed
+ * label) or a finite mm point, the labelOffset field's validation. */
+function isValidLabelOffset(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null) return false;
+  const o = value as Record<string, unknown>;
+  return isFiniteNumber(o.x) && isFiniteNumber(o.y);
 }
 
 /**
@@ -341,6 +372,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         if (!isFiniteNumber(c.mm) || c.mm <= 0) {
           return `${subject}: The length constraint ${c.id} needs a value above 0 mm.`;
         }
+        if (!isValidLabelOffset(c.labelOffset)) {
+          return `${subject}: The length constraint ${c.id}'s label offset must be a finite mm point.`;
+        }
         break;
       case 'distance':
         if (!kinds.has(c.p1Id as string) || !kinds.has(c.p2Id as string)) return missing;
@@ -349,6 +383,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         }
         if (!isFiniteNumber(c.mm) || c.mm <= 0) {
           return `${subject}: The distance constraint ${c.id} needs a value above 0 mm.`;
+        }
+        if (!isValidLabelOffset(c.labelOffset)) {
+          return `${subject}: The distance constraint ${c.id}'s label offset must be a finite mm point.`;
         }
         break;
       case 'radius':
@@ -360,6 +397,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         if (!isFiniteNumber(c.mm) || c.mm <= 0) {
           return `${subject}: The ${kind} constraint ${c.id} needs a value above 0 mm.`;
         }
+        if (!isValidLabelOffset(c.labelOffset)) {
+          return `${subject}: The ${kind} constraint ${c.id}'s label offset must be a finite mm point.`;
+        }
         break;
       case 'angle':
         if (!kinds.has(c.l1Id as string) || !kinds.has(c.l2Id as string)) return missing;
@@ -368,6 +408,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         }
         if (!isFiniteNumber(c.degrees)) {
           return `${subject}: The angle constraint ${c.id} needs a finite angle in degrees.`;
+        }
+        if (!isValidLabelOffset(c.labelOffset)) {
+          return `${subject}: The angle constraint ${c.id}'s label offset must be a finite mm point.`;
         }
         break;
       default:
@@ -441,15 +484,24 @@ export function deserializeSketch(raw: unknown): SketchParseResult {
           mirrorLineId: c.mirrorLineId,
         };
       case 'length':
-        return { kind: 'length', id: c.id, lineId: c.lineId, mm: c.mm };
+        return { kind: 'length', id: c.id, lineId: c.lineId, mm: c.mm, labelOffset: c.labelOffset };
       case 'distance':
-        return { kind: 'distance', id: c.id, p1Id: c.p1Id, p2Id: c.p2Id, mm: c.mm };
+        return {
+          kind: 'distance', id: c.id, p1Id: c.p1Id, p2Id: c.p2Id, mm: c.mm, labelOffset: c.labelOffset,
+        };
       case 'radius':
-        return { kind: 'radius', id: c.id, entityId: c.entityId, mm: c.mm };
+        return {
+          kind: 'radius', id: c.id, entityId: c.entityId, mm: c.mm, labelOffset: c.labelOffset,
+        };
       case 'diameter':
-        return { kind: 'diameter', id: c.id, entityId: c.entityId, mm: c.mm };
+        return {
+          kind: 'diameter', id: c.id, entityId: c.entityId, mm: c.mm, labelOffset: c.labelOffset,
+        };
       case 'angle':
-        return { kind: 'angle', id: c.id, l1Id: c.l1Id, l2Id: c.l2Id, degrees: c.degrees };
+        return {
+          kind: 'angle', id: c.id, l1Id: c.l1Id, l2Id: c.l2Id, degrees: c.degrees,
+          labelOffset: c.labelOffset,
+        };
       default:
         return assertNever(c);
     }
