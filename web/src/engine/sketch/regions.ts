@@ -239,8 +239,13 @@ function lineCircle(
   const c = fx * fx + fy * fy - circleLike.radius * circleLike.radius;
   const discriminant = b * b - 4 * a * c;
   // Tangency defense: a near-zero discriminant is treated as exactly one
-  // tangent point rather than two coincident (or numerically imaginary) roots.
-  const tangentThreshold = 4 * a * a * WELD_EPSILON_MM * WELD_EPSILON_MM;
+  // tangent point rather than two coincident (or numerically imaginary)
+  // roots. The two roots t1,t2 = (-b +/- sqrt(disc)) / (2a) sit a spatial
+  // distance |t1 - t2| * sqrt(a) = sqrt(disc / a) apart along the line (the
+  // line's own parametrization runs at speed sqrt(a) per unit t), so
+  // requiring that separation at or below the shared weld epsilon means
+  // discriminant <= a * epsilon^2.
+  const tangentThreshold = a * WELD_EPSILON_MM * WELD_EPSILON_MM;
   if (discriminant < -tangentThreshold) return [];
   if (Math.abs(discriminant) <= tangentThreshold) {
     const t = -b / (2 * a);
@@ -278,11 +283,45 @@ function circleCircle(
   if (hSquared <= WELD_EPSILON_MM * WELD_EPSILON_MM) {
     return [{ x: midX, y: midY }];
   }
-  if (hSquared < 0) return [];
   const h = Math.sqrt(hSquared);
   return [
     { x: midX - h * uy, y: midY + h * ux },
     { x: midX + h * uy, y: midY - h * ux },
+  ];
+}
+
+/**
+ * Two lines that overlap along a shared sub-segment rather than crossing at
+ * a point: collinear (both cross products of the offset from a's start
+ * within the shared epsilon of zero, i.e. b's endpoints lie on a's infinite
+ * line) and their projected parameter ranges on a overlap by more than the
+ * epsilon. Returns the two points bounding the shared overlap (in a's
+ * frame), or an empty array when the lines are not collinear or do not
+ * overlap. Ordinary crossing lines are handled by lineLine; this covers the
+ * case lineLine cannot (parallel lines have no isolated intersection point).
+ */
+function collinearOverlap(a: { p1: MmPoint; p2: MmPoint }, b: { p1: MmPoint; p2: MmPoint }): MmPoint[] {
+  const dax = a.p2.x - a.p1.x;
+  const day = a.p2.y - a.p1.y;
+  const lenA = Math.hypot(dax, day);
+  if (lenA < 1e-12) return [];
+  const ux = dax / lenA;
+  const uy = day / lenA;
+  // Perpendicular distance of each of b's endpoints from a's infinite line.
+  const perp1 = (b.p1.x - a.p1.x) * uy - (b.p1.y - a.p1.y) * ux;
+  const perp2 = (b.p2.x - a.p1.x) * uy - (b.p2.y - a.p1.y) * ux;
+  if (Math.abs(perp1) > WELD_EPSILON_MM || Math.abs(perp2) > WELD_EPSILON_MM) return [];
+  // Project b's endpoints onto a's direction, in millimeters along a from a.p1.
+  const proj1 = (b.p1.x - a.p1.x) * ux + (b.p1.y - a.p1.y) * uy;
+  const proj2 = (b.p2.x - a.p1.x) * ux + (b.p2.y - a.p1.y) * uy;
+  const bLo = Math.min(proj1, proj2);
+  const bHi = Math.max(proj1, proj2);
+  const lo = Math.max(0, bLo);
+  const hi = Math.min(lenA, bHi);
+  if (hi - lo <= WELD_EPSILON_MM) return []; // touching at a point at most, not a shared segment
+  return [
+    { x: a.p1.x + ux * lo, y: a.p1.y + uy * lo },
+    { x: a.p1.x + ux * hi, y: a.p1.y + uy * hi },
   ];
 }
 
@@ -303,8 +342,13 @@ function paramOnCurve(curve: Curve, p: MmPoint): number | null {
     if (angle < 0) angle += 2 * Math.PI;
     return angle;
   }
-  while (angle < curve.startAngle - WELD_EPSILON_MM) angle += 2 * Math.PI;
-  if (angle > curve.endAngle + WELD_EPSILON_MM) return null;
+  // The weld epsilon is a millimeter distance; converting it to an angular
+  // tolerance on this curve's own radius (arc length = radius * angle) keeps
+  // the span rejection at the true epsilon distance, not epsilon radians
+  // (which would be a wildly looser bound on any curve wider than 1 mm).
+  const angleTol = WELD_EPSILON_MM / Math.max(curve.radius, WELD_EPSILON_MM);
+  while (angle < curve.startAngle - angleTol) angle += 2 * Math.PI;
+  if (angle > curve.endAngle + angleTol) return null;
   return Math.max(curve.startAngle, Math.min(curve.endAngle, angle));
 }
 
@@ -342,7 +386,13 @@ interface HalfEdge {
   to: number;
   /** Polyline from `from` to `to`, inclusive of both endpoints. */
   points: MmPoint[];
-  entityId: string;
+  /**
+   * Source entity id(s) contributing this edge. Usually one; two lines that
+   * overlap along a shared sub-segment (a wall shared between two shapes, or
+   * an exact duplicate line) collapse onto the same arrangement edge with
+   * both entity ids attached, rather than two coincident parallel edges.
+   */
+  entityIds: string[];
   twin: number;
   componentId: number;
   visited: boolean;
@@ -377,7 +427,14 @@ export function extractRegions(sketch: Sketch): RegionsResult {
   }
   for (let i = 0; i < curves.length; i += 1) {
     for (let j = i + 1; j < curves.length; j += 1) {
-      const points = rawIntersections(curves[i], curves[j]);
+      const ci = curves[i];
+      const cj = curves[j];
+      const points = rawIntersections(ci, cj);
+      // lineLine only reports a crossing point; two collinear (parallel,
+      // coincident-line) segments never cross at a single point, so their
+      // shared overlap is detected separately and folded into the same
+      // split-point handling below.
+      if (ci.kind === 'line' && cj.kind === 'line') points.push(...collinearOverlap(ci, cj));
       for (const p of points) {
         const ti = paramOnCurve(curves[i], p);
         const tj = paramOnCurve(curves[j], p);
@@ -418,6 +475,16 @@ export function extractRegions(sketch: Sketch): RegionsResult {
     list.push(heId);
     outgoing.set(v, list);
   };
+  // Two straight sub-segments landing on the exact same pair of welded
+  // vertices (a shared wall, or an exact duplicate line) collapse onto one
+  // arrangement edge carrying both entity ids, rather than two coincident
+  // parallel edges the angle sort could not otherwise order. Keyed by the
+  // unordered vertex pair; only line-sourced segments are ever collapsed,
+  // since a curved edge sharing endpoints with a straight or differently
+  // curved one is genuinely different geometry, not an overlap.
+  const straightEdgeByVertexPair = new Map<string, number>(); // key -> heForward id
+
+  const vertexPairKey = (u: number, v: number): string => `${Math.min(u, v)}:${Math.max(u, v)}`;
 
   for (let ci = 0; ci < curves.length; ci += 1) {
     const curve = curves[ci];
@@ -461,12 +528,21 @@ export function extractRegions(sketch: Sketch): RegionsResult {
       const length = polylineLength(forwardPoints);
       // Tangency defense: drop post-split edges shorter than the epsilon.
       if (length < WELD_EPSILON_MM) continue;
+      if (curve.kind === 'line' && seg.fromV !== seg.toV) {
+        const key = vertexPairKey(seg.fromV, seg.toV);
+        const existingId = straightEdgeByVertexPair.get(key);
+        if (existingId !== undefined) {
+          halfEdges[existingId].entityIds.push(curve.entityId);
+          halfEdges[halfEdges[existingId].twin].entityIds.push(curve.entityId);
+          continue;
+        }
+      }
       const heForward: HalfEdge = {
         id: halfEdges.length,
         from: seg.fromV,
         to: seg.toV,
         points: forwardPoints,
-        entityId: curve.entityId,
+        entityIds: [curve.entityId],
         twin: halfEdges.length + 1,
         componentId: -1,
         visited: false,
@@ -477,7 +553,7 @@ export function extractRegions(sketch: Sketch): RegionsResult {
         from: seg.toV,
         to: seg.fromV,
         points: [...forwardPoints].reverse(),
-        entityId: curve.entityId,
+        entityIds: [curve.entityId],
         twin: heForward.id,
         componentId: -1,
         visited: false,
@@ -485,6 +561,9 @@ export function extractRegions(sketch: Sketch): RegionsResult {
       halfEdges.push(heBackward);
       addOutgoing(seg.fromV, heForward.id);
       addOutgoing(seg.toV, heBackward.id);
+      if (curve.kind === 'line') {
+        straightEdgeByVertexPair.set(vertexPairKey(seg.fromV, seg.toV), heForward.id);
+      }
     }
   }
 
@@ -552,7 +631,7 @@ export function extractRegions(sketch: Sketch): RegionsResult {
     for (;;) {
       const edge = halfEdges[cur];
       edge.visited = true;
-      entityIds.add(edge.entityId);
+      for (const id of edge.entityIds) entityIds.add(id);
       // Skip the last point (shared with the next edge's first point).
       points.push(...edge.points.slice(0, -1));
       cur = nextHalfEdge(cur);
@@ -562,35 +641,52 @@ export function extractRegions(sketch: Sketch): RegionsResult {
   }
 
   const positive = cycles.filter((c) => c.area > 0);
+  // Each connected component has exactly one negative-area cycle: the single
+  // unbounded face of that component considered on its own, which traces
+  // the outer silhouette of the whole component regardless of how many
+  // bounded faces it internally splits into (e.g. two overlapping circles
+  // forming one island still has one outer boundary).
+  const outerByComponent = new Map<number, Cycle>();
+  for (const c of cycles) {
+    if (c.area < 0) outerByComponent.set(c.componentId, c);
+  }
 
-  // Step 4 (continued): group faces fully inside another face's outer
-  // boundary, from a different connected component, into that face's holes.
-  const parentOf: (number | null)[] = positive.map(() => null);
-  for (let i = 0; i < positive.length; i += 1) {
-    const candidate = positive[i];
-    const leftmost = candidate.points.reduce((a, b) => (b.x < a.x ? b : a));
+  // Step 4 (continued): for every component, find the tightest positive
+  // cycle from a DIFFERENT component that contains it (leftmost-vertex
+  // ray-crossing containment test on that component's own outer boundary).
+  // A component is tested once, not once per internal face: two components
+  // never cross without merging into one (curves that cross weld into a
+  // shared vertex), so a component is either fully inside a given face or
+  // fully outside it, and grouping per component avoids adding the same
+  // island as several separate, edge-sharing holes.
+  const parentFaceOfComponent = new Map<number, number>(); // componentId -> positive cycle index
+  for (const [componentId, outer] of outerByComponent) {
+    const leftmost = outer.points.reduce((a, b) => (b.x < a.x ? b : a));
     let bestParent = -1;
     let bestArea = Infinity;
     for (let j = 0; j < positive.length; j += 1) {
-      if (i === j) continue;
-      const outer = positive[j];
-      if (outer.componentId === candidate.componentId) continue;
-      if (outer.area >= bestArea) continue;
-      if (pointInPolygon(leftmost, outer.points) && outer.area > candidate.area) {
+      const candidate = positive[j];
+      if (candidate.componentId === componentId) continue;
+      if (candidate.area >= bestArea) continue;
+      if (pointInPolygon(leftmost, candidate.points)) {
         bestParent = j;
-        bestArea = outer.area;
+        bestArea = candidate.area;
       }
     }
-    parentOf[i] = bestParent >= 0 ? bestParent : null;
+    if (bestParent >= 0) parentFaceOfComponent.set(componentId, bestParent);
   }
 
   const faces: RegionFace[] = positive.map((cycle, i) => {
-    const holeIndices = parentOf
-      .map((p, idx) => (p === i ? idx : -1))
-      .filter((idx) => idx >= 0);
-    const holes = holeIndices.map((idx) => orientNegative(positive[idx].points));
+    const nestedComponentIds = [...parentFaceOfComponent.entries()]
+      .filter(([, parentIdx]) => parentIdx === i)
+      .map(([componentId]) => componentId);
+    // The component's own negative cycle is already the correctly oriented
+    // (negative-area) hole boundary; no re-orientation needed.
+    const holes = nestedComponentIds.map((cid) => (outerByComponent.get(cid) as Cycle).points);
     const entityIds = new Set(cycle.entityIds);
-    for (const idx of holeIndices) for (const id of positive[idx].entityIds) entityIds.add(id);
+    for (const cid of nestedComponentIds) {
+      for (const id of (outerByComponent.get(cid) as Cycle).entityIds) entityIds.add(id);
+    }
     return {
       id: `region-${i}`,
       outer: orientPositive(cycle.points),
@@ -626,10 +722,6 @@ function polylineLength(points: MmPoint[]): number {
     sum += Math.hypot(points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
   }
   return sum;
-}
-
-function orientNegative(loop: MmPoint[]): MmPoint[] {
-  return shoelaceArea(loop) <= 0 ? loop : [...loop].reverse();
 }
 
 /** Standard ray-casting point-in-polygon test. */
