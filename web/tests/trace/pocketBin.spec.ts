@@ -313,6 +313,17 @@ describe('buildPocketBinBody', () => {
     body.delete();
   });
 
+  it('stays watertight when two tools with different pocket depths overlap', () => {
+    const tools = [lTool(), lTool({ id: 'l-2', name: 'Second wrench' })];
+    const placements: ToolPlacement[] = [
+      { ...centeredL, pocketDepthMm: 5 },
+      { toolId: 'l-2', xMm: -10, yMm: -5.1, pocketDepthMm: 10, draftAngleDeg: 0 },
+    ];
+    const body = buildPocketBinBody(m, params({ tools, placements }));
+    expect(body.status()).toBe('NoError');
+    body.delete();
+  });
+
   it('rejects a placement whose tool is missing from the plan', () => {
     expect(() =>
       buildPocketBinBody(m, params({ placements: [{ ...centeredL, toolId: 'gone' }] })),
@@ -403,6 +414,25 @@ function pocketAreaAt(
 /** Effective pocket radius at height z from the measured cross-section area. */
 function pocketRadiusAt(body: Manifold, cx: number, cy: number, z: number, boxSize: number): number {
   return Math.sqrt(pocketAreaAt(body, cx, cy, z, boxSize) / Math.PI);
+}
+
+/** Like pocketAreaAt but with independent X and Y probe extents, for a
+ * non-square footprint (e.g. two squares sharing a wall). */
+function pocketAreaInBox(
+  body: Manifold,
+  cx: number,
+  cy: number,
+  z: number,
+  sizeX: number,
+  sizeY: number,
+): number {
+  const t = 0.4;
+  const probe = m.Manifold.cube([sizeX, sizeY, t], true).translate(cx, cy, z);
+  const solid = body.intersect(probe);
+  const area = (sizeX * sizeY * t - solid.volume()) / t;
+  probe.delete();
+  solid.delete();
+  return area;
 }
 
 describe('drafted pocket walls', () => {
@@ -511,6 +541,98 @@ describe('drafted pocket walls', () => {
     expect(() =>
       buildPocketBinBody(m, params({ tools, placements: apartAtZero })),
     ).not.toThrow();
+  });
+});
+
+describe('multi-part pocket union (regression for the phantom wall between adjacent parts)', () => {
+  it('unions two clearance-grown parts of one tool instead of cancelling their shared wall', () => {
+    // Two 20 mm squares sharing a wall at tool-local x 10, before clearance:
+    // part A spans x -10..10, part B spans x 10..30, both y -10..10. Growing
+    // each part independently by the tool's clearance (as resolvedToolOutline
+    // does, per part) makes them overlap by a 2*offsetMm strip along the
+    // shared wall: exactly the case the flat EvenOdd fill over both parts'
+    // concatenated loops used to cancel (a winding-2 strip is even, so
+    // EvenOdd empties it), carving a phantom wall between the two halves of
+    // one tool. The fix unions each part's own EvenOdd fill instead.
+    const offsetMm = 1.5;
+    const twoSquares: TracedTool = {
+      id: 'two-square',
+      name: 'Two squares',
+      parts: [
+        {
+          outer: [
+            { x: -10, y: -10 },
+            { x: 10, y: -10 },
+            { x: 10, y: 10 },
+            { x: -10, y: 10 },
+          ],
+          holes: [],
+        },
+        {
+          outer: [
+            { x: 10, y: -10 },
+            { x: 30, y: -10 },
+            { x: 30, y: 10 },
+            { x: 10, y: 10 },
+          ],
+          holes: [],
+        },
+      ],
+      rotationDeg: 0,
+      offsetMm,
+      mirrored: false,
+      minHoleWidthMm: 0,
+      filledHoles: [],
+      fingerHoles: [],
+      source: { kind: 'primitive' },
+    };
+    // The raw combined footprint (before growth) spans tool-local x 0..20 at
+    // its centre once translated by xMm -10 (below); grown, each square's
+    // side becomes 20 + 2*offsetMm, so the union area is exactly two grown
+    // squares minus the strip they double-count where they overlap.
+    const grownSide = 20 + 2 * offsetMm; // 23 mm
+    const overlapWidth = 2 * offsetMm; // 3 mm: each square grows offsetMm past the shared wall
+    const sharpUnionAreaMm2 = grownSide * grownSide * 2 - overlapWidth * grownSide; // 989
+    // The clearance offset rounds convex corners ('Round' join, radius
+    // offsetMm). The two corners on the shared wall of each square lie
+    // inside the overlap region and never reach the union's outer boundary;
+    // only the 4 outward-facing corners (2 per square) are actually rounded
+    // on the final union shape. Each rounded corner loses the area between
+    // the square corner and its inscribed quarter circle: offsetMm^2 * (1 -
+    // pi/4). Subtracting that from the sharp-cornered union is the analytic
+    // expected area; the faceted offset (circleSegments under the chordal
+    // tolerance) approximates the round join, leaving a small residual the
+    // tolerance below absorbs.
+    const cornerLossMm2 = offsetMm * offsetMm * (1 - Math.PI / 4);
+    const expectedUnionAreaMm2 = sharpUnionAreaMm2 - 4 * cornerLossMm2;
+
+    const placement: ToolPlacement = {
+      toolId: 'two-square',
+      xMm: -10,
+      yMm: 9,
+      pocketDepthMm: 5,
+      draftAngleDeg: 0,
+    };
+    const body = buildPocketBinBody(
+      m,
+      params({
+        gridX: 3,
+        gridY: 3,
+        tools: [twoSquares],
+        placements: [placement],
+      }),
+    );
+    expect(body.status()).toBe('NoError');
+    // Probe well inside the pocket's depth (bottoms at 21 - 5 = 16 mm on a 3
+    // unit bin), sized generously around the combined footprint (grown
+    // bounds roughly x -21.5..21.5, y -2.5..20.5) without reaching either
+    // side wall or the back wall on this 3x3 bin.
+    const measured = pocketAreaInBox(body, 0, 9, 18, 50, 30);
+    // Within 1 mm^2 of the analytic union area: comfortably tighter than the
+    // roughly 138 mm^2 (2 * the 69 mm^2 overlap strip) the flat-EvenOdd bug
+    // used to cancel from the true union.
+    expect(Math.abs(measured - expectedUnionAreaMm2)).toBeLessThan(1);
+    body.delete();
   });
 });
 

@@ -7,8 +7,8 @@ import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { assertNever, binOf } from '../../engine/plan/types';
 import type { TraceSession } from '../../engine/trace/types';
-import { recentredParts, worldFromEntry } from '../../engine/trace/layoutModel';
-import { matchPartsByGeometry, placementPreservingCentroid, sortPartsByCentroid } from '../../engine/trace/edit';
+import { previewReplacementParts, worldFromEntry } from '../../engine/trace/layoutModel';
+import { matchPartsByGeometry, placementPreservingCentroid } from '../../engine/trace/edit';
 import { getPhoto } from '../../photoStore';
 import { cloneSketch } from '../../engine/sketch/model';
 import PhotoStage from './PhotoStage.vue';
@@ -177,17 +177,38 @@ async function finishSketch(): Promise<void> {
     if (tool !== undefined) {
       const oldParts = tool.parts;
       const oldFilledHoles = tool.filledHoles;
-      const oldPlacement = trace.placementOf(tool.id);
-      const newParts = recentredParts(sortPartsByCentroid(picked.parts));
+      // Snapshot the placement's own fields before replaceToolParts, which
+      // mutates the store's live placement object (placementOf returns a
+      // reference into trace.placements, not a copy) to the sheet position.
+      const livePlacement = trace.placementOf(tool.id);
+      const oldPlacement =
+        livePlacement === undefined ? undefined : { ...livePlacement };
+      const newParts = previewReplacementParts(picked.parts);
       const matches = matchPartsByGeometry(oldParts, newParts);
       trace.replaceToolParts(tool.id, picked.parts, source);
+      let droppedAFill = false;
       const remappedFilledHoles = oldFilledHoles
         .map((f) => {
           const match = matches.find((m) => m.oldIndex === f.partIndex);
-          return match === undefined ? null : { partIndex: match.newIndex, holeIndex: f.holeIndex };
+          if (match === undefined) {
+            droppedAFill = true;
+            return null;
+          }
+          // The matched new part may have fewer holes than the old one; a
+          // holeIndex the new part doesn't have would otherwise fail the
+          // plan's own import validation later, so it is dropped here too.
+          if (f.holeIndex >= newParts[match.newIndex].holes.length) {
+            droppedAFill = true;
+            return null;
+          }
+          return { partIndex: match.newIndex, holeIndex: f.holeIndex };
         })
         .filter((f): f is { partIndex: number; holeIndex: number } => f !== null);
       trace.setFilledHoles(tool.id, remappedFilledHoles);
+      trace.refinishNotice =
+        droppedAFill && oldFilledHoles.length > 0
+          ? 'Some filled holes could not be carried over to the new shape.'
+          : null;
       if (oldPlacement !== undefined) {
         const adjusted = placementPreservingCentroid(oldParts, newParts, oldPlacement);
         trace.moveTool(tool.id, adjusted.xMm, adjusted.yMm);

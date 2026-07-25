@@ -144,12 +144,12 @@ function applyDefaultDepth(value: number): void {
   }
 }
 
-/** True when the hole is an elongated slot rather than a circle. */
 /** Total interior holes across every part of the tool's raw (unresolved) outline. */
 function toolHoleCount(tool: TracedTool): number {
   return tool.parts.reduce((count, part) => count + part.holes.length, 0);
 }
 
+/** True when the hole is an elongated slot rather than a circle. */
 function isSlot(hole: FingerHole): boolean {
   return hole.x2 !== undefined && hole.y2 !== undefined;
 }

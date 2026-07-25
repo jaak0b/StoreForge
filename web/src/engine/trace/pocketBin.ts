@@ -114,22 +114,31 @@ function outlineSection(m: ManifoldToplevel, outline: TracedOutline): CrossSecti
 }
 
 /**
- * Cross-section of every part of a placed pocket combined, as one EvenOdd
- * fill over all parts' outer-plus-holes loops. Because a tool's parts are
- * disjoint by construction, one EvenOdd fill over their concatenated loops is
- * exactly the union of each part's own EvenOdd fill, so this stands in for
- * "the tool's whole footprint" everywhere the pre-multi-part code used a
- * single outline's section.
+ * Cross-section of every part of a placed pocket combined: one EvenOdd
+ * cross-section per part (outer plus that part's own holes), unioned together
+ * with CrossSection.add, the established boolean-union primitive. A part's
+ * clearance offset can grow it into an adjacent part's footprint (they no
+ * longer stay disjoint the way the unclearanced parts do), so a single flat
+ * EvenOdd fill over every part's concatenated loops is wrong where two parts'
+ * grown outlines overlap: the shared strip is covered twice and an EvenOdd
+ * fill cancels it back out, carving a phantom wall between two parts that
+ * should print as one merged pocket. Unioning each part's own fill sidesteps
+ * that: CrossSection.add returns the true union regardless of overlap.
  */
 function outlinesSection(m: ManifoldToplevel, outlines: TracedOutline[]): CrossSection {
-  const loops: MmPoint[][] = [];
+  let union: CrossSection | null = null;
   for (const outline of outlines) {
-    loops.push(outline.outer, ...outline.holes);
+    const part = outlineSection(m, outline);
+    if (union === null) {
+      union = part;
+      continue;
+    }
+    const merged = union.add(part);
+    union.delete();
+    part.delete();
+    union = merged;
   }
-  const polygons: SimplePolygon[] = loops.map((loop) =>
-    loop.map((p) => [p.x, p.y] as [number, number]),
-  );
-  return new m.CrossSection(polygons, 'EvenOdd');
+  return union ?? new m.CrossSection([], 'EvenOdd');
 }
 
 /**

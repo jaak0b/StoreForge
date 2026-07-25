@@ -152,19 +152,36 @@ export function combinedCentroidOf(parts: readonly TracedOutline[]): MmPoint {
 }
 
 /**
+ * Orders two parts by centroid (y then x), breaking an exact centroid tie
+ * (concentric parts, e.g. an annulus and the disc cut from its middle) by
+ * area descending then hole count descending, so ordering and matching stay
+ * total even when two parts share a centroid exactly. The single comparator
+ * both sortPartsByCentroid and matchPartsByGeometry's tie-break spend, so the
+ * two cannot drift apart on what "same centroid" resolves to.
+ */
+function compareByCentroidThenShape(a: TracedOutline, b: TracedOutline): number {
+  const ca = centroidOf(a.outer);
+  const cb = centroidOf(b.outer);
+  if (ca.y !== cb.y) return ca.y - cb.y;
+  if (ca.x !== cb.x) return ca.x - cb.x;
+  const areaA = Math.abs(signedArea(a.outer));
+  const areaB = Math.abs(signedArea(b.outer));
+  if (areaA !== areaB) return areaB - areaA;
+  return b.holes.length - a.holes.length;
+}
+
+/**
  * Deterministic creation order for a tool's parts: sorted by each part's own
  * centroid, y then x, so the same set of traced regions always produces the
  * same part order regardless of the order the caller (e.g. a segmentation
- * mask scan) found them in. The single home for the ordering; a fresh part
- * list from `addToolParts`/`replaceToolParts` in layoutModel.ts is always
- * passed through this first.
+ * mask scan) found them in. Concentric parts (same centroid) tie-break by
+ * area descending then hole count descending, via compareByCentroidThenShape.
+ * The single home for the ordering; a fresh part list from
+ * `addToolParts`/`replaceToolParts` in layoutModel.ts is always passed
+ * through this first.
  */
 export function sortPartsByCentroid(parts: readonly TracedOutline[]): TracedOutline[] {
-  return [...parts].sort((a, b) => {
-    const ca = centroidOf(a.outer);
-    const cb = centroidOf(b.outer);
-    return ca.y !== cb.y ? ca.y - cb.y : ca.x - cb.x;
-  });
+  return [...parts].sort(compareByCentroidThenShape);
 }
 
 /**
@@ -557,7 +574,19 @@ export function matchPartsByGeometry(
 ): PartMatch[] {
   const oldCentroids = oldParts.map((p) => centroidOf(p.outer));
   const newCentroids = newParts.map((p) => centroidOf(p.outer));
-  const candidates: { oldIndex: number; newIndex: number; distance: number }[] = [];
+  // Concentric parts (an annulus and the disc it surrounds) share a centroid
+  // exactly, so distance alone leaves candidates tied; each part's own area
+  // and hole count, compareByCentroidThenShape's tie-break, resolves the tie
+  // the same deterministic way sortPartsByCentroid already orders parts.
+  const oldAreas = oldParts.map((p) => Math.abs(signedArea(p.outer)));
+  const newAreas = newParts.map((p) => Math.abs(signedArea(p.outer)));
+  const candidates: {
+    oldIndex: number;
+    newIndex: number;
+    distance: number;
+    areaDelta: number;
+    holeDelta: number;
+  }[] = [];
   for (let i = 0; i < oldCentroids.length; i += 1) {
     for (let j = 0; j < newCentroids.length; j += 1) {
       const distance = Math.hypot(
@@ -565,11 +594,21 @@ export function matchPartsByGeometry(
         oldCentroids[i].y - newCentroids[j].y,
       );
       if (distance <= matchToleranceMm) {
-        candidates.push({ oldIndex: i, newIndex: j, distance });
+        candidates.push({
+          oldIndex: i,
+          newIndex: j,
+          distance,
+          areaDelta: Math.abs(oldAreas[i] - newAreas[j]),
+          holeDelta: Math.abs(oldParts[i].holes.length - newParts[j].holes.length),
+        });
       }
     }
   }
-  candidates.sort((a, b) => a.distance - b.distance);
+  candidates.sort((a, b) => {
+    if (a.distance !== b.distance) return a.distance - b.distance;
+    if (a.areaDelta !== b.areaDelta) return a.areaDelta - b.areaDelta;
+    return a.holeDelta - b.holeDelta;
+  });
   const usedOld = new Set<number>();
   const usedNew = new Set<number>();
   const matches: PartMatch[] = [];

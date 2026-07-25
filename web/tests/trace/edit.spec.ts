@@ -534,6 +534,39 @@ describe('sortPartsByCentroid', () => {
       expect(sorted).toEqual(expectedOrder);
     }
   });
+
+  it('breaks an exact centroid tie (concentric parts) by area descending', () => {
+    // An annulus (outer 20 mm square, inner 10 mm hole) and the 8 mm inner
+    // disc it surrounds: same centroid (0,0) exactly, but the annulus has the
+    // larger area, so it must sort first regardless of input order.
+    const annulus: TracedOutline = {
+      outer: [
+        { x: -10, y: -10 },
+        { x: 10, y: -10 },
+        { x: 10, y: 10 },
+        { x: -10, y: 10 },
+      ],
+      holes: [
+        [
+          { x: -5, y: -5 },
+          { x: -5, y: 5 },
+          { x: 5, y: 5 },
+          { x: 5, y: -5 },
+        ],
+      ],
+    };
+    const disc: TracedOutline = {
+      outer: [
+        { x: -4, y: -4 },
+        { x: 4, y: -4 },
+        { x: 4, y: 4 },
+        { x: -4, y: 4 },
+      ],
+      holes: [],
+    };
+    expect(sortPartsByCentroid([disc, annulus])).toEqual([annulus, disc]);
+    expect(sortPartsByCentroid([annulus, disc])).toEqual([annulus, disc]);
+  });
 });
 
 describe('combinedCentroidOf', () => {
@@ -595,6 +628,51 @@ describe('matchPartsByGeometry', () => {
     };
     const matches = matchPartsByGeometry(oldParts, [farAway]);
     expect(matches).toHaveLength(0);
+  });
+
+  it('matches concentric parts (same centroid) by area rather than input order', () => {
+    // An annulus and the inner disc it surrounds share centroid (0,0)
+    // exactly, so distance alone cannot tell old-annulus/new-annulus from
+    // old-annulus/new-disc: the area tie-break must pick the same-shaped part
+    // on both sides.
+    const annulus: TracedOutline = {
+      outer: [
+        { x: -10, y: -10 },
+        { x: 10, y: -10 },
+        { x: 10, y: 10 },
+        { x: -10, y: 10 },
+      ],
+      holes: [
+        [
+          { x: -5, y: -5 },
+          { x: -5, y: 5 },
+          { x: 5, y: 5 },
+          { x: 5, y: -5 },
+        ],
+      ],
+    };
+    const disc: TracedOutline = {
+      outer: [
+        { x: -4, y: -4 },
+        { x: 4, y: -4 },
+        { x: 4, y: 4 },
+        { x: -4, y: 4 },
+      ],
+      holes: [],
+    };
+    const oldParts = [annulus, disc];
+    // New parts shuffled and nudged slightly, disc first this time.
+    const newDisc: TracedOutline = { ...disc, outer: disc.outer.map((p) => ({ x: p.x + 0.1, y: p.y })) };
+    const newAnnulus: TracedOutline = {
+      ...annulus,
+      outer: annulus.outer.map((p) => ({ x: p.x + 0.1, y: p.y })),
+    };
+    const newParts = [newDisc, newAnnulus];
+    const matches = matchPartsByGeometry(oldParts, newParts);
+    expect(matches).toHaveLength(2);
+    const byOld = new Map(matches.map((m) => [m.oldIndex, m.newIndex]));
+    expect(byOld.get(0)).toBe(1); // old annulus (index 0) -> new annulus (index 1)
+    expect(byOld.get(1)).toBe(0); // old disc (index 1) -> new disc (index 0)
   });
 
   it('assigns each side at most once even with several plausible candidates', () => {

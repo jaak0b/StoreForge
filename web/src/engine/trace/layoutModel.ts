@@ -385,6 +385,19 @@ export function recentredParts(parts: TracedOutline[]): TracedOutline[] {
 }
 
 /**
+ * The tool-local parts a replaceToolParts call would produce from raw sheet
+ * outlines: ordered deterministically (sortPartsByCentroid) then recentred
+ * together, exactly as replaceToolParts itself does below. Exposed so a
+ * caller that needs to know the new parts before committing the replace (the
+ * sketch re-finish flow matches old parts to these by geometry, to remap
+ * filled holes and preserve the world placement) computes the identical
+ * result instead of restating the two-step recipe itself.
+ */
+export function previewReplacementParts(outlines: TracedOutline[]): TracedOutline[] {
+  return recentredParts(sortPartsByCentroid(outlines));
+}
+
+/**
  * Adds a tool from one or more outlines in sheet mm (see TracedTool.parts):
  * the parts are ordered deterministically (sortPartsByCentroid) then
  * recentred together so tool-local coordinates sit about their combined
@@ -484,7 +497,7 @@ export function replaceToolParts(
   const tool = state.tools.find((t) => t.id === toolId);
   if (tool === undefined) return;
   const ordered = sortPartsByCentroid(outlines);
-  tool.parts = recentredParts(ordered);
+  tool.parts = previewReplacementParts(outlines);
   tool.source = cloneSource(source);
   tool.filledHoles = [];
   const placement = state.placements.find((p) => p.toolId === toolId);

@@ -88,6 +88,13 @@ export const useToolTrace = defineStore('toolTrace', () => {
   const tools = ref<TracedTool[]>([]);
   const placements = ref<ToolPlacement[]>([]);
   const selectedToolId = ref<string | null>(null);
+  /**
+   * Set by a re-finish that could not carry over every filled hole (an
+   * unmatched part, or a hole index that no longer exists on its matched
+   * part); shown as a non-blocking notice alongside the pocket warnings until
+   * the next re-finish or a workspace reset clears it.
+   */
+  const refinishNotice = ref<string | null>(null);
 
   /** Which canvas the trace-and-layout workspace shows. */
   const workspaceMode = ref<'trace' | 'layout'>('layout');
@@ -435,6 +442,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     tools.value = [];
     placements.value = [];
     selectedToolId.value = null;
+    refinishNotice.value = null;
     workspaceMode.value = 'layout';
     retraceRequestId.value = null;
     fingerHoleMode.value = false;
@@ -470,6 +478,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     tools,
     placements,
     selectedToolId,
+    refinishNotice,
     workspaceMode,
     retraceRequestId,
     fingerHoleMode,

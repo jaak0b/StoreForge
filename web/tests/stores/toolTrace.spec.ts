@@ -395,4 +395,72 @@ describe('toolTrace multi-part sketch tools', () => {
     expect(placementAfter.xMm + worldAfter.x).toBeCloseTo(placementBefore.xMm + worldBefore.x, 6);
     expect(placementAfter.yMm + worldAfter.y).toBeCloseTo(placementBefore.yMm + worldBefore.y, 6);
   });
+
+  it('re-finish drops a remapped filled hole whose index no longer exists on the matched part', async () => {
+    const { matchPartsByGeometry } = await import('../../src/engine/trace/edit');
+
+    // A single square part with two holes; its re-finished replacement lands
+    // at (nearly) the same centroid but has only one hole. A fill on the
+    // second (now-gone) hole must be dropped, not carried over as an index
+    // the plan's own import validation would later reject.
+    const twoHoleSquare = {
+      outer: [
+        { x: 0, y: 0 },
+        { x: 20, y: 0 },
+        { x: 20, y: 20 },
+        { x: 0, y: 20 },
+      ],
+      holes: [
+        [
+          { x: 2, y: 2 },
+          { x: 2, y: 4 },
+          { x: 4, y: 4 },
+          { x: 4, y: 2 },
+        ],
+        [
+          { x: 14, y: 14 },
+          { x: 14, y: 16 },
+          { x: 16, y: 16 },
+          { x: 16, y: 14 },
+        ],
+      ],
+    };
+    const oneHoleSquare = {
+      outer: twoHoleSquare.outer.map((p) => ({ ...p })),
+      holes: [twoHoleSquare.holes[0].map((p) => ({ ...p }))],
+    };
+
+    const trace = useToolTrace();
+    const sketch = { schemaVersion: SKETCH_SCHEMA_VERSION, entities: [], constraints: [] };
+    const tool = trace.addToolParts([twoHoleSquare], 'Sketched shape', { kind: 'sketch', sketch });
+    trace.toggleFilledHole(tool.id, 0, 0); // hole 0, survives
+    trace.toggleFilledHole(tool.id, 0, 1); // hole 1, will be out of range after re-finish
+    expect(tool.filledHoles).toHaveLength(2);
+
+    const oldParts = tool.parts;
+    const oldFilledHoles = tool.filledHoles;
+    const newRawParts = [oneHoleSquare];
+    const { recentredParts } = await import('../../src/engine/trace/layoutModel');
+    const { sortPartsByCentroid } = await import('../../src/engine/trace/edit');
+    const newParts = recentredParts(sortPartsByCentroid(newRawParts));
+    const matches = matchPartsByGeometry(oldParts, newParts);
+    expect(matches).toHaveLength(1);
+
+    trace.replaceToolParts(tool.id, newRawParts, { kind: 'sketch', sketch });
+
+    const remapped = oldFilledHoles
+      .map((f) => {
+        const match = matches.find((m) => m.oldIndex === f.partIndex);
+        if (match === undefined) return null;
+        if (f.holeIndex >= newParts[match.newIndex].holes.length) return null;
+        return { partIndex: match.newIndex, holeIndex: f.holeIndex };
+      })
+      .filter((f): f is { partIndex: number; holeIndex: number } => f !== null);
+    trace.setFilledHoles(tool.id, remapped);
+
+    // Only hole 0's fill (still present on the matched part) carries over;
+    // hole 1's fill, now out of range, is dropped rather than kept verbatim.
+    expect(tool.filledHoles).toHaveLength(1);
+    expect(tool.filledHoles[0]).toEqual({ partIndex: matches[0].newIndex, holeIndex: 0 });
+  });
 });

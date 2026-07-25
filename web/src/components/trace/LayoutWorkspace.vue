@@ -471,6 +471,9 @@ function cancelEdit(): void {
         <v-alert v-if="photoNote" type="warning" density="compact" class="mb-2 float-alert">
           {{ photoNote }}
         </v-alert>
+        <v-alert v-if="trace.refinishNotice" type="warning" density="compact" class="mb-2 float-alert">
+          {{ trace.refinishNotice }}
+        </v-alert>
         <div class="d-flex justify-end ga-2">
           <v-btn v-if="editingEntry !== null" variant="outlined" @click="cancelEdit">
             Cancel edit
