@@ -202,7 +202,15 @@ function onPointerDown(event: PointerEvent): void {
     pendingPointId.value = hit;
     pendingDownScreen.value = { x: event.clientX, y: event.clientY };
     dragSnapTargetId.value = null;
-    (event.target as Element).setPointerCapture(event.pointerId);
+    // Capture on the SVG root, not event.target: the point's rendered circle
+    // (r = 0.9 mm) is visually smaller than the generous 8-screen-pixel pick
+    // radius hitPoint() uses, so a pointerdown within the pick radius but off
+    // the circle's painted pixels lands on a sibling element (an entity's
+    // invisible hit-path, or the background). Capturing on that element still
+    // works for a point drag that stays over the canvas, but ties correctness
+    // to which element happened to be under the cursor; capturing on the
+    // stable svg root removes that dependency entirely.
+    svgEl.value!.setPointerCapture(event.pointerId);
     return;
   }
   if (editor.activeTool === 'select' && hit === null && !isEntityTarget(event.target)) {
