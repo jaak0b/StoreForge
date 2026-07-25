@@ -313,7 +313,6 @@ async function storeReferencedSessions(): Promise<TraceSession[]> {
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         photoNote.value = `Storing a trace photo failed (${detail}). The bin was saved, but tools traced on that sheet cannot be re-traced later without the photo.`;
-        continue;
       }
     }
     saved.push(JSON.parse(JSON.stringify(session)) as TraceSession);

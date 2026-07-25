@@ -156,12 +156,14 @@ function commitQuickEntry(): void {
       const dy = cursor.y - tail.y;
       const dirLen = Math.hypot(dx, dy) || 1;
       const target = { x: tail.x + (dx / dirLen) * value, y: tail.y + (dy / dirLen) * value };
-      editor.appendChainPoint(target);
-      if (chainTailSegmentId.value !== null) {
-        editor.addDimension({
-          kind: 'length', id: editor.nextId(), lineId: chainTailSegmentId.value, mm: value,
-        });
-      }
+      editor.runGrouped(() => {
+        editor.appendChainPoint(target);
+        if (chainTailSegmentId.value !== null) {
+          editor.addDimension({
+            kind: 'length', id: editor.nextId(), lineId: chainTailSegmentId.value, mm: value,
+          });
+        }
+      });
       scheduleSolve();
       break;
     }
@@ -169,8 +171,10 @@ function commitQuickEntry(): void {
       if (pendingClicks.value.length !== 1) break;
       const center = pendingClicks.value[0];
       const centerHitId = pendingHitPointIds.value[0] ?? undefined;
-      const circleId = editor.addCircle(center, value / 2, centerHitId);
-      editor.addDimension({ kind: 'diameter', id: editor.nextId(), entityId: circleId, mm: value });
+      editor.runGrouped(() => {
+        const circleId = editor.addCircle(center, value / 2, centerHitId);
+        editor.addDimension({ kind: 'diameter', id: editor.nextId(), entityId: circleId, mm: value });
+      });
       editor.clearPendingClicks();
       scheduleSolve();
       break;
@@ -178,7 +182,9 @@ function commitQuickEntry(): void {
     case 'slotWidth': {
       if (pendingClicks.value.length !== 2) break;
       const [a, b] = pendingClicks.value;
-      editor.addSlot(a, b, value);
+      editor.runGrouped(() => {
+        editor.addSlot(a, b, value);
+      });
       editor.clearPendingClicks();
       scheduleSolve();
       break;
@@ -190,8 +196,16 @@ function commitQuickEntry(): void {
   quickEntryText.value = '';
 }
 
-/** Abandons the quick numeric entry without applying anything. */
+/** Abandons the quick numeric entry without applying anything. The slot
+ * width prompt also clears its two axis clicks: unlike the line/circle quick
+ * entry (whose seed click stays live for a retry), the slot tool has no
+ * further use for those points once its own prompt is dismissed, and
+ * leaving them behind would wedge the tool: a third click would push a
+ * length-3 pendingClicks that never reopens the prompt. */
 function cancelQuickEntry(): void {
+  if (quickEntryKind.value === 'slotWidth') {
+    editor.clearPendingClicks();
+  }
   quickEntryKind.value = null;
   quickEntryText.value = '';
 }
@@ -268,6 +282,13 @@ function beginDimensionFromSelection(): void {
   let created: string | null = null;
   let measured = 10;
   let radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null = null;
+  // Opens a mutation scope that stays open until commitDimensionDraft or
+  // cancelDimensionDraft closes it below, so the addDimension here and the
+  // eventual setDimensionValue on commit collapse into one undo step for
+  // what is, from the user's perspective, a single gesture (pick entities,
+  // type a value). Closed again immediately below when no dimension ends up
+  // being created (an unsupported selection).
+  editor.beginMutation();
   if (picked.length === 1 && picked[0].kind === 'line') {
     const id = editor.nextId();
     measured = measureLineLength(sketch.value, picked[0].id);
@@ -296,6 +317,7 @@ function beginDimensionFromSelection(): void {
     });
     created = id;
   } else {
+    editor.endMutation();
     toolHint.value =
       'Select one line for a length, an arc or circle for a radius, two points for a distance, or two lines for an angle.';
     return;
@@ -339,6 +361,9 @@ function commitDimensionDraft(): void {
     return;
   }
   editor.setDimensionValue(dimensionDraft.value.constraintId, value);
+  // Closes the mutation scope beginDimensionFromSelection opened, so its
+  // addDimension and this setDimensionValue land as one undo step.
+  if (dimensionDraft.value.isNew) editor.endMutation();
   dimensionDraft.value = null;
   scheduleSolve();
 }
@@ -354,6 +379,9 @@ function cancelDimensionDraft(): void {
     editor.removeConstraint(draft.constraintId);
     scheduleSolve();
   }
+  // Closes the mutation scope beginDimensionFromSelection opened, whether or
+  // not there was a placeholder constraint left to remove.
+  if (draft !== null && draft.isNew) editor.endMutation();
   dimensionDraft.value = null;
 }
 
@@ -628,6 +656,14 @@ function onCanvasClick(at: MmPoint, hitPointId: string | null, suppressAutoHV = 
       break;
     }
     case 'slot': {
+      // Defends against a stale pendingClicks: normally cancelQuickEntry
+      // clears it when the width prompt is dismissed, but if a click ever
+      // lands with both axis ends already picked, reopen the prompt instead
+      // of appending a third point that the prompt would never consume.
+      if (pendingClicks.value.length >= 2) {
+        openQuickEntry('slotWidth', '');
+        break;
+      }
       pendingClicks.value.push(at);
       // The width prompt opens on its own once both axis ends are picked,
       // rather than waiting for a keypress like the line/circle quick entry;
@@ -937,8 +973,11 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         mandatory
         @update:model-value="(kind: 'radius' | 'diameter') => toggleRadiusDiameter(kind)"
       >
-        <v-btn value="radius" size="small">Radius</v-btn>
-        <v-btn value="diameter" size="small">Diameter</v-btn>
+        <!-- mousedown.prevent keeps focus in the dimension text field so the
+             toggle click never triggers onDimensionBlur (which would commit
+             and unmount this row before the click registers). -->
+        <v-btn value="radius" size="small" @mousedown.prevent>Radius</v-btn>
+        <v-btn value="diameter" size="small" @mousedown.prevent>Diameter</v-btn>
       </v-btn-toggle>
     </div>
     <v-text-field

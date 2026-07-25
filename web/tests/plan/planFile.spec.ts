@@ -681,6 +681,33 @@ describe('trace sources in plan files', () => {
     });
   });
 
+  it('round-trips a traced entry whose session was saved without its photo bytes', () => {
+    // A failed photo store write must still keep the session record (metadata
+    // only) so tools that reference it stay valid; only the photo is lost.
+    const traced = entry({
+      id: 't1',
+      product: { kind: 'bin', labelSlot: true, bin: tracedBin() },
+    });
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = binOf(result.plan.entries[0].product);
+    if (bin === null || bin.origin !== 'traced') throw new Error('expected a traced bin');
+    // The session round-trips even though no photo bytes exist for it
+    // anywhere: the plan file never stores photo bytes, only the session
+    // metadata (id, traceSourceId, paper), so a photo-store failure cannot
+    // make the session invalid to save or reload.
+    expect(bin.traceSessions).toEqual([traceSession()]);
+    expect(bin.pockets.tools[0].source).toEqual({
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [
+        { x: 120, y: 80, label: 1 },
+        { x: 40, y: 30, label: 0 },
+      ],
+    });
+  });
+
   it('accepts a traced entry without trace sessions (imported plan)', () => {
     expect(
       validateEntry(

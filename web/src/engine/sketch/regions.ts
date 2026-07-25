@@ -119,6 +119,34 @@ export function orientPositive(loop: MmPoint[]): MmPoint[] {
   return shoelaceArea(loop) >= 0 ? loop : [...loop].reverse();
 }
 
+/**
+ * Polygon centroid (area-weighted, standard shoelace centroid formula), used
+ * to identify a region face by its geometry rather than its positional id:
+ * face ids are assigned by traversal order, so a recompute can silently
+ * renumber faces even when the underlying shape at a given spot is
+ * unchanged. Falls back to the vertex average for a degenerate
+ * (near-zero-area) loop, where the area-weighted formula divides by zero.
+ */
+export function polygonCentroid(loop: MmPoint[]): MmPoint {
+  const area = shoelaceArea(loop);
+  if (Math.abs(area) < WELD_EPSILON_MM * WELD_EPSILON_MM) {
+    const n = loop.length || 1;
+    const sum = loop.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+    return { x: sum.x / n, y: sum.y / n };
+  }
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < loop.length; i += 1) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    const cross = a.x * b.y - b.x * a.y;
+    cx += (a.x + b.x) * cross;
+    cy += (a.y + b.y) * cross;
+  }
+  const factor = 1 / (6 * area);
+  return { x: cx * factor, y: cy * factor };
+}
+
 /** A face's outer plus holes as a plain TracedOutline for the trace pipeline. */
 export function regionToOutline(face: RegionFace): TracedOutline {
   return { outer: face.outer, holes: face.holes };

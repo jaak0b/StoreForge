@@ -13,7 +13,13 @@ import type { DragTarget, SketchSolveResult } from '../engine/sketch/solve';
 import type { MmPoint, TracedOutline } from '../engine/trace/types';
 import { assertNever } from '../engine/plan/types';
 import { solveSketchInWorker } from '../sketchClient';
-import { extractRegions, regionToOutline, type RegionFace } from '../engine/sketch/regions';
+import {
+  extractRegions,
+  polygonCentroid,
+  regionToOutline,
+  WELD_EPSILON_MM,
+  type RegionFace,
+} from '../engine/sketch/regions';
 import { inferHVConstraint } from '../engine/sketch/autoInfer';
 
 /** The drawing tool active on the sketch canvas. */
@@ -63,6 +69,13 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** Id of the region the user clicked, or null. Cleared whenever a
    * recompute no longer has that id; auto-picked when exactly one face. */
   const selectedRegionId = ref<string | null>(null);
+  /** Centroid and area of the currently selected face, captured alongside
+   * selectedRegionId. Face ids are assigned by traversal order, so a
+   * recompute can silently renumber faces; recomputeRegions uses this to
+   * tell "the same face kept its id" apart from "a different face now has
+   * that id", which would otherwise let the finish flow carve the wrong
+   * region. */
+  const selectedRegionGeom = ref<{ centroid: MmPoint; areaMm2: number } | null>(null);
   /** Id of the sketched tool being re-edited, or null for a new shape. */
   const editingToolId = ref<string | null>(null);
   /** The open line/arc chain's last point id, or null when no chain is open. */
@@ -179,6 +192,25 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     dragInProgress = false;
   }
 
+  /**
+   * Runs fn inside a single mutation scope so any store-mutating calls it
+   * makes (addPoint, addDimension, and so on) push one combined undo step
+   * instead of one per call. Uses the same recordingDepth guard as
+   * beginMutation/endMutation, so nesting inside an already-open scope (e.g.
+   * a point drag) is safe. Callers that perform one user gesture as two
+   * mutating store calls (a typed-length commit that both places geometry
+   * and adds its dimension, or a dimension draft that adds then sets a
+   * value) should wrap the pair here so one undo removes both.
+   */
+  function runGrouped(fn: () => void): void {
+    beginMutation();
+    try {
+      fn();
+    } finally {
+      endMutation();
+    }
+  }
+
   /** Restores a history entry: replaces the sketch and chain state, drops
    * selected ids the snapshot no longer has, and bumps generation so a solve
    * can be rescheduled. */
@@ -250,12 +282,18 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     regionFaces.value = [];
     regionsError.value = null;
     selectedRegionId.value = null;
+    selectedRegionGeom.value = null;
     editingToolId.value = null;
     chainTailId.value = null;
     chainTailSegmentId.value = null;
     underlayUrl.value = null;
     underlayOpacityPct.value = 40;
     underlayMmPerPixel.value = null;
+    pendingClicks.value = [];
+    pendingHitPointIds.value = [];
+    cursorMm.value = null;
+    hoveredConstraintId.value = null;
+    glyphsVisible.value = true;
     idCounter = 0;
     historyStack.value = [];
     redoStack.value = [];
@@ -864,15 +902,36 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     }
     regionFaces.value = result.faces;
     regionsError.value = null;
-    if (
-      selectedRegionId.value !== null &&
-      !result.faces.some((f) => f.id === selectedRegionId.value)
-    ) {
-      selectedRegionId.value = null;
+    if (selectedRegionId.value !== null) {
+      const geom = selectedRegionGeom.value;
+      // Face ids are positional (assigned by traversal order), so a
+      // recompute can renumber them even when the previously selected face's
+      // geometry is unchanged, and can also hand the old id to a completely
+      // different face. Search all faces for the one that is geometrically
+      // the same face (not merely whichever face now carries the old id).
+      const stillThere = geom === null ? undefined : result.faces.find((f) => isSameFace(f, geom));
+      selectedRegionId.value = stillThere?.id ?? null;
     }
     if (selectedRegionId.value === null && result.faces.length === 1) {
+      // Single-face sketches auto-repick even after a geometry change: with
+      // only one face there is no ambiguity to get wrong.
       selectedRegionId.value = result.faces[0].id;
     }
+    const selected = result.faces.find((f) => f.id === selectedRegionId.value) ?? null;
+    selectedRegionGeom.value =
+      selected === null ? null : { centroid: polygonCentroid(selected.outer), areaMm2: selected.areaMm2 };
+  }
+
+  /** True when `face` is geometrically the same region as the one described
+   * by `geom` (a prior selection's centroid and area), not merely a
+   * different face that happened to inherit the same positional id. */
+  function isSameFace(face: RegionFace, geom: { centroid: MmPoint; areaMm2: number }): boolean {
+    const centroid = polygonCentroid(face.outer);
+    const centroidDistance = Math.hypot(centroid.x - geom.centroid.x, centroid.y - geom.centroid.y);
+    const areaTolerance = 1e-6 * Math.max(1, Math.abs(geom.areaMm2));
+    return (
+      centroidDistance <= WELD_EPSILON_MM && Math.abs(face.areaMm2 - geom.areaMm2) <= areaTolerance
+    );
   }
 
   /** Clears regions to the no-regions state, for a conflicting/failed solve. */
@@ -880,11 +939,15 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     regionFaces.value = [];
     regionsError.value = null;
     selectedRegionId.value = null;
+    selectedRegionGeom.value = null;
   }
 
   /** Selects a region by clicking its shaded face on the canvas. */
   function selectRegion(regionId: string): void {
     selectedRegionId.value = regionId;
+    const face = regionFaces.value.find((f) => f.id === regionId) ?? null;
+    selectedRegionGeom.value =
+      face === null ? null : { centroid: polygonCentroid(face.outer), areaMm2: face.areaMm2 };
   }
 
   /**
@@ -997,6 +1060,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     redoStack,
     beginPointDrag,
     endPointDrag,
+    beginMutation,
+    endMutation,
+    runGrouped,
     undo,
     redo,
   };

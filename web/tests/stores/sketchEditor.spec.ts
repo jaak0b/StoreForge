@@ -593,6 +593,97 @@ describe('useSketchEditor', () => {
       expect(picked.ok).toBe(true);
     });
 
+    it('keeps the selection across a recompute that renumbers faces but leaves the selected face geometrically unchanged', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      const secondSquareEntityIds = new Set(
+        editor.sketch.entities.filter((e) => e.kind === 'point' && e.x >= 25).map((e) => e.id),
+      );
+      const secondFace = editor.regionFaces.find((f) =>
+        f.entityIds.some((id) => {
+          const entity = editor.sketch.entities.find((e) => e.id === id);
+          return (
+            entity !== undefined &&
+            (entity.kind === 'line'
+              ? secondSquareEntityIds.has(entity.p1Id) || secondSquareEntityIds.has(entity.p2Id)
+              : false)
+          );
+        }),
+      )!;
+      editor.selectRegion(secondFace.id);
+      expect(editor.selectedRegionId).toBe(secondFace.id);
+
+      // Delete the first square and redraw an identical one: its geometry is
+      // unchanged, but face ids are assigned by traversal order, so this can
+      // (and here does) shuffle which id belongs to the still-selected face.
+      const firstSquareLineIds = editor.sketch.entities
+        .filter(
+          (e) =>
+            e.kind === 'line' &&
+            !secondSquareEntityIds.has(e.p1Id) &&
+            !secondSquareEntityIds.has(e.p2Id),
+        )
+        .map((e) => e.id);
+      editor.deleteEntities(firstSquareLineIds);
+      drawSquare(editor, 0, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+
+      const survivingSecondFace = editor.regionFaces.find((f) =>
+        f.entityIds.some((id) => {
+          const entity = editor.sketch.entities.find((e) => e.id === id);
+          return (
+            entity !== undefined &&
+            (entity.kind === 'line'
+              ? secondSquareEntityIds.has(entity.p1Id) || secondSquareEntityIds.has(entity.p2Id)
+              : false)
+          );
+        }),
+      )!;
+      // The selection survives, keyed on the face's geometry, whether or not
+      // its id happened to change.
+      expect(editor.selectedRegionId).toBe(survivingSecondFace.id);
+    });
+
+    it('clears a stale selection when the face at the same id is now a different region', async () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      drawSquare(editor, 0, 0);
+      editor.endChain();
+      drawSquare(editor, 30, 0);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      const [faceA, faceB] = editor.regionFaces;
+      editor.selectRegion(faceA.id);
+      expect(editor.selectedRegionId).toBe(faceA.id);
+
+      // Delete the selected face's square and grow the other square so a
+      // recompute could plausibly reuse faceA's id for a face at a
+      // completely different location; the geometry check must reject it.
+      const faceASquareEntityIds = new Set(
+        editor.sketch.entities.filter((e) => e.kind === 'point' && e.x < 25).map((e) => e.id),
+      );
+      const faceALineIds = editor.sketch.entities
+        .filter(
+          (e) =>
+            e.kind === 'line' &&
+            (faceASquareEntityIds.has(e.p1Id) || faceASquareEntityIds.has(e.p2Id)),
+        )
+        .map((e) => e.id);
+      editor.deleteEntities(faceALineIds);
+      editor.endChain();
+      drawSquare(editor, 100, 100);
+      await editor.solveNow();
+      expect(editor.regionFaces).toHaveLength(2);
+      expect(editor.selectedRegionId).toBeNull();
+      void faceB;
+    });
+
     it('does not recompute regions during a point drag, only once the drag ends', async () => {
       const editor = useSketchEditor();
       editor.startNewSketch();
@@ -798,6 +889,48 @@ describe('useSketchEditor', () => {
       const dims = editor.sketch.constraints.filter((c) => c.kind === 'length');
       expect(dims).toHaveLength(1);
       expect(dims[0].kind === 'length' && dims[0].mm).toBe(typed);
+    });
+
+    it('runGrouped collapses a segment placement and its length dimension into one undo step', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      const historyBefore = editor.historyStack.length;
+
+      editor.runGrouped(() => {
+        editor.appendChainPoint({ x: 25, y: 0 });
+        editor.addDimension({
+          kind: 'length', id: editor.nextId(), lineId: editor.chainTailSegmentId!, mm: 25,
+        });
+      });
+      expect(editor.historyStack.length).toBe(historyBefore + 1);
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      expect(measureLineLength(editor.sketch, line.id)).toBeCloseTo(25);
+      expect(editor.sketch.constraints.filter((c) => c.kind === 'length')).toHaveLength(1);
+
+      // One undo removes both the geometry and its dimension.
+      editor.undo();
+      expect(editor.sketch.entities.filter((e) => e.kind === 'line')).toHaveLength(0);
+      expect(editor.sketch.constraints.filter((c) => c.kind === 'length')).toHaveLength(0);
+    });
+  });
+
+  describe('startNewSketch resets all display state', () => {
+    it('clears pending clicks, cursor, hovered constraint and restores glyph visibility', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.pendingClicks.push({ x: 1, y: 2 });
+      editor.pendingHitPointIds.push('p1');
+      editor.cursorMm = { x: 3, y: 4 };
+      editor.hoveredConstraintId = 'c1';
+      editor.glyphsVisible = false;
+
+      editor.startNewSketch();
+      expect(editor.pendingClicks).toEqual([]);
+      expect(editor.pendingHitPointIds).toEqual([]);
+      expect(editor.cursorMm).toBeNull();
+      expect(editor.hoveredConstraintId).toBeNull();
+      expect(editor.glyphsVisible).toBe(true);
     });
   });
 });
