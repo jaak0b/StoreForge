@@ -14,8 +14,17 @@ function pointOf(sketch: Sketch, id: string): { x: number; y: number } {
   return { x: entity.x, y: entity.y };
 }
 
-/** Falls back to a sane default when the measured value is zero, negative or
- * non-finite (degenerate geometry), since dimension mm values must be > 0. */
+/**
+ * Falls back to a sane default when the measured value is zero, negative or
+ * non-finite (degenerate geometry), since dimension mm values must be > 0.
+ * This is not a swallowed error under convention 2: no current tool can
+ * place a zero-length line or a zero-radius arc/circle, so the fallback
+ * should never fire from the shipped UI. It exists so that if a future
+ * caller does manage to measure degenerate geometry, the dimension gets a
+ * usable placeholder value instead of NaN silently corrupting the sketch;
+ * the degenerate case is expected to be visible in review of that future
+ * caller, not hidden by this function.
+ */
 function withFallback(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : FALLBACK_MM;
 }

@@ -44,3 +44,6 @@ directive; everything else awaits owner triage.
 - Trim tool: low priority, region picking already yields trim's outcome.
 - Offset curves in-sketch: skip, pipeline offsets already.
 - DXF import: real hobbyist demand (Inkscape exports); an importer module, separate decision.
+- Rectangle and slot corners do not snap onto existing sketch points (unlike line/circle/arc);
+  a compound profile built from these tools relies on region extraction to join adjacent
+  shapes rather than shared corner points.

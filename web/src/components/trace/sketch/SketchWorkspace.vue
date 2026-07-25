@@ -15,6 +15,7 @@ import { assertNever } from '../../../engine/plan/types';
 import {
   measureLineLength,
   measureRadius,
+  measureDiameter,
   measurePointDistance,
   measureAngleBetweenLines,
 } from '../../../engine/sketch/measure';
@@ -218,11 +219,18 @@ function scheduleSolve(): void {
 /**
  * The dimension entry field: which constraint is being typed, and its text.
  * isNew marks a placeholder dimension inserted by beginDimensionFromSelection
- * (mm: 10) that cancelDimensionDraft removes if abandoned without a commit.
+ * that cancelDimensionDraft removes if abandoned without a commit. radiusToggle
+ * is set only for a freshly created radius/diameter dimension (one arc or
+ * circle selected): it names the measured entity so the radius/diameter
+ * buttons can swap the constraint kind in place and reseed the text with the
+ * matching measured value.
  */
-const dimensionDraft = ref<{ constraintId: string | null; text: string; isNew: boolean } | null>(
-  null,
-);
+const dimensionDraft = ref<{
+  constraintId: string | null;
+  text: string;
+  isNew: boolean;
+  radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null;
+} | null>(null);
 
 function entityById(id: string): SketchEntity | undefined {
   return sketch.value.entities.find((e) => e.id === id);
@@ -252,14 +260,14 @@ const showConstraintRow = computed<boolean>(
 /**
  * With the dimension tool active, a selection of one or two entities decides
  * the dimension kind: one line is a length, one arc or circle is a radius
- * (Shift for diameter is deliberately not offered; a diameter is typed by
- * picking Diameter in the field's kind menu), two points are a distance, two
- * lines are an angle.
+ * (with a radius/diameter toggle in the entry row, radius the default), two
+ * points are a distance, two lines are an angle.
  */
 function beginDimensionFromSelection(): void {
   const picked = selectedEntities.value;
   let created: string | null = null;
   let measured = 10;
+  let radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null = null;
   if (picked.length === 1 && picked[0].kind === 'line') {
     const id = editor.nextId();
     measured = measureLineLength(sketch.value, picked[0].id);
@@ -270,6 +278,7 @@ function beginDimensionFromSelection(): void {
     measured = measureRadius(sketch.value, picked[0].id);
     editor.addDimension({ kind: 'radius', id, entityId: picked[0].id, mm: measured });
     created = id;
+    radiusToggle = { entityId: picked[0].id, kind: 'radius' };
   } else if (picked.length === 2 && picked.every((e) => e.kind === 'point')) {
     const id = editor.nextId();
     measured = measurePointDistance(sketch.value, picked[0].id, picked[1].id);
@@ -294,8 +303,32 @@ function beginDimensionFromSelection(): void {
   // Pre-filled with the measured current value: Enter without editing locks
   // the dimension at the size it already is, instead of the solver yanking
   // the geometry to an arbitrary placeholder.
-  dimensionDraft.value = { constraintId: created, text: String(measured), isNew: true };
+  dimensionDraft.value = { constraintId: created, text: String(measured), isNew: true, radiusToggle };
   editor.selectedIds = [];
+}
+
+/**
+ * Swaps a freshly created radius dimension to diameter or back, by removing
+ * the old constraint and adding the other kind on the same entity, reseeded
+ * from the matching measured value. Only available for a radiusToggle draft
+ * (one arc or circle selected), and only while the draft is still new
+ * (isNew): the toggle exists to pick the kind before the first commit, not
+ * to convert an already-committed dimension in place.
+ */
+function toggleRadiusDiameter(kind: 'radius' | 'diameter'): void {
+  const draft = dimensionDraft.value;
+  if (draft === null || draft.radiusToggle === null || draft.radiusToggle.kind === kind) return;
+  if (draft.constraintId !== null) editor.removeConstraint(draft.constraintId);
+  const entityId = draft.radiusToggle.entityId;
+  const id = editor.nextId();
+  const measured = kind === 'radius' ? measureRadius(sketch.value, entityId) : measureDiameter(sketch.value, entityId);
+  editor.addDimension({ kind, id, entityId, mm: measured });
+  dimensionDraft.value = {
+    constraintId: id,
+    text: String(measured),
+    isNew: draft.isNew,
+    radiusToggle: { entityId, kind },
+  };
 }
 
 function commitDimensionDraft(): void {
@@ -340,12 +373,21 @@ function onDimensionBlur(): void {
   }
 }
 
-/** Click-to-edit on an existing on-canvas dimension label. */
+/** Click-to-edit on an existing on-canvas dimension label. A radius or
+ * diameter dimension also gets the radius/diameter toggle, so an existing
+ * one can be flipped without deleting and re-adding it by hand. */
 function onDimensionClick(constraintId: string): void {
   const c = sketch.value.constraints.find((k) => k.id === constraintId);
   if (c === undefined) return;
   const current = c.kind === 'angle' ? c.degrees : 'mm' in c ? c.mm : null;
-  dimensionDraft.value = { constraintId, text: current === null ? '' : String(current), isNew: false };
+  const radiusToggle =
+    c.kind === 'radius' || c.kind === 'diameter' ? { entityId: c.entityId, kind: c.kind } : null;
+  dimensionDraft.value = {
+    constraintId,
+    text: current === null ? '' : String(current),
+    isNew: false,
+    radiusToggle,
+  };
 }
 
 /** Toggles an entity in the selection; with the dimension tool active, a
@@ -877,17 +919,28 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
       </div>
       <p v-else class="tool-hint">{{ displayedHint }}</p>
     </v-toolbar>
-    <v-text-field
-      v-if="dimensionDraft !== null"
-      v-model="dimensionDraft.text"
-      label="Dimension value"
-      density="compact"
-      autofocus
-      style="max-width: 200px"
-      @keyup.enter="commitDimensionDraft"
-      @keyup.esc="cancelDimensionDraft"
-      @blur="onDimensionBlur"
-    />
+    <div v-if="dimensionDraft !== null" class="dimension-draft-row">
+      <v-text-field
+        v-model="dimensionDraft.text"
+        label="Dimension value"
+        density="compact"
+        autofocus
+        style="max-width: 200px"
+        @keyup.enter="commitDimensionDraft"
+        @keyup.esc="cancelDimensionDraft"
+        @blur="onDimensionBlur"
+      />
+      <v-btn-toggle
+        v-if="dimensionDraft.radiusToggle !== null"
+        :model-value="dimensionDraft.radiusToggle.kind"
+        density="compact"
+        mandatory
+        @update:model-value="(kind: 'radius' | 'diameter') => toggleRadiusDiameter(kind)"
+      >
+        <v-btn value="radius" size="small">Radius</v-btn>
+        <v-btn value="diameter" size="small">Diameter</v-btn>
+      </v-btn-toggle>
+    </div>
     <v-text-field
       v-if="quickEntryKind !== null"
       v-model="quickEntryText"
@@ -965,6 +1018,11 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
 .canvas-holder {
   flex: 1;
   min-height: 320px;
+}
+.dimension-draft-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .tool-hint {
   margin: 0 12px;

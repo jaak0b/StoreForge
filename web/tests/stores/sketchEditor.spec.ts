@@ -647,6 +647,31 @@ describe('useSketchEditor', () => {
       expect(measurePointDistance(editor.sketch, p1, p2)).toBeCloseTo(5);
     });
 
+    it('creates a diameter dimension seeded from the measured diameter, mirroring the radius/diameter toggle', () => {
+      // Mimics SketchWorkspace's toggleRadiusDiameter: an arc or circle
+      // selection first gets a radius dimension (beginDimensionFromSelection's
+      // default); switching the toggle to diameter removes that constraint
+      // and adds a diameter one, reseeded from measureDiameter.
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      const circleId = editor.addCircle({ x: 0, y: 0 }, 6);
+      const radiusId = editor.nextId();
+      editor.addDimension({
+        kind: 'radius', id: radiusId, entityId: circleId, mm: measureRadius(editor.sketch, circleId),
+      });
+
+      editor.removeConstraint(radiusId);
+      const diameterId = editor.nextId();
+      const measuredDiameter = measureDiameter(editor.sketch, circleId);
+      editor.addDimension({ kind: 'diameter', id: diameterId, entityId: circleId, mm: measuredDiameter });
+
+      const dims = editor.sketch.constraints;
+      expect(dims).toHaveLength(1);
+      expect(dims[0].kind).toBe('diameter');
+      expect(dims[0].kind === 'diameter' && dims[0].mm).toBeCloseTo(12);
+      expect(measuredDiameter).toBeCloseTo(12);
+    });
+
     it('measures the angle between two lines', () => {
       const editor = useSketchEditor();
       editor.startNewSketch();
