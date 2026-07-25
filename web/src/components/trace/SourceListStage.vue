@@ -19,6 +19,9 @@ const emit = defineEmits<{
   openSketch: [toolId: string];
   addPhoto: [];
   drawShape: [];
+  deleteSession: [sessionId: string];
+  deleteSketchTool: [toolId: string];
+  startOver: [];
 }>();
 </script>
 
@@ -40,6 +43,19 @@ const emit = defineEmits<{
             more tools or re-trace existing ones.
           </v-card-subtitle>
         </v-card-item>
+        <v-card-actions class="source-card-actions">
+          <v-spacer />
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            :disabled="props.busy"
+            @click.stop="emit('deleteSession', session.id)"
+          >
+            <v-icon>mdi-delete-outline</v-icon>
+            <v-tooltip activator="parent" location="bottom">Delete this photo sheet</v-tooltip>
+          </v-btn>
+        </v-card-actions>
       </v-card>
       <v-card
         v-for="tool in props.sketchTools"
@@ -53,9 +69,22 @@ const emit = defineEmits<{
           <v-card-title class="text-body-1">{{ tool.name }}</v-card-title>
           <v-card-subtitle>Sketched shape. Open to edit the sketch.</v-card-subtitle>
         </v-card-item>
+        <v-card-actions class="source-card-actions">
+          <v-spacer />
+          <v-btn
+            icon
+            size="small"
+            variant="text"
+            :disabled="props.busy"
+            @click.stop="emit('deleteSketchTool', tool.id)"
+          >
+            <v-icon>mdi-delete-outline</v-icon>
+            <v-tooltip activator="parent" location="bottom">Delete this sketched shape</v-tooltip>
+          </v-btn>
+        </v-card-actions>
       </v-card>
     </div>
-    <div class="d-flex flex-wrap ga-3">
+    <div class="d-flex flex-wrap align-center ga-3">
       <v-btn
         :disabled="props.busy"
         size="large"
@@ -72,6 +101,14 @@ const emit = defineEmits<{
       >
         Draw a shape
       </v-btn>
+      <v-btn
+        v-if="props.sessions.length > 0 || props.sketchTools.length > 0"
+        :disabled="props.busy"
+        variant="text"
+        @click="emit('startOver')"
+      >
+        Start over
+      </v-btn>
     </div>
   </div>
 </template>
@@ -84,6 +121,9 @@ const emit = defineEmits<{
 }
 .source-card {
   cursor: pointer;
+}
+.source-card-actions {
+  padding-top: 0;
 }
 @media (max-width: 599px) {
   /* Source cards stack full width in one column on phones (375 px). */

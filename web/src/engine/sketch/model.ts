@@ -492,3 +492,83 @@ export function arcFromThreePoints(
   const cross = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
   return { center: { x: ux, y: uy }, ccw: cross > 0 };
 }
+
+/**
+ * The unit tangent direction at `endpoint`, pointing away from the segment
+ * (the direction a chain continuing from that endpoint would travel), for a
+ * line or arc identified by `segmentId`. Shared by the tangent-arc tool's
+ * commit (the store's addThreePointArc, called with tangent=true) and its
+ * ghost preview (SketchCanvas), so both read the same "which way does this
+ * chain continue" answer. Returns null when the segment or its points are
+ * missing, or (for an arc) the endpoint sits on the center (zero radius).
+ */
+export function tangentDirectionAtPoint(
+  sketch: Sketch,
+  segmentId: string,
+  endpointId: string,
+): { ux: number; uy: number } | null {
+  const segment = sketch.entities.find((e) => e.id === segmentId);
+  if (segment === undefined) return null;
+  const pointOf = (id: string): MmPoint | null => {
+    const p = sketch.entities.find((e) => e.id === id);
+    return p !== undefined && p.kind === 'point' ? { x: p.x, y: p.y } : null;
+  };
+  const endpoint = pointOf(endpointId);
+  if (endpoint === null) return null;
+  if (segment.kind === 'line') {
+    const otherId = segment.p1Id === endpointId ? segment.p2Id : segment.p1Id;
+    const other = pointOf(otherId);
+    if (other === null) return null;
+    const dx = endpoint.x - other.x;
+    const dy = endpoint.y - other.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) return null;
+    return { ux: dx / len, uy: dy / len };
+  }
+  if (segment.kind === 'arc') {
+    const center = pointOf(segment.centerId);
+    if (center === null) return null;
+    const rx = endpoint.x - center.x;
+    const ry = endpoint.y - center.y;
+    const r = Math.hypot(rx, ry);
+    if (r < 1e-9) return null;
+    // The arc is stored counterclockwise from start to end (y-down frame);
+    // the tangent direction of travel at either endpoint is the radius
+    // vector rotated 90 degrees in the direction of travel. At the end
+    // point that is +90 degrees (ccw); at the start point, travelling
+    // backward along the arc from the chain's perspective, it is -90.
+    const sign = segment.endId === endpointId ? 1 : -1;
+    return { ux: (-ry / r) * sign, uy: (rx / r) * sign };
+  }
+  return null;
+}
+
+/**
+ * Center and orientation of the arc that starts at `start` tangent to
+ * `tangentDir` and passes through `end`, by the standard tangent-arc
+ * construction: the center lies on the line through `start` perpendicular to
+ * the tangent direction, equidistant from `start` and `end`. Returns null
+ * when `end` coincides with `start` (any radius would fit) or the tangent
+ * direction is degenerate.
+ */
+export function arcTangentToPoint(
+  start: MmPoint,
+  tangentDir: { ux: number; uy: number },
+  end: MmPoint,
+): { center: MmPoint; ccw: boolean } | null {
+  const tLen = Math.hypot(tangentDir.ux, tangentDir.uy);
+  if (tLen < 1e-9) return null;
+  const ux = tangentDir.ux / tLen;
+  const uy = tangentDir.uy / tLen;
+  // Normal to the tangent direction, defining the line the center sits on.
+  const nx = -uy;
+  const ny = ux;
+  const dx = start.x - end.x;
+  const dy = start.y - end.y;
+  const denom = 2 * (nx * dx + ny * dy);
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = (dx * dx + dy * dy) / denom;
+  const center = { x: start.x + nx * t, y: start.y + ny * t };
+  const cross = (end.x - start.x) * uy - (end.y - start.y) * ux;
+  return { center, ccw: cross < 0 };
+}

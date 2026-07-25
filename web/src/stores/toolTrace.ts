@@ -201,6 +201,30 @@ export const useToolTrace = defineStore('toolTrace', () => {
     if (selectedToolId.value === toolId) selectedToolId.value = null;
   }
 
+  /**
+   * Removes a photo sheet session and, cascading, every tool sourced from it
+   * (and that tool's placement, through layout.removeTool). Sketch and
+   * primitive tools are untouched, since they do not reference a session.
+   * Clears the active photo working state first when the removed session is
+   * the active one, so no stale state points at a session that no longer
+   * exists. Orphaned photo blobs are swept later by the existing
+   * reference-counted sweep (engine/plan/storedAssets.ts), which runs from
+   * the current set of queue entries; nothing here needs to delete the blob
+   * directly.
+   */
+  function removeSession(sessionId: string): void {
+    if (activeSessionId.value === sessionId) clearActivePhotoState();
+    sessions.value = sessions.value.filter((s) => s.id !== sessionId);
+    sessionBlobs.delete(sessionId);
+    const toolIdsToRemove = tools.value
+      .filter((t) => t.source.kind === 'photo' && t.source.sessionId === sessionId)
+      .map((t) => t.id);
+    for (const toolId of toolIdsToRemove) {
+      layout.removeTool(layoutState, toolId);
+      if (selectedToolId.value === toolId) selectedToolId.value = null;
+    }
+  }
+
   function duplicateTool(toolId: string): void {
     const copy = layout.duplicateTool(layoutState, toolId);
     if (copy !== null) selectedToolId.value = copy.id;
@@ -423,6 +447,7 @@ export const useToolTrace = defineStore('toolTrace', () => {
     addTool,
     replaceToolOutline,
     removeTool,
+    removeSession,
     duplicateTool,
     moveTool,
     binPlacement,

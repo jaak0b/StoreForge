@@ -15,6 +15,7 @@ import TraceCanvas from './TraceCanvas.vue';
 import LayoutWorkspace from './LayoutWorkspace.vue';
 import SketchWorkspace from './sketch/SketchWorkspace.vue';
 import SourceListStage from './SourceListStage.vue';
+import ConfirmDialog from '../ConfirmDialog.vue';
 import { useSketchEditor } from '../../stores/sketchEditor';
 
 /**
@@ -165,6 +166,74 @@ async function finishSketch(): Promise<void> {
   }
   stage.value = 'workspace';
   trace.workspaceMode = 'layout';
+}
+
+/**
+ * The Sources stage's confirm dialog: one dialog element covers deleting a
+ * photo sheet (cascading its traced tools), deleting a sketched shape that
+ * already has a placement, and the "start over" reset, each with its own
+ * title/message and confirm action, so the wording always names the exact
+ * count of what is being removed.
+ */
+const sourceConfirm = ref<{
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+} | null>(null);
+
+/** A photo sheet card's delete button: always confirms, naming the sheet's
+ * traced tool count exactly, since deleting the sheet cascades to them. */
+function requestDeleteSession(sessionId: string): void {
+  const tracedCount = trace.tools.filter(
+    (t) => t.source.kind === 'photo' && t.source.sessionId === sessionId,
+  ).length;
+  const toolPhrase = tracedCount === 1 ? '1 traced tool' : `${tracedCount} traced tools`;
+  sourceConfirm.value = {
+    title: 'Delete this photo sheet?',
+    message:
+      tracedCount > 0
+        ? `This removes the sheet and its ${toolPhrase}.`
+        : 'This removes the sheet. It has no traced tools.',
+    confirmLabel: 'Delete',
+    onConfirm: () => {
+      trace.removeSession(sessionId);
+      sourceConfirm.value = null;
+    },
+  };
+}
+
+/** A sketched-shape card's delete button: confirms only when the tool has a
+ * placement in the layout, since that is the data a delete would discard. */
+function requestDeleteSketchTool(toolId: string): void {
+  if (trace.placementOf(toolId) === undefined) {
+    trace.removeTool(toolId);
+    return;
+  }
+  sourceConfirm.value = {
+    title: 'Delete this sketched shape?',
+    message: 'This removes the sketched shape and its placement in the layout.',
+    confirmLabel: 'Delete',
+    onConfirm: () => {
+      trace.removeTool(toolId);
+      sourceConfirm.value = null;
+    },
+  };
+}
+
+/** The Sources stage's "start over" action: clears every source, tool,
+ * placement, active session and sketch editor state, behind a confirm. */
+function requestStartOver(): void {
+  sourceConfirm.value = {
+    title: 'Start over?',
+    message: 'This clears every photo sheet, sketched shape and traced tool from this bin.',
+    confirmLabel: 'Start over',
+    onConfirm: () => {
+      trace.reset();
+      sketchEditor.startNewSketch();
+      sourceConfirm.value = null;
+    },
+  };
 }
 
 /** The queue entry being edited on this tab, or null when designing a new bin. */
@@ -332,6 +401,9 @@ function restart(): void {
         @open-sketch="editSketchedTool"
         @add-photo="addPhotoSheet"
         @draw-shape="drawShape"
+        @delete-session="requestDeleteSession"
+        @delete-sketch-tool="requestDeleteSketchTool"
+        @start-over="requestStartOver"
       />
     </template>
 
@@ -383,6 +455,14 @@ function restart(): void {
         />
       </div>
     </div>
+    <ConfirmDialog
+      :model-value="sourceConfirm !== null"
+      :title="sourceConfirm?.title ?? ''"
+      :message="sourceConfirm?.message ?? ''"
+      :confirm-label="sourceConfirm?.confirmLabel ?? 'Delete'"
+      @update:model-value="(value: boolean) => { if (!value) sourceConfirm = null; }"
+      @confirm="sourceConfirm?.onConfirm()"
+    />
   </div>
 </template>
 

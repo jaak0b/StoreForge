@@ -9,6 +9,11 @@ import {
 import { assertNever } from '../../../engine/plan/types';
 import type { MmPoint } from '../../../engine/trace/types';
 import type { SketchEntity } from '../../../engine/sketch/model';
+import {
+  arcFromThreePoints,
+  arcTangentToPoint,
+  tangentDirectionAtPoint,
+} from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
 
@@ -41,11 +46,13 @@ const {
   underlayMmPerPixel,
   activeTool,
   chainTailId,
+  chainTailSegmentId,
   regionFaces,
   selectedRegionId,
   cursorMm,
   hoveredConstraintId,
   hoveredEntityIds,
+  pendingClicks,
 } = storeToRefs(editor);
 
 /** Region the pointer currently hovers, for the raised-opacity hover cue;
@@ -364,11 +371,141 @@ const chainTailPoint = computed(() =>
 );
 
 /** The dashed rubber-band line from the open chain's tail to the cursor,
- * shown only while a line or arc tool is active. */
+ * shown only while the line tool is active (the multi-click tools' own
+ * ghost preview below covers arcThreePoint and arcTangent). */
 const rubberBand = computed(() => {
   if (chainTailPoint.value === null || cursorMm.value === null) return null;
-  if (!['line', 'arcThreePoint', 'arcTangent'].includes(activeTool.value)) return null;
+  if (activeTool.value !== 'line') return null;
   return { x1: chainTailPoint.value.x, y1: chainTailPoint.value.y, x2: cursorMm.value.x, y2: cursorMm.value.y };
+});
+
+/** SVG path data for the arc from `start` to `end` about `center`, in the
+ * same convention entityPaths uses for a stored (always-ccw) arc: the sweep
+ * flag mirrors ccw so a clockwise-derived preview arc still bulges the
+ * right way. */
+function arcPreviewPathD(center: MmPoint, start: MmPoint, end: MmPoint, ccw: boolean): string {
+  const r = Math.hypot(start.x - center.x, start.y - center.y);
+  const a0 = Math.atan2(start.y - center.y, start.x - center.x);
+  let a1 = Math.atan2(end.y - center.y, end.x - center.x);
+  if (ccw) {
+    if (a1 <= a0) a1 += 2 * Math.PI;
+  } else if (a1 >= a0) {
+    a1 -= 2 * Math.PI;
+  }
+  const largeArc = Math.abs(a1 - a0) > Math.PI ? 1 : 0;
+  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} ${ccw ? 1 : 0} ${end.x} ${end.y}`;
+}
+
+/** SVG path data for a thin stadium (capsule) outline along the axis from
+ * `a` to `b`, half-width `r`: two straight sides and two semicircle caps. */
+function capsulePreviewPathD(a: MmPoint, b: MmPoint, r: number): string {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const topA = { x: a.x + nx * r, y: a.y + ny * r };
+  const botA = { x: a.x - nx * r, y: a.y - ny * r };
+  const topB = { x: b.x + nx * r, y: b.y + ny * r };
+  const botB = { x: b.x - nx * r, y: b.y - ny * r };
+  return (
+    `M ${topA.x} ${topA.y} L ${topB.x} ${topB.y} ` +
+    `A ${r} ${r} 0 1 1 ${botB.x} ${botB.y} L ${botA.x} ${botA.y} ` +
+    `A ${r} ${r} 0 1 1 ${topA.x} ${topA.y} Z`
+  );
+}
+
+/** Half-width of the slot tool's ghost preview before a width is typed: a
+ * thin capsule just wide enough to read as a capsule rather than a line. */
+const SLOT_PREVIEW_HALF_WIDTH_MM = 1;
+
+type GhostPreview =
+  | { kind: 'line'; x1: number; y1: number; x2: number; y2: number }
+  | { kind: 'circle'; cx: number; cy: number; r: number }
+  | { kind: 'path'; d: string };
+
+/**
+ * The dashed, display-only preview of a multi-click tool's in-progress
+ * shape, following the cursor after each committed click. One exhaustive
+ * switch over every sketch tool (assertNever guards a tool added later
+ * without a preview case). Each branch reuses the same construction math the
+ * tool's commit path uses (arcFromThreePoints, arcTangentToPoint via
+ * tangentDirectionAtPoint), so the preview never promises a shape the commit
+ * would not actually produce (convention 10). Never touches the sketch
+ * model; cleared automatically whenever pendingClicks is cleared, since every
+ * branch below reads it.
+ */
+const ghostPreview = computed<GhostPreview | null>(() => {
+  const cursor = cursorMm.value;
+  if (cursor === null) return null;
+  const clicks = pendingClicks.value;
+  switch (activeTool.value) {
+    case 'select':
+    case 'dimension':
+      return null;
+    case 'line':
+      // The rubber band above already covers the line tool.
+      return null;
+    case 'circle': {
+      if (clicks.length !== 1) return null;
+      const center = clicks[0];
+      return { kind: 'circle', cx: center.x, cy: center.y, r: Math.hypot(cursor.x - center.x, cursor.y - center.y) };
+    }
+    case 'rectangle': {
+      if (clicks.length !== 1) return null;
+      const c1 = clicks[0];
+      const x1 = Math.min(c1.x, cursor.x);
+      const y1 = Math.min(c1.y, cursor.y);
+      const x2 = Math.max(c1.x, cursor.x);
+      const y2 = Math.max(c1.y, cursor.y);
+      return { kind: 'path', d: `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2} L ${x1} ${y2} Z` };
+    }
+    case 'arcThreePoint': {
+      if (clicks.length === 0) {
+        return chainTailPoint.value === null
+          ? null
+          : { kind: 'line', x1: chainTailPoint.value.x, y1: chainTailPoint.value.y, x2: cursor.x, y2: cursor.y };
+      }
+      if (clicks.length === 1) {
+        return { kind: 'line', x1: clicks[0].x, y1: clicks[0].y, x2: cursor.x, y2: cursor.y };
+      }
+      const [start, end] = clicks;
+      const derived = arcFromThreePoints(start, cursor, end);
+      if (derived === null) return { kind: 'line', x1: start.x, y1: start.y, x2: cursor.x, y2: cursor.y };
+      return { kind: 'path', d: arcPreviewPathD(derived.center, start, end, derived.ccw) };
+    }
+    case 'arcTangent': {
+      const tail = chainTailPoint.value;
+      if (tail === null) return null;
+      if (clicks.length === 0) {
+        const segmentId = chainTailSegmentId.value;
+        const tailId = chainTailId.value;
+        const dir =
+          segmentId !== null && tailId !== null
+            ? tangentDirectionAtPoint(sketch.value, segmentId, tailId)
+            : null;
+        if (dir === null) return { kind: 'line', x1: tail.x, y1: tail.y, x2: cursor.x, y2: cursor.y };
+        const derived = arcTangentToPoint(tail, dir, cursor);
+        if (derived === null) return { kind: 'line', x1: tail.x, y1: tail.y, x2: cursor.x, y2: cursor.y };
+        return { kind: 'path', d: arcPreviewPathD(derived.center, tail, cursor, derived.ccw) };
+      }
+      const end = clicks[0];
+      const derived = arcFromThreePoints(tail, cursor, end);
+      if (derived === null) return { kind: 'line', x1: tail.x, y1: tail.y, x2: cursor.x, y2: cursor.y };
+      return { kind: 'path', d: arcPreviewPathD(derived.center, tail, end, derived.ccw) };
+    }
+    case 'slot': {
+      if (clicks.length !== 1) return null;
+      return { kind: 'path', d: capsulePreviewPathD(clicks[0], cursor, SLOT_PREVIEW_HALF_WIDTH_MM) };
+    }
+    case 'mirror': {
+      if (clicks.length !== 1) return null;
+      const a = clicks[0];
+      return { kind: 'line', x1: a.x, y1: a.y, x2: cursor.x, y2: cursor.y };
+    }
+    default:
+      return assertNever(activeTool.value);
+  }
 });
 
 /** Whether Alt is currently held, suppressing the auto H/V hint and
@@ -677,6 +814,37 @@ const glyphFontSizeMm = computed(() => glyphMmPerPx.value * 9);
         stroke="#ff6f00"
         stroke-width="0.4"
         stroke-dasharray="1.2 1"
+      />
+      <line
+        v-if="ghostPreview !== null && ghostPreview.kind === 'line'"
+        :x1="ghostPreview.x1"
+        :y1="ghostPreview.y1"
+        :x2="ghostPreview.x2"
+        :y2="ghostPreview.y2"
+        stroke="#ff6f00"
+        stroke-width="0.4"
+        stroke-dasharray="1.2 1"
+        style="pointer-events: none"
+      />
+      <circle
+        v-if="ghostPreview !== null && ghostPreview.kind === 'circle'"
+        :cx="ghostPreview.cx"
+        :cy="ghostPreview.cy"
+        :r="ghostPreview.r"
+        fill="none"
+        stroke="#ff6f00"
+        stroke-width="0.4"
+        stroke-dasharray="1.2 1"
+        style="pointer-events: none"
+      />
+      <path
+        v-if="ghostPreview !== null && ghostPreview.kind === 'path'"
+        :d="ghostPreview.d"
+        fill="none"
+        stroke="#ff6f00"
+        stroke-width="0.4"
+        stroke-dasharray="1.2 1"
+        style="pointer-events: none"
       />
       <circle
         v-if="activeSnapPoint !== null"

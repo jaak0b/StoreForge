@@ -197,3 +197,94 @@ describe('toolTrace active session', () => {
     expect(trace.sessionBlobs.size).toBe(0);
   });
 });
+
+describe('toolTrace removeSession cascade', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    URL.createObjectURL ??= () => 'blob:test';
+    URL.revokeObjectURL ??= () => {};
+  });
+
+  const photoOutline = {
+    outer: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ],
+    holes: [],
+  };
+
+  it('removes the session and every tool sourced from it, plus their placements', () => {
+    const trace = useToolTrace();
+    trace.sessions = [
+      { id: 's1', traceSourceId: 'p1', paper },
+      { id: 's2', traceSourceId: 'p2', paper },
+    ];
+    const fromS1 = trace.addTool(photoOutline, 'From sheet 1', {
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [],
+    });
+    const fromS2 = trace.addTool(photoOutline, 'From sheet 2', {
+      kind: 'photo',
+      sessionId: 's2',
+      clicks: [],
+    });
+    const sketched = trace.addTool(photoOutline, 'Sketched shape', {
+      kind: 'sketch',
+      sketch: { schemaVersion: SKETCH_SCHEMA_VERSION, entities: [], constraints: [] },
+    });
+
+    trace.removeSession('s1');
+
+    expect(trace.sessions.map((s) => s.id)).toEqual(['s2']);
+    expect(trace.tools.map((t) => t.id)).toEqual([fromS2.id, sketched.id]);
+    expect(trace.placements.some((p) => p.toolId === fromS1.id)).toBe(false);
+    expect(trace.placements.some((p) => p.toolId === fromS2.id)).toBe(true);
+    expect(trace.placements.some((p) => p.toolId === sketched.id)).toBe(true);
+  });
+
+  it('clears the active photo working state when the removed session is active', async () => {
+    const trace = useToolTrace();
+    trace.sessions = [{ id: 's1', traceSourceId: 'p1', paper }];
+    await trace.activateSession('s1', new Blob(['a']));
+    trace.removeSession('s1');
+    expect(trace.activeSessionId).toBeNull();
+    expect(trace.embedReady).toBe(false);
+    expect(trace.sessionBlobs.size).toBe(0);
+  });
+});
+
+describe('toolTrace start-over reset', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it('leaves the store pristine: no sources, tools, placements or selection', () => {
+    const trace = useToolTrace();
+    const outline = {
+      outer: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ],
+      holes: [],
+    };
+    trace.sessions = [{ id: 's1', traceSourceId: 'p1', paper }];
+    trace.addTool(outline, 'Circle', { kind: 'primitive' });
+    trace.gridManual = true;
+    trace.gridX = 4;
+
+    trace.reset();
+
+    expect(trace.sessions).toEqual([]);
+    expect(trace.tools).toEqual([]);
+    expect(trace.placements).toEqual([]);
+    expect(trace.selectedToolId).toBeNull();
+    expect(trace.activeSessionId).toBeNull();
+    expect(trace.gridManual).toBe(false);
+    expect(trace.gridX).toBe(1);
+  });
+});
