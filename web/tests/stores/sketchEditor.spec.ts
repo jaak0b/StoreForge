@@ -1101,7 +1101,7 @@ describe('useSketchEditor', () => {
       expect(editor.sketch.constraints.filter((c) => c.kind === 'length')).toHaveLength(0);
     });
 
-    it('two parallel lines surface a hint and never resolve to a dimension', () => {
+    it('two parallel lines resolve to a point-line distance dimension', () => {
       const editor = useSketchEditor();
       editor.startNewSketch();
       editor.appendChainPoint({ x: 0, y: 0 });
@@ -1113,9 +1113,12 @@ describe('useSketchEditor', () => {
       const l2 = editor.sketch.entities.filter((e) => e.kind === 'line')[1];
 
       editor.selectedIds = [l1.id, l2.id];
-      const hint = editor.resolveDimensionAtSelection();
-      expect(hint).toBe('Select a point and a line for a distance.');
-      expect(editor.dimensionPending).toBeNull();
+      editor.resolveDimensionAtSelection();
+      expect(editor.dimensionPending).toEqual({
+        kind: 'pointLineDistance',
+        pointId: (l1 as { p1Id: string }).p1Id,
+        lineId: l2.id,
+      });
       expect(editor.selectedIds).toEqual([]);
     });
 

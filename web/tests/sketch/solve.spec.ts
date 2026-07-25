@@ -129,6 +129,47 @@ describe('solveSketch', () => {
     }
   });
 
+  it('moves a point to the constrained perpendicular distance from a line', () => {
+    const sketch: Sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [
+        point('pA', 0, 0),
+        point('pB', 10, 0.4),
+        point('pP', 4, 2),
+        line('lAB', 'pA', 'pB'),
+      ],
+      constraints: [
+        { kind: 'horizontal', id: 'cH', lineId: 'lAB' },
+        { kind: 'pointLineDistance', id: 'cPL', pointId: 'pP', lineId: 'lAB', mm: 5 },
+      ],
+    };
+    const result = solveSketch(wrapper, sketch);
+    expect(result.status).toBe('solved');
+    if (result.status !== 'solved') return;
+    const a = solvedPoint(result.sketch, 'pA');
+    const b = solvedPoint(result.sketch, 'pB');
+    const p = solvedPoint(result.sketch, 'pP');
+    // lAB is horizontal after solving, so the perpendicular distance is
+    // simply the vertical offset from the line's (shared) y.
+    expect(a.y).toBeCloseTo(b.y, 5);
+    expect(Math.abs(p.y - a.y)).toBeCloseTo(5, 4);
+  });
+
+  it('does not let a driven dimension constrain the geometry', () => {
+    const sketch = rectangleSketch();
+    // Add a driven length dimension on a side the other constraints already
+    // fully determine, at a value that would otherwise conflict.
+    sketch.constraints.push({ kind: 'length', id: 'cDriven', lineId: 'lBC', mm: 999, driven: true });
+    const result = solveSketch(wrapper, sketch);
+    expect(result.status).toBe('solved');
+    if (result.status !== 'solved') return;
+    const b = solvedPoint(result.sketch, 'pB');
+    const c = solvedPoint(result.sketch, 'pC');
+    // Geometry unchanged by the driven dimension: still the 20 mm the
+    // ordinary distance constraint drives, not the driven dimension's 999.
+    expect(Math.hypot(c.x - b.x, c.y - b.y)).toBeCloseTo(20, 5);
+  });
+
   it('moves a dragged point toward the target without breaking constraints', () => {
     const result = solveSketch(wrapper, rectangleSketch(), {
       pointId: 'pA',

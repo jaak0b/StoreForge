@@ -22,7 +22,7 @@ import {
 } from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
-import { formatMm, formatDegrees, measureAngleBetweenLines, measureLineLength, measurePointDistance, measureRadius } from '../../../engine/sketch/measure';
+import { formatMm, formatDegrees, measureAngleBetweenLines, measureLineLength, measurePointDistance, measurePointLineDistance, measureRadius } from '../../../engine/sketch/measure';
 import {
   DEFAULT_LABEL_OFFSET,
   dimensionAnchor,
@@ -803,6 +803,7 @@ function dimensionOf(c: (typeof sketch.value.constraints)[number]): SketchDimens
     case 'radius':
     case 'diameter':
     case 'angle':
+    case 'pointLineDistance':
       return c;
     case 'coincident':
     case 'horizontal':
@@ -824,6 +825,7 @@ function dimensionText(dimension: SketchDimension): string {
   switch (dimension.kind) {
     case 'length':
     case 'distance':
+    case 'pointLineDistance':
       return `${formatMm(dimension.mm)} mm`;
     case 'radius':
       return `R ${formatMm(dimension.mm)} mm`;
@@ -893,6 +895,12 @@ const dimensionGhost = computed<DimensionRender | null>(() => {
       fake = {
         kind: 'angle', id: '_ghost', l1Id: resolved.l1Id, l2Id: resolved.l2Id,
         degrees: formatDegrees(measureAngleBetweenLines(sketch.value, resolved.l1Id, resolved.l2Id)),
+      };
+      break;
+    case 'pointLineDistance':
+      fake = {
+        kind: 'pointLineDistance', id: '_ghost', pointId: resolved.pointId, lineId: resolved.lineId,
+        mm: formatMm(measurePointLineDistance(sketch.value, resolved.pointId, resolved.lineId)),
       };
       break;
     default:

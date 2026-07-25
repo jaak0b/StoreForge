@@ -77,6 +77,32 @@ describe('validateSketch', () => {
     );
   });
 
+  it('accepts a point-line distance dimension and a driven flag', () => {
+    const sketch = squareSketch();
+    sketch.constraints.push({
+      kind: 'pointLineDistance', id: 'cPL', pointId: 'pC', lineId: 'lAB', mm: 10, driven: true,
+    });
+    expect(validateSketch(sketch, 'sketch')).toBeNull();
+  });
+
+  it('rejects a point-line distance constraint whose point/line ids are swapped', () => {
+    const sketch = squareSketch();
+    sketch.constraints.push({
+      kind: 'pointLineDistance', id: 'cPL', pointId: 'lAB', lineId: 'pC', mm: 10,
+    });
+    expect(validateSketch(sketch, 'sketch')).toBe(
+      'sketch: The point-line distance constraint cPL needs a point and a line.',
+    );
+  });
+
+  it('rejects a non-boolean driven flag', () => {
+    const sketch = squareSketch();
+    (sketch.constraints[2] as unknown as Record<string, unknown>).driven = 'yes';
+    expect(validateSketch(sketch, 'sketch')).toBe(
+      "sketch: The length constraint c3's driven flag must be true or false.",
+    );
+  });
+
   it('rejects an unknown schema version', () => {
     const sketch = { ...squareSketch(), schemaVersion: 999 };
     expect(validateSketch(sketch, 'sketch')).toBe(
@@ -88,6 +114,16 @@ describe('validateSketch', () => {
 describe('deserializeSketch', () => {
   it('round-trips through JSON', () => {
     const original = squareSketch();
+    const result = deserializeSketch(JSON.parse(JSON.stringify(original)));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.sketch).toEqual(original);
+  });
+
+  it('round-trips a point-line distance dimension with a driven flag', () => {
+    const original = squareSketch();
+    original.constraints.push({
+      kind: 'pointLineDistance', id: 'cPL', pointId: 'pC', lineId: 'lAB', mm: 10, driven: true,
+    });
     const result = deserializeSketch(JSON.parse(JSON.stringify(original)));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.sketch).toEqual(original);

@@ -271,6 +271,7 @@ export function constraintGlyphs(sketch: Sketch): ConstraintGlyph[] {
       case 'radius':
       case 'diameter':
       case 'angle':
+      case 'pointLineDistance':
         // Dimensions render as text labels, not glyphs.
         break;
       default:
@@ -308,6 +309,8 @@ export function constraintKindSentence(c: SketchConstraint): string {
       return 'The selected constraint is a diameter dimension.';
     case 'angle':
       return 'The selected constraint is an angle dimension.';
+    case 'pointLineDistance':
+      return 'The selected constraint is a point-line distance dimension.';
     default:
       return assertNever(c);
   }

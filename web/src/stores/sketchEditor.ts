@@ -752,6 +752,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
         case 'distance':
         case 'radius':
         case 'diameter':
+        case 'pointLineDistance':
           dimension.mm = value;
           break;
         case 'angle':
@@ -895,7 +896,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       c.kind !== 'distance' &&
       c.kind !== 'radius' &&
       c.kind !== 'diameter' &&
-      c.kind !== 'angle'
+      c.kind !== 'angle' &&
+      c.kind !== 'pointLineDistance'
     ) {
       return;
     }
@@ -972,6 +974,7 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       case 'radius':
       case 'diameter':
       case 'angle':
+      case 'pointLineDistance':
         c.labelOffset = offset;
         bumpGeneration();
         break;
@@ -1086,6 +1089,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
         return [constraint.entityId];
       case 'angle':
         return [constraint.l1Id, constraint.l2Id];
+      case 'pointLineDistance':
+        return [constraint.pointId, constraint.lineId];
       default:
         return assertNever(constraint);
     }

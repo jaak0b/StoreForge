@@ -4,6 +4,7 @@
 // Single source for this: the dimension entry field (measured default) and
 // the typed-length-while-drawing flow both read these functions rather than
 // each computing their own version (convention 10).
+import { assertNever } from '../plan/types';
 import type { Sketch } from './model';
 
 const FALLBACK_MM = 10;
@@ -93,6 +94,74 @@ export function parseDimensionValue(text: string): number | null {
   if (!/^\d+(\.\d+)?$/.test(trimmed)) return null;
   const value = Number(trimmed);
   return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * The perpendicular distance from a point to a line's infinite extension, in
+ * mm: the standard point-line projection formula, distance = |cross(d, p -
+ * a)| / |d| for line direction d = b - a. Used both for the point-line
+ * distance dimension's measured default and for the parallel-lines and
+ * curve-center selection resolutions that reduce to it (dimensionSelection.ts).
+ */
+export function measurePointLineDistance(sketch: Sketch, pointId: string, lineId: string): number {
+  const line = sketch.entities.find((e) => e.id === lineId);
+  if (line === undefined || line.kind !== 'line') return FALLBACK_MM;
+  const a = pointOf(sketch, line.p1Id);
+  const b = pointOf(sketch, line.p2Id);
+  const p = pointOf(sketch, pointId);
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return FALLBACK_MM;
+  const cross = dx * (p.y - a.y) - dy * (p.x - a.x);
+  return withFallback(Math.abs(cross) / len);
+}
+
+/**
+ * Recomputes every driven dimension's stored value (mm or degrees) from the
+ * sketch's current, already-solved geometry, in place. A driven dimension is
+ * never enforced by the solver (solve.ts passes PlaneGCS's driving: false for
+ * it); this is what keeps its displayed value truthful instead of stale.
+ * Framework-agnostic (convention 3); the caller that owns the "just solved"
+ * moment, expected to be the binQueue/sketchEditor store's solve result
+ * handling, must call this on the freshly solved sketch after every solve
+ * before the sketch is shown or persisted. Mutates and also returns `sketch`
+ * for chaining.
+ */
+export function updateDrivenDimensions(sketch: Sketch): Sketch {
+  for (const c of sketch.constraints) {
+    switch (c.kind) {
+      case 'length':
+        if (c.driven === true) c.mm = formatMm(measureLineLength(sketch, c.lineId));
+        break;
+      case 'distance':
+        if (c.driven === true) c.mm = formatMm(measurePointDistance(sketch, c.p1Id, c.p2Id));
+        break;
+      case 'radius':
+        if (c.driven === true) c.mm = formatMm(measureRadius(sketch, c.entityId));
+        break;
+      case 'diameter':
+        if (c.driven === true) c.mm = formatMm(measureDiameter(sketch, c.entityId));
+        break;
+      case 'angle':
+        if (c.driven === true) c.degrees = formatDegrees(measureAngleBetweenLines(sketch, c.l1Id, c.l2Id));
+        break;
+      case 'pointLineDistance':
+        if (c.driven === true) c.mm = formatMm(measurePointLineDistance(sketch, c.pointId, c.lineId));
+        break;
+      case 'coincident':
+      case 'horizontal':
+      case 'vertical':
+      case 'parallel':
+      case 'perpendicular':
+      case 'tangent':
+      case 'symmetric':
+        break;
+      default:
+        assertNever(c);
+    }
+  }
+  return sketch;
 }
 
 /** The current angle between two lines, in degrees, folded to 0..180. */

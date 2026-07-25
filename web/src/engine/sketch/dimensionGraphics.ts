@@ -68,9 +68,30 @@ export function dimensionAnchor(sketch: Sketch, dimension: SketchDimension): MmP
       const v = angleVertex(sketch, dimension.l1Id, dimension.l2Id);
       return v ?? { x: 0, y: 0 };
     }
+    case 'pointLineDistance': {
+      const foot = pointLineFoot(sketch, dimension.pointId, dimension.lineId);
+      if (foot === null) return { x: 0, y: 0 };
+      return scale(add(pointOf(sketch, dimension.pointId), foot), 0.5);
+    }
     default:
       return assertNever(dimension);
   }
+}
+
+/** The foot of the perpendicular from `pointId` onto `lineId`'s infinite
+ * extension, the second endpoint a point-line distance dimension draws its
+ * witness line to. Null when the line's points are missing or coincident. */
+function pointLineFoot(sketch: Sketch, pointId: string, lineId: string): MmPoint | null {
+  const line = sketch.entities.find((e) => e.id === lineId);
+  if (line === undefined || line.kind !== 'line') return null;
+  const a = pointOf(sketch, line.p1Id);
+  const b = pointOf(sketch, line.p2Id);
+  const p = pointOf(sketch, pointId);
+  const d = sub(b, a);
+  const lenSq = d.x * d.x + d.y * d.y;
+  if (lenSq < 1e-12) return null;
+  const t = ((p.x - a.x) * d.x + (p.y - a.y) * d.y) / lenSq;
+  return add(a, scale(d, t));
 }
 
 /** Intersection of two lines' infinite extensions, or null when parallel;
@@ -155,15 +176,21 @@ export function dimensionGraphics(
 ): DimensionGraphics | null {
   switch (dimension.kind) {
     case 'length':
-    case 'distance': {
-      const [p1, p2] =
-        dimension.kind === 'length'
-          ? (() => {
-              const line = sketch.entities.find((e) => e.id === dimension.lineId);
-              if (line === undefined || line.kind !== 'line') return [null, null] as const;
-              return [pointOf(sketch, line.p1Id), pointOf(sketch, line.p2Id)] as const;
-            })()
-          : [pointOf(sketch, dimension.p1Id), pointOf(sketch, dimension.p2Id)] as const;
+    case 'distance':
+    case 'pointLineDistance': {
+      const [p1, p2] = ((): readonly [MmPoint | null, MmPoint | null] => {
+        if (dimension.kind === 'length') {
+          const line = sketch.entities.find((e) => e.id === dimension.lineId);
+          if (line === undefined || line.kind !== 'line') return [null, null] as const;
+          return [pointOf(sketch, line.p1Id), pointOf(sketch, line.p2Id)] as const;
+        }
+        if (dimension.kind === 'distance') {
+          return [pointOf(sketch, dimension.p1Id), pointOf(sketch, dimension.p2Id)] as const;
+        }
+        const foot = pointLineFoot(sketch, dimension.pointId, dimension.lineId);
+        if (foot === null) return [null, null] as const;
+        return [pointOf(sketch, dimension.pointId), foot] as const;
+      })();
       if (p1 === null || p2 === null) return null;
       const u = normalize(sub(p2, p1));
       const n = perp(u);

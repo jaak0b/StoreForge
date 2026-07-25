@@ -350,6 +350,7 @@ function singleEntityIdOfPending(pending: DimensionSelectionKind): string | null
       return pending.entityId;
     case 'distance':
     case 'angle':
+    case 'pointLineDistance':
       return null;
     default:
       return assertNever(pending);

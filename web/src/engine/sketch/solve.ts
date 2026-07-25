@@ -29,6 +29,16 @@ const SOLVE_CONVERGED = 1;
 const DRAG_POINT_ID = '__drag_target';
 const DRAG_CONSTRAINT_ID = '__drag_pin';
 
+/**
+ * The PlaneGCS primitive fields for a dimension's driven flag: `{ driving:
+ * false }` for a driven dimension (measured, never enforced; see model.ts's
+ * SketchDimension.driven), or no fields at all for an ordinary driving
+ * dimension so PlaneGCS's own default (driving: true) applies.
+ */
+function drivingFlag(driven: boolean | undefined): { driving?: false } {
+  return driven === true ? { driving: false } : {};
+}
+
 function arcAngles(
   center: { x: number; y: number },
   start: { x: number; y: number },
@@ -181,6 +191,7 @@ export function solveSketch(
           p1_id: lineEntity.p1Id,
           p2_id: lineEntity.p2Id,
           distance: c.mm,
+          ...drivingFlag(c.driven),
         });
         break;
       }
@@ -191,6 +202,7 @@ export function solveSketch(
           p1_id: c.p1Id,
           p2_id: c.p2Id,
           distance: c.mm,
+          ...drivingFlag(c.driven),
         });
         break;
       case 'radius':
@@ -204,9 +216,13 @@ export function solveSketch(
         }
         const radiusMm = c.kind === 'diameter' ? c.mm / 2 : c.mm;
         if (target.kind === 'arc') {
-          primitives.push({ id: c.id, type: 'arc_radius', a_id: target.id, radius: radiusMm });
+          primitives.push({
+            id: c.id, type: 'arc_radius', a_id: target.id, radius: radiusMm, ...drivingFlag(c.driven),
+          });
         } else {
-          primitives.push({ id: c.id, type: 'circle_radius', c_id: target.id, radius: radiusMm });
+          primitives.push({
+            id: c.id, type: 'circle_radius', c_id: target.id, radius: radiusMm, ...drivingFlag(c.driven),
+          });
         }
         break;
       }
@@ -217,8 +233,27 @@ export function solveSketch(
           l1_id: c.l1Id,
           l2_id: c.l2Id,
           angle: (c.degrees * Math.PI) / 180,
+          ...drivingFlag(c.driven),
         });
         break;
+      case 'pointLineDistance': {
+        const lineEntity = byId.get(c.lineId);
+        if (lineEntity === undefined || lineEntity.kind !== 'line') {
+          return {
+            status: 'failed',
+            message: 'A point-line distance dimension refers to a line that is not in the sketch.',
+          };
+        }
+        primitives.push({
+          id: c.id,
+          type: 'p2l_distance',
+          p_id: c.pointId,
+          l_id: c.lineId,
+          distance: c.mm,
+          ...drivingFlag(c.driven),
+        });
+        break;
+      }
       default:
         return assertNever(c);
     }

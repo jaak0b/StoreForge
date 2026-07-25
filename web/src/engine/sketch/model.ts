@@ -112,12 +112,21 @@ export interface LabelOffset {
   x: number;
   y: number;
 }
+/**
+ * True for a dimension that reports a measured value but never constrains
+ * the geometry: PlaneGCS receives it with `driving: false` (solve.ts), and
+ * after each solve its value is overwritten from the solved geometry
+ * (measure.ts's updateDrivenDimensions) rather than the solver moving
+ * geometry to match a typed value. Optional and defaulting to false/absent
+ * (an ordinary driving dimension) so existing sketches deserialize unchanged.
+ */
 export interface LengthDimension {
   kind: 'length';
   id: string;
   lineId: string;
   mm: number;
   labelOffset?: LabelOffset;
+  driven?: boolean;
 }
 export interface DistanceDimension {
   kind: 'distance';
@@ -126,6 +135,7 @@ export interface DistanceDimension {
   p2Id: string;
   mm: number;
   labelOffset?: LabelOffset;
+  driven?: boolean;
 }
 export interface RadiusDimension {
   kind: 'radius';
@@ -133,6 +143,7 @@ export interface RadiusDimension {
   entityId: string;
   mm: number;
   labelOffset?: LabelOffset;
+  driven?: boolean;
 }
 export interface DiameterDimension {
   kind: 'diameter';
@@ -140,6 +151,7 @@ export interface DiameterDimension {
   entityId: string;
   mm: number;
   labelOffset?: LabelOffset;
+  driven?: boolean;
 }
 export interface AngleDimension {
   kind: 'angle';
@@ -148,6 +160,22 @@ export interface AngleDimension {
   l2Id: string;
   degrees: number;
   labelOffset?: LabelOffset;
+  driven?: boolean;
+}
+/**
+ * The perpendicular distance from a point to a line (PlaneGCS p2l_distance),
+ * for pairs that a plain point-to-point distance cannot express: a point and
+ * a line, two parallel lines (endpoint of one to the other), or a line and a
+ * curve's center (see dimensionSelection.ts's pair resolution).
+ */
+export interface PointLineDistanceDimension {
+  kind: 'pointLineDistance';
+  id: string;
+  pointId: string;
+  lineId: string;
+  mm: number;
+  labelOffset?: LabelOffset;
+  driven?: boolean;
 }
 
 export type SketchConstraint =
@@ -162,7 +190,8 @@ export type SketchConstraint =
   | DistanceDimension
   | RadiusDimension
   | DiameterDimension
-  | AngleDimension;
+  | AngleDimension
+  | PointLineDistanceDimension;
 
 /** The dimension subset of the constraints, for the click-to-edit labels. */
 export type SketchDimension =
@@ -170,7 +199,8 @@ export type SketchDimension =
   | DistanceDimension
   | RadiusDimension
   | DiameterDimension
-  | AngleDimension;
+  | AngleDimension
+  | PointLineDistanceDimension;
 
 export interface Sketch {
   schemaVersion: number;
@@ -203,6 +233,12 @@ function isValidLabelOffset(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
   const o = value as Record<string, unknown>;
   return isFiniteNumber(o.x) && isFiniteNumber(o.y);
+}
+
+/** True when `value` is either absent (an ordinary driving dimension) or a
+ * boolean, the `driven` field's validation. */
+function isValidDriven(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean';
 }
 
 /**
@@ -375,6 +411,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         if (!isValidLabelOffset(c.labelOffset)) {
           return `${subject}: The length constraint ${c.id}'s label offset must be a finite mm point.`;
         }
+        if (!isValidDriven(c.driven)) {
+          return `${subject}: The length constraint ${c.id}'s driven flag must be true or false.`;
+        }
         break;
       case 'distance':
         if (!kinds.has(c.p1Id as string) || !kinds.has(c.p2Id as string)) return missing;
@@ -386,6 +425,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         }
         if (!isValidLabelOffset(c.labelOffset)) {
           return `${subject}: The distance constraint ${c.id}'s label offset must be a finite mm point.`;
+        }
+        if (!isValidDriven(c.driven)) {
+          return `${subject}: The distance constraint ${c.id}'s driven flag must be true or false.`;
         }
         break;
       case 'radius':
@@ -400,6 +442,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         if (!isValidLabelOffset(c.labelOffset)) {
           return `${subject}: The ${kind} constraint ${c.id}'s label offset must be a finite mm point.`;
         }
+        if (!isValidDriven(c.driven)) {
+          return `${subject}: The ${kind} constraint ${c.id}'s driven flag must be true or false.`;
+        }
         break;
       case 'angle':
         if (!kinds.has(c.l1Id as string) || !kinds.has(c.l2Id as string)) return missing;
@@ -411,6 +456,24 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         }
         if (!isValidLabelOffset(c.labelOffset)) {
           return `${subject}: The angle constraint ${c.id}'s label offset must be a finite mm point.`;
+        }
+        if (!isValidDriven(c.driven)) {
+          return `${subject}: The angle constraint ${c.id}'s driven flag must be true or false.`;
+        }
+        break;
+      case 'pointLineDistance':
+        if (!kinds.has(c.pointId as string) || !kinds.has(c.lineId as string)) return missing;
+        if (!isPoint(c.pointId) || !isLine(c.lineId)) {
+          return `${subject}: The point-line distance constraint ${c.id} needs a point and a line.`;
+        }
+        if (!isFiniteNumber(c.mm) || c.mm <= 0) {
+          return `${subject}: The point-line distance constraint ${c.id} needs a value above 0 mm.`;
+        }
+        if (!isValidLabelOffset(c.labelOffset)) {
+          return `${subject}: The point-line distance constraint ${c.id}'s label offset must be a finite mm point.`;
+        }
+        if (!isValidDriven(c.driven)) {
+          return `${subject}: The point-line distance constraint ${c.id}'s driven flag must be true or false.`;
         }
         break;
       default:
@@ -484,23 +547,34 @@ export function deserializeSketch(raw: unknown): SketchParseResult {
           mirrorLineId: c.mirrorLineId,
         };
       case 'length':
-        return { kind: 'length', id: c.id, lineId: c.lineId, mm: c.mm, labelOffset: c.labelOffset };
+        return {
+          kind: 'length', id: c.id, lineId: c.lineId, mm: c.mm, labelOffset: c.labelOffset,
+          driven: c.driven,
+        };
       case 'distance':
         return {
           kind: 'distance', id: c.id, p1Id: c.p1Id, p2Id: c.p2Id, mm: c.mm, labelOffset: c.labelOffset,
+          driven: c.driven,
         };
       case 'radius':
         return {
           kind: 'radius', id: c.id, entityId: c.entityId, mm: c.mm, labelOffset: c.labelOffset,
+          driven: c.driven,
         };
       case 'diameter':
         return {
           kind: 'diameter', id: c.id, entityId: c.entityId, mm: c.mm, labelOffset: c.labelOffset,
+          driven: c.driven,
         };
       case 'angle':
         return {
           kind: 'angle', id: c.id, l1Id: c.l1Id, l2Id: c.l2Id, degrees: c.degrees,
-          labelOffset: c.labelOffset,
+          labelOffset: c.labelOffset, driven: c.driven,
+        };
+      case 'pointLineDistance':
+        return {
+          kind: 'pointLineDistance', id: c.id, pointId: c.pointId, lineId: c.lineId, mm: c.mm,
+          labelOffset: c.labelOffset, driven: c.driven,
         };
       default:
         return assertNever(c);
