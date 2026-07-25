@@ -100,7 +100,24 @@ const regionPaths = computed(() =>
 );
 
 /** Region shading: light CAD blue, hover raises opacity, a selected region
- * (any number can be selected at once) reads distinct and stronger. */
+ * (any number can be selected at once) reads distinct and stronger.
+ *
+ * The region fills only pick up pointer events with the select tool active
+ * (see the "regions" group's :style binding below): with any point-placement
+ * tool active (dimension, line, arc, circle, rectangle, slot, mirror), the
+ * region layer is pointer-events:none so clicks fall through to the canvas's
+ * own pointerdown handler instead of landing on a region <path> element. That
+ * matters because isEntityTarget() below treats any SVGPathElement as an
+ * entity hit; before this fix, a click inside a shaded region during
+ * dimension-label placement was misread as a hit on the region path, so
+ * placeDimensionDraft's `!isEntityHit` guard in SketchWorkspace's
+ * onCanvasClick never fired and the pending dimension's label failed to
+ * place. Manual verification: activate the dimension tool, pick an entity so
+ * a label is pending, then click inside a shaded region versus outside it;
+ * both must place the label. Also confirm region selection still works with
+ * the select tool (click a region toggles it) and that line/circle/rectangle
+ * point placement over a shaded region is unaffected (it never depended on
+ * isEntityHit, so it worked before and after). */
 function regionFill(regionId: string): string {
   return selectedRegionIds.value.includes(regionId) ? '#1565c0' : '#1e88e5';
 }
@@ -1252,7 +1269,7 @@ function removeSelectedConstraint(constraintId: string): void {
         stroke-width="0.15"
       />
     </g>
-    <g class="regions">
+    <g class="regions" :style="{ pointerEvents: editor.activeTool === 'select' ? 'auto' : 'none' }">
       <path
         v-for="r in regionPaths"
         :key="r.id"
