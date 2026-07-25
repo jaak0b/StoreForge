@@ -1589,6 +1589,11 @@ function removeSelectedConstraint(constraintId: string): void {
   background: #fafafa;
 }
 
+svg text {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* Space is held to pan; show the grab cursor, grabbing while dragging,
    matching TraceCanvas's convention. */
 .cursor-grab {
