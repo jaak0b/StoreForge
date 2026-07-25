@@ -3,9 +3,9 @@
 // (segment angle chosen so the chord-to-arc deviation stays within the shared
 // outline tolerance). Failures are user-worded messages the UI shows verbatim.
 import type { MmPoint, TracedOutline } from '../trace/types';
-import { OUTLINE_TOLERANCE_MM } from '../trace/contour';
 import { assertNever } from '../plan/types';
 import type { Sketch, SketchArc, SketchCircle, SketchEntity, SketchPoint } from './model';
+import { flattenArc, flattenCircle, orientPositive } from './regions';
 
 export type ProfileResult =
   | { ok: true; outline: TracedOutline }
@@ -40,58 +40,6 @@ class PointGroups {
     const rb = this.find(b);
     if (ra !== rb) this.parent.set(ra, rb);
   }
-}
-
-/** Number of segments flattening an arc of the given radius and sweep. */
-function segmentCount(radiusMm: number, sweepRad: number): number {
-  // Sagitta bound: a chord spanning angle t deviates r * (1 - cos(t / 2)),
-  // so the largest allowed step is 2 * acos(1 - tolerance / r).
-  const ratio = 1 - OUTLINE_TOLERANCE_MM / Math.max(radiusMm, OUTLINE_TOLERANCE_MM);
-  const maxStep = 2 * Math.acos(Math.max(-1, Math.min(1, ratio)));
-  return Math.max(2, Math.ceil(sweepRad / Math.max(maxStep, 1e-6)));
-}
-
-/** Flattened arc points from start toward end, excluding the end point. */
-function flattenArc(
-  center: SketchPoint,
-  start: SketchPoint,
-  end: SketchPoint,
-  reversed: boolean,
-): MmPoint[] {
-  const radius = Math.hypot(start.x - center.x, start.y - center.y);
-  const a0 = Math.atan2(start.y - center.y, start.x - center.x);
-  let a1 = Math.atan2(end.y - center.y, end.x - center.x);
-  if (a1 <= a0) a1 += 2 * Math.PI; // stored arcs run counterclockwise start to end
-  const from = reversed ? a1 : a0;
-  const to = reversed ? a0 : a1;
-  const n = segmentCount(radius, Math.abs(to - from));
-  const points: MmPoint[] = [];
-  for (let i = 0; i < n; i += 1) {
-    const t = from + ((to - from) * i) / n;
-    points.push({ x: center.x + radius * Math.cos(t), y: center.y + radius * Math.sin(t) });
-  }
-  return points;
-}
-
-/** Full-circle flattening, counterclockwise, closed implicitly. */
-function flattenCircle(center: SketchPoint, radiusMm: number): MmPoint[] {
-  const n = Math.max(8, segmentCount(radiusMm, 2 * Math.PI));
-  const points: MmPoint[] = [];
-  for (let i = 0; i < n; i += 1) {
-    const t = (2 * Math.PI * i) / n;
-    points.push({ x: center.x + radiusMm * Math.cos(t), y: center.y + radiusMm * Math.sin(t) });
-  }
-  return points;
-}
-
-function shoelaceArea(loop: MmPoint[]): number {
-  let sum = 0;
-  for (let i = 0; i < loop.length; i += 1) {
-    const a = loop[i];
-    const b = loop[(i + 1) % loop.length];
-    sum += a.x * b.y - b.x * a.y;
-  }
-  return sum / 2;
 }
 
 /** Proper (interior) intersection test of two segments, standard orientation test. */
@@ -225,9 +173,4 @@ export function extractProfile(sketch: Sketch): ProfileResult {
     return { ok: false, error: SELF_INTERSECTING };
   }
   return { ok: true, outline: { outer: orientPositive(loop), holes: [] } };
-}
-
-/** Ensures positive shoelace area, the TracedOutline outer-loop convention. */
-function orientPositive(loop: MmPoint[]): MmPoint[] {
-  return shoelaceArea(loop) >= 0 ? loop : [...loop].reverse();
 }
