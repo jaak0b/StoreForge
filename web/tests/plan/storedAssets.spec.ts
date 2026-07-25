@@ -207,6 +207,30 @@ describe('referencedAssetIds', () => {
     );
   });
 
+  it('keeps every session photo a traced bin references and sweeps the rest', () => {
+    const bin: TracedBin = {
+      origin: 'traced',
+      gridX: 1,
+      gridY: 1,
+      heightUnits: 6,
+      magnetHoles: false,
+      pockets: { tools: [], placements: [] },
+      edits: [],
+      traceSessions: [
+        { id: 's1', traceSourceId: 'photo-a', paper: { kind: 'a4', corners: PAPER_CORNERS } },
+        { id: 's2', traceSourceId: 'photo-b', paper: { kind: 'a4', corners: PAPER_CORNERS } },
+      ],
+    };
+    const entry: QueueEntry = {
+      id: 'e1',
+      createdAt: '2026-07-25T00:00:00.000Z',
+      quantity: 1,
+      product: { kind: 'bin', bin, labelSlot: false },
+    };
+    const referenced = referencedAssetIds([entry], []);
+    expect(referenced.tracePhotos).toEqual(new Set(['photo-a', 'photo-b']));
+  });
+
   it('keeps the two asset kinds apart', () => {
     const referenced = referencedAssetIds(
       [tracedEntry('t1', 'photo-a'), cutoutEntry('c1', 'model-a')],
