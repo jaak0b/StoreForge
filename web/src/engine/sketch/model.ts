@@ -567,7 +567,7 @@ export function arcTangentToPoint(
   const dy = start.y - end.y;
   const denom = 2 * (nx * dx + ny * dy);
   if (Math.abs(denom) < 1e-9) return null;
-  const t = (dx * dx + dy * dy) / denom;
+  const t = -(dx * dx + dy * dy) / denom;
   const center = { x: start.x + nx * t, y: start.y + ny * t };
   const cross = (end.x - start.x) * uy - (end.y - start.y) * ux;
   return { center, ccw: cross < 0 };

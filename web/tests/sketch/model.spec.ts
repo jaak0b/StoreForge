@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SKETCH_SCHEMA_VERSION,
   arcFromThreePoints,
+  arcTangentToPoint,
   cloneSketch,
   deserializeSketch,
   validateSketch,
@@ -125,5 +126,30 @@ describe('arcFromThreePoints', () => {
 
   it('returns null for collinear points', () => {
     expect(arcFromThreePoints({ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 0 })).toBeNull();
+  });
+});
+
+describe('arcTangentToPoint', () => {
+  it('finds a center equidistant from start and end for a horizontal tangent', () => {
+    const result = arcTangentToPoint({ x: 0, y: 0 }, { ux: 1, uy: 0 }, { x: 1, y: 1 });
+    expect(result).not.toBeNull();
+    expect(result!.center.x).toBeCloseTo(0, 9);
+    expect(result!.center.y).toBeCloseTo(1, 9);
+  });
+
+  it('finds a center equidistant from start and end with a perpendicular tangent direction', () => {
+    const start = { x: 0, y: 0 };
+    const tangentDir = { ux: 0, uy: 1 };
+    const end = { x: 3, y: 4 };
+    const result = arcTangentToPoint(start, tangentDir, end);
+    expect(result).not.toBeNull();
+    const { center } = result!;
+    const distStart = Math.hypot(center.x - start.x, center.y - start.y);
+    const distEnd = Math.hypot(center.x - end.x, center.y - end.y);
+    expect(distStart).toBeCloseTo(distEnd, 9);
+    const cx = center.x - start.x;
+    const cy = center.y - start.y;
+    const dot = cx * tangentDir.ux + cy * tangentDir.uy;
+    expect(dot).toBeCloseTo(0, 9);
   });
 });
