@@ -195,16 +195,52 @@ export function solveSketch(
         });
         break;
       }
-      case 'distance':
+      case 'distance': {
+        if (c.axis === undefined) {
+          primitives.push({
+            id: c.id,
+            type: 'p2p_distance',
+            p1_id: c.p1Id,
+            p2_id: c.p2Id,
+            distance: c.mm,
+            ...drivingFlag(c.driven),
+          });
+          break;
+        }
+        // An axis-flavored distance has no dedicated PlaneGCS "p2p distance
+        // along one axis" constraint; it is built from the general-purpose
+        // `difference` constraint (param1 - param2 = difference) over each
+        // point's x or y property param, the mechanism PlaneGCS actually
+        // offers for this (see solve.ts's module comment for the survey).
+        const p1 = byId.get(c.p1Id);
+        const p2 = byId.get(c.p2Id);
+        if (p1 === undefined || p1.kind !== 'point' || p2 === undefined || p2.kind !== 'point') {
+          return {
+            status: 'failed',
+            message: 'An axis distance dimension refers to a point that is not in the sketch.',
+          };
+        }
+        // `difference` is signed (param1 - param2), but the dimension's
+        // stored mm is an unsigned magnitude (model.ts validation requires
+        // mm > 0); target the sign the sketch's current arrangement already
+        // has, so a driving solve enforces the magnitude without flipping
+        // which point is on which side.
+        const currentDiff = c.axis === 'x' ? p1.x - p2.x : p1.y - p2.y;
+        const signedTarget = currentDiff < 0 ? -c.mm : c.mm;
         primitives.push({
           id: c.id,
-          type: 'p2p_distance',
-          p1_id: c.p1Id,
-          p2_id: c.p2Id,
-          distance: c.mm,
+          type: 'difference',
+          // PlaneGCS's `difference` constraint is param2 minus param1 (empirically
+          // verified against the wrapper; not documented in constraints.d.ts), so
+          // param1/param2 are swapped here to make `difference` read as p1 - p2,
+          // matching signedTarget's sign convention above.
+          param1: { o_id: c.p2Id, prop: c.axis },
+          param2: { o_id: c.p1Id, prop: c.axis },
+          difference: signedTarget,
           ...drivingFlag(c.driven),
         });
         break;
+      }
       case 'radius':
       case 'diameter': {
         const target = byId.get(c.entityId);

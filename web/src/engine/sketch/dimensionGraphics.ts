@@ -95,8 +95,11 @@ function pointLineFoot(sketch: Sketch, pointId: string, lineId: string): MmPoint
 }
 
 /** Intersection of two lines' infinite extensions, or null when parallel;
- * falls back to the midpoint of the four endpoints for the angle anchor. */
-function lineIntersection(
+ * falls back to the midpoint of the four endpoints for the angle anchor.
+ * Exported so dimensionSelection.ts's angle-quadrant sector picking
+ * (angleForCursorSector below reuses it directly; the selection module
+ * shares this instead of re-deriving line intersection, convention 10). */
+export function lineIntersection(
   sketch: Sketch,
   l1Id: string,
   l2Id: string,
@@ -124,6 +127,48 @@ function angleVertex(sketch: Sketch, l1Id: string, l2Id: string): MmPoint | null
   if (l1 === undefined || l1.kind !== 'line' || l2 === undefined || l2.kind !== 'line') return null;
   const pts = [l1.p1Id, l1.p2Id, l2.p1Id, l2.p2Id].map((id) => pointOf(sketch, id));
   return scale(pts.reduce((s, p) => add(s, p), { x: 0, y: 0 }), 1 / pts.length);
+}
+
+/**
+ * The angle, in degrees, of whichever of the two lines' four quadrant
+ * sectors around their intersection contains `cursor`: two intersecting
+ * lines split the plane into four sectors bounded by their four rays (each
+ * line contributing two opposite rays), alternating between an acute sector
+ * and its supplementary obtuse sector. This is the angle-dimension's live
+ * quadrant pick (Fusion semantics: the sector under the cursor is the one
+ * dimensioned, acute or supplementary as that sector dictates), used both by
+ * the placement ghost preview and by the store's commit path so both derive
+ * the same value (convention 10). Returns null when the lines are parallel
+ * (lineIntersection returns null; the caller falls back to its prior
+ * behavior of the fixed 0..180 measured angle).
+ */
+export function angleForCursorSector(
+  sketch: Sketch,
+  l1Id: string,
+  l2Id: string,
+  cursor: MmPoint,
+): number | null {
+  const hit = lineIntersection(sketch, l1Id, l2Id);
+  if (hit === null) return null;
+  const norm = (radians: number): number => {
+    const twoPi = 2 * Math.PI;
+    return ((radians % twoPi) + twoPi) % twoPi;
+  };
+  const a1 = Math.atan2(hit.d1.y, hit.d1.x);
+  const a2 = Math.atan2(hit.d2.y, hit.d2.x);
+  const rays = [norm(a1), norm(a1 + Math.PI), norm(a2), norm(a2 + Math.PI)].sort((x, y) => x - y);
+  const cursorAngle = norm(Math.atan2(cursor.y - hit.point.y, cursor.x - hit.point.x));
+  for (let i = 0; i < 4; i += 1) {
+    const start = rays[i];
+    const end = i === 3 ? rays[0] + 2 * Math.PI : rays[i + 1];
+    const c = cursorAngle >= start ? cursorAngle : cursorAngle + 2 * Math.PI;
+    if (c >= start && c <= end + 1e-9) {
+      return ((end - start) * 180) / Math.PI;
+    }
+  }
+  // Unreachable: the four sorted rays always cover the full circle, so some
+  // sector always contains the cursor angle.
+  return null;
 }
 
 export interface ArrowheadGraphic {
@@ -162,6 +207,40 @@ function angleDegOf(from: MmPoint, to: MmPoint): number {
 }
 
 /**
+ * Graphics for an axis-flavored point-to-point distance (model.ts's
+ * DistanceDimension.axis): the dimension line runs along the fixed axis
+ * (horizontal for axis 'x', so it measures the x separation; vertical for
+ * axis 'y') at the label's position on the other axis, with witness lines
+ * dropped from each point onto it. The generic aligned-distance case above
+ * offsets along the segment's own perpendicular instead; this is the H/V
+ * counterpart to it.
+ */
+function axisDistanceGraphics(
+  p1: MmPoint,
+  p2: MmPoint,
+  axis: 'x' | 'y',
+  labelAt: MmPoint,
+  text: string,
+): DimensionGraphics {
+  const d1 = axis === 'x' ? { x: p1.x, y: labelAt.y } : { x: labelAt.x, y: p1.y };
+  const d2 = axis === 'x' ? { x: p2.x, y: labelAt.y } : { x: labelAt.x, y: p2.y };
+  return {
+    kind: 'linear',
+    witnessLines: [
+      { a: p1, b: d1 },
+      { a: p2, b: d2 },
+    ],
+    dimensionLine: { a: d1, b: d2 },
+    arrowheads: [
+      { at: d1, angleDeg: angleDegOf(d2, d1) + 180 },
+      { at: d2, angleDeg: angleDegOf(d1, d2) + 180 },
+    ],
+    textAt: labelAt,
+    text,
+  };
+}
+
+/**
  * The Fusion-style graphics primitives for one dimension, given the label
  * position it should be drawn at (the stored anchor + labelOffset, or a
  * placement ghost's live cursor position). `text` is pre-formatted by the
@@ -192,6 +271,9 @@ export function dimensionGraphics(
         return [pointOf(sketch, dimension.pointId), foot] as const;
       })();
       if (p1 === null || p2 === null) return null;
+      if (dimension.kind === 'distance' && dimension.axis !== undefined) {
+        return axisDistanceGraphics(p1, p2, dimension.axis, labelAt, text);
+      }
       const u = normalize(sub(p2, p1));
       const n = perp(u);
       const mid = scale(add(p1, p2), 0.5);

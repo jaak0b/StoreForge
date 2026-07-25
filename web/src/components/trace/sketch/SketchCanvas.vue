@@ -22,14 +22,15 @@ import {
 } from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
-import { formatMm, formatDegrees, measureAngleBetweenLines, measureLineLength, measurePointDistance, measurePointLineDistance, measureRadius } from '../../../engine/sketch/measure';
+import { formatMm, formatDegrees, measureAngleBetweenLines, measureLineLength, measurePointAxisDistance, measurePointDistance, measurePointLineDistance, measureRadius } from '../../../engine/sketch/measure';
 import {
   DEFAULT_LABEL_OFFSET,
+  angleForCursorSector,
   dimensionAnchor,
   dimensionGraphics,
   type DimensionGraphics,
 } from '../../../engine/sketch/dimensionGraphics';
-import { anchorForDimensionSelection } from '../../../engine/sketch/dimensionSelection';
+import { anchorForDimensionSelection, pickDistanceAxis } from '../../../engine/sketch/dimensionSelection';
 
 const emit = defineEmits<{
   /** A canvas click in mm, for the active drawing tool. altKey is the Alt
@@ -899,12 +900,18 @@ const dimensionGhost = computed<DimensionRender | null>(() => {
         mm: formatMm(measureLineLength(sketch.value, resolved.lineId)),
       };
       break;
-    case 'distance':
+    case 'distance': {
+      const axis = pickDistanceAxis(sketch.value, resolved.p1Id, resolved.p2Id, cursorMm.value);
       fake = {
-        kind: 'distance', id: '_ghost', p1Id: resolved.p1Id, p2Id: resolved.p2Id,
-        mm: formatMm(measurePointDistance(sketch.value, resolved.p1Id, resolved.p2Id)),
+        kind: 'distance', id: '_ghost', p1Id: resolved.p1Id, p2Id: resolved.p2Id, axis,
+        mm: formatMm(
+          axis === undefined
+            ? measurePointDistance(sketch.value, resolved.p1Id, resolved.p2Id)
+            : measurePointAxisDistance(sketch.value, resolved.p1Id, resolved.p2Id, axis),
+        ),
       };
       break;
+    }
     case 'radiusOrDiameter':
       fake = {
         kind: 'radius', id: '_ghost', entityId: resolved.entityId,
@@ -914,7 +921,10 @@ const dimensionGhost = computed<DimensionRender | null>(() => {
     case 'angle':
       fake = {
         kind: 'angle', id: '_ghost', l1Id: resolved.l1Id, l2Id: resolved.l2Id,
-        degrees: formatDegrees(measureAngleBetweenLines(sketch.value, resolved.l1Id, resolved.l2Id)),
+        degrees: formatDegrees(
+          angleForCursorSector(sketch.value, resolved.l1Id, resolved.l2Id, cursorMm.value) ??
+            measureAngleBetweenLines(sketch.value, resolved.l1Id, resolved.l2Id),
+        ),
       };
       break;
     case 'pointLineDistance':

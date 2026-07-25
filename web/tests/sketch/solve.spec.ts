@@ -47,6 +47,42 @@ function solvedPoint(sketch: Sketch, id: string): { x: number; y: number } {
   return p;
 }
 
+describe('solveSketch axis distance', () => {
+  it('enforces an x-only distance between two points, leaving y free', () => {
+    const sketch: Sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [point('p1', 0, 0), point('p2', 8, 3)],
+      constraints: [
+        { kind: 'distance', id: 'cAxis', p1Id: 'p1', p2Id: 'p2', mm: 10, axis: 'x' },
+      ],
+    };
+    const result = solveSketch(wrapper, sketch);
+    expect(result.status).toBe('solved');
+    if (result.status !== 'solved') return;
+    const p1 = solvedPoint(result.sketch, 'p1');
+    const p2 = solvedPoint(result.sketch, 'p2');
+    expect(Math.abs(p2.x - p1.x)).toBeCloseTo(10, 4);
+  });
+
+  it('keeps the sign of the current arrangement when enforcing an axis distance', () => {
+    // p2 starts to the left of p1 (negative x difference); the solver must
+    // not flip which point is on which side to satisfy the magnitude.
+    const sketch: Sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [point('p1', 20, 0), point('p2', 12, 4)],
+      constraints: [
+        { kind: 'distance', id: 'cAxis', p1Id: 'p1', p2Id: 'p2', mm: 10, axis: 'x' },
+      ],
+    };
+    const result = solveSketch(wrapper, sketch);
+    expect(result.status).toBe('solved');
+    if (result.status !== 'solved') return;
+    const p1 = solvedPoint(result.sketch, 'p1');
+    const p2 = solvedPoint(result.sketch, 'p2');
+    expect(p1.x - p2.x).toBeCloseTo(10, 4);
+  });
+});
+
 describe('solveSketch', () => {
   it('solves the dimensioned rectangle and reports the free dof', () => {
     const result = solveSketch(wrapper, rectangleSketch());

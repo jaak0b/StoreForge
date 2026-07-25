@@ -103,6 +103,24 @@ describe('validateSketch', () => {
     );
   });
 
+  it('accepts a distance dimension with an x axis flavor', () => {
+    const sketch = squareSketch();
+    sketch.constraints.push({
+      kind: 'distance', id: 'cAxis', p1Id: 'pA', p2Id: 'pC', mm: 10, axis: 'x',
+    });
+    expect(validateSketch(sketch, 'sketch')).toBeNull();
+  });
+
+  it('rejects a distance dimension with an invalid axis value', () => {
+    const sketch = squareSketch();
+    sketch.constraints.push({
+      kind: 'distance', id: 'cAxis', p1Id: 'pA', p2Id: 'pC', mm: 10, axis: 'z',
+    } as never);
+    expect(validateSketch(sketch, 'sketch')).toBe(
+      "sketch: The distance constraint cAxis's axis must be x or y.",
+    );
+  });
+
   it('rejects an unknown schema version', () => {
     const sketch = { ...squareSketch(), schemaVersion: 999 };
     expect(validateSketch(sketch, 'sketch')).toBe(
@@ -123,6 +141,16 @@ describe('deserializeSketch', () => {
     const original = squareSketch();
     original.constraints.push({
       kind: 'pointLineDistance', id: 'cPL', pointId: 'pC', lineId: 'lAB', mm: 10, driven: true,
+    });
+    const result = deserializeSketch(JSON.parse(JSON.stringify(original)));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.sketch).toEqual(original);
+  });
+
+  it('round-trips a y-axis distance dimension', () => {
+    const original = squareSketch();
+    original.constraints.push({
+      kind: 'distance', id: 'cAxis', p1Id: 'pA', p2Id: 'pC', mm: 10, axis: 'y',
     });
     const result = deserializeSketch(JSON.parse(JSON.stringify(original)));
     expect(result.ok).toBe(true);

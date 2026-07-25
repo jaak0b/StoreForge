@@ -11,15 +11,63 @@
 import type { LabelOffset, Sketch, SketchDimension, SketchEntity } from './model';
 import type { MmPoint } from '../trace/types';
 import { assertNever } from '../plan/types';
-import { dimensionAnchor } from './dimensionGraphics';
+import { angleForCursorSector, dimensionAnchor } from './dimensionGraphics';
 import {
   measureAngleBetweenLines,
   measureDiameter,
   measureLineLength,
+  measurePointAxisDistance,
   measurePointDistance,
   measurePointLineDistance,
   measureRadius,
 } from './measure';
+
+/** The band, in degrees off the segment's own direction, within which a
+ * point-point distance placement is treated as an aligned (true) distance
+ * rather than an axis-flavored one: a live placement heuristic (like
+ * autoInfer.ts's snap band), not a measurement-pipeline tolerance
+ * (convention 12 governs the latter, not this). */
+const DISTANCE_AXIS_ALIGNED_BAND_DEG = 20;
+
+function pointOf(sketch: Sketch, id: string): MmPoint {
+  const e = sketch.entities.find((x) => x.id === id);
+  return e !== undefined && e.kind === 'point' ? { x: e.x, y: e.y } : { x: 0, y: 0 };
+}
+
+/**
+ * The H/V/aligned flavor a point-to-point distance placement resolves to,
+ * live, from the cursor's offset off the two points' midpoint (Fusion 360's
+ * point-point dimension semantics): when the cursor's offset direction sits
+ * within DISTANCE_AXIS_ALIGNED_BAND_DEG of the segment's own direction, the
+ * dimension is the true aligned distance (undefined axis, no witness
+ * H/V flavor); otherwise the offset's dominant component picks the flavor
+ * for the perpendicular case: an offset displaced mostly along y (away
+ * across the segment's own direction) yields the horizontal (x) dimension,
+ * and one displaced mostly along x yields the vertical (y) dimension.
+ * Degenerate inputs (coincident points, or the cursor sitting exactly on the
+ * midpoint) fall back to the aligned distance.
+ */
+export function pickDistanceAxis(
+  sketch: Sketch,
+  p1Id: string,
+  p2Id: string,
+  cursor: MmPoint,
+): 'x' | 'y' | undefined {
+  const p1 = pointOf(sketch, p1Id);
+  const p2 = pointOf(sketch, p2Id);
+  const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  const dx = cursor.x - mid.x;
+  const dy = cursor.y - mid.y;
+  const offsetLen = Math.hypot(dx, dy);
+  if (segLen < 1e-9 || offsetLen < 1e-9) return undefined;
+  const ux = (p2.x - p1.x) / segLen;
+  const uy = (p2.y - p1.y) / segLen;
+  const alongSegment = Math.abs(dx * ux + dy * uy);
+  const angleFromSegmentDeg = (Math.acos(Math.min(1, alongSegment / offsetLen)) * 180) / Math.PI;
+  if (angleFromSegmentDeg <= DISTANCE_AXIS_ALIGNED_BAND_DEG) return undefined;
+  return Math.abs(dy) > Math.abs(dx) ? 'x' : 'y';
+}
 
 export type DimensionSelectionKind =
   | { kind: 'length'; lineId: string }
@@ -161,25 +209,39 @@ export function anchorForDimensionSelection(sketch: Sketch, resolved: DimensionS
   }
 }
 
-/** The current measured value (mm, or degrees for angle) of a resolved
+/**
+ * The current measured value (mm, or degrees for angle) of a resolved
  * selection, for seeding the draft's default text. radiusKind picks radius
- * vs diameter for a radiusOrDiameter selection. */
+ * vs diameter for a radiusOrDiameter selection. cursor is the live placement
+ * position, consulted only by the two kinds with a cursor-picked flavor:
+ * distance (pickDistanceAxis's H/V/aligned pick) and angle
+ * (angleForCursorSector's quadrant pick, falling back to the fixed 0..180
+ * measured angle when the lines are parallel).
+ */
 export function measuredValueForDimensionSelection(
   sketch: Sketch,
   resolved: DimensionSelectionKind,
   radiusKind: 'radius' | 'diameter',
+  cursor: MmPoint,
 ): number {
   switch (resolved.kind) {
     case 'length':
       return measureLineLength(sketch, resolved.lineId);
-    case 'distance':
-      return measurePointDistance(sketch, resolved.p1Id, resolved.p2Id);
+    case 'distance': {
+      const axis = pickDistanceAxis(sketch, resolved.p1Id, resolved.p2Id, cursor);
+      return axis === undefined
+        ? measurePointDistance(sketch, resolved.p1Id, resolved.p2Id)
+        : measurePointAxisDistance(sketch, resolved.p1Id, resolved.p2Id, axis);
+    }
     case 'radiusOrDiameter':
       return radiusKind === 'radius'
         ? measureRadius(sketch, resolved.entityId)
         : measureDiameter(sketch, resolved.entityId);
     case 'angle':
-      return measureAngleBetweenLines(sketch, resolved.l1Id, resolved.l2Id);
+      return (
+        angleForCursorSector(sketch, resolved.l1Id, resolved.l2Id, cursor) ??
+        measureAngleBetweenLines(sketch, resolved.l1Id, resolved.l2Id)
+      );
     case 'pointLineDistance':
       return measurePointLineDistance(sketch, resolved.pointId, resolved.lineId);
     default:
@@ -187,22 +249,31 @@ export function measuredValueForDimensionSelection(
   }
 }
 
-/** Builds the actual constraint a resolved selection commits to, given the
+/**
+ * Builds the actual constraint a resolved selection commits to, given the
  * radius/diameter choice, a fresh id, the typed value and the placed
  * labelOffset. The single place that turns a DimensionSelectionKind into a
- * real SketchDimension (convention 10), used by the store's commit path. */
+ * real SketchDimension (convention 10), used by the store's commit path.
+ * distanceAxis is the H/V/aligned flavor pickDistanceAxis resolved at
+ * placement (undefined for the ordinary aligned distance, or for any
+ * resolved kind other than 'distance', which ignores it).
+ */
 export function buildDimensionFromSelection(
   resolved: DimensionSelectionKind,
   radiusKind: 'radius' | 'diameter',
   id: string,
   value: number,
   labelOffset: LabelOffset,
+  distanceAxis?: 'x' | 'y',
 ): SketchDimension {
   switch (resolved.kind) {
     case 'length':
       return { kind: 'length', id, lineId: resolved.lineId, mm: value, labelOffset };
     case 'distance':
-      return { kind: 'distance', id, p1Id: resolved.p1Id, p2Id: resolved.p2Id, mm: value, labelOffset };
+      return {
+        kind: 'distance', id, p1Id: resolved.p1Id, p2Id: resolved.p2Id, mm: value, axis: distanceAxis,
+        labelOffset,
+      };
     case 'radiusOrDiameter':
       return { kind: radiusKind, id, entityId: resolved.entityId, mm: value, labelOffset };
     case 'angle':

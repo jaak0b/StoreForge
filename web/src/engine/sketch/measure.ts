@@ -46,6 +46,21 @@ export function measurePointDistance(sketch: Sketch, p1Id: string, p2Id: string)
   return withFallback(Math.hypot(b.x - a.x, b.y - a.y));
 }
 
+/** The current distance between two points along one axis only (|dx| or
+ * |dy|), in mm: the measured value for an axis-flavored distance dimension
+ * (model.ts's DistanceDimension.axis). Single source (convention 10) for
+ * that dimension's measured default and its driven-dimension refresh. */
+export function measurePointAxisDistance(
+  sketch: Sketch,
+  p1Id: string,
+  p2Id: string,
+  axis: 'x' | 'y',
+): number {
+  const a = pointOf(sketch, p1Id);
+  const b = pointOf(sketch, p2Id);
+  return withFallback(Math.abs(axis === 'x' ? b.x - a.x : b.y - a.y));
+}
+
 /** The current radius of an arc or circle, in mm. */
 export function measureRadius(sketch: Sketch, entityId: string): number {
   const entity = sketch.entities.find((e) => e.id === entityId);
@@ -135,7 +150,13 @@ export function updateDrivenDimensions(sketch: Sketch): Sketch {
         if (c.driven === true) c.mm = formatMm(measureLineLength(sketch, c.lineId));
         break;
       case 'distance':
-        if (c.driven === true) c.mm = formatMm(measurePointDistance(sketch, c.p1Id, c.p2Id));
+        if (c.driven === true) {
+          c.mm = formatMm(
+            c.axis === undefined
+              ? measurePointDistance(sketch, c.p1Id, c.p2Id)
+              : measurePointAxisDistance(sketch, c.p1Id, c.p2Id, c.axis),
+          );
+        }
         break;
       case 'radius':
         if (c.driven === true) c.mm = formatMm(measureRadius(sketch, c.entityId));

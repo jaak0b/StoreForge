@@ -128,12 +128,21 @@ export interface LengthDimension {
   labelOffset?: LabelOffset;
   driven?: boolean;
 }
+/**
+ * When set, the dimension measures only the x ('x') or y ('y') separation
+ * between the two points (a Fusion-style horizontal or vertical dimension)
+ * instead of the true point-to-point distance; the flavor is picked live
+ * from the cursor while the dimension is placed (dimensionSelection.ts's
+ * pickDistanceAxis) and then fixed at commit. Absent means the ordinary
+ * aligned (Euclidean) distance, so existing sketches deserialize unchanged.
+ */
 export interface DistanceDimension {
   kind: 'distance';
   id: string;
   p1Id: string;
   p2Id: string;
   mm: number;
+  axis?: 'x' | 'y';
   labelOffset?: LabelOffset;
   driven?: boolean;
 }
@@ -239,6 +248,12 @@ function isValidLabelOffset(value: unknown): boolean {
  * boolean, the `driven` field's validation. */
 function isValidDriven(value: unknown): boolean {
   return value === undefined || typeof value === 'boolean';
+}
+
+/** True when `value` is either absent (the ordinary aligned distance) or
+ * exactly 'x' or 'y', the distance dimension's `axis` field's validation. */
+function isValidAxis(value: unknown): boolean {
+  return value === undefined || value === 'x' || value === 'y';
 }
 
 /**
@@ -423,6 +438,9 @@ export function validateSketch(raw: unknown, subject: string): string | null {
         if (!isFiniteNumber(c.mm) || c.mm <= 0) {
           return `${subject}: The distance constraint ${c.id} needs a value above 0 mm.`;
         }
+        if (!isValidAxis(c.axis)) {
+          return `${subject}: The distance constraint ${c.id}'s axis must be x or y.`;
+        }
         if (!isValidLabelOffset(c.labelOffset)) {
           return `${subject}: The distance constraint ${c.id}'s label offset must be a finite mm point.`;
         }
@@ -553,8 +571,8 @@ export function deserializeSketch(raw: unknown): SketchParseResult {
         };
       case 'distance':
         return {
-          kind: 'distance', id: c.id, p1Id: c.p1Id, p2Id: c.p2Id, mm: c.mm, labelOffset: c.labelOffset,
-          driven: c.driven,
+          kind: 'distance', id: c.id, p1Id: c.p1Id, p2Id: c.p2Id, mm: c.mm, axis: c.axis,
+          labelOffset: c.labelOffset, driven: c.driven,
         };
       case 'radius':
         return {

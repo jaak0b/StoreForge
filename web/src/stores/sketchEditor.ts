@@ -26,6 +26,7 @@ import {
   anchorForDimensionSelection,
   buildDimensionFromSelection,
   measuredValueForDimensionSelection,
+  pickDistanceAxis,
   resolveDimensionSelection,
   type DimensionSelectionKind,
 } from '../engine/sketch/dimensionSelection';
@@ -45,6 +46,9 @@ import {
  * existing dimension reopened for editing (constraintId set, pending null).
  * radiusToggle names the measured entity when the dimension is a radius or
  * diameter, for the toggle buttons beside the inline input; null otherwise.
+ * distanceAxis is the H/V/aligned flavor pickDistanceAxis resolved at the
+ * placement click, for a point-point distance draft only (undefined for
+ * every other pending kind, and for the aligned flavor itself).
  */
 export interface DimensionDraft {
   constraintId: string | null;
@@ -52,6 +56,7 @@ export interface DimensionDraft {
   labelOffset: LabelOffset;
   text: string;
   radiusToggle: { entityId: string; kind: 'radius' | 'diameter' } | null;
+  distanceAxis?: 'x' | 'y';
 }
 
 /** The drawing tool active on the sketch canvas. */
@@ -826,20 +831,26 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
 
   /** The measured default value for a resolved selection, mm-rounded for
    * every kind but angle (degree-rounded), matching formatMm/formatDegrees's
-   * existing seeding convention. */
-  function measuredDraftValue(pending: DimensionSelectionKind, radiusKind: 'radius' | 'diameter'): number {
-    const raw = measuredValueForDimensionSelection(sketch.value, pending, radiusKind);
+   * existing seeding convention. cursor is the live placement position,
+   * consulted only for distance (H/V/aligned) and angle (quadrant) flavors. */
+  function measuredDraftValue(
+    pending: DimensionSelectionKind,
+    radiusKind: 'radius' | 'diameter',
+    cursor: MmPoint,
+  ): number {
+    const raw = measuredValueForDimensionSelection(sketch.value, pending, radiusKind, cursor);
     return pending.kind === 'angle' ? formatDegrees(raw) : formatMm(raw);
   }
 
   /**
    * Places the dimension label at `at` (mm), the placement click's
    * position: computes the labelOffset from the pending selection's anchor,
-   * seeds the draft with the current measured value, and clears
-   * dimensionPending. The constraint itself is not added until
-   * commitDimensionDraft: placement and commit are two steps of one user
-   * gesture, but only commit is a sketch mutation, so Escape before commit
-   * needs nothing to undo.
+   * seeds the draft with the current measured value, resolves the
+   * point-point distance's H/V/aligned flavor (pickDistanceAxis) from this
+   * same click position, and clears dimensionPending. The constraint itself
+   * is not added until commitDimensionDraft: placement and commit are two
+   * steps of one user gesture, but only commit is a sketch mutation, so
+   * Escape before commit needs nothing to undo.
    */
   function placeDimensionDraft(at: MmPoint): void {
     const pending = dimensionPending.value;
@@ -848,8 +859,12 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     const labelOffset: LabelOffset = { x: at.x - anchor.x, y: at.y - anchor.y };
     const radiusToggle =
       pending.kind === 'radiusOrDiameter' ? { entityId: pending.entityId, kind: 'radius' as const } : null;
-    const value = measuredDraftValue(pending, radiusToggle?.kind ?? 'radius');
-    dimensionDraft.value = { constraintId: null, pending, labelOffset, text: String(value), radiusToggle };
+    const value = measuredDraftValue(pending, radiusToggle?.kind ?? 'radius', at);
+    const distanceAxis =
+      pending.kind === 'distance' ? pickDistanceAxis(sketch.value, pending.p1Id, pending.p2Id, at) : undefined;
+    dimensionDraft.value = {
+      constraintId: null, pending, labelOffset, text: String(value), radiusToggle, distanceAxis,
+    };
     dimensionDraftError.value = null;
     dimensionPending.value = null;
   }
@@ -890,7 +905,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       }
       const id = nextId();
       const kind = draft.radiusToggle?.kind ?? 'radius';
-      addDimension(buildDimensionFromSelection(draft.pending, kind, id, value, draft.labelOffset));
+      addDimension(
+        buildDimensionFromSelection(draft.pending, kind, id, value, draft.labelOffset, draft.distanceAxis),
+      );
       justAddedDimensionId = id;
     } else {
       setDimensionValue(draft.constraintId, value);
