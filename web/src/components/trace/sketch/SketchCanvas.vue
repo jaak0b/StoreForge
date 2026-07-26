@@ -685,6 +685,7 @@ function applyUnderlayDrag(drag: UnderlayDragState, cursor: MmPoint): void {
 function onUnderlayHandlePointerDown(event: PointerEvent, kind: UnderlayHandleKind): void {
   if (underlay.value === null || editor.activeTool !== 'select') return;
   if (editor.calibrating || editor.calibrateDraft !== null) return;
+  if (event.button !== 0) return;
   event.stopPropagation();
   underlayDrag.value = { kind, startCursorMm: clientToMm(event), startUnderlay: { ...underlay.value } };
   svgEl.value?.setPointerCapture(event.pointerId);
@@ -700,6 +701,7 @@ function onUnderlayHandlePointerDown(event: PointerEvent, kind: UnderlayHandleKi
 function onUnderlayBodyPointerDown(event: PointerEvent): void {
   if (underlay.value === null || editor.activeTool !== 'select') return;
   if (editor.calibrating || editor.calibrateDraft !== null) return;
+  if (event.button !== 0) return;
   if (hitPoint(clientToMm(event)) !== null) return;
   editor.selectUnderlay();
   onUnderlayHandlePointerDown(event, 'moveBody');
