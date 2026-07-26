@@ -61,8 +61,8 @@ const {
   selectedIds,
   selectedConstraintId,
   glyphsVisible,
-  underlay,
-  underlaySelected,
+  underlays,
+  selectedUnderlayId,
   calibrating,
   calibrateClicks,
   calibrateDraft,
@@ -381,7 +381,7 @@ function underlayCornersMm(u: CanvasUnderlay): MmPoint[] {
 
 /** Sketch entity/underlay bounds in mm, or null when the sketch is empty. */
 function sketchBoundsMm(): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  if (points.value.length === 0 && underlay.value === null) return null;
+  if (points.value.length === 0 && underlays.value.length === 0) return null;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -392,8 +392,8 @@ function sketchBoundsMm(): { minX: number; minY: number; maxX: number; maxY: num
     maxX = Math.max(maxX, p.x);
     maxY = Math.max(maxY, p.y);
   }
-  if (underlay.value !== null) {
-    for (const corner of underlayCornersMm(underlay.value)) {
+  for (const u of underlays.value) {
+    for (const corner of underlayCornersMm(u)) {
       minX = Math.min(minX, corner.x);
       minY = Math.min(minY, corner.y);
       maxX = Math.max(maxX, corner.x);
@@ -425,7 +425,7 @@ function fitToView(): void {
   };
 }
 /** Whether the Fit button is usable: there must be something to frame. */
-const canFit = computed(() => points.value.length > 0 || underlay.value !== null);
+const canFit = computed(() => points.value.length > 0 || underlays.value.length > 0);
 
 /** The current view's center in sketch mm, the inverse of the viewBox
  * computed above; used to center a freshly inserted underlay in view
@@ -542,6 +542,7 @@ function dragThresholdMm(): number {
  * undo stack, matching the rest of the underlay's display-only state.
  */
 interface UnderlayDragState {
+  id: string;
   kind: UnderlayHandleKind;
   startCursorMm: MmPoint;
   startUnderlay: CanvasUnderlay;
@@ -591,6 +592,7 @@ function repositionAboutAnchor(
  * image never distorts, then the center is repositioned to keep the anchor
  * corner exactly fixed in world space. */
 function applyUnderlayCornerDrag(
+  id: string,
   s: CanvasUnderlay,
   kind: 'cornerTL' | 'cornerTR' | 'cornerBR' | 'cornerBL',
   cursor: MmPoint,
@@ -611,13 +613,14 @@ function applyUnderlayCornerDrag(
   const newScaleX = s.scaleX * factor;
   const newScaleY = s.scaleY * factor;
   const newCenter = repositionAboutAnchor(s, anchorLocal, anchorWorld, newScaleX, newScaleY);
-  editor.setUnderlayScale(newScaleX, newScaleY);
-  editor.setUnderlayPosition(newCenter.x, newCenter.y);
+  editor.setUnderlayScale(id, newScaleX, newScaleY);
+  editor.setUnderlayPosition(id, newCenter.x, newCenter.y);
 }
 
 /** Side handle: non-uniform scale of just that one axis, about the opposite
  * side (which stays fixed in world space), the other axis untouched. */
 function applyUnderlayEdgeDrag(
+  id: string,
   s: CanvasUnderlay,
   kind: 'edgeL' | 'edgeR' | 'edgeT' | 'edgeB',
   cursor: MmPoint,
@@ -643,8 +646,8 @@ function applyUnderlayEdgeDrag(
     newScaleY = Math.abs(raw) >= MIN_UNDERLAY_SCALE_FACTOR ? raw : Math.sign(raw || s.scaleY) * MIN_UNDERLAY_SCALE_FACTOR;
   }
   const newCenter = repositionAboutAnchor(s, anchorLocal, anchorWorld, newScaleX, newScaleY);
-  editor.setUnderlayScale(newScaleX, newScaleY);
-  editor.setUnderlayPosition(newCenter.x, newCenter.y);
+  editor.setUnderlayScale(id, newScaleX, newScaleY);
+  editor.setUnderlayPosition(id, newCenter.x, newCenter.y);
 }
 
 /** Applies the in-progress manipulator drag for the current cursor position.
@@ -656,27 +659,27 @@ function applyUnderlayDrag(drag: UnderlayDragState, cursor: MmPoint): void {
     case 'moveBody': {
       const dx = cursor.x - drag.startCursorMm.x;
       const dy = cursor.y - drag.startCursorMm.y;
-      editor.setUnderlayPosition(s.xMm + dx, s.yMm + dy);
+      editor.setUnderlayPosition(drag.id, s.xMm + dx, s.yMm + dy);
       return;
     }
     case 'rotate': {
       const center = { x: s.xMm, y: s.yMm };
       const a0 = Math.atan2(drag.startCursorMm.y - center.y, drag.startCursorMm.x - center.x);
       const a1 = Math.atan2(cursor.y - center.y, cursor.x - center.x);
-      editor.setUnderlayRotationDeg(s.rotationDeg + ((a1 - a0) * 180) / Math.PI);
+      editor.setUnderlayRotationDeg(drag.id, s.rotationDeg + ((a1 - a0) * 180) / Math.PI);
       return;
     }
     case 'cornerTL':
     case 'cornerTR':
     case 'cornerBR':
     case 'cornerBL':
-      applyUnderlayCornerDrag(s, drag.kind, cursor);
+      applyUnderlayCornerDrag(drag.id, s, drag.kind, cursor);
       return;
     case 'edgeL':
     case 'edgeR':
     case 'edgeT':
     case 'edgeB':
-      applyUnderlayEdgeDrag(s, drag.kind, cursor);
+      applyUnderlayEdgeDrag(drag.id, s, drag.kind, cursor);
       return;
     default:
       assertNever(drag.kind);
@@ -694,29 +697,35 @@ function applyUnderlayDrag(drag: UnderlayDragState, cursor: MmPoint): void {
  * group in edge cases (e.g. mid-drag) where the CSS gate alone would not
  * cover it.
  */
-function onUnderlayHandlePointerDown(event: PointerEvent, kind: UnderlayHandleKind): void {
-  if (underlay.value === null || editor.activeTool !== 'select') return;
-  if (editor.calibrating || editor.calibrateDraft !== null) return;
+function onUnderlayHandlePointerDown(event: PointerEvent, id: string, kind: UnderlayHandleKind): void {
+  const u = underlayById(id);
+  if (u === null || editor.activeTool !== 'select') return;
+  if (editor.calibrating !== null || editor.calibrateDraft !== null) return;
   if (event.button !== 0) return;
   event.stopPropagation();
-  underlayDrag.value = { kind, startCursorMm: clientToMm(event), startUnderlay: { ...underlay.value } };
+  underlayDrag.value = { id, kind, startCursorMm: clientToMm(event), startUnderlay: { ...u } };
   svgEl.value?.setPointerCapture(event.pointerId);
 }
 /**
- * Starts a body-move drag and selects the underlay, unless the pointerdown
- * actually lands within an existing sketch point's pick radius: a point
- * dragged over the underlay must still start the point drag (the documented
- * hit-tolerance design in onPointerDown), so this defers by returning
- * without stopping propagation whenever hitPoint finds one, letting the
- * event bubble to the canvas root's own pointerdown handler.
+ * Starts a body-move drag and selects the clicked underlay, unless the
+ * pointerdown actually lands within an existing sketch point's pick radius:
+ * a point dragged over an underlay must still start the point drag (the
+ * documented hit-tolerance design in onPointerDown), so this defers by
+ * returning without stopping propagation whenever hitPoint finds one,
+ * letting the event bubble to the canvas root's own pointerdown handler.
  */
-function onUnderlayBodyPointerDown(event: PointerEvent): void {
-  if (underlay.value === null || editor.activeTool !== 'select') return;
-  if (editor.calibrating || editor.calibrateDraft !== null) return;
+function onUnderlayBodyPointerDown(event: PointerEvent, id: string): void {
+  if (underlayById(id) === null || editor.activeTool !== 'select') return;
+  if (editor.calibrating !== null || editor.calibrateDraft !== null) return;
   if (event.button !== 0) return;
   if (hitPoint(clientToMm(event)) !== null) return;
-  editor.selectUnderlay();
-  onUnderlayHandlePointerDown(event, 'moveBody');
+  editor.selectUnderlay(id);
+  onUnderlayHandlePointerDown(event, id, 'moveBody');
+}
+
+/** Finds an underlay by id among the current underlays, or null. */
+function underlayById(id: string): CanvasUnderlay | null {
+  return underlays.value.find((u) => u.id === id) ?? null;
 }
 
 /** Screen-px offset of the corner and side handle markers, and the rotate
@@ -731,12 +740,11 @@ interface UnderlayHandle { kind: UnderlayHandleKind; at: MmPoint; }
  * action is in progress (the underlay is not click-targetable for
  * manipulation outside plain select-tool use). */
 const underlayHandles = computed<UnderlayHandle[]>(() => {
-  const u = underlay.value;
+  const u = selectedUnderlayId.value === null ? null : underlayById(selectedUnderlayId.value);
   if (
     u === null ||
-    !underlaySelected.value ||
     activeTool.value !== 'select' ||
-    editor.calibrating ||
+    editor.calibrating !== null ||
     editor.calibrateDraft !== null
   ) {
     return [];
@@ -818,7 +826,7 @@ function underlayTransformAttr(u: CanvasUnderlay): string {
  * pointerdown handler instead of starting a manipulator drag.
  */
 const underlayPointerEvents = computed(() =>
-  activeTool.value === 'select' && !editor.calibrating && editor.calibrateDraft === null
+  activeTool.value === 'select' && editor.calibrating === null && editor.calibrateDraft === null
     ? 'auto'
     : 'none',
 );
@@ -1663,22 +1671,23 @@ function removeSelectedConstraint(constraintId: string): void {
     :class="canvasCursorClass"
   >
     <g
-      v-if="underlay !== null"
-      :transform="underlayTransformAttr(underlay)"
+      v-for="u in underlays"
+      :key="u.id"
+      :transform="underlayTransformAttr(u)"
       :style="{ pointerEvents: underlayPointerEvents }"
     >
       <image
-        :href="underlay.url"
-        :x="-underlay.naturalWidthPx / 2"
-        :y="-underlay.naturalHeightPx / 2"
-        :width="underlay.naturalWidthPx"
-        :height="underlay.naturalHeightPx"
-        :opacity="underlay.opacityPct / 100"
+        :href="u.url"
+        :x="-u.naturalWidthPx / 2"
+        :y="-u.naturalHeightPx / 2"
+        :width="u.naturalWidthPx"
+        :height="u.naturalHeightPx"
+        :opacity="u.opacityPct / 100"
         style="cursor: move"
-        @pointerdown="onUnderlayBodyPointerDown"
+        @pointerdown="onUnderlayBodyPointerDown($event, u.id)"
       />
     </g>
-    <g v-if="underlayHandles.length > 0" class="underlay-manipulator">
+    <g v-if="underlayHandles.length > 0 && selectedUnderlayId !== null" class="underlay-manipulator">
       <rect
         v-for="h in underlayHandles.filter((x) => x.kind !== 'rotate')"
         :key="h.kind"
@@ -1690,7 +1699,7 @@ function removeSelectedConstraint(constraintId: string): void {
         stroke="#455a64"
         :stroke-width="mmPerScreenPixel() * 1"
         :style="{ cursor: underlayHandleCursor(h.kind) }"
-        @pointerdown="onUnderlayHandlePointerDown($event, h.kind)"
+        @pointerdown="onUnderlayHandlePointerDown($event, selectedUnderlayId!, h.kind)"
       />
       <circle
         v-for="h in underlayHandles.filter((x) => x.kind === 'rotate')"
@@ -1702,7 +1711,7 @@ function removeSelectedConstraint(constraintId: string): void {
         stroke="#455a64"
         :stroke-width="mmPerScreenPixel() * 1"
         :style="{ cursor: underlayHandleCursor(h.kind) }"
-        @pointerdown="onUnderlayHandlePointerDown($event, h.kind)"
+        @pointerdown="onUnderlayHandlePointerDown($event, selectedUnderlayId!, h.kind)"
       />
     </g>
     <g v-if="calibrating && calibrateClicks.length > 0" style="pointer-events: none">

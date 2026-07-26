@@ -523,10 +523,12 @@ function removeConflicting(constraintId: string): void {
 const pendingUnderlayUrls = new Set<string>();
 
 /**
- * Loads the chosen file's pixel dimensions, then inserts it as the
+ * Loads the chosen file's pixel dimensions, then inserts it as a new
  * reference photo underlay centered in the current view, replicating
  * Fusion 360's Canvas insert (modest default size, aspect preserved, ~50%
- * opacity). Replaces any existing underlay.
+ * opacity). Appends alongside any existing underlays rather than replacing
+ * them: "Add a photo" can be used repeatedly to build up several reference
+ * canvases.
  */
 function onUnderlayFile(file: File | File[] | null): void {
   const picked = Array.isArray(file) ? (file[0] ?? null) : file;
@@ -537,7 +539,7 @@ function onUnderlayFile(file: File | File[] | null): void {
   img.onload = () => {
     pendingUnderlayUrls.delete(url);
     const center = sketchCanvas.value?.viewCenterMm() ?? { x: 0, y: 0 };
-    editor.insertUnderlay(url, img.naturalWidth, img.naturalHeight, center);
+    editor.insertUnderlay(url, img.naturalWidth, img.naturalHeight, center, picked.name || null);
   };
   img.onerror = () => {
     pendingUnderlayUrls.delete(url);
@@ -552,58 +554,80 @@ onUnmounted(() => {
   pendingUnderlayUrls.clear();
 });
 
+/** The underlay bound to the exact-entry fields and Calibrate/Remove: the
+ * current selection, or null when no underlay is selected. */
+const selectedUnderlay = computed(() =>
+  editor.selectedUnderlayId === null
+    ? null
+    : editor.underlays.find((u) => u.id === editor.selectedUnderlayId) ?? null,
+);
+
+/** The menu row label for one underlay: its source file name, or "Photo N"
+ * (1-based insertion order) when no file name is available. */
+function underlayLabel(id: string): string {
+  const index = editor.underlays.findIndex((u) => u.id === id);
+  const u = index === -1 ? null : editor.underlays[index];
+  if (u === null) return '';
+  return u.fileName ?? `Photo ${index + 1}`;
+}
+
 /**
- * Exact-entry fields for the reference photo underlay's X/Y/rotation/scale.
- * Each is a getter/setter computed so the displayed text is derived from
- * the store's full-precision transform through the same rounding formatters
- * as the on-canvas dimension labels (convention 10 single source), instead
- * of a cached formatted string that could go stale after a manipulator
- * drag. Committing an unparseable value is a no-op: the getter re-reads the
+ * Exact-entry fields for the selected underlay's X/Y/rotation/scale. Each is
+ * a getter/setter computed so the displayed text is derived from the
+ * store's full-precision transform through the same rounding formatters as
+ * the on-canvas dimension labels (convention 10 single source), instead of
+ * a cached formatted string that could go stale after a manipulator drag.
+ * Committing an unparseable value is a no-op: the getter re-reads the
  * unchanged store value on the next render, which reverts the field.
  */
 const underlayXField = computed<number | string>({
-  get: () => (editor.underlay === null ? 0 : formatMm(editor.underlay.xMm)),
+  get: () => (selectedUnderlay.value === null ? 0 : formatMm(selectedUnderlay.value.xMm)),
   set: (text) => {
-    if (editor.underlay === null) return;
+    const u = selectedUnderlay.value;
+    if (u === null) return;
     const value = parseSignedValue(String(text));
     if (value === null) return;
-    editor.setUnderlayPosition(value, editor.underlay.yMm);
+    editor.setUnderlayPosition(u.id, value, u.yMm);
   },
 });
 const underlayYField = computed<number | string>({
-  get: () => (editor.underlay === null ? 0 : formatMm(editor.underlay.yMm)),
+  get: () => (selectedUnderlay.value === null ? 0 : formatMm(selectedUnderlay.value.yMm)),
   set: (text) => {
-    if (editor.underlay === null) return;
+    const u = selectedUnderlay.value;
+    if (u === null) return;
     const value = parseSignedValue(String(text));
     if (value === null) return;
-    editor.setUnderlayPosition(editor.underlay.xMm, value);
+    editor.setUnderlayPosition(u.id, u.xMm, value);
   },
 });
 const underlayRotationField = computed<number | string>({
-  get: () => (editor.underlay === null ? 0 : formatDegrees(editor.underlay.rotationDeg)),
+  get: () => (selectedUnderlay.value === null ? 0 : formatDegrees(selectedUnderlay.value.rotationDeg)),
   set: (text) => {
-    if (editor.underlay === null) return;
+    const u = selectedUnderlay.value;
+    if (u === null) return;
     const value = parseSignedValue(String(text));
     if (value === null) return;
-    editor.setUnderlayRotationDeg(value);
+    editor.setUnderlayRotationDeg(u.id, value);
   },
 });
 const underlayScaleXField = computed<number | string>({
-  get: () => (editor.underlay === null ? 0 : formatScale(editor.underlay.scaleX)),
+  get: () => (selectedUnderlay.value === null ? 0 : formatScale(selectedUnderlay.value.scaleX)),
   set: (text) => {
-    if (editor.underlay === null) return;
+    const u = selectedUnderlay.value;
+    if (u === null) return;
     const value = parseDimensionValue(String(text));
     if (value === null) return;
-    editor.setUnderlayScale(value, editor.underlay.scaleY);
+    editor.setUnderlayScale(u.id, value, u.scaleY);
   },
 });
 const underlayScaleYField = computed<number | string>({
-  get: () => (editor.underlay === null ? 0 : formatScale(editor.underlay.scaleY)),
+  get: () => (selectedUnderlay.value === null ? 0 : formatScale(selectedUnderlay.value.scaleY)),
   set: (text) => {
-    if (editor.underlay === null) return;
+    const u = selectedUnderlay.value;
+    if (u === null) return;
     const value = parseDimensionValue(String(text));
     if (value === null) return;
-    editor.setUnderlayScale(editor.underlay.scaleX, value);
+    editor.setUnderlayScale(u.id, u.scaleX, value);
   },
 });
 
@@ -876,13 +900,13 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
       // the same as closeChainTo does when the chain closes by clicking.
       editor.endChain();
       selectTool('select');
-    } else if (editor.calibrating || editor.calibrateDraft !== null) {
+    } else if (editor.calibrating !== null || editor.calibrateDraft !== null) {
       editor.cancelCalibrateUnderlay();
     } else if (editor.selectedConstraintId !== null) {
       editor.selectedConstraintId = null;
     } else if (editor.selectedIds.length > 0) {
       editor.selectedIds = [];
-    } else if (editor.underlaySelected) {
+    } else if (editor.selectedUnderlayId !== null) {
       editor.deselectUnderlay();
     } else if (activeTool.value === 'dimension') {
       // Nothing pending or selected: Escape exits the dimension tool to select.
@@ -989,38 +1013,56 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         </template>
         <v-card class="photo-menu pa-3">
           <v-file-input
-            :label="editor.underlay !== null ? 'Replace photo' : 'Insert photo'"
+            label="Add a photo"
             density="compact"
             hide-details
             accept="image/*"
             @update:model-value="onUnderlayFile"
           />
-          <template v-if="editor.underlay !== null">
+          <div
+            v-for="u in editor.underlays"
+            :key="u.id"
+            class="photo-menu-canvas mt-4"
+            :class="{ 'photo-menu-canvas--selected': u.id === editor.selectedUnderlayId }"
+            @click="editor.selectUnderlay(u.id)"
+          >
+            <p class="photo-menu-canvas-label">{{ underlayLabel(u.id) }}</p>
             <v-slider
-              :model-value="editor.underlay.opacityPct"
+              :model-value="u.opacityPct"
               min="0"
               max="100"
               step="5"
               hide-details
               label="Opacity"
-              class="mt-4"
-              @update:model-value="(v: number) => editor.setUnderlayOpacityPct(v)"
+              @update:model-value="(v: number) => editor.setUnderlayOpacityPct(u.id, v)"
             />
-            <div class="mt-4 photo-menu-row">
-              <v-btn size="small" @click="editor.flipUnderlayHorizontal()">Flip horizontal</v-btn>
-              <v-btn size="small" @click="editor.flipUnderlayVertical()">Flip vertical</v-btn>
+            <div class="photo-menu-row">
+              <v-btn size="small" @click.stop="editor.flipUnderlayHorizontal(u.id)">Flip horizontal</v-btn>
+              <v-btn size="small" @click.stop="editor.flipUnderlayVertical(u.id)">Flip vertical</v-btn>
             </div>
             <v-btn
               size="small"
               block
               class="mt-2"
-              @click="editor.startCalibrateUnderlay()"
+              @click.stop="editor.selectUnderlay(u.id); editor.startCalibrateUnderlay(u.id)"
             >
               Calibrate
             </v-btn>
-            <p v-if="editor.calibrating" class="tool-hint mt-1">
+            <p v-if="editor.calibrating === u.id" class="tool-hint mt-1">
               Click the two ends of a known distance on the photo, then type its real length in mm.
             </p>
+            <v-btn
+              size="small"
+              color="error"
+              variant="text"
+              block
+              class="mt-2"
+              @click.stop="editor.removeUnderlay(u.id)"
+            >
+              Remove photo
+            </v-btn>
+          </div>
+          <template v-if="selectedUnderlay !== null">
             <div class="mt-4 photo-menu-fields">
               <v-text-field
                 label="X (mm)"
@@ -1063,9 +1105,6 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
                 @change="(e: Event) => (underlayScaleYField = (e.target as HTMLInputElement).value)"
               />
             </div>
-            <v-btn size="small" color="error" variant="text" block class="mt-4" @click="editor.removeUnderlay()">
-              Remove photo
-            </v-btn>
           </template>
         </v-card>
       </v-menu>
@@ -1197,6 +1236,19 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
 .photo-menu-row {
   display: flex;
   gap: 8px;
+}
+.photo-menu-canvas {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 4px;
+  padding: 8px;
+  cursor: pointer;
+}
+.photo-menu-canvas--selected {
+  border-color: rgb(var(--v-theme-primary));
+}
+.photo-menu-canvas-label {
+  font-weight: 600;
+  margin-bottom: 4px;
 }
 .photo-menu-fields {
   display: flex;

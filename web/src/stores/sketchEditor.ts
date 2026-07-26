@@ -65,16 +65,23 @@ export interface DimensionDraft {
 }
 
 /**
- * The reference-photo underlay's 2D affine transform plus its display
+ * One reference-photo underlay's 2D affine transform plus its display
  * state, replicating Fusion 360's Canvas feature. xMm/yMm is the image
  * center; the image extends naturalWidthPx/naturalHeightPx around it before
  * scaleX/scaleY and rotationDeg are applied (scale first, then rotate,
  * then translate to xMm/yMm). Negative scaleX or scaleY is a horizontal or
  * vertical flip: no separate flip booleans exist, since a flip is exactly a
- * negated axis of this same transform.
+ * negated axis of this same transform. Several of these can exist at once
+ * (the multi-canvas workspace); id is stable for the underlay's lifetime and
+ * is how every mutation, the manipulator, and the menu row target one
+ * specific underlay. fileName is the source file's name, shown as the menu
+ * row's label (falling back to "Photo N" when unavailable, e.g. a name-less
+ * File-like source).
  */
 export interface CanvasUnderlay {
+  id: string;
   url: string;
+  fileName: string | null;
   naturalWidthPx: number;
   naturalHeightPx: number;
   opacityPct: number;
@@ -163,22 +170,24 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** Id of the last segment (line or arc) added to the open chain, or null. */
   const chainTailSegmentId = ref<string | null>(null);
   /**
-   * The reference-photo underlay: one 2D affine transform (position,
+   * The reference-photo underlays: each a 2D affine transform (position,
    * rotation, per-axis scale) plus display state (source url, opacity,
    * natural pixel size), replicating Fusion 360's Canvas feature. Display
    * only: never enters the Sketch model or the solver. A horizontal or
-   * vertical flip is folded into scaleX/scaleY's sign rather than stored as
-   * a separate boolean, since a flip is exactly a negated axis of the same
-   * affine transform.
+   * vertical flip is folded into an underlay's scaleX/scaleY sign rather
+   * than stored as a separate boolean, since a flip is exactly a negated
+   * axis of the same affine transform. In insertion order; the canvas
+   * renders them in this order, under everything else.
    */
-  const underlay = ref<CanvasUnderlay | null>(null);
-  /** Whether the underlay is the current selection (clicked with the select
-   * tool). Mutually exclusive with selectedIds/selectedConstraintId, the
-   * same way those two are mutually exclusive with each other. */
-  const underlaySelected = ref(false);
-  /** Whether the Calibrate action is armed, awaiting its two clicks on the
-   * underlay. */
-  const calibrating = ref(false);
+  const underlays = ref<CanvasUnderlay[]>([]);
+  /** Id of the underlay that is the current selection (clicked with the
+   * select tool, or the most recently inserted/remaining one), or null when
+   * none is selected. Mutually exclusive with selectedIds/selectedConstraintId,
+   * the same way those two are mutually exclusive with each other. */
+  const selectedUnderlayId = ref<string | null>(null);
+  /** Id of the underlay the Calibrate action is armed against, awaiting its
+   * two clicks; null when Calibrate is not armed. */
+  const calibrating = ref<string | null>(null);
   /** The calibrate action's two clicked points, in current sketch mm. */
   const calibrateClicks = ref<MmPoint[]>([]);
   /** The calibrate action's inline value input, open once both clicks have
@@ -386,6 +395,15 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     return `s${idCounter}`;
   }
 
+  /** Separate counter for underlay ids (editor state, never saved with the
+   * sketch), so inserting and removing underlays never collides with or
+   * consumes sketch entity ids. */
+  let underlayIdCounter = 0;
+  function nextUnderlayId(): string {
+    underlayIdCounter += 1;
+    return `u${underlayIdCounter}`;
+  }
+
   /**
    * Bumped by every mutation of sketch.value. solveNow captures it before
    * awaiting the worker and discards a stale result if it no longer matches,
@@ -414,10 +432,10 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     editingToolId.value = null;
     chainTailId.value = null;
     chainTailSegmentId.value = null;
-    if (underlay.value !== null) URL.revokeObjectURL(underlay.value.url);
-    underlay.value = null;
-    underlaySelected.value = false;
-    calibrating.value = false;
+    for (const u of underlays.value) URL.revokeObjectURL(u.url);
+    underlays.value = [];
+    selectedUnderlayId.value = null;
+    calibrating.value = null;
     calibrateClicks.value = [];
     calibrateDraft.value = null;
     calibrateDraftError.value = null;
@@ -1545,25 +1563,36 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   /** Initial opacity of a freshly inserted underlay. */
   const DEFAULT_UNDERLAY_OPACITY_PCT = 50;
 
+  /** Finds an underlay by id, or null when it no longer exists (removed
+   * concurrently, or a stale id from before a remove). */
+  function underlayById(id: string): CanvasUnderlay | null {
+    return underlays.value.find((u) => u.id === id) ?? null;
+  }
+
   /**
-   * Inserts a reference photo, replacing any existing one (revoking its
-   * object URL first): centered at `viewCenterMm` (the canvas's current view
+   * Inserts a new reference photo underlay, appended after any existing ones
+   * and selected: centered at `viewCenterMm` (the canvas's current view
    * center, matching Fusion's Canvas insert), sized so its longest side is
    * DEFAULT_UNDERLAY_LONG_SIDE_MM with aspect preserved, at
-   * DEFAULT_UNDERLAY_OPACITY_PCT opacity, unrotated and unflipped. Clears any
-   * open calibrate action and the current underlay selection.
+   * DEFAULT_UNDERLAY_OPACITY_PCT opacity, unrotated and unflipped. Existing
+   * underlays are left untouched: multiple photos can accumulate. Clears any
+   * open calibrate action, since that always targets whichever underlay was
+   * previously selected. Returns the new underlay's id.
    */
   function insertUnderlay(
     url: string,
     naturalWidthPx: number,
     naturalHeightPx: number,
     viewCenterMm: MmPoint,
-  ): void {
-    if (underlay.value !== null) URL.revokeObjectURL(underlay.value.url);
+    fileName: string | null = null,
+  ): string {
     const longestPx = Math.max(naturalWidthPx, naturalHeightPx) || 1;
     const scale = DEFAULT_UNDERLAY_LONG_SIDE_MM / longestPx;
-    underlay.value = {
+    const id = nextUnderlayId();
+    underlays.value.push({
+      id,
       url,
+      fileName,
       naturalWidthPx,
       naturalHeightPx,
       opacityPct: DEFAULT_UNDERLAY_OPACITY_PCT,
@@ -1572,82 +1601,103 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       rotationDeg: 0,
       scaleX: scale,
       scaleY: scale,
-    };
-    underlaySelected.value = false;
+    });
     cancelCalibrateUnderlay();
+    selectUnderlay(id);
+    return id;
   }
 
-  /** Removes the underlay entirely, revoking its object URL. */
-  function removeUnderlay(): void {
-    if (underlay.value !== null) URL.revokeObjectURL(underlay.value.url);
-    underlay.value = null;
-    underlaySelected.value = false;
-    cancelCalibrateUnderlay();
+  /** Removes one underlay by id, revoking its object URL. Reselects
+   * sensibly: the removed underlay's selection moves to the most recently
+   * inserted of whatever remains (the last array entry), or to no selection
+   * once the list is empty. No-op for an id that no longer exists. Cancels
+   * an in-progress calibrate action targeting the removed underlay. */
+  function removeUnderlay(id: string): void {
+    const underlay = underlayById(id);
+    if (underlay === null) return;
+    URL.revokeObjectURL(underlay.url);
+    underlays.value = underlays.value.filter((u) => u.id !== id);
+    if (calibrating.value === id) cancelCalibrateUnderlay();
+    if (selectedUnderlayId.value === id) {
+      const remaining = underlays.value;
+      selectedUnderlayId.value = remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+    }
   }
 
-  function setUnderlayOpacityPct(pct: number): void {
-    if (underlay.value !== null) underlay.value.opacityPct = pct;
+  function setUnderlayOpacityPct(id: string, pct: number): void {
+    const underlay = underlayById(id);
+    if (underlay !== null) underlay.opacityPct = pct;
   }
 
   /** Negates scaleX, folding a horizontal flip into the transform (no
    * separate flip flag). */
-  function flipUnderlayHorizontal(): void {
-    if (underlay.value !== null) underlay.value.scaleX = -underlay.value.scaleX;
+  function flipUnderlayHorizontal(id: string): void {
+    const underlay = underlayById(id);
+    if (underlay !== null) underlay.scaleX = -underlay.scaleX;
   }
 
   /** Negates scaleY, folding a vertical flip into the transform. */
-  function flipUnderlayVertical(): void {
-    if (underlay.value !== null) underlay.value.scaleY = -underlay.value.scaleY;
+  function flipUnderlayVertical(id: string): void {
+    const underlay = underlayById(id);
+    if (underlay !== null) underlay.scaleY = -underlay.scaleY;
   }
 
-  /** Sets the underlay's center position directly (the manipulator's move
-   * drag, and the Edit Canvas dialog analogue's X/Y fields). */
-  function setUnderlayPosition(xMm: number, yMm: number): void {
-    if (underlay.value === null) return;
-    underlay.value.xMm = xMm;
-    underlay.value.yMm = yMm;
+  /** Sets an underlay's center position directly (the manipulator's move
+   * drag, and the exact-entry X/Y fields). */
+  function setUnderlayPosition(id: string, xMm: number, yMm: number): void {
+    const underlay = underlayById(id);
+    if (underlay === null) return;
+    underlay.xMm = xMm;
+    underlay.yMm = yMm;
   }
 
-  /** Sets the underlay's rotation directly (the manipulator's rotate drag,
-   * and the Edit Canvas dialog analogue's rotation field). */
-  function setUnderlayRotationDeg(rotationDeg: number): void {
-    if (underlay.value !== null) underlay.value.rotationDeg = rotationDeg;
+  /** Sets an underlay's rotation directly (the manipulator's rotate drag,
+   * and the exact-entry rotation field). */
+  function setUnderlayRotationDeg(id: string, rotationDeg: number): void {
+    const underlay = underlayById(id);
+    if (underlay !== null) underlay.rotationDeg = rotationDeg;
   }
 
-  /** Sets the underlay's per-axis scale directly (the manipulator's corner
-   * and side drags, and the Edit Canvas dialog analogue's scale fields). */
-  function setUnderlayScale(scaleX: number, scaleY: number): void {
-    if (underlay.value === null) return;
-    underlay.value.scaleX = scaleX;
-    underlay.value.scaleY = scaleY;
+  /** Sets an underlay's per-axis scale directly (the manipulator's corner
+   * and side drags, and the exact-entry scale fields). */
+  function setUnderlayScale(id: string, scaleX: number, scaleY: number): void {
+    const underlay = underlayById(id);
+    if (underlay === null) return;
+    underlay.scaleX = scaleX;
+    underlay.scaleY = scaleY;
   }
 
-  /** Selects the underlay (clicking it with the select tool), clearing the
-   * entity and constraint selections; mutually exclusive with both, the same
-   * way selectConstraint clears selectedIds. */
-  function selectUnderlay(): void {
-    underlaySelected.value = true;
+  /** Selects an underlay by id (clicking it, or one of its menu rows, with
+   * the select tool), clearing the entity and constraint selections;
+   * mutually exclusive with both, the same way selectConstraint clears
+   * selectedIds. No-op for an id that no longer exists. */
+  function selectUnderlay(id: string): void {
+    if (underlayById(id) === null) return;
+    selectedUnderlayId.value = id;
     selectedIds.value = [];
     selectedConstraintId.value = null;
   }
 
-  /** Deselects the underlay (Escape, or clicking elsewhere on the canvas). */
+  /** Deselects whichever underlay is selected (Escape, or clicking elsewhere
+   * on the canvas). */
   function deselectUnderlay(): void {
-    underlaySelected.value = false;
+    selectedUnderlayId.value = null;
   }
 
-  /** Arms the Calibrate action: the next two canvas clicks are the
-   * calibration points, replacing whatever was previously picked. */
-  function startCalibrateUnderlay(): void {
-    calibrating.value = true;
+  /** Arms the Calibrate action against one underlay: the next two canvas
+   * clicks are the calibration points, replacing whatever was previously
+   * picked. No-op for an id that no longer exists. */
+  function startCalibrateUnderlay(id: string): void {
+    if (underlayById(id) === null) return;
+    calibrating.value = id;
     calibrateClicks.value = [];
     calibrateDraft.value = null;
     calibrateDraftError.value = null;
   }
 
-  /** Abandons the Calibrate action without changing the underlay. */
+  /** Abandons the Calibrate action without changing any underlay. */
   function cancelCalibrateUnderlay(): void {
-    calibrating.value = false;
+    calibrating.value = null;
     calibrateClicks.value = [];
     calibrateDraft.value = null;
     calibrateDraftError.value = null;
@@ -1655,9 +1705,9 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
 
   /** Records one of the Calibrate action's two clicks; opens the inline
    * value input once both have landed. No-op when calibrating is not armed
-   * or the underlay has been removed mid-pick. */
+   * or its target underlay has been removed mid-pick. */
   function addCalibrateClick(at: MmPoint): void {
-    if (!calibrating.value || underlay.value === null) return;
+    if (calibrating.value === null || underlayById(calibrating.value) === null) return;
     calibrateClicks.value.push(at);
     if (calibrateClicks.value.length === 2) {
       calibrateDraft.value = { text: '' };
@@ -1666,48 +1716,52 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   }
 
   /**
-   * The Calibrate action's core math: a PURE uniform scale of the underlay
-   * about its own origin (its stored xMm/yMm position), never a translation
-   * and never a rotation. The two calibration points are already in current
-   * sketch mm (post-transform), so their on-canvas distance is the "before"
-   * length; rescaling scaleX and scaleY by the same factor (entered/before)
-   * makes that same span read as the entered real-world distance, exactly
-   * like Fusion's Canvas calibrate, and is safely repeatable (each call
-   * measures the canvas as it now stands, not the original insert size).
-   * Returns false without changing the underlay when the two points coincide
-   * (zero drawn distance, nothing to rescale from) or realMm is not a finite
-   * positive number; true once the rescale has been applied.
+   * The Calibrate action's core math: a PURE uniform scale of the given
+   * underlay about its own origin (its stored xMm/yMm position), never a
+   * translation and never a rotation. The two calibration points are
+   * already in current sketch mm (post-transform), so their on-canvas
+   * distance is the "before" length; rescaling scaleX and scaleY by the
+   * same factor (entered/before) makes that same span read as the entered
+   * real-world distance, exactly like Fusion's Canvas calibrate, and is
+   * safely repeatable (each call measures the canvas as it now stands, not
+   * the original insert size). Returns false without changing anything
+   * when the id no longer exists, the two points coincide (zero drawn
+   * distance, nothing to rescale from), or realMm is not a finite positive
+   * number; true once the rescale has been applied.
    */
-  function calibrateUnderlayScale(a: MmPoint, b: MmPoint, realMm: number): boolean {
-    if (underlay.value === null) return false;
+  function calibrateUnderlayScale(id: string, a: MmPoint, b: MmPoint, realMm: number): boolean {
+    const underlay = underlayById(id);
+    if (underlay === null) return false;
     const drawnMm = Math.hypot(b.x - a.x, b.y - a.y);
     if (drawnMm <= 0 || !Number.isFinite(realMm) || realMm <= 0) return false;
     const factor = realMm / drawnMm;
-    underlay.value.scaleX *= factor;
-    underlay.value.scaleY *= factor;
+    underlay.scaleX *= factor;
+    underlay.scaleY *= factor;
     return true;
   }
 
-  /** Parses and commits the Calibrate action's typed real-world distance.
-   * Returns false and sets calibrateDraftError for unparseable or
-   * non-positive text, or for two clicks that landed on the same point
-   * (nothing to measure a scale from), leaving the draft open for another
-   * attempt (mirrors commitDimensionDraft); returns true once the underlay
-   * has been rescaled. */
+  /** Parses and commits the Calibrate action's typed real-world distance
+   * against its armed target underlay. Returns false and sets
+   * calibrateDraftError for unparseable or non-positive text, or for two
+   * clicks that landed on the same point (nothing to measure a scale
+   * from), leaving the draft open for another attempt (mirrors
+   * commitDimensionDraft); returns true once the underlay has been
+   * rescaled. */
   function commitCalibrateDraft(): boolean {
     const draft = calibrateDraft.value;
-    if (draft === null || calibrateClicks.value.length !== 2) return false;
+    const targetId = calibrating.value;
+    if (draft === null || targetId === null || calibrateClicks.value.length !== 2) return false;
     const value = parseDimensionValue(draft.text);
     if (value === null || value <= 0) {
       calibrateDraftError.value = 'Enter the real distance as a number in millimeters.';
       return false;
     }
     const [a, b] = calibrateClicks.value;
-    if (!calibrateUnderlayScale(a, b, value)) {
+    if (!calibrateUnderlayScale(targetId, a, b, value)) {
       calibrateDraftError.value = 'Those two points are the same point. Click two different points on the photo.';
       return false;
     }
-    calibrating.value = false;
+    calibrating.value = null;
     calibrateClicks.value = [];
     calibrateDraft.value = null;
     calibrateDraftError.value = null;
@@ -1786,8 +1840,8 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     editingToolId,
     chainTailId,
     chainTailSegmentId,
-    underlay,
-    underlaySelected,
+    underlays,
+    selectedUnderlayId,
     calibrating,
     calibrateClicks,
     calibrateDraft,
