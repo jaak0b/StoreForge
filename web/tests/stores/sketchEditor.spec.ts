@@ -244,6 +244,57 @@ describe('useSketchEditor', () => {
     }
   });
 
+  it('deleting a point from a closed chain cascades to its lines, leaving no dangling references', () => {
+    const editor = useSketchEditor();
+    editor.startNewSketch();
+    // Closed triangle: p1 -> p2 -> p3 -> p1.
+    const p1 = editor.appendChainPoint({ x: 0, y: 0 })!;
+    const p2 = editor.appendChainPoint({ x: 10, y: 0 })!;
+    const p3 = editor.appendChainPoint({ x: 10, y: 10 })!;
+    editor.closeChainTo(p1); // closes the triangle back onto p1
+
+    const lineAtP2 = editor.sketch.entities.find(
+      (e) =>
+        e.kind === 'line' &&
+        ((e as { p1Id: string; p2Id: string }).p1Id === p2 ||
+          (e as { p1Id: string; p2Id: string }).p2Id === p2),
+    )!;
+    const otherLine = editor.sketch.entities.find(
+      (e) =>
+        e.kind === 'line' &&
+        e.id !== lineAtP2.id &&
+        (e as { p1Id: string; p2Id: string }).p1Id !== p2 &&
+        (e as { p1Id: string; p2Id: string }).p2Id !== p2,
+    )!;
+
+    // Delete the p2 node, as the owner does.
+    editor.selectedIds = [p2];
+    editor.deleteEntities([p2]);
+
+    // The point and every line that referenced it must be gone.
+    const ids = new Set(editor.sketch.entities.map((e) => e.id));
+    expect(ids.has(p2)).toBe(false);
+    expect(ids.has(lineAtP2.id)).toBe(false);
+
+    // Every surviving line's endpoints must still exist (no dangling refs
+    // that would break entityPaths/hit-testing for other lines).
+    const pointIds = new Set(
+      editor.sketch.entities.filter((e) => e.kind === 'point').map((e) => e.id),
+    );
+    for (const entity of editor.sketch.entities) {
+      if (entity.kind === 'line') {
+        expect(pointIds.has(entity.p1Id)).toBe(true);
+        expect(pointIds.has(entity.p2Id)).toBe(true);
+      }
+    }
+
+    // A remaining line must still be selectable and deletable.
+    expect(otherLine).toBeDefined();
+    editor.selectedIds = [otherLine.id];
+    expect(() => editor.deleteEntities([otherLine.id])).not.toThrow();
+    expect(editor.sketch.entities.some((e) => e.id === otherLine.id)).toBe(false);
+  });
+
   it('joins two chains at a shared corner point, producing one closed loop', () => {
     const editor = useSketchEditor();
     editor.startNewSketch();

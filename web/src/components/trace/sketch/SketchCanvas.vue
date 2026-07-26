@@ -446,36 +446,48 @@ const points = computed(() =>
 const pointById = computed(() => new Map(points.value.map((p) => [p.id, p])));
 
 /** SVG path data of every non-point entity, keyed by entity id. */
+/**
+ * SVG path data of every non-point entity, keyed by entity id. An entity
+ * whose point references are dangling (should never happen: deleteEntities
+ * cascades point deletion to its dependents) is skipped rather than thrown
+ * from, so one bad entity can never blank out the whole canvas; no attempt
+ * is made to repair the data.
+ */
 const entityPaths = computed(() =>
   sketch.value.entities
     .filter((e) => e.kind !== 'point')
-    .map((entity) => {
+    .flatMap((entity): { entity: SketchEntity; d: string }[] => {
       switch (entity.kind) {
         case 'line': {
-          const a = pointById.value.get(entity.p1Id)!;
-          const b = pointById.value.get(entity.p2Id)!;
-          return { entity, d: `M ${a.x} ${a.y} L ${b.x} ${b.y}` };
+          const a = pointById.value.get(entity.p1Id);
+          const b = pointById.value.get(entity.p2Id);
+          if (a === undefined || b === undefined) return [];
+          return [{ entity, d: `M ${a.x} ${a.y} L ${b.x} ${b.y}` }];
         }
         case 'arc': {
-          const c = pointById.value.get(entity.centerId)!;
-          const s = pointById.value.get(entity.startId)!;
-          const e2 = pointById.value.get(entity.endId)!;
+          const c = pointById.value.get(entity.centerId);
+          const s = pointById.value.get(entity.startId);
+          const e2 = pointById.value.get(entity.endId);
+          if (c === undefined || s === undefined || e2 === undefined) return [];
           const r = Math.hypot(s.x - c.x, s.y - c.y);
           const a0 = Math.atan2(s.y - c.y, s.x - c.x);
           let a1 = Math.atan2(e2.y - c.y, e2.x - c.x);
           if (a1 <= a0) a1 += 2 * Math.PI;
           const largeArc = a1 - a0 > Math.PI ? 1 : 0;
-          return { entity, d: `M ${s.x} ${s.y} A ${r} ${r} 0 ${largeArc} 1 ${e2.x} ${e2.y}` };
+          return [{ entity, d: `M ${s.x} ${s.y} A ${r} ${r} 0 ${largeArc} 1 ${e2.x} ${e2.y}` }];
         }
         case 'circle': {
-          const c = pointById.value.get(entity.centerId)!;
-          return {
-            entity,
-            d:
-              `M ${c.x + entity.radiusMm} ${c.y} ` +
-              `A ${entity.radiusMm} ${entity.radiusMm} 0 1 1 ${c.x - entity.radiusMm} ${c.y} ` +
-              `A ${entity.radiusMm} ${entity.radiusMm} 0 1 1 ${c.x + entity.radiusMm} ${c.y}`,
-          };
+          const c = pointById.value.get(entity.centerId);
+          if (c === undefined) return [];
+          return [
+            {
+              entity,
+              d:
+                `M ${c.x + entity.radiusMm} ${c.y} ` +
+                `A ${entity.radiusMm} ${entity.radiusMm} 0 1 1 ${c.x - entity.radiusMm} ${c.y} ` +
+                `A ${entity.radiusMm} ${entity.radiusMm} 0 1 1 ${c.x + entity.radiusMm} ${c.y}`,
+            },
+          ];
         }
         default:
           return assertNever(entity);

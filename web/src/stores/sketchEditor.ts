@@ -1327,7 +1327,10 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
   }
 
   /**
-   * Deletes the given entities. Points that become orphaned (endpoints of the
+   * Deletes the given entities. A deleted point cascades to every entity
+   * that references it as an endpoint (a line, arc or circle cannot outlive
+   * a point it depends on), and that cascade repeats until no more entities
+   * reference a removed point. Points that become orphaned (endpoints of the
    * deleted entities not referenced by any remaining entity or constraint)
    * are removed too, so a shared endpoint between chained lines survives
    * while a far endpoint used nowhere else does not. Every constraint that
@@ -1339,6 +1342,21 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
     beginMutation();
     try {
     const removedIds = new Set(ids);
+    // Cascade: any entity that references a removed point cannot survive
+    // it, so pull those entities into removedIds too, repeating until the
+    // set stabilizes (an arc/circle could in turn cascade further, though
+    // today only points are shared refs).
+    for (;;) {
+      let grew = false;
+      for (const entity of sketch.value.entities) {
+        if (removedIds.has(entity.id)) continue;
+        if (entityPointRefs(entity).some((pointId) => removedIds.has(pointId))) {
+          removedIds.add(entity.id);
+          grew = true;
+        }
+      }
+      if (!grew) break;
+    }
     const removedEntities = sketch.value.entities.filter((e) => removedIds.has(e.id));
     // Candidate points: endpoints of the deleted entities, not themselves
     // already among the removed ids.
