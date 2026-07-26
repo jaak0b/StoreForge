@@ -56,12 +56,24 @@ export function clampZoom(zoom: number, range: ZoomRange = DEFAULT_ZOOM_RANGE): 
  * as large as the canvas, so panX lies in [canvasWidth * (1 - zoom), 0] and
  * panY in [canvasHeight * (1 - zoom), 0]. At zoom 1 the only valid pan is
  * (0, 0), which recentres the view.
+ *
+ * Pass `unbounded: true` to skip the clamp entirely and return the pan
+ * unchanged. This is for callers with no fixed content frame to keep in view
+ * (the sketch canvas's open-ended design space, unlike the photo trace
+ * canvas's fixed image bounds): there the "canvas width/height" the caller
+ * would otherwise have to invent is an arbitrary virtual window, not a real
+ * content extent, so any clamp derived from it fences the user near whatever
+ * window happened to be current rather than the actual sketch content.
  */
 export function clampPan(
   transform: ViewTransform,
   canvasWidth: number,
   canvasHeight: number,
+  options?: { unbounded?: boolean },
 ): { panX: number; panY: number } {
+  if (options?.unbounded) {
+    return { panX: transform.panX, panY: transform.panY };
+  }
   const minPanX = canvasWidth * (1 - transform.zoom);
   const minPanY = canvasHeight * (1 - transform.zoom);
   return {
@@ -100,6 +112,7 @@ export function zoomToCursor(
   canvasWidth: number,
   canvasHeight: number,
   zoomRange: ZoomRange = DEFAULT_ZOOM_RANGE,
+  options?: { unbounded?: boolean },
 ): ViewTransform {
   const zoom = clampZoom(newZoom, zoomRange);
   const imagePoint = screenToImage(anchor, transform);
@@ -108,6 +121,6 @@ export function zoomToCursor(
     panX: anchor.x - imagePoint.x * zoom,
     panY: anchor.y - imagePoint.y * zoom,
   };
-  const { panX, panY } = clampPan(panned, canvasWidth, canvasHeight);
+  const { panX, panY } = clampPan(panned, canvasWidth, canvasHeight, options);
   return { zoom, panX, panY };
 }

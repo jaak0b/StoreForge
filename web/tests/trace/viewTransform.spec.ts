@@ -48,6 +48,12 @@ describe('clampPan', () => {
       panY: -100,
     });
   });
+
+  it('passes the pan through unchanged in unbounded mode, even far outside the normal range', () => {
+    expect(
+      clampPan({ zoom: 3, panX: 100, panY: -5000 }, 200, 100, { unbounded: true }),
+    ).toEqual({ panX: 100, panY: -5000 });
+  });
 });
 
 describe('screenToImage round-trips', () => {
@@ -82,5 +88,16 @@ describe('zoomToCursor', () => {
   it('clamps the requested zoom before applying it', () => {
     const after = zoomToCursor({ zoom: 4, panX: -300, panY: -150 }, 20, { x: 100, y: 50 }, 200, 100);
     expect(after.zoom).toBe(8);
+  });
+
+  it('does not re-fence the pan in unbounded mode, deep zoom far from the origin', () => {
+    // Content far outside the [0, 200]x[0, 100] window a bounded clamp would assume.
+    const before = { zoom: 8, panX: -5000, panY: -3000 };
+    const anchor = { x: 100, y: 50 };
+    const imagePoint = screenToImage(anchor, before);
+    const after = zoomToCursor(before, 8, anchor, 200, 100, undefined, { unbounded: true });
+    expect(after).toEqual(before);
+    // The anchor still sits over the same content point: no clamp perturbed it.
+    expect(screenToImage(anchor, after)).toEqual(imagePoint);
   });
 });

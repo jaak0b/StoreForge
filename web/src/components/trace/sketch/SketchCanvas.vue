@@ -232,12 +232,31 @@ function onWheel(event: WheelEvent): void {
   event.preventDefault();
   const factor = event.deltaY < 0 ? 1.2 : 1 / 1.2;
   const anchor = eventToVirtualPx(event);
-  view.value = zoomToCursor(view.value, view.value.zoom * factor, anchor, WINDOW_MM, WINDOW_MM, SKETCH_ZOOM_RANGE);
+  view.value = zoomToCursor(
+    view.value,
+    view.value.zoom * factor,
+    anchor,
+    WINDOW_MM,
+    WINDOW_MM,
+    SKETCH_ZOOM_RANGE,
+    { unbounded: true },
+  );
 }
 
-/** Applies a pan offset clamped so the design window stays reachable. */
+/**
+ * Applies a pan offset. Unlike the photo trace canvas, the sketch has no
+ * fixed content frame to keep in view (it's an open-ended design space), so
+ * panning is unclamped: clampPan's bound would have to be an arbitrary
+ * virtual window rather than a real content extent, fencing the user near
+ * wherever the view started instead of the actual sketch content.
+ */
 function setPan(nextPanX: number, nextPanY: number): void {
-  const clamped = clampPan({ zoom: view.value.zoom, panX: nextPanX, panY: nextPanY }, WINDOW_MM, WINDOW_MM);
+  const clamped = clampPan(
+    { zoom: view.value.zoom, panX: nextPanX, panY: nextPanY },
+    WINDOW_MM,
+    WINDOW_MM,
+    { unbounded: true },
+  );
   view.value = { zoom: view.value.zoom, panX: clamped.panX, panY: clamped.panY };
 }
 
