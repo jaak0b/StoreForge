@@ -511,36 +511,26 @@ function removeConflicting(constraintId: string): void {
   scheduleSolve();
 }
 
-/** The two clicked ends of the calibration line over the underlay, in current display mm. */
-const calibrationClicks = ref<MmPoint[]>([]);
-const calibrationLengthText = ref('');
-const calibrating = ref(false);
-
-function onUnderlayFile(file: File | null): void {
-  if (editor.underlayUrl !== null) URL.revokeObjectURL(editor.underlayUrl);
-  editor.underlayUrl = file === null ? null : URL.createObjectURL(file);
-  editor.underlayMmPerPixel = file === null ? null : 1;
-  calibrationClicks.value = [];
-}
-
 /**
- * One-line scale calibration: the user draws one line over the photo and
- * types its real length. Display only; the figure scales the underlay image
- * and never enters the sketch geometry.
+ * Loads the chosen file's pixel dimensions, then inserts it as the
+ * reference photo underlay centered in the current view, replicating
+ * Fusion 360's Canvas insert (modest default size, aspect preserved, ~50%
+ * opacity). Replaces any existing underlay.
  */
-function commitCalibration(): void {
-  const lengthMm = Number(calibrationLengthText.value);
-  if (calibrationClicks.value.length !== 2 || !Number.isFinite(lengthMm) || lengthMm <= 0) {
-    toolHint.value = 'Click the two ends of a known distance on the photo, then type its length in mm.';
-    return;
-  }
-  const [a, b] = calibrationClicks.value;
-  const drawnMm = Math.hypot(b.x - a.x, b.y - a.y);
-  const currentScale = editor.underlayMmPerPixel ?? 1;
-  // The clicks are in current display mm; rescale so the drawn span reads lengthMm.
-  editor.underlayMmPerPixel = (currentScale * lengthMm) / drawnMm;
-  calibrating.value = false;
-  calibrationClicks.value = [];
+function onUnderlayFile(file: File | File[] | null): void {
+  const picked = Array.isArray(file) ? (file[0] ?? null) : file;
+  if (picked === null) return;
+  const url = URL.createObjectURL(picked);
+  const img = new Image();
+  img.onload = () => {
+    const center = sketchCanvas.value?.viewCenterMm() ?? { x: 0, y: 0 };
+    editor.insertUnderlay(url, img.naturalWidth, img.naturalHeight, center);
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    toolHint.value = 'That file could not be read as an image.';
+  };
+  img.src = url;
 }
 
 function onCanvasClick(
@@ -555,10 +545,11 @@ function onCanvasClick(
   // The dimension inline input is open: a canvas click must not also start a
   // new placement underneath it.
   if (editor.dimensionDraft !== null) return;
-  if (calibrating.value) {
+  // The calibrate action's own inline input is open: same guard.
+  if (editor.calibrateDraft !== null) return;
+  if (editor.calibrating) {
     editor.clearPendingClicks();
-    calibrationClicks.value.push(at);
-    if (calibrationClicks.value.length > 2) calibrationClicks.value = [at];
+    editor.addCalibrateClick(at);
     return;
   }
   switch (activeTool.value) {
@@ -811,10 +802,14 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
       // the same as closeChainTo does when the chain closes by clicking.
       editor.endChain();
       selectTool('select');
+    } else if (editor.calibrating || editor.calibrateDraft !== null) {
+      editor.cancelCalibrateUnderlay();
     } else if (editor.selectedConstraintId !== null) {
       editor.selectedConstraintId = null;
     } else if (editor.selectedIds.length > 0) {
       editor.selectedIds = [];
+    } else if (editor.underlaySelected) {
+      editor.deselectUnderlay();
     } else if (activeTool.value === 'dimension') {
       // Nothing pending or selected: Escape exits the dimension tool to select.
       selectTool('select');
@@ -920,40 +915,84 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
         </template>
         <v-card class="photo-menu pa-3">
           <v-file-input
-            label="Upload photo"
+            :label="editor.underlay !== null ? 'Replace photo' : 'Insert photo'"
             density="compact"
             hide-details
             accept="image/*"
-            @update:model-value="(f: File | File[] | null) => onUnderlayFile(Array.isArray(f) ? (f[0] ?? null) : f)"
+            @update:model-value="onUnderlayFile"
           />
-          <v-slider
-            v-if="editor.underlayUrl !== null"
-            v-model="editor.underlayOpacityPct"
-            min="0"
-            max="100"
-            step="5"
-            hide-details
-            label="Opacity"
-            class="mt-4"
-          />
-          <v-btn
-            v-if="editor.underlayUrl !== null"
-            size="small"
-            block
-            class="mt-4"
-            @click="calibrating = true; calibrationClicks = []"
-          >
-            Set photo scale
-          </v-btn>
-          <v-text-field
-            v-if="calibrating"
-            v-model="calibrationLengthText"
-            label="Line length in mm"
-            density="compact"
-            hide-details
-            class="mt-4"
-            @keyup.enter="commitCalibration"
-          />
+          <template v-if="editor.underlay !== null">
+            <v-slider
+              :model-value="editor.underlay.opacityPct"
+              min="0"
+              max="100"
+              step="5"
+              hide-details
+              label="Opacity"
+              class="mt-4"
+              @update:model-value="(v: number) => editor.setUnderlayOpacityPct(v)"
+            />
+            <div class="mt-4 photo-menu-row">
+              <v-btn size="small" @click="editor.flipUnderlayHorizontal()">Flip horizontal</v-btn>
+              <v-btn size="small" @click="editor.flipUnderlayVertical()">Flip vertical</v-btn>
+            </div>
+            <v-btn
+              size="small"
+              block
+              class="mt-2"
+              @click="editor.startCalibrateUnderlay()"
+            >
+              Calibrate
+            </v-btn>
+            <p v-if="editor.calibrating" class="tool-hint mt-1">
+              Click the two ends of a known distance on the photo, then type its real length in mm.
+            </p>
+            <div class="mt-4 photo-menu-fields">
+              <v-text-field
+                label="X (mm)"
+                density="compact"
+                hide-details
+                type="number"
+                :model-value="editor.underlay.xMm"
+                @change="(e: Event) => editor.setUnderlayPosition(Number((e.target as HTMLInputElement).value), editor.underlay!.yMm)"
+              />
+              <v-text-field
+                label="Y (mm)"
+                density="compact"
+                hide-details
+                type="number"
+                :model-value="editor.underlay.yMm"
+                @change="(e: Event) => editor.setUnderlayPosition(editor.underlay!.xMm, Number((e.target as HTMLInputElement).value))"
+              />
+              <v-text-field
+                label="Rotation (deg)"
+                density="compact"
+                hide-details
+                type="number"
+                :model-value="editor.underlay.rotationDeg"
+                @change="(e: Event) => editor.setUnderlayRotationDeg(Number((e.target as HTMLInputElement).value))"
+              />
+              <v-text-field
+                label="Scale X"
+                density="compact"
+                hide-details
+                type="number"
+                :model-value="editor.underlay.scaleX"
+                @change="(e: Event) => editor.setUnderlayScale(Number((e.target as HTMLInputElement).value), editor.underlay!.scaleY)"
+              />
+              <v-text-field
+                label="Scale Y"
+                density="compact"
+                hide-details
+                type="number"
+                :model-value="editor.underlay.scaleY"
+                @change="(e: Event) => editor.setUnderlayScale(editor.underlay!.scaleX, Number((e.target as HTMLInputElement).value))"
+              />
+            </div>
+            <v-btn size="small" color="error" variant="text" block class="mt-4" @click="editor.removeUnderlay()">
+              Remove photo
+            </v-btn>
+          </template>
         </v-card>
       </v-menu>
       <v-spacer />
@@ -1079,7 +1118,16 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
   align-items: center;
 }
 .photo-menu {
-  min-width: 240px;
+  min-width: 260px;
+}
+.photo-menu-row {
+  display: flex;
+  gap: 8px;
+}
+.photo-menu-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .tangent-arc-icon {
   display: block;

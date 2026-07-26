@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { useSketchEditor } from '../../../stores/sketchEditor';
+import { useSketchEditor, type CanvasUnderlay, type UnderlayHandleKind } from '../../../stores/sketchEditor';
 import {
   MAX_ZOOM,
   MIN_ZOOM,
@@ -22,7 +22,7 @@ import {
 } from '../../../engine/sketch/model';
 import { constraintGlyphs } from '../../../engine/sketch/constraintGlyphs';
 import { inferHVConstraint } from '../../../engine/sketch/autoInfer';
-import { formatMm, formatDegrees, measureLineLength, measurePointAxisDistance, measurePointDistance, measurePointLineDistance, measureRadius } from '../../../engine/sketch/measure';
+import { formatMm, formatDegrees, measureLineLength, measurePointAxisDistance, measurePointDistance, measurePointLineDistance, measureRadius, parseDimensionValue } from '../../../engine/sketch/measure';
 import {
   DEFAULT_LABEL_OFFSET,
   dimensionAnchor,
@@ -61,9 +61,12 @@ const {
   selectedIds,
   selectedConstraintId,
   glyphsVisible,
-  underlayUrl,
-  underlayOpacityPct,
-  underlayMmPerPixel,
+  underlay,
+  underlaySelected,
+  calibrating,
+  calibrateClicks,
+  calibrateDraft,
+  calibrateDraftError,
   activeTool,
   chainTailId,
   chainTailSegmentId,
@@ -332,9 +335,53 @@ const canvasCursorClass = computed(() => {
   return spaceHeld.value ? 'cursor-grab' : '';
 });
 
+/**
+ * Converts a point in the underlay's local (unscaled, unrotated,
+ * center-origin) pixel space to current sketch mm, applying scale then
+ * rotation then translation: this is the single source (convention 10) every
+ * underlay rendering, bounds and manipulator calculation reads, so the
+ * transform math never drifts between them.
+ */
+function underlayLocalToWorld(u: CanvasUnderlay, local: MmPoint): MmPoint {
+  const rad = (u.rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const sx = local.x * u.scaleX;
+  const sy = local.y * u.scaleY;
+  return { x: u.xMm + sx * cos - sy * sin, y: u.yMm + sx * sin + sy * cos };
+}
+
+/**
+ * Inverse of underlayLocalToWorld's rotation and translation only (not the
+ * scale): converts a world mm point to the underlay's rotated-but-unscaled
+ * local frame, i.e. (scaleX*localX, scaleY*localY). The manipulator's scale
+ * math divides this by the known unscaled offset to recover the new scale,
+ * which only works because rotation is undone here first.
+ */
+function underlayWorldToRotatedLocal(u: CanvasUnderlay, world: MmPoint): MmPoint {
+  const rad = (-u.rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = world.x - u.xMm;
+  const dy = world.y - u.yMm;
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
+}
+
+/** The underlay's four corners in current sketch mm, for framing and bounds. */
+function underlayCornersMm(u: CanvasUnderlay): MmPoint[] {
+  const hw = u.naturalWidthPx / 2;
+  const hh = u.naturalHeightPx / 2;
+  return [
+    underlayLocalToWorld(u, { x: -hw, y: -hh }),
+    underlayLocalToWorld(u, { x: hw, y: -hh }),
+    underlayLocalToWorld(u, { x: hw, y: hh }),
+    underlayLocalToWorld(u, { x: -hw, y: hh }),
+  ];
+}
+
 /** Sketch entity/underlay bounds in mm, or null when the sketch is empty. */
 function sketchBoundsMm(): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  if (points.value.length === 0) return null;
+  if (points.value.length === 0 && underlay.value === null) return null;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -345,19 +392,12 @@ function sketchBoundsMm(): { minX: number; minY: number; maxX: number; maxY: num
     maxX = Math.max(maxX, p.x);
     maxY = Math.max(maxY, p.y);
   }
-  const underlayImage = svgEl.value?.querySelector('image') ?? null;
-  if (underlayImage !== null && underlayMmPerPixel.value !== null) {
-    try {
-      const bbox = (underlayImage as SVGImageElement).getBBox();
-      if (bbox.width > 0 && bbox.height > 0) {
-        const scale = underlayMmPerPixel.value;
-        minX = Math.min(minX, bbox.x * scale);
-        minY = Math.min(minY, bbox.y * scale);
-        maxX = Math.max(maxX, (bbox.x + bbox.width) * scale);
-        maxY = Math.max(maxY, (bbox.y + bbox.height) * scale);
-      }
-    } catch {
-      // The underlay image has not finished loading; frame the sketch alone.
+  if (underlay.value !== null) {
+    for (const corner of underlayCornersMm(underlay.value)) {
+      minX = Math.min(minX, corner.x);
+      minY = Math.min(minY, corner.y);
+      maxX = Math.max(maxX, corner.x);
+      maxY = Math.max(maxY, corner.y);
     }
   }
   return { minX, minY, maxX, maxY };
@@ -385,9 +425,20 @@ function fitToView(): void {
   };
 }
 /** Whether the Fit button is usable: there must be something to frame. */
-const canFit = computed(() => points.value.length > 0);
+const canFit = computed(() => points.value.length > 0 || underlay.value !== null);
 
-defineExpose({ fitToView, canFit });
+/** The current view's center in sketch mm, the inverse of the viewBox
+ * computed above; used to center a freshly inserted underlay in view
+ * (Fusion's Canvas insert behavior). */
+function viewCenterMm(): MmPoint {
+  const size = WINDOW_MM / view.value.zoom;
+  return {
+    x: -view.value.panX / view.value.zoom + size / 4,
+    y: -view.value.panY / view.value.zoom + size / 4,
+  };
+}
+
+defineExpose({ fitToView, canFit, viewCenterMm });
 
 const points = computed(() =>
   sketch.value.entities.filter((e): e is Extract<SketchEntity, { kind: 'point' }> => e.kind === 'point'),
@@ -468,6 +519,242 @@ function dragThresholdMm(): number {
   return mmPerScreenPixel() * DRAG_THRESHOLD_PX;
 }
 
+/**
+ * Fusion-style manipulator for the selected underlay: a body drag (move), a
+ * corner handle (uniform scale about the opposite corner, chosen over
+ * "about center" so the anchor stays visually pinned the way Fusion's own
+ * corner drag behaves), a side handle (non-uniform scale of that one axis
+ * about the opposite side), or the rotate handle (rotate about the canvas
+ * center). Only active with the select tool on the currently selected
+ * underlay; the manipulation itself never touches the Sketch model or the
+ * undo stack, matching the rest of the underlay's display-only state.
+ */
+interface UnderlayDragState {
+  kind: UnderlayHandleKind;
+  startCursorMm: MmPoint;
+  startUnderlay: CanvasUnderlay;
+}
+const underlayDrag = ref<UnderlayDragState | null>(null);
+
+const UNDERLAY_CORNER_SIGN: Record<'cornerTL' | 'cornerTR' | 'cornerBR' | 'cornerBL', MmPoint> = {
+  cornerTL: { x: -1, y: -1 },
+  cornerTR: { x: 1, y: -1 },
+  cornerBR: { x: 1, y: 1 },
+  cornerBL: { x: -1, y: 1 },
+};
+const UNDERLAY_EDGE_AXIS: Record<'edgeL' | 'edgeR' | 'edgeT' | 'edgeB', { axis: 'x' | 'y'; sign: number }> = {
+  edgeL: { axis: 'x', sign: -1 },
+  edgeR: { axis: 'x', sign: 1 },
+  edgeT: { axis: 'y', sign: -1 },
+  edgeB: { axis: 'y', sign: 1 },
+};
+
+/** Recomputes the underlay's center so `anchorLocal` (a fixed point in the
+ * *original* local frame) lands back on `anchorWorld` under the new scale,
+ * i.e. the anchor stays pinned while the opposite handle moves with the
+ * cursor. Shared by the corner and side scale handlers. */
+function repositionAboutAnchor(
+  s: CanvasUnderlay,
+  anchorLocal: MmPoint,
+  anchorWorld: MmPoint,
+  newScaleX: number,
+  newScaleY: number,
+): MmPoint {
+  const rad = (s.rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const ax = anchorLocal.x * newScaleX;
+  const ay = anchorLocal.y * newScaleY;
+  return { x: anchorWorld.x - (ax * cos - ay * sin), y: anchorWorld.y - (ax * sin + ay * cos) };
+}
+
+/** Corner handle: uniform scale about the opposite corner. The scale factor
+ * is the ratio of the cursor's distance from that fixed corner to the
+ * original corner-to-corner distance, applied equally to both axes so the
+ * image never distorts, then the center is repositioned to keep the anchor
+ * corner exactly fixed in world space. */
+function applyUnderlayCornerDrag(
+  s: CanvasUnderlay,
+  kind: 'cornerTL' | 'cornerTR' | 'cornerBR' | 'cornerBL',
+  cursor: MmPoint,
+): void {
+  const hw = s.naturalWidthPx / 2;
+  const hh = s.naturalHeightPx / 2;
+  const sign = UNDERLAY_CORNER_SIGN[kind];
+  const draggedLocal = { x: sign.x * hw, y: sign.y * hh };
+  const anchorLocal = { x: -draggedLocal.x, y: -draggedLocal.y };
+  const anchorWorld = underlayLocalToWorld(s, anchorLocal);
+  const draggedWorld = underlayLocalToWorld(s, draggedLocal);
+  const oldDist = Math.hypot(draggedWorld.x - anchorWorld.x, draggedWorld.y - anchorWorld.y) || 1e-9;
+  const newDist = Math.hypot(cursor.x - anchorWorld.x, cursor.y - anchorWorld.y);
+  const factor = newDist / oldDist;
+  const newScaleX = s.scaleX * factor;
+  const newScaleY = s.scaleY * factor;
+  const newCenter = repositionAboutAnchor(s, anchorLocal, anchorWorld, newScaleX, newScaleY);
+  editor.setUnderlayScale(newScaleX, newScaleY);
+  editor.setUnderlayPosition(newCenter.x, newCenter.y);
+}
+
+/** Side handle: non-uniform scale of just that one axis, about the opposite
+ * side (which stays fixed in world space), the other axis untouched. */
+function applyUnderlayEdgeDrag(
+  s: CanvasUnderlay,
+  kind: 'edgeL' | 'edgeR' | 'edgeT' | 'edgeB',
+  cursor: MmPoint,
+): void {
+  const hw = s.naturalWidthPx / 2;
+  const hh = s.naturalHeightPx / 2;
+  const { axis, sign } = UNDERLAY_EDGE_AXIS[kind];
+  const draggedLocal = axis === 'x' ? { x: sign * hw, y: 0 } : { x: 0, y: sign * hh };
+  const anchorLocal = { x: -draggedLocal.x, y: -draggedLocal.y };
+  const anchorWorld = underlayLocalToWorld(s, anchorLocal);
+  const rotatedLocalOffset = underlayWorldToRotatedLocal(s, cursor);
+  const anchorRotatedLocalOffset = underlayWorldToRotatedLocal(s, anchorWorld);
+  let newScaleX = s.scaleX;
+  let newScaleY = s.scaleY;
+  if (axis === 'x') {
+    newScaleX =
+      (rotatedLocalOffset.x - anchorRotatedLocalOffset.x) / (draggedLocal.x - anchorLocal.x);
+  } else {
+    newScaleY =
+      (rotatedLocalOffset.y - anchorRotatedLocalOffset.y) / (draggedLocal.y - anchorLocal.y);
+  }
+  const newCenter = repositionAboutAnchor(s, anchorLocal, anchorWorld, newScaleX, newScaleY);
+  editor.setUnderlayScale(newScaleX, newScaleY);
+  editor.setUnderlayPosition(newCenter.x, newCenter.y);
+}
+
+/** Applies the in-progress manipulator drag for the current cursor position.
+ * One exhaustive switch over UnderlayHandleKind (assertNever guards a handle
+ * kind added later without a case here). */
+function applyUnderlayDrag(drag: UnderlayDragState, cursor: MmPoint): void {
+  const s = drag.startUnderlay;
+  switch (drag.kind) {
+    case 'moveBody': {
+      const dx = cursor.x - drag.startCursorMm.x;
+      const dy = cursor.y - drag.startCursorMm.y;
+      editor.setUnderlayPosition(s.xMm + dx, s.yMm + dy);
+      return;
+    }
+    case 'rotate': {
+      const center = { x: s.xMm, y: s.yMm };
+      const a0 = Math.atan2(drag.startCursorMm.y - center.y, drag.startCursorMm.x - center.x);
+      const a1 = Math.atan2(cursor.y - center.y, cursor.x - center.x);
+      editor.setUnderlayRotationDeg(s.rotationDeg + ((a1 - a0) * 180) / Math.PI);
+      return;
+    }
+    case 'cornerTL':
+    case 'cornerTR':
+    case 'cornerBR':
+    case 'cornerBL':
+      applyUnderlayCornerDrag(s, drag.kind, cursor);
+      return;
+    case 'edgeL':
+    case 'edgeR':
+    case 'edgeT':
+    case 'edgeB':
+      applyUnderlayEdgeDrag(s, drag.kind, cursor);
+      return;
+    default:
+      assertNever(drag.kind);
+  }
+}
+
+/** Starts a manipulator drag on a handle or the body; the body also selects
+ * the underlay (a click with no movement is a valid select gesture). */
+function onUnderlayHandlePointerDown(event: PointerEvent, kind: UnderlayHandleKind): void {
+  if (underlay.value === null || editor.activeTool !== 'select') return;
+  event.stopPropagation();
+  underlayDrag.value = { kind, startCursorMm: clientToMm(event), startUnderlay: { ...underlay.value } };
+  svgEl.value?.setPointerCapture(event.pointerId);
+}
+function onUnderlayBodyPointerDown(event: PointerEvent): void {
+  if (underlay.value === null || editor.activeTool !== 'select') return;
+  event.stopPropagation();
+  editor.selectUnderlay();
+  onUnderlayHandlePointerDown(event, 'moveBody');
+}
+
+/** Screen-px offset of the corner and side handle markers, and the rotate
+ * handle's further offset beyond the top-right corner. */
+const UNDERLAY_HANDLE_HIT_PX = 10;
+const UNDERLAY_ROTATE_OFFSET_PX = 26;
+
+interface UnderlayHandle { kind: UnderlayHandleKind; at: MmPoint; }
+
+/** The selected underlay's manipulator handles in current sketch mm; []
+ * when nothing is selected or a placement tool is active (item 6: the
+ * underlay is never click-targetable outside the select tool). */
+const underlayHandles = computed<UnderlayHandle[]>(() => {
+  const u = underlay.value;
+  if (u === null || !underlaySelected.value || activeTool.value !== 'select') return [];
+  const hw = u.naturalWidthPx / 2;
+  const hh = u.naturalHeightPx / 2;
+  const corners: { kind: UnderlayHandleKind; local: MmPoint }[] = [
+    { kind: 'cornerTL', local: { x: -hw, y: -hh } },
+    { kind: 'cornerTR', local: { x: hw, y: -hh } },
+    { kind: 'cornerBR', local: { x: hw, y: hh } },
+    { kind: 'cornerBL', local: { x: -hw, y: hh } },
+  ];
+  const edges: { kind: UnderlayHandleKind; local: MmPoint }[] = [
+    { kind: 'edgeL', local: { x: -hw, y: 0 } },
+    { kind: 'edgeR', local: { x: hw, y: 0 } },
+    { kind: 'edgeT', local: { x: 0, y: -hh } },
+    { kind: 'edgeB', local: { x: 0, y: hh } },
+  ];
+  const handles: UnderlayHandle[] = [...corners, ...edges].map((h) => ({
+    kind: h.kind,
+    at: underlayLocalToWorld(u, h.local),
+  }));
+  const rotateOffsetMm = mmPerScreenPixel() * UNDERLAY_ROTATE_OFFSET_PX;
+  const rad = (u.rotationDeg * Math.PI) / 180;
+  const dirX = Math.cos(rad) - Math.sin(rad);
+  const dirY = Math.sin(rad) + Math.cos(rad);
+  const dirLen = Math.hypot(dirX, dirY) || 1;
+  const trCorner = underlayLocalToWorld(u, { x: hw, y: -hh });
+  handles.push({
+    kind: 'rotate',
+    at: {
+      x: trCorner.x + (dirX / dirLen) * rotateOffsetMm,
+      y: trCorner.y + (dirY / dirLen) * rotateOffsetMm,
+    },
+  });
+  return handles;
+});
+const underlayHandleRadiusMm = computed(() => mmPerScreenPixel() * UNDERLAY_HANDLE_HIT_PX);
+
+/** The underlay's SVG group transform attribute: scale, then rotate, then
+ * translate, matching underlayLocalToWorld's math exactly. */
+function underlayTransformAttr(u: CanvasUnderlay): string {
+  return `translate(${u.xMm} ${u.yMm}) rotate(${u.rotationDeg}) scale(${u.scaleX} ${u.scaleY})`;
+}
+
+/** Whether the underlay picks up pointer events at all: never while a
+ * placement tool is active (item 6), same pointer-events discipline as the
+ * region fills. */
+const underlayPointerEvents = computed(() => (activeTool.value === 'select' ? 'auto' : 'none'));
+
+function onCalibrateInputEnter(): void {
+  if (editor.commitCalibrateDraft()) return;
+}
+
+function onCalibrateInputBlur(): void {
+  if (calibrateDraft.value === null) return;
+  if (parseDimensionValue(calibrateDraft.value.text) !== null) {
+    editor.commitCalibrateDraft();
+  } else {
+    editor.cancelCalibrateUnderlay();
+  }
+}
+
+/** The calibrate action's inline value input screen position: the second
+ * clicked point, converted the same way the dimension draft input is. */
+const calibrateDraftScreenPos = computed<{ x: number; y: number } | null>(() => {
+  void view.value;
+  if (calibrateDraft.value === null || calibrateClicks.value.length !== 2) return null;
+  return mmToScreenPx(calibrateClicks.value[1]);
+});
+
 function onPointerDown(event: PointerEvent): void {
   if (maybeStartPan(event)) return;
   const at = clientToMm(event);
@@ -490,6 +777,7 @@ function onPointerDown(event: PointerEvent): void {
   if (editor.activeTool === 'select' && hit === null && !isEntityTarget(event.target)) {
     selectedIds.value = [];
     selectedConstraintId.value = null;
+    editor.deselectUnderlay();
   }
   emit('canvasClick', at, hit, event.altKey, isEntityTarget(event.target));
 }
@@ -498,6 +786,10 @@ function onPointerMove(event: PointerEvent): void {
   if (panDrag !== null) {
     const vpx = eventToVirtualPx(event);
     setPan(panDrag.panX + (vpx.x - panDrag.startX), panDrag.panY + (vpx.y - panDrag.startY));
+    return;
+  }
+  if (underlayDrag.value !== null) {
+    applyUnderlayDrag(underlayDrag.value, clientToMm(event));
     return;
   }
   cursorMm.value = clientToMm(event);
@@ -536,8 +828,21 @@ function onPointerMove(event: PointerEvent): void {
   dragSnapTargetId.value = target !== null && target !== draggingPointId.value ? target : null;
 }
 
+function endUnderlayDrag(event: PointerEvent): void {
+  underlayDrag.value = null;
+  try {
+    svgEl.value?.releasePointerCapture(event.pointerId);
+  } catch {
+    // No capture to release; nothing to do.
+  }
+}
+
 function onPointerUp(event: PointerEvent): void {
   if (endPan(event)) return;
+  if (underlayDrag.value !== null) {
+    endUnderlayDrag(event);
+    return;
+  }
   if (pendingLabelId.value !== null) {
     // A plain click on the label with no drag: does nothing on its own
     // (double-click, handled separately, reopens the inline input).
@@ -585,6 +890,10 @@ function onPointerLeave(event: PointerEvent): void {
  */
 function onPointerCancel(event: PointerEvent): void {
   if (endPan(event)) return;
+  if (underlayDrag.value !== null) {
+    endUnderlayDrag(event);
+    return;
+  }
   if (pendingLabelId.value !== null) {
     pendingLabelId.value = null;
     pendingLabelDownScreen.value = null;
@@ -1268,14 +1577,65 @@ function removeSelectedConstraint(constraintId: string): void {
     @pointercancel="onPointerCancel"
     :class="canvasCursorClass"
   >
-    <image
-      v-if="underlayUrl !== null && underlayMmPerPixel !== null"
-      :href="underlayUrl"
-      x="0"
-      y="0"
-      :opacity="underlayOpacityPct / 100"
-      :style="{ transform: `scale(${underlayMmPerPixel})` }"
-    />
+    <g
+      v-if="underlay !== null"
+      :transform="underlayTransformAttr(underlay)"
+      :style="{ pointerEvents: underlayPointerEvents }"
+    >
+      <image
+        :href="underlay.url"
+        :x="-underlay.naturalWidthPx / 2"
+        :y="-underlay.naturalHeightPx / 2"
+        :width="underlay.naturalWidthPx"
+        :height="underlay.naturalHeightPx"
+        :opacity="underlay.opacityPct / 100"
+        style="cursor: move"
+        @pointerdown="onUnderlayBodyPointerDown"
+      />
+    </g>
+    <g v-if="underlayHandles.length > 0" class="underlay-manipulator">
+      <rect
+        v-for="h in underlayHandles.filter((x) => x.kind !== 'rotate')"
+        :key="h.kind"
+        :x="h.at.x - underlayHandleRadiusMm / 2"
+        :y="h.at.y - underlayHandleRadiusMm / 2"
+        :width="underlayHandleRadiusMm"
+        :height="underlayHandleRadiusMm"
+        fill="#90a4ae"
+        stroke="#455a64"
+        :stroke-width="mmPerScreenPixel() * 1"
+        :style="{ cursor: h.kind.startsWith('corner') ? 'nwse-resize' : 'ew-resize' }"
+        @pointerdown="onUnderlayHandlePointerDown($event, h.kind)"
+      />
+      <circle
+        v-for="h in underlayHandles.filter((x) => x.kind === 'rotate')"
+        :key="h.kind"
+        :cx="h.at.x"
+        :cy="h.at.y"
+        :r="underlayHandleRadiusMm / 2"
+        fill="#90a4ae"
+        stroke="#455a64"
+        :stroke-width="mmPerScreenPixel() * 1"
+        style="cursor: grab"
+        @pointerdown="onUnderlayHandlePointerDown($event, h.kind)"
+      />
+    </g>
+    <g v-if="calibrating && calibrateClicks.length > 0" style="pointer-events: none">
+      <circle
+        v-for="(c, i) in calibrateClicks"
+        :key="i"
+        :cx="c.x"
+        :cy="c.y"
+        :r="mmPerScreenPixel() * 4"
+        fill="#ff6f00"
+      />
+      <line
+        v-if="calibrateClicks.length === 2"
+        :x1="calibrateClicks[0].x" :y1="calibrateClicks[0].y"
+        :x2="calibrateClicks[1].x" :y2="calibrateClicks[1].y"
+        stroke="#ff6f00" :stroke-width="mmPerScreenPixel() * 0.8"
+      />
+    </g>
     <g class="grid">
       <line
         v-for="(g, i) in gridLines"
@@ -1591,6 +1951,25 @@ function removeSelectedConstraint(constraintId: string): void {
         @click="onDraftToggleRadiusDiameter('diameter')"
       >Diameter</button>
     </div>
+  </div>
+  <div
+    v-if="calibrateDraft !== null && calibrateDraftScreenPos !== null"
+    class="dimension-draft-overlay"
+    :style="{ left: `${calibrateDraftScreenPos.x}px`, top: `${calibrateDraftScreenPos.y}px` }"
+  >
+    <input
+      v-model="calibrateDraft.text"
+      class="dimension-draft-input"
+      :class="{ 'dimension-draft-input--error': calibrateDraftError !== null }"
+      type="text"
+      inputmode="decimal"
+      autofocus
+      placeholder="Real distance in mm"
+      @keyup.enter="onCalibrateInputEnter"
+      @keyup.esc="editor.cancelCalibrateUnderlay()"
+      @blur="onCalibrateInputBlur"
+    />
+    <div v-if="calibrateDraftError !== null" class="dimension-draft-error">{{ calibrateDraftError }}</div>
   </div>
   </div>
 </template>

@@ -1430,4 +1430,178 @@ describe('useSketchEditor', () => {
       expect(editor.dimensionConflictOffer).toBeNull();
     });
   });
+
+  describe('reference photo underlay (Fusion Canvas replica)', () => {
+    it('inserts centered at the view center, aspect preserved, longest side 100 mm, 50% opacity', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:one', 400, 200, { x: 30, y: -10 });
+      expect(editor.underlay).not.toBeNull();
+      const u = editor.underlay!;
+      expect(u.url).toBe('blob:one');
+      expect(u.xMm).toBe(30);
+      expect(u.yMm).toBe(-10);
+      expect(u.rotationDeg).toBe(0);
+      expect(u.opacityPct).toBe(50);
+      // Longest side (width, 400px) maps to 100mm, aspect preserved.
+      expect(u.scaleX).toBeCloseTo(100 / 400);
+      expect(u.scaleY).toBeCloseTo(100 / 400);
+      expect(u.naturalWidthPx * u.scaleX).toBeCloseTo(100);
+      expect(u.naturalHeightPx * u.scaleY).toBeCloseTo(50);
+    });
+
+    it('round-trips the transform through direct setters', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:two', 100, 100, { x: 0, y: 0 });
+      editor.setUnderlayPosition(12, -7);
+      editor.setUnderlayRotationDeg(45);
+      editor.setUnderlayScale(2, 3);
+      editor.setUnderlayOpacityPct(75);
+      const u = editor.underlay!;
+      expect(u.xMm).toBe(12);
+      expect(u.yMm).toBe(-7);
+      expect(u.rotationDeg).toBe(45);
+      expect(u.scaleX).toBe(2);
+      expect(u.scaleY).toBe(3);
+      expect(u.opacityPct).toBe(75);
+    });
+
+    it('folds a horizontal or vertical flip into the scale sign, never a separate flag', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:three', 100, 50, { x: 0, y: 0 });
+      const scaleBefore = editor.underlay!.scaleX;
+      editor.flipUnderlayHorizontal();
+      expect(editor.underlay!.scaleX).toBeCloseTo(-scaleBefore);
+      expect(editor.underlay!.scaleY).toBeCloseTo(scaleBefore);
+      editor.flipUnderlayHorizontal();
+      expect(editor.underlay!.scaleX).toBeCloseTo(scaleBefore);
+      const scaleYBefore = editor.underlay!.scaleY;
+      editor.flipUnderlayVertical();
+      expect(editor.underlay!.scaleY).toBeCloseTo(-scaleYBefore);
+    });
+
+    it('calibrate rescales uniformly about the underlay origin with no translation and no rotation', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:four', 100, 100, { x: 5, y: 5 });
+      editor.setUnderlayScale(1, 1);
+      const before = { ...editor.underlay! };
+      // Two points 10mm apart at the current (before) scale; tell it that
+      // span is really 20mm, so scale should double.
+      editor.calibrateUnderlayScale({ x: -5, y: 0 }, { x: 5, y: 0 }, 20);
+      const after = editor.underlay!;
+      expect(after.scaleX).toBeCloseTo(before.scaleX * 2);
+      expect(after.scaleY).toBeCloseTo(before.scaleY * 2);
+      // Position and rotation are untouched: pure scale about the underlay's
+      // own origin, never a translation or a rotation.
+      expect(after.xMm).toBe(before.xMm);
+      expect(after.yMm).toBe(before.yMm);
+      expect(after.rotationDeg).toBe(before.rotationDeg);
+    });
+
+    it('calibrate is repeatable, each call measuring the canvas as it now stands', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:five', 100, 100, { x: 0, y: 0 });
+      editor.setUnderlayScale(1, 1);
+      editor.calibrateUnderlayScale({ x: 0, y: 0 }, { x: 10, y: 0 }, 20);
+      expect(editor.underlay!.scaleX).toBeCloseTo(2);
+      // The same two mm points, rescaled by a smaller factor: this reads as
+      // "the current 10mm-apart clicks are really 5mm", so the scale halves
+      // again from its now-2x state, landing at 1, not back at the original
+      // 0.5 (repeatable means each call measures the canvas as it now
+      // stands, not the original insert size).
+      editor.calibrateUnderlayScale({ x: 0, y: 0 }, { x: 10, y: 0 }, 5);
+      expect(editor.underlay!.scaleX).toBeCloseTo(1);
+    });
+
+    it('the calibrate draft flow records two clicks, opens the input, and commits via it', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:six', 100, 100, { x: 0, y: 0 });
+      editor.setUnderlayScale(1, 1);
+      editor.startCalibrateUnderlay();
+      expect(editor.calibrating).toBe(true);
+      editor.addCalibrateClick({ x: 0, y: 0 });
+      expect(editor.calibrateDraft).toBeNull();
+      editor.addCalibrateClick({ x: 10, y: 0 });
+      expect(editor.calibrateDraft).not.toBeNull();
+      editor.calibrateDraft!.text = '20';
+      expect(editor.commitCalibrateDraft()).toBe(true);
+      expect(editor.underlay!.scaleX).toBeCloseTo(2);
+      expect(editor.calibrating).toBe(false);
+      expect(editor.calibrateDraft).toBeNull();
+    });
+
+    it('rejects unparseable or non-positive calibrate text without changing the underlay', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:seven', 100, 100, { x: 0, y: 0 });
+      editor.setUnderlayScale(1, 1);
+      editor.startCalibrateUnderlay();
+      editor.addCalibrateClick({ x: 0, y: 0 });
+      editor.addCalibrateClick({ x: 10, y: 0 });
+      editor.calibrateDraft!.text = 'abc';
+      expect(editor.commitCalibrateDraft()).toBe(false);
+      expect(editor.calibrateDraftError).not.toBeNull();
+      expect(editor.underlay!.scaleX).toBeCloseTo(1);
+      editor.calibrateDraft!.text = '-5';
+      expect(editor.commitCalibrateDraft()).toBe(false);
+      expect(editor.underlay!.scaleX).toBeCloseTo(1);
+    });
+
+    it('gates the underlay off click-targetability outside the select tool, mirroring region shading', () => {
+      // The store itself has no tool-gated pointer state (that lives in the
+      // canvas component's rendering); this test guards the invariant that
+      // the store's own underlay mutations never depend on activeTool, so
+      // the canvas is free to gate purely on activeTool === 'select' without
+      // the store fighting it.
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:eight', 100, 100, { x: 0, y: 0 });
+      editor.activeTool = 'line';
+      editor.setUnderlayPosition(1, 1);
+      expect(editor.underlay!.xMm).toBe(1);
+    });
+
+    it('selecting the underlay clears the entity and constraint selection, and is mutually exclusive with them', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.appendChainPoint({ x: 0, y: 0 });
+      editor.appendChainPoint({ x: 10, y: 0 });
+      const line = editor.sketch.entities.find((e) => e.kind === 'line')!;
+      editor.selectedIds = [line.id];
+      editor.insertUnderlay('blob:nine', 100, 100, { x: 0, y: 0 });
+      editor.selectUnderlay();
+      expect(editor.underlaySelected).toBe(true);
+      expect(editor.selectedIds).toEqual([]);
+      expect(editor.selectedConstraintId).toBeNull();
+    });
+
+    it('removeUnderlay clears the underlay, its selection and any in-progress calibration', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:ten', 100, 100, { x: 0, y: 0 });
+      editor.selectUnderlay();
+      editor.startCalibrateUnderlay();
+      editor.removeUnderlay();
+      expect(editor.underlay).toBeNull();
+      expect(editor.underlaySelected).toBe(false);
+      expect(editor.calibrating).toBe(false);
+    });
+
+    it('startNewSketch resets the underlay and its selection/calibration state', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:eleven', 100, 100, { x: 0, y: 0 });
+      editor.selectUnderlay();
+      editor.startCalibrateUnderlay();
+      editor.startNewSketch();
+      expect(editor.underlay).toBeNull();
+      expect(editor.underlaySelected).toBe(false);
+      expect(editor.calibrating).toBe(false);
+    });
+  });
 });
