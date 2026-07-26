@@ -1552,6 +1552,33 @@ describe('useSketchEditor', () => {
       expect(editor.underlay!.scaleX).toBeCloseTo(1);
     });
 
+    it('rejects two identical calibrate clicks with a complete-sentence error, leaving the underlay unchanged', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:twelve', 100, 100, { x: 0, y: 0 });
+      editor.setUnderlayScale(1, 1);
+      editor.startCalibrateUnderlay();
+      editor.addCalibrateClick({ x: 3, y: 4 });
+      editor.addCalibrateClick({ x: 3, y: 4 });
+      editor.calibrateDraft!.text = '20';
+      expect(editor.commitCalibrateDraft()).toBe(false);
+      expect(editor.calibrateDraftError).not.toBeNull();
+      expect(editor.calibrateDraftError).toMatch(/\./);
+      expect(editor.underlay!.scaleX).toBeCloseTo(1);
+      // The draft stays open for another attempt, same as any other reject.
+      expect(editor.calibrateDraft).not.toBeNull();
+    });
+
+    it('calibrateUnderlayScale reports failure (false) for coincident points instead of silently no-opping', () => {
+      const editor = useSketchEditor();
+      editor.startNewSketch();
+      editor.insertUnderlay('blob:thirteen', 100, 100, { x: 0, y: 0 });
+      editor.setUnderlayScale(1, 1);
+      expect(editor.calibrateUnderlayScale({ x: 1, y: 1 }, { x: 1, y: 1 }, 20)).toBe(false);
+      expect(editor.underlay!.scaleX).toBeCloseTo(1);
+      expect(editor.calibrateUnderlayScale({ x: 0, y: 0 }, { x: 10, y: 0 }, 20)).toBe(true);
+    });
+
     it('gates the underlay off click-targetability outside the select tool, mirroring region shading', () => {
       // The store itself has no tool-gated pointer state (that lives in the
       // canvas component's rendering); this test guards the invariant that

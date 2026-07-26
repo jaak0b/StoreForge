@@ -1656,20 +1656,26 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
    * makes that same span read as the entered real-world distance, exactly
    * like Fusion's Canvas calibrate, and is safely repeatable (each call
    * measures the canvas as it now stands, not the original insert size).
+   * Returns false without changing the underlay when the two points coincide
+   * (zero drawn distance, nothing to rescale from) or realMm is not a finite
+   * positive number; true once the rescale has been applied.
    */
-  function calibrateUnderlayScale(a: MmPoint, b: MmPoint, realMm: number): void {
-    if (underlay.value === null) return;
+  function calibrateUnderlayScale(a: MmPoint, b: MmPoint, realMm: number): boolean {
+    if (underlay.value === null) return false;
     const drawnMm = Math.hypot(b.x - a.x, b.y - a.y);
-    if (drawnMm <= 0 || !Number.isFinite(realMm) || realMm <= 0) return;
+    if (drawnMm <= 0 || !Number.isFinite(realMm) || realMm <= 0) return false;
     const factor = realMm / drawnMm;
     underlay.value.scaleX *= factor;
     underlay.value.scaleY *= factor;
+    return true;
   }
 
   /** Parses and commits the Calibrate action's typed real-world distance.
    * Returns false and sets calibrateDraftError for unparseable or
-   * non-positive text, leaving the draft open for another attempt (mirrors
-   * commitDimensionDraft); returns true once the underlay has been rescaled. */
+   * non-positive text, or for two clicks that landed on the same point
+   * (nothing to measure a scale from), leaving the draft open for another
+   * attempt (mirrors commitDimensionDraft); returns true once the underlay
+   * has been rescaled. */
   function commitCalibrateDraft(): boolean {
     const draft = calibrateDraft.value;
     if (draft === null || calibrateClicks.value.length !== 2) return false;
@@ -1679,7 +1685,10 @@ export const useSketchEditor = defineStore('sketchEditor', () => {
       return false;
     }
     const [a, b] = calibrateClicks.value;
-    calibrateUnderlayScale(a, b, value);
+    if (!calibrateUnderlayScale(a, b, value)) {
+      calibrateDraftError.value = 'Those two points are the same point. Click two different points on the photo.';
+      return false;
+    }
     calibrating.value = false;
     calibrateClicks.value = [];
     calibrateDraft.value = null;

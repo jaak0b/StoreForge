@@ -511,6 +511,11 @@ function removeConflicting(constraintId: string): void {
   scheduleSolve();
 }
 
+/** Object URLs created by onUnderlayFile that have not yet resolved (loaded
+ * or errored): revoked on unmount so navigating away mid-load never leaks
+ * one. Removed from the set as soon as its image settles either way. */
+const pendingUnderlayUrls = new Set<string>();
+
 /**
  * Loads the chosen file's pixel dimensions, then inserts it as the
  * reference photo underlay centered in the current view, replicating
@@ -521,17 +526,25 @@ function onUnderlayFile(file: File | File[] | null): void {
   const picked = Array.isArray(file) ? (file[0] ?? null) : file;
   if (picked === null) return;
   const url = URL.createObjectURL(picked);
+  pendingUnderlayUrls.add(url);
   const img = new Image();
   img.onload = () => {
+    pendingUnderlayUrls.delete(url);
     const center = sketchCanvas.value?.viewCenterMm() ?? { x: 0, y: 0 };
     editor.insertUnderlay(url, img.naturalWidth, img.naturalHeight, center);
   };
   img.onerror = () => {
+    pendingUnderlayUrls.delete(url);
     URL.revokeObjectURL(url);
     toolHint.value = 'That file could not be read as an image.';
   };
   img.src = url;
 }
+
+onUnmounted(() => {
+  for (const url of pendingUnderlayUrls) URL.revokeObjectURL(url);
+  pendingUnderlayUrls.clear();
+});
 
 function onCanvasClick(
   at: MmPoint,

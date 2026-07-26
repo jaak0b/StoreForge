@@ -338,9 +338,9 @@ const canvasCursorClass = computed(() => {
 /**
  * Converts a point in the underlay's local (unscaled, unrotated,
  * center-origin) pixel space to current sketch mm, applying scale then
- * rotation then translation: this is the single source (convention 10) every
- * underlay rendering, bounds and manipulator calculation reads, so the
- * transform math never drifts between them.
+ * rotation then translation: this is the single source every underlay
+ * rendering, bounds and manipulator calculation reads, so the transform math
+ * never drifts between them.
  */
 function underlayLocalToWorld(u: CanvasUnderlay, local: MmPoint): MmPoint {
   const rad = (u.rotationDeg * Math.PI) / 180;
@@ -536,6 +536,11 @@ interface UnderlayDragState {
 }
 const underlayDrag = ref<UnderlayDragState | null>(null);
 
+/** Smallest allowed magnitude for a manipulator-computed scale factor or
+ * axis scale, so a corner or side dragged onto its anchor cannot collapse
+ * the underlay to (or through) zero size. */
+const MIN_UNDERLAY_SCALE_FACTOR = 0.001;
+
 const UNDERLAY_CORNER_SIGN: Record<'cornerTL' | 'cornerTR' | 'cornerBR' | 'cornerBL', MmPoint> = {
   cornerTL: { x: -1, y: -1 },
   cornerTR: { x: 1, y: -1 },
@@ -587,7 +592,10 @@ function applyUnderlayCornerDrag(
   const draggedWorld = underlayLocalToWorld(s, draggedLocal);
   const oldDist = Math.hypot(draggedWorld.x - anchorWorld.x, draggedWorld.y - anchorWorld.y) || 1e-9;
   const newDist = Math.hypot(cursor.x - anchorWorld.x, cursor.y - anchorWorld.y);
-  const factor = newDist / oldDist;
+  // Clamped away from zero: a corner dragged exactly onto its anchor would
+  // otherwise collapse the underlay to zero size and strand it there, since
+  // a zero scale has no distance left to drag back out from.
+  const factor = Math.max(newDist / oldDist, MIN_UNDERLAY_SCALE_FACTOR);
   const newScaleX = s.scaleX * factor;
   const newScaleY = s.scaleY * factor;
   const newCenter = repositionAboutAnchor(s, anchorLocal, anchorWorld, newScaleX, newScaleY);
@@ -613,11 +621,14 @@ function applyUnderlayEdgeDrag(
   let newScaleX = s.scaleX;
   let newScaleY = s.scaleY;
   if (axis === 'x') {
-    newScaleX =
-      (rotatedLocalOffset.x - anchorRotatedLocalOffset.x) / (draggedLocal.x - anchorLocal.x);
+    const raw = (rotatedLocalOffset.x - anchorRotatedLocalOffset.x) / (draggedLocal.x - anchorLocal.x);
+    // Clamped away from zero for the same reason the corner drag's factor
+    // is: a side dragged onto its anchor must not collapse that axis to
+    // zero and strand it there.
+    newScaleX = Math.abs(raw) >= MIN_UNDERLAY_SCALE_FACTOR ? raw : Math.sign(raw || s.scaleX) * MIN_UNDERLAY_SCALE_FACTOR;
   } else {
-    newScaleY =
-      (rotatedLocalOffset.y - anchorRotatedLocalOffset.y) / (draggedLocal.y - anchorLocal.y);
+    const raw = (rotatedLocalOffset.y - anchorRotatedLocalOffset.y) / (draggedLocal.y - anchorLocal.y);
+    newScaleY = Math.abs(raw) >= MIN_UNDERLAY_SCALE_FACTOR ? raw : Math.sign(raw || s.scaleY) * MIN_UNDERLAY_SCALE_FACTOR;
   }
   const newCenter = repositionAboutAnchor(s, anchorLocal, anchorWorld, newScaleX, newScaleY);
   editor.setUnderlayScale(newScaleX, newScaleY);
@@ -660,17 +671,36 @@ function applyUnderlayDrag(drag: UnderlayDragState, cursor: MmPoint): void {
   }
 }
 
-/** Starts a manipulator drag on a handle or the body; the body also selects
- * the underlay (a click with no movement is a valid select gesture). */
+/**
+ * Starts a manipulator drag on a handle. Both this and onUnderlayBodyPointerDown
+ * below no-op while the Calibrate action is armed or its inline input is
+ * open: Calibrate's own two clicks must reach the canvas's plain pointerdown
+ * handler (which routes to addCalibrateClick), not be swallowed here as a
+ * manipulator gesture. underlayPointerEvents (below) already turns off
+ * pointer-events on the underlay's whole group in that state so this guard
+ * is belt-and-suspenders, kept because a handle can render on top of the
+ * group in edge cases (e.g. mid-drag) where the CSS gate alone would not
+ * cover it.
+ */
 function onUnderlayHandlePointerDown(event: PointerEvent, kind: UnderlayHandleKind): void {
   if (underlay.value === null || editor.activeTool !== 'select') return;
+  if (editor.calibrating || editor.calibrateDraft !== null) return;
   event.stopPropagation();
   underlayDrag.value = { kind, startCursorMm: clientToMm(event), startUnderlay: { ...underlay.value } };
   svgEl.value?.setPointerCapture(event.pointerId);
 }
+/**
+ * Starts a body-move drag and selects the underlay, unless the pointerdown
+ * actually lands within an existing sketch point's pick radius: a point
+ * dragged over the underlay must still start the point drag (the documented
+ * hit-tolerance design in onPointerDown), so this defers by returning
+ * without stopping propagation whenever hitPoint finds one, letting the
+ * event bubble to the canvas root's own pointerdown handler.
+ */
 function onUnderlayBodyPointerDown(event: PointerEvent): void {
   if (underlay.value === null || editor.activeTool !== 'select') return;
-  event.stopPropagation();
+  if (editor.calibrating || editor.calibrateDraft !== null) return;
+  if (hitPoint(clientToMm(event)) !== null) return;
   editor.selectUnderlay();
   onUnderlayHandlePointerDown(event, 'moveBody');
 }
@@ -683,11 +713,20 @@ const UNDERLAY_ROTATE_OFFSET_PX = 26;
 interface UnderlayHandle { kind: UnderlayHandleKind; at: MmPoint; }
 
 /** The selected underlay's manipulator handles in current sketch mm; []
- * when nothing is selected or a placement tool is active (item 6: the
- * underlay is never click-targetable outside the select tool). */
+ * when nothing is selected, a placement tool is active, or the Calibrate
+ * action is in progress (the underlay is not click-targetable for
+ * manipulation outside plain select-tool use). */
 const underlayHandles = computed<UnderlayHandle[]>(() => {
   const u = underlay.value;
-  if (u === null || !underlaySelected.value || activeTool.value !== 'select') return [];
+  if (
+    u === null ||
+    !underlaySelected.value ||
+    activeTool.value !== 'select' ||
+    editor.calibrating ||
+    editor.calibrateDraft !== null
+  ) {
+    return [];
+  }
   const hw = u.naturalWidthPx / 2;
   const hh = u.naturalHeightPx / 2;
   const corners: { kind: UnderlayHandleKind; local: MmPoint }[] = [
@@ -723,20 +762,52 @@ const underlayHandles = computed<UnderlayHandle[]>(() => {
 });
 const underlayHandleRadiusMm = computed(() => mmPerScreenPixel() * UNDERLAY_HANDLE_HIT_PX);
 
+/** The resize cursor for a manipulator handle: diagonal for a corner,
+ * left-right for the left/right side handles, up-down for the top/bottom
+ * side handles, grab for the rotate handle. One exhaustive switch
+ * (assertNever guards a handle kind added later without a cursor here). */
+function underlayHandleCursor(kind: UnderlayHandleKind): string {
+  switch (kind) {
+    case 'cornerTL':
+    case 'cornerBR':
+      return 'nwse-resize';
+    case 'cornerTR':
+    case 'cornerBL':
+      return 'nesw-resize';
+    case 'edgeL':
+    case 'edgeR':
+      return 'ew-resize';
+    case 'edgeT':
+    case 'edgeB':
+      return 'ns-resize';
+    case 'rotate':
+      return 'grab';
+    case 'moveBody':
+      return 'move';
+    default:
+      return assertNever(kind);
+  }
+}
+
 /** The underlay's SVG group transform attribute: scale, then rotate, then
  * translate, matching underlayLocalToWorld's math exactly. */
 function underlayTransformAttr(u: CanvasUnderlay): string {
   return `translate(${u.xMm} ${u.yMm}) rotate(${u.rotationDeg}) scale(${u.scaleX} ${u.scaleY})`;
 }
 
-/** Whether the underlay picks up pointer events at all: never while a
- * placement tool is active (item 6), same pointer-events discipline as the
- * region fills. */
-const underlayPointerEvents = computed(() => (activeTool.value === 'select' ? 'auto' : 'none'));
-
-function onCalibrateInputEnter(): void {
-  if (editor.commitCalibrateDraft()) return;
-}
+/**
+ * Whether the underlay picks up pointer events at all: never while a
+ * placement tool is active (same pointer-events discipline as the region
+ * fills, so drawing clicks fall through to the canvas instead of landing on
+ * the photo), and never while the Calibrate action is armed or its inline
+ * input is open, so Calibrate's own two clicks reach the canvas's plain
+ * pointerdown handler instead of starting a manipulator drag.
+ */
+const underlayPointerEvents = computed(() =>
+  activeTool.value === 'select' && !editor.calibrating && editor.calibrateDraft === null
+    ? 'auto'
+    : 'none',
+);
 
 function onCalibrateInputBlur(): void {
   if (calibrateDraft.value === null) return;
@@ -1604,7 +1675,7 @@ function removeSelectedConstraint(constraintId: string): void {
         fill="#90a4ae"
         stroke="#455a64"
         :stroke-width="mmPerScreenPixel() * 1"
-        :style="{ cursor: h.kind.startsWith('corner') ? 'nwse-resize' : 'ew-resize' }"
+        :style="{ cursor: underlayHandleCursor(h.kind) }"
         @pointerdown="onUnderlayHandlePointerDown($event, h.kind)"
       />
       <circle
@@ -1616,7 +1687,7 @@ function removeSelectedConstraint(constraintId: string): void {
         fill="#90a4ae"
         stroke="#455a64"
         :stroke-width="mmPerScreenPixel() * 1"
-        style="cursor: grab"
+        :style="{ cursor: underlayHandleCursor(h.kind) }"
         @pointerdown="onUnderlayHandlePointerDown($event, h.kind)"
       />
     </g>
@@ -1965,7 +2036,7 @@ function removeSelectedConstraint(constraintId: string): void {
       inputmode="decimal"
       autofocus
       placeholder="Real distance in mm"
-      @keyup.enter="onCalibrateInputEnter"
+      @keyup.enter="editor.commitCalibrateDraft()"
       @keyup.esc="editor.cancelCalibrateUnderlay()"
       @blur="onCalibrateInputBlur"
     />
