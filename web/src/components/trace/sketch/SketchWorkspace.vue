@@ -13,7 +13,13 @@ import {
 } from '../../../engine/sketch/constraintApplicability';
 import { constraintKindSentence } from '../../../engine/sketch/constraintGlyphs';
 import { assertNever } from '../../../engine/plan/types';
-import { parseDimensionValue } from '../../../engine/sketch/measure';
+import {
+  formatDegrees,
+  formatMm,
+  formatScale,
+  parseDimensionValue,
+  parseSignedValue,
+} from '../../../engine/sketch/measure';
 
 const emit = defineEmits<{
   (e: 'finish'): void;
@@ -546,6 +552,61 @@ onUnmounted(() => {
   pendingUnderlayUrls.clear();
 });
 
+/**
+ * Exact-entry fields for the reference photo underlay's X/Y/rotation/scale.
+ * Each is a getter/setter computed so the displayed text is derived from
+ * the store's full-precision transform through the same rounding formatters
+ * as the on-canvas dimension labels (convention 10 single source), instead
+ * of a cached formatted string that could go stale after a manipulator
+ * drag. Committing an unparseable value is a no-op: the getter re-reads the
+ * unchanged store value on the next render, which reverts the field.
+ */
+const underlayXField = computed<number | string>({
+  get: () => (editor.underlay === null ? 0 : formatMm(editor.underlay.xMm)),
+  set: (text) => {
+    if (editor.underlay === null) return;
+    const value = parseSignedValue(String(text));
+    if (value === null) return;
+    editor.setUnderlayPosition(value, editor.underlay.yMm);
+  },
+});
+const underlayYField = computed<number | string>({
+  get: () => (editor.underlay === null ? 0 : formatMm(editor.underlay.yMm)),
+  set: (text) => {
+    if (editor.underlay === null) return;
+    const value = parseSignedValue(String(text));
+    if (value === null) return;
+    editor.setUnderlayPosition(editor.underlay.xMm, value);
+  },
+});
+const underlayRotationField = computed<number | string>({
+  get: () => (editor.underlay === null ? 0 : formatDegrees(editor.underlay.rotationDeg)),
+  set: (text) => {
+    if (editor.underlay === null) return;
+    const value = parseSignedValue(String(text));
+    if (value === null) return;
+    editor.setUnderlayRotationDeg(value);
+  },
+});
+const underlayScaleXField = computed<number | string>({
+  get: () => (editor.underlay === null ? 0 : formatScale(editor.underlay.scaleX)),
+  set: (text) => {
+    if (editor.underlay === null) return;
+    const value = parseDimensionValue(String(text));
+    if (value === null) return;
+    editor.setUnderlayScale(value, editor.underlay.scaleY);
+  },
+});
+const underlayScaleYField = computed<number | string>({
+  get: () => (editor.underlay === null ? 0 : formatScale(editor.underlay.scaleY)),
+  set: (text) => {
+    if (editor.underlay === null) return;
+    const value = parseDimensionValue(String(text));
+    if (value === null) return;
+    editor.setUnderlayScale(editor.underlay.scaleX, value);
+  },
+});
+
 function onCanvasClick(
   at: MmPoint,
   hitPointId: string | null,
@@ -966,40 +1027,40 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
                 density="compact"
                 hide-details
                 type="number"
-                :model-value="editor.underlay.xMm"
-                @change="(e: Event) => editor.setUnderlayPosition(Number((e.target as HTMLInputElement).value), editor.underlay!.yMm)"
+                :model-value="underlayXField"
+                @change="(e: Event) => (underlayXField = (e.target as HTMLInputElement).value)"
               />
               <v-text-field
                 label="Y (mm)"
                 density="compact"
                 hide-details
                 type="number"
-                :model-value="editor.underlay.yMm"
-                @change="(e: Event) => editor.setUnderlayPosition(editor.underlay!.xMm, Number((e.target as HTMLInputElement).value))"
+                :model-value="underlayYField"
+                @change="(e: Event) => (underlayYField = (e.target as HTMLInputElement).value)"
               />
               <v-text-field
                 label="Rotation (deg)"
                 density="compact"
                 hide-details
                 type="number"
-                :model-value="editor.underlay.rotationDeg"
-                @change="(e: Event) => editor.setUnderlayRotationDeg(Number((e.target as HTMLInputElement).value))"
+                :model-value="underlayRotationField"
+                @change="(e: Event) => (underlayRotationField = (e.target as HTMLInputElement).value)"
               />
               <v-text-field
                 label="Scale X"
                 density="compact"
                 hide-details
                 type="number"
-                :model-value="editor.underlay.scaleX"
-                @change="(e: Event) => editor.setUnderlayScale(Number((e.target as HTMLInputElement).value), editor.underlay!.scaleY)"
+                :model-value="underlayScaleXField"
+                @change="(e: Event) => (underlayScaleXField = (e.target as HTMLInputElement).value)"
               />
               <v-text-field
                 label="Scale Y"
                 density="compact"
                 hide-details
                 type="number"
-                :model-value="editor.underlay.scaleY"
-                @change="(e: Event) => editor.setUnderlayScale(editor.underlay!.scaleX, Number((e.target as HTMLInputElement).value))"
+                :model-value="underlayScaleYField"
+                @change="(e: Event) => (underlayScaleYField = (e.target as HTMLInputElement).value)"
               />
             </div>
             <v-btn size="small" color="error" variant="text" block class="mt-4" @click="editor.removeUnderlay()">

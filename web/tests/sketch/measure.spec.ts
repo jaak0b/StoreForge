@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   formatMm,
   formatDegrees,
+  formatScale,
   measurePointLineDistance,
   parseDimensionValue,
+  parseSignedValue,
   updateDrivenDimensions,
 } from '../../src/engine/sketch/measure';
 import { SKETCH_SCHEMA_VERSION, type Sketch } from '../../src/engine/sketch/model';
@@ -135,6 +137,36 @@ describe('updateDrivenDimensions', () => {
     const c = sketch.constraints[0];
     expect(c.kind).toBe('length');
     if (c.kind === 'length') expect(c.mm).toBe(999);
+  });
+});
+
+describe('formatScale', () => {
+  it('rounds to 4 decimal places', () => {
+    expect(formatScale(1.000123456)).toBeCloseTo(1.0001);
+    expect(formatScale(1)).toBe(1);
+    expect(formatScale(0.00001)).toBe(0);
+  });
+});
+
+describe('parseSignedValue', () => {
+  it('accepts a plain positive or negative decimal', () => {
+    expect(parseSignedValue('36.58')).toBe(36.58);
+    expect(parseSignedValue('-36.58')).toBe(-36.58);
+    expect(parseSignedValue('0')).toBe(0);
+  });
+
+  it('accepts a comma decimal separator and surrounding whitespace', () => {
+    expect(parseSignedValue('  -36,58  ')).toBe(-36.58);
+  });
+
+  it('rejects trailing garbage instead of taking a numeric prefix', () => {
+    expect(parseSignedValue('36.58743339531354SS')).toBeNull();
+    expect(parseSignedValue('-12abc')).toBeNull();
+  });
+
+  it('rejects empty or non-numeric input', () => {
+    expect(parseSignedValue('')).toBeNull();
+    expect(parseSignedValue('abc')).toBeNull();
   });
 });
 

@@ -112,6 +112,31 @@ export function parseDimensionValue(text: string): number | null {
 }
 
 /**
+ * Same acceptance rules as parseDimensionValue, but also accepts a leading
+ * minus sign and zero, for fields whose real-world value can be negative or
+ * zero (the reference photo underlay's X/Y position, which can sit off the
+ * sketch origin). Kept as a separate function rather than loosening
+ * parseDimensionValue itself, since other callers rely on its
+ * positive-only behavior. Returns null for unparseable input.
+ */
+export function parseSignedValue(text: string): number | null {
+  const trimmed = text.trim().replace(',', '.');
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Rounds a scale factor to 4 decimal places, for display and for seeding a
+ * measured default: the reference photo underlay's Scale X/Y fields need
+ * finer precision than formatMm's 0.01 mm, since scale is a unitless ratio
+ * where small differences compound over a large photo.
+ */
+export function formatScale(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+/**
  * The perpendicular distance from a point to a line's infinite extension, in
  * mm: the standard point-line projection formula, distance = |cross(d, p -
  * a)| / |d| for line direction d = b - a. Used both for the point-line
