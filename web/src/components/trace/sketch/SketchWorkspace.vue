@@ -1048,7 +1048,7 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
             >
               Calibrate
             </v-btn>
-            <p v-if="editor.calibrating === u.id" class="tool-hint mt-1">
+            <p v-if="editor.calibrating === u.id" class="tool-hint tool-hint--wrap mt-1">
               Click the two ends of a known distance on the photo, then type its real length in mm.
             </p>
             <v-btn
@@ -1231,7 +1231,8 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
   align-items: center;
 }
 .photo-menu {
-  min-width: 260px;
+  width: 360px;
+  max-width: 360px;
 }
 .photo-menu-row {
   display: flex;
@@ -1266,6 +1267,11 @@ onUnmounted(() => window.removeEventListener('keydown', onWorkspaceKeydown));
   margin: 0 12px;
   font-size: 0.85rem;
   color: rgba(0, 0, 0, 0.6);
+}
+.tool-hint--wrap {
+  margin: 0;
+  white-space: normal;
+  color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
 }
 .status-rows {
   padding: 4px 12px;
