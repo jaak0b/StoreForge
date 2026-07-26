@@ -831,6 +831,20 @@ const underlayPointerEvents = computed(() =>
     : 'none',
 );
 
+/** Placeholder text for the dimension draft's inline input: degrees for an
+ * angle dimension (new or reopened for edit), millimeters for every other
+ * dimension kind, mirroring commitDimensionDraft's own isAngle check so the
+ * two stay in sync. */
+const dimensionDraftPlaceholder = computed(() => {
+  const draft = dimensionDraft.value;
+  if (draft === null) return '';
+  const isAngle =
+    draft.pending?.kind === 'angle' ||
+    (draft.constraintId !== null &&
+      sketch.value.constraints.find((c) => c.id === draft.constraintId)?.kind === 'angle');
+  return isAngle ? 'Value in deg' : 'Value in mm';
+});
+
 function onCalibrateInputBlur(): void {
   if (calibrateDraft.value === null) return;
   if (parseDimensionValue(calibrateDraft.value.text) !== null) {
@@ -2026,6 +2040,7 @@ function removeSelectedConstraint(constraintId: string): void {
       :class="{ 'dimension-draft-input--error': dimensionDraftError !== null }"
       type="text"
       inputmode="decimal"
+      :placeholder="dimensionDraftPlaceholder"
       @keyup.enter="onDraftEnter"
       @keyup.esc="editor.cancelDimensionDraft()"
       @blur="onDraftBlur"
@@ -2053,12 +2068,12 @@ function removeSelectedConstraint(constraintId: string): void {
   >
     <input
       v-model="calibrateDraft.text"
-      class="dimension-draft-input"
+      class="dimension-draft-input dimension-draft-input--wide"
       :class="{ 'dimension-draft-input--error': calibrateDraftError !== null }"
       type="text"
       inputmode="decimal"
       autofocus
-      placeholder="Real distance in mm"
+      placeholder="Real distance (mm)"
       @keyup.enter="editor.commitCalibrateDraft()"
       @keyup.esc="editor.cancelCalibrateUnderlay()"
       @blur="onCalibrateInputBlur"
@@ -2116,6 +2131,14 @@ svg text {
   border-radius: 3px;
   background: #ffffff;
   color: #263238;
+}
+
+/* The calibrate action's inline input carries a longer placeholder ("Real
+   distance (mm)") than the dimension draft input, so it gets extra width to
+   avoid truncating the unit off the end (owner-reported: was cut to "Real
+   distanc..."). */
+.dimension-draft-input--wide {
+  width: 150px;
 }
 .dimension-draft-input--error {
   border-color: #e53935;
