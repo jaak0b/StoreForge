@@ -1,4 +1,4 @@
-import type { PaperCorners, PaperKind, TracedTool, ToolPlacement } from '../trace/types';
+import type { PaperCorners, PaperKind, TracedTool, ToolPlacement, TraceSession } from '../trace/types';
 import type { DividerWall } from '../gridfinity/dividerModel';
 import type { ModelPlacement, SizeMm } from '../cutout/cutoutBin';
 import type { HeadType } from './screwListImport';
@@ -128,13 +128,12 @@ export interface TracedBin extends BinEnvelope, CavityEditedBin {
   /** The tool pockets sunk into the bin. */
   pockets: BinPockets;
   /**
-   * Key of the original trace photo in this device's photo store. Absent for
-   * plans imported from elsewhere or bins saved before photo storage; the
-   * bin is then layout-only editable.
+   * The photographed sheets this bin's photo tools were traced on. Empty for
+   * bins with only sketched or primitive tools, and for plans imported from
+   * devices that no longer hold the photos (the photo store lookup then
+   * comes back empty and the bin is layout-only editable).
    */
-  traceSourceId?: string;
-  /** The reference-sheet setup the photo was rectified with, when known. */
-  paper?: TracePaper;
+  traceSessions: TraceSession[];
 }
 
 /**
@@ -656,13 +655,13 @@ export interface Group {
 /** Versioned envelope the whole plan is persisted and exported as. */
 export interface PlanFile {
   /**
-   * Envelope format version. Currently 10, which is version 9 plus the group
-   * entity (a persistent drawer fill) and the baseplate product's optional
-   * group backlink. The change is additive: no field of an earlier version
-   * changes meaning, so versions 1 to 9 read exactly as before; they simply
-   * contain no group and no linked baseplate.
+   * Envelope format version. Currently 11, which is version 10 plus the
+   * outline source on pocket tools (photo trace or embedded sketch). The
+   * change is additive: no field of an earlier version changes meaning, so
+   * versions 1 to 10 read exactly as before; they simply contain no source
+   * (defaulted to a photo trace on pick).
    */
-  version: 10;
+  version: 11;
   /** All queue entries. */
   entries: QueueEntry[];
   /** All open print batches. */
@@ -672,4 +671,4 @@ export interface PlanFile {
 }
 
 /** The current envelope format version. */
-export const PLAN_FILE_VERSION = 10;
+export const PLAN_FILE_VERSION = 11;

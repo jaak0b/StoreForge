@@ -41,7 +41,7 @@ export interface PocketBinRequest extends SlottedBinParams {
  * as one.
  */
 export type PocketPreviewResult =
-  | { outcome: 'carved'; meshes: PartMeshes }
+  | { outcome: 'carved'; meshes: PartMeshes; warnings: string[] }
   | { outcome: 'superseded' };
 
 /**

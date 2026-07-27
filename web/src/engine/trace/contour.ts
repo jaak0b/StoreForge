@@ -61,7 +61,12 @@ export interface MaskContourOptions {
   minHoleAreaMm2?: number;
 }
 
-const DEFAULT_TOLERANCE_MM = 0.2;
+/**
+ * Polygon simplification and arc flattening tolerance in mm, shared by the
+ * photo trace (approxPolyDP epsilon) and the sketch profile extraction, so a
+ * sketched outline and a traced outline are faithful to the same figure.
+ */
+export const OUTLINE_TOLERANCE_MM = 0.2;
 const DEFAULT_MIN_HOLE_AREA_MM2 = 3;
 
 /** Simplify a contour Mat with approxPolyDP, returning its vertices in pixels. */
@@ -174,7 +179,7 @@ export function maskToContour(
     // No include points would make every contour vacuously qualify; refuse.
     return { ok: false, reason: 'noContainingRegion' };
   }
-  const toleranceMm = options.toleranceMm ?? DEFAULT_TOLERANCE_MM;
+  const toleranceMm = options.toleranceMm ?? OUTLINE_TOLERANCE_MM;
   const minHoleAreaMm2 = options.minHoleAreaMm2 ?? DEFAULT_MIN_HOLE_AREA_MM2;
   const epsilonPx = toleranceMm / mmPerPixel;
   const minHoleAreaPx = minHoleAreaMm2 / (mmPerPixel * mmPerPixel);

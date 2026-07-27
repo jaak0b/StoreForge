@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import ConfirmDialog from './ConfirmDialog.vue';
 
 /**
- * The one delete-drawer confirm dialog, shared by the drawer detail view and
- * the queue's group header rows so the wording and warnings stay identical.
- * States how many still-queued baseplates and connection clips the delete
- * also removes and, when any plate has already printed, that the printed
- * record is lost.
+ * The delete-drawer confirm dialog, shared by the drawer detail view and the
+ * queue's group header rows so the wording and warnings stay identical. Wraps
+ * the app's generic ConfirmDialog shell with drawer-specific wording. States
+ * how many still-queued baseplates and connection clips the delete also
+ * removes and, when any plate has already printed, that the printed record
+ * is lost.
  */
 
 const props = defineProps<{
@@ -42,32 +44,24 @@ const removalPhrase = computed(() => {
 </script>
 
 <template>
-  <v-dialog
+  <ConfirmDialog
     :model-value="modelValue"
-    max-width="440"
+    title="Delete this drawer?"
+    confirm-label="Delete"
     @update:model-value="(value: boolean) => emit('update:modelValue', value)"
+    @confirm="emit('confirm')"
   >
-    <v-card>
-      <v-card-title>Delete this drawer?</v-card-title>
-      <v-card-text>
-        <p class="mb-2">
-          <template v-if="removalPhrase !== ''">
-            Deleting the drawer also removes its {{ removalPhrase }} from the
-            queue.
-          </template>
-          Plates already on a build plate are left alone.
-        </p>
-        <p v-if="doneCount > 0" class="mb-0">
-          The record of the {{ doneCount }}
-          {{ doneCount === 1 ? 'plate' : 'plates' }} already printed for this
-          drawer is lost.
-        </p>
-      </v-card-text>
-      <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" @click="emit('update:modelValue', false)">Cancel</v-btn>
-        <v-btn color="error" variant="flat" @click="emit('confirm')">Delete</v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+    <p class="mb-2">
+      <template v-if="removalPhrase !== ''">
+        Deleting the drawer also removes its {{ removalPhrase }} from the
+        queue.
+      </template>
+      Plates already on a build plate are left alone.
+    </p>
+    <p v-if="doneCount > 0" class="mb-0">
+      The record of the {{ doneCount }}
+      {{ doneCount === 1 ? 'plate' : 'plates' }} already printed for this
+      drawer is lost.
+    </p>
+  </ConfirmDialog>
 </template>

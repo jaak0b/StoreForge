@@ -22,8 +22,10 @@ import type {
   ScrewSpec,
   TracedBin,
 } from '../../src/engine/plan/types';
-import { PLAN_FILE_VERSION } from '../../src/engine/plan/types';
+import { PLAN_FILE_VERSION, binOf } from '../../src/engine/plan/types';
+import type { TraceSession, ToolSource } from '../../src/engine/trace/types';
 import { evenDividerWalls } from '../../src/engine/gridfinity/dividerModel';
+import { SKETCH_SCHEMA_VERSION } from '../../src/engine/sketch/model';
 
 function manualBin(overrides: Partial<ManualBin> = {}): ManualBin {
   return {
@@ -51,38 +53,63 @@ function screwBin(overrides: Partial<ScrewBin> = {}): ScrewBin {
   return { ...manualBin(), origin: 'screw', screw: screwSpec(), ...overrides };
 }
 
-function pockets(): BinPockets {
+function tracePaper() {
+  return {
+    corners: {
+      tl: { x: 100, y: 120 },
+      tr: { x: 900, y: 110 },
+      br: { x: 920, y: 700 },
+      bl: { x: 90, y: 710 },
+    },
+    kind: 'a4' as const,
+  };
+}
+
+function traceSession(overrides: Partial<TraceSession> = {}): TraceSession {
+  return { id: 's1', traceSourceId: 'photo-1', paper: tracePaper(), ...overrides };
+}
+
+/** A tool pockets fixture whose one tool defaults to a photo tool referencing session s1. */
+function pockets(
+  source: ToolSource = {
+    kind: 'photo',
+    sessionId: 's1',
+    clicks: [
+      { x: 120, y: 80, label: 1 },
+      { x: 40, y: 30, label: 0 },
+    ],
+  },
+): BinPockets {
   return {
     tools: [
       {
         id: 't1',
         name: 'Wrench',
-        outline: {
-          outer: [
-            { x: -10, y: -5 },
-            { x: 10, y: -5 },
-            { x: 10, y: 5 },
-            { x: -10, y: 5 },
-          ],
-          holes: [
-            [
-              { x: -2, y: -1 },
-              { x: -2, y: 1 },
-              { x: 2, y: 1 },
-              { x: 2, y: -1 },
+        parts: [
+          {
+            outer: [
+              { x: -10, y: -5 },
+              { x: 10, y: -5 },
+              { x: 10, y: 5 },
+              { x: -10, y: 5 },
             ],
-          ],
-        },
-        clicks: [
-          { x: 120, y: 80, label: 1 },
-          { x: 40, y: 30, label: 0 },
+            holes: [
+              [
+                { x: -2, y: -1 },
+                { x: -2, y: 1 },
+                { x: 2, y: 1 },
+                { x: 2, y: -1 },
+              ],
+            ],
+          },
         ],
         rotationDeg: 90,
         offsetMm: 0.5,
         mirrored: true,
         minHoleWidthMm: 3.2,
-        filledHoleIndices: [0],
+        filledHoles: [{ partIndex: 0, holeIndex: 0 }],
         fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
+        source,
       },
     ],
     placements: [{ toolId: 't1', xMm: 3, yMm: -4, pocketDepthMm: 12, draftAngleDeg: 0 }],
@@ -93,7 +120,14 @@ function tracedBin(overrides: Partial<TracedBin> = {}): TracedBin {
   const { walls, origin, ...base } = manualBin();
   void walls;
   void origin;
-  return { ...base, origin: 'traced', pockets: pockets(), edits: [], ...overrides };
+  return {
+    ...base,
+    origin: 'traced',
+    pockets: pockets(),
+    edits: [],
+    traceSessions: [traceSession()],
+    ...overrides,
+  };
 }
 
 function entry(overrides: Partial<QueueEntry> = {}): QueueEntry {
@@ -628,46 +662,83 @@ describe('bin entry kinds in plan files', () => {
 });
 
 describe('trace sources in plan files', () => {
-  function tracePaper() {
-    return {
-      corners: {
-        tl: { x: 100, y: 120 },
-        tr: { x: 900, y: 110 },
-        br: { x: 920, y: 700 },
-        bl: { x: 90, y: 710 },
-      },
-      kind: 'a4' as const,
-    };
-  }
-
-  it('round-trips a traced entry with its trace source id, paper and clicks', () => {
+  it('round-trips a traced entry with its trace session, paper and clicks', () => {
     const traced = entry({
       id: 't1',
-      product: { kind: 'bin', labelSlot: true, bin: tracedBin({ traceSourceId: 'photo-1', paper: tracePaper() }) },
+      product: { kind: 'bin', labelSlot: true, bin: tracedBin() },
     });
     const result = parsePlanFile(serializePlanFile([traced], []));
-    expect(result).toEqual({
-      ok: true,
-      plan: { version: PLAN_FILE_VERSION, entries: [traced], batches: [], groups: [] },
-      warnings: [],
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = binOf(result.plan.entries[0].product);
+    if (bin === null || bin.origin !== 'traced') throw new Error('expected a traced bin');
+    expect(bin.traceSessions).toEqual([traceSession()]);
+    expect(bin.pockets.tools[0].source).toEqual({
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [
+        { x: 120, y: 80, label: 1 },
+        { x: 40, y: 30, label: 0 },
+      ],
     });
   });
 
-  it('accepts a traced entry without trace source fields (imported plan)', () => {
-    expect(validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } }))).toBeNull();
+  it('round-trips a traced entry whose session was saved without its photo bytes', () => {
+    // A failed photo store write must still keep the session record (metadata
+    // only) so tools that reference it stay valid; only the photo is lost.
+    const traced = entry({
+      id: 't1',
+      product: { kind: 'bin', labelSlot: true, bin: tracedBin() },
+    });
+    const result = parsePlanFile(serializePlanFile([traced], []));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = binOf(result.plan.entries[0].product);
+    if (bin === null || bin.origin !== 'traced') throw new Error('expected a traced bin');
+    // The session round-trips even though no photo bytes exist for it
+    // anywhere: the plan file never stores photo bytes, only the session
+    // metadata (id, traceSourceId, paper), so a photo-store failure cannot
+    // make the session invalid to save or reload.
+    expect(bin.traceSessions).toEqual([traceSession()]);
+    expect(bin.pockets.tools[0].source).toEqual({
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [
+        { x: 120, y: 80, label: 1 },
+        { x: 40, y: 30, label: 0 },
+      ],
+    });
   });
 
-  it('defaults missing tool clicks to an empty list on old plans', () => {
+  it('accepts a traced entry without trace sessions (imported plan)', () => {
+    expect(
+      validateEntry(
+        entry({
+          id: 't1',
+          product: {
+            kind: 'bin',
+            labelSlot: true,
+            bin: tracedBin({ traceSessions: [], pockets: pockets({ kind: 'primitive' }) }),
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('defaults a legacy tool with no stored clicks to a primitive source', () => {
     const legacy = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
     const raw = JSON.parse(serializePlanFile([legacy], [])) as {
-      entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+      entries: Array<{ product: { bin: Record<string, unknown> } }>;
     };
-    delete raw.entries[0].product.bin.pockets.tools[0].clicks;
+    const bin = raw.entries[0].product.bin;
+    delete bin.traceSessions;
+    const tools = (bin.pockets as { tools: Array<Record<string, unknown>> }).tools;
+    delete tools[0].source;
     const result = parsePlanFile(JSON.stringify({ ...raw, version: 4, batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      const bin = result.plan.entries[0].product as { bin: TracedBin };
-      expect(bin.bin.pockets.tools[0].clicks).toEqual([]);
+      const picked = result.plan.entries[0].product as { bin: TracedBin };
+      expect(picked.bin.pockets.tools[0].source).toEqual({ kind: 'primitive' });
     }
   });
 
@@ -677,7 +748,7 @@ describe('trace sources in plan files', () => {
       entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
     };
     delete raw.entries[0].product.bin.pockets.tools[0].minHoleWidthMm;
-    delete raw.entries[0].product.bin.pockets.tools[0].filledHoleIndices;
+    delete raw.entries[0].product.bin.pockets.tools[0].filledHoles;
     const result = parsePlanFile(JSON.stringify({ ...raw, version: 4, batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -685,7 +756,7 @@ describe('trace sources in plan files', () => {
       const bin = result.plan.entries[0].product as { bin: TracedBin };
       // The layout model's default minimum hole width, and no filled holes.
       expect(bin.bin.pockets.tools[0].minHoleWidthMm).toBe(1.6);
-      expect(bin.bin.pockets.tools[0].filledHoleIndices).toEqual([]);
+      expect(bin.bin.pockets.tools[0].filledHoles).toEqual([]);
     }
   });
 
@@ -705,20 +776,20 @@ describe('trace sources in plan files', () => {
     ).toBe('entry t1: pocket tool t1: The minimum hole width must be a number of at least 0 mm.');
   });
 
-  it('rejects a filled hole index outside the outline holes', () => {
+  it('rejects a filled hole naming a hole index outside its part', () => {
     const bad = pockets();
-    // The fixture tool has one hole, so index 1 refers to nothing.
-    bad.tools[0].filledHoleIndices = [1];
+    // The fixture tool's one part has one hole, so hole index 1 refers to nothing.
+    bad.tools[0].filledHoles = [{ partIndex: 0, holeIndex: 1 }];
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe(
-      "entry t1: pocket tool t1: The filled hole list must contain whole numbers referring to the tool's own holes.",
+      "entry t1: pocket tool t1: A filled hole must name a whole part index and a whole hole index that refer to the tool's own parts and holes.",
     );
   });
 
   it('rejects a malformed click', () => {
     const bad = pockets();
-    bad.tools[0].clicks = [{ x: 1, y: 2, label: 3 as never }];
+    (bad.tools[0].source as Record<string, unknown>).clicks = [{ x: 1, y: 2, label: 3 as never }];
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe('entry t1: pocket tool t1: A click needs an x, a y and a label of 0 or 1.');
@@ -726,7 +797,7 @@ describe('trace sources in plan files', () => {
 
   it('round-trips a tool carrying mixed add and erase brush strokes', () => {
     const withStrokes = pockets();
-    (withStrokes.tools[0] as Record<string, unknown>).brushStrokes = [
+    (withStrokes.tools[0].source as Record<string, unknown>).brushStrokes = [
       { mode: 'add', radiusMm: 4, points: [{ x: 12, y: 20 }, { x: 30, y: 24 }] },
       { mode: 'erase', radiusMm: 2.5, points: [{ x: 50, y: 60 }] },
     ];
@@ -744,7 +815,7 @@ describe('trace sources in plan files', () => {
 
   it('round-trips a tool carrying a smooth brush stroke', () => {
     const withStrokes = pockets();
-    (withStrokes.tools[0] as Record<string, unknown>).brushStrokes = [
+    (withStrokes.tools[0].source as Record<string, unknown>).brushStrokes = [
       { mode: 'smooth', radiusMm: 3, points: [{ x: 18, y: 44 }, { x: 22, y: 47 }] },
     ];
     const traced = entry({
@@ -765,23 +836,23 @@ describe('trace sources in plan files', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const bin = result.plan.entries[0].product as { bin: TracedBin };
-    expect('brushStrokes' in bin.bin.pockets.tools[0]).toBe(false);
+    expect('brushStrokes' in (bin.bin.pockets.tools[0].source as object)).toBe(false);
   });
 
-  it('loads a legacy plan whose tools predate brush strokes without a warning', () => {
+  it('loads a photo tool that predates brush strokes without a warning', () => {
     const legacy = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
     const raw = JSON.parse(serializePlanFile([legacy], [])) as {
-      entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+      entries: Array<{ product: { bin: { pockets: { tools: Array<{ source: Record<string, unknown> }> } } } }>;
     };
-    delete raw.entries[0].product.bin.pockets.tools[0].brushStrokes;
-    const result = parsePlanFile(JSON.stringify({ ...raw, version: 4, batches: [] }));
+    delete raw.entries[0].product.bin.pockets.tools[0].source.brushStrokes;
+    const result = parsePlanFile(JSON.stringify({ ...raw, batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.warnings).toEqual([]);
   });
 
   it('rejects a brush stroke with an unknown mode', () => {
     const bad = pockets();
-    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+    (bad.tools[0].source as Record<string, unknown>).brushStrokes = [
       { mode: 'paint', radiusMm: 4, points: [{ x: 1, y: 2 }] },
     ];
     expect(
@@ -793,7 +864,7 @@ describe('trace sources in plan files', () => {
 
   it('rejects a brush stroke with a non-positive radius', () => {
     const bad = pockets();
-    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+    (bad.tools[0].source as Record<string, unknown>).brushStrokes = [
       { mode: 'add', radiusMm: 0, points: [{ x: 1, y: 2 }] },
     ];
     expect(
@@ -805,7 +876,7 @@ describe('trace sources in plan files', () => {
 
   it('rejects a brush stroke whose points is not a list', () => {
     const bad = pockets();
-    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+    (bad.tools[0].source as Record<string, unknown>).brushStrokes = [
       { mode: 'add', radiusMm: 4, points: 'here' },
     ];
     expect(
@@ -817,7 +888,7 @@ describe('trace sources in plan files', () => {
 
   it('rejects a brush stroke point with a non-finite coordinate', () => {
     const bad = pockets();
-    (bad.tools[0] as Record<string, unknown>).brushStrokes = [
+    (bad.tools[0].source as Record<string, unknown>).brushStrokes = [
       { mode: 'add', radiusMm: 4, points: [{ x: 1, y: Number.NaN }] },
     ];
     expect(
@@ -827,27 +898,37 @@ describe('trace sources in plan files', () => {
 
   it('rejects a brushStrokes field that is not a list', () => {
     const bad = pockets();
-    (bad.tools[0] as Record<string, unknown>).brushStrokes = { mode: 'add' };
+    (bad.tools[0].source as Record<string, unknown>).brushStrokes = { mode: 'add' };
     expect(
       validateEntry(entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) } })),
     ).toBe('entry t1: pocket tool t1: The brush strokes must be a list.');
   });
 
-  it('rejects an empty traceSourceId', () => {
+  it('rejects an empty stored photo id on a trace session', () => {
     const bad = entry({
       id: 't1',
-      product: { kind: 'bin', labelSlot: true, bin: tracedBin({ traceSourceId: '' }) },
+      product: {
+        kind: 'bin',
+        labelSlot: true,
+        bin: tracedBin({ traceSessions: [traceSession({ traceSourceId: '' })] }),
+      },
     });
-    expect(validateEntry(bad)).toBe('entry t1: The trace source id must be text that is not empty.');
+    expect(validateEntry(bad)).toBe(
+      'entry t1: photo sheet s1: The stored photo id must be text that is not empty.',
+    );
   });
 
   it('rejects an unknown paper kind', () => {
     const paper = { ...tracePaper(), kind: 'a3' };
     const bad = entry({
       id: 't1',
-      product: { kind: 'bin', labelSlot: true, bin: tracedBin({ paper: paper as never }) },
+      product: {
+        kind: 'bin',
+        labelSlot: true,
+        bin: tracedBin({ traceSessions: [traceSession({ paper: paper as never })] }),
+      },
     });
-    expect(validateEntry(bad)).toBe('entry t1: The paper kind must be a4 or letter.');
+    expect(validateEntry(bad)).toBe('entry t1: photo sheet s1: The paper kind must be a4 or letter.');
   });
 
   it('rejects a paper corner without coordinates', () => {
@@ -855,18 +936,20 @@ describe('trace sources in plan files', () => {
     paper.corners.br = { x: 5 };
     const bad = entry({
       id: 't1',
-      product: { kind: 'bin', labelSlot: true, bin: tracedBin({ paper: paper as never }) },
+      product: {
+        kind: 'bin',
+        labelSlot: true,
+        bin: tracedBin({ traceSessions: [traceSession({ paper: paper as never })] }),
+      },
     });
-    expect(validateEntry(bad)).toBe('entry t1: The paper corner br needs an x and a y coordinate.');
+    expect(validateEntry(bad)).toBe(
+      'entry t1: photo sheet s1: The paper corner br needs an x and a y coordinate.',
+    );
   });
 
-  it('round-trips a batch item carrying the trace source snapshot', () => {
+  it('round-trips a batch item carrying its trace session snapshot', () => {
     const withSource = batch({
-      items: [
-        batchItem({
-          product: { kind: 'bin', labelSlot: true, bin: tracedBin({ traceSourceId: 'photo-1', paper: tracePaper() }) },
-        }),
-      ],
+      items: [batchItem({ product: { kind: 'bin', labelSlot: true, bin: tracedBin() } })],
     });
     const result = parsePlanFile(serializePlanFile([], [withSource]));
     expect(result).toEqual({
@@ -880,14 +963,18 @@ describe('trace sources in plan files', () => {
     const bad = batch({
       items: [
         batchItem({
-          product: { kind: 'bin', labelSlot: true, bin: tracedBin({ paper: 'a4' as never }) },
+          product: {
+            kind: 'bin',
+            labelSlot: true,
+            bin: tracedBin({ traceSessions: [traceSession({ paper: 'a4' as never })] }),
+          },
         }),
       ],
     });
     const result = parsePlanFile(serializePlanFile([], [bad]));
     expect(result).toEqual({
       ok: false,
-      error: 'The plan is invalid: batch batch1: item i1: The paper must be an object.',
+      error: 'The plan is invalid: batch batch1: item i1: photo sheet s1: The paper must be an object.',
     });
   });
 });
@@ -907,7 +994,7 @@ describe('pockets in plan files', () => {
 
   it('rejects an outline with fewer than 3 outer points', () => {
     const bad = pockets();
-    bad.tools[0].outline.outer = [
+    bad.tools[0].parts[0].outer = [
       { x: 0, y: 0 },
       { x: 1, y: 0 },
     ];
@@ -916,7 +1003,7 @@ describe('pockets in plan files', () => {
       product: { kind: 'bin', labelSlot: true, bin: tracedBin({ pockets: bad }) },
     });
     expect(validateEntry(entryWithBad)).toBe(
-      'entry t1: pocket tool t1: The outline needs at least 3 outer points.',
+      'entry t1: pocket tool t1: A traced part needs at least 3 outer points.',
     );
   });
 
@@ -1119,8 +1206,32 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
   });
 
   it('migrates a legacy entry without kind and with pockets to a traced bin', () => {
+    // A true version-1/2 pocket tool has no self-contained source at all: its
+    // clicks sit on the tool itself, and with no bin-level photo to migrate
+    // (this entry never had traceSourceId or paper), the tool degrades to a
+    // primitive rather than a photo tool with a dangling session.
+    const legacyPockets = {
+      tools: [
+        {
+          id: 't1',
+          name: 'Wrench',
+          outline: pockets().tools[0].parts[0],
+          clicks: [
+            { x: 120, y: 80, label: 1 },
+            { x: 40, y: 30, label: 0 },
+          ],
+          rotationDeg: 90,
+          offsetMm: 0.5,
+          mirrored: true,
+          minHoleWidthMm: 3.2,
+          filledHoleIndices: [0],
+          fingerHoles: [{ x: 0, y: 0, diameterMm: 25 }],
+        },
+      ],
+      placements: pockets().placements,
+    };
     const legacy: Record<string, unknown> = {
-      ...legacyFlatEntry({ labelMode: 'slot', pockets: pockets() }),
+      ...legacyFlatEntry({ labelMode: 'slot', pockets: legacyPockets }),
     };
     delete legacy.kind;
     delete legacy.dividerCountX;
@@ -1128,9 +1239,11 @@ describe('legacy label mode conversion (versions 1 and 2)', () => {
     const result = parsePlanFile(JSON.stringify({ version: 2, entries: [legacy], batches: [] }));
     expect(result.ok).toBe(true);
     if (result.ok) {
+      const expectedPockets = pockets();
+      expectedPockets.tools[0].source = { kind: 'primitive' };
       expect(result.plan.entries[0].product).toEqual({
         kind: 'bin',
-        bin: tracedBin(),
+        bin: tracedBin({ pockets: expectedPockets, traceSessions: [] }),
         labelSlot: true,
       });
     }
@@ -1773,7 +1886,7 @@ describe('cavity edits (plan version 9)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect((result.plan.entries[0].product as { bin: { edits: unknown } }).bin.edits).toEqual([]);
-    expect(result.plan.version).toBe(10);
+    expect(result.plan.version).toBe(PLAN_FILE_VERSION);
   });
 
   it('rejects an edit with a radius outside 0.2 to 50 mm', () => {
@@ -1977,5 +2090,308 @@ describe('traced bin cavity edits and pocket draft angle (plan version 10)', () 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain('draft angle');
+  });
+});
+
+describe('plan version 11: pocket tool source', () => {
+  function rawTracedEntry(): {
+    entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+  } {
+    const traced = entry({ id: 't1', product: { kind: 'bin', labelSlot: true, bin: tracedBin() } });
+    return JSON.parse(serializePlanFile([traced], [])) as {
+      entries: Array<{ product: { bin: { pockets: { tools: Array<Record<string, unknown>> } } } }>;
+    };
+  }
+
+  function parseTracedEntryWith(mutate: (tool: Record<string, unknown>) => void): PlanParseResult {
+    const raw = rawTracedEntry();
+    mutate(raw.entries[0].product.bin.pockets.tools[0]);
+    return parsePlanFile(JSON.stringify(raw));
+  }
+
+  function writeAndReparseTracedEntry(
+    mutate: (tool: Record<string, unknown>) => void,
+  ): Extract<PlanParseResult, { ok: true }>['plan'] {
+    const result = parseTracedEntryWith(mutate);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    return result.plan;
+  }
+
+  function firstPocketTool(plan: Extract<PlanParseResult, { ok: true }>['plan']): TracedBin['pockets']['tools'][0] {
+    return (plan.entries[0].product as { bin: TracedBin }).bin.pockets.tools[0];
+  }
+
+  it('rejects an absent source when the bin has trace sessions', () => {
+    const result = parseTracedEntryWith((tool) => {
+      delete (tool as Record<string, unknown>).source;
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('The outline source must be an object.');
+    }
+  });
+
+  it('round-trips a sketch source', () => {
+    const sketch = {
+      schemaVersion: SKETCH_SCHEMA_VERSION,
+      entities: [
+        { kind: 'point', id: 'pc', x: 0, y: 0, construction: false },
+        { kind: 'circle', id: 'c1', centerId: 'pc', radiusMm: 12, construction: false },
+      ],
+      constraints: [],
+    };
+    const plan = writeAndReparseTracedEntry((tool) => {
+      (tool as Record<string, unknown>).source = { kind: 'sketch', sketch };
+    });
+    const tool = firstPocketTool(plan);
+    expect(tool.source.kind).toBe('sketch');
+    if (tool.source.kind === 'sketch') expect(tool.source.sketch).toEqual(sketch);
+  });
+
+  it('rejects a sketch source with a broken sketch', () => {
+    const result = parseTracedEntryWith((tool) => {
+      (tool as Record<string, unknown>).source = { kind: 'sketch', sketch: { schemaVersion: 1 } };
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('entities must be a list');
+    }
+  });
+
+  it('rejects an unknown source kind', () => {
+    const result = parseTracedEntryWith((tool) => {
+      (tool as Record<string, unknown>).source = { kind: 'scan' };
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('source must be a photo trace, a sketch or a basic shape');
+    }
+  });
+});
+
+describe('plan v11 trace sessions', () => {
+  const squareOutline = {
+    outer: [
+      { x: 0, y: 0 },
+      { x: 20, y: 0 },
+      { x: 20, y: 20 },
+      { x: 0, y: 20 },
+    ],
+    holes: [],
+  };
+
+  const paper = {
+    kind: 'a4',
+    corners: {
+      tl: { x: 0, y: 0 },
+      tr: { x: 100, y: 0 },
+      br: { x: 100, y: 140 },
+      bl: { x: 0, y: 140 },
+    },
+  };
+
+  function tracedEntry(bin: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: 'e1',
+      createdAt: '2026-07-25T00:00:00.000Z',
+      quantity: 1,
+      product: {
+        kind: 'bin',
+        labelSlot: false,
+        bin: {
+          origin: 'traced',
+          gridX: 1,
+          gridY: 1,
+          heightUnits: 6,
+          magnetHoles: false,
+          ...bin,
+        },
+      },
+    };
+  }
+
+  function toolBase(id: string): Record<string, unknown> {
+    return {
+      id,
+      name: 'Tool',
+      parts: [squareOutline],
+      rotationDeg: 0,
+      offsetMm: 1.5,
+      mirrored: false,
+      minHoleWidthMm: 0,
+      filledHoles: [],
+      fingerHoles: [],
+    };
+  }
+
+  it('round-trips a multi-session bin with photo, sketch and primitive tools', () => {
+    const plan = {
+      version: 11,
+      entries: [
+        tracedEntry({
+          traceSessions: [
+            { id: 's1', traceSourceId: 'p1', paper },
+            { id: 's2', traceSourceId: 'p2', paper },
+          ],
+          pockets: {
+            tools: [
+              {
+                ...toolBase('t1'),
+                source: { kind: 'photo', sessionId: 's1', clicks: [{ x: 1, y: 2, label: 1 }] },
+              },
+              {
+                ...toolBase('t2'),
+                source: { kind: 'photo', sessionId: 's2', clicks: [{ x: 3, y: 4, label: 1 }] },
+              },
+              { ...toolBase('t3'), source: { kind: 'primitive' } },
+            ],
+            placements: [
+              { toolId: 't1', xMm: 10, yMm: 10, pocketDepthMm: 20, draftAngleDeg: 0 },
+              { toolId: 't2', xMm: 25, yMm: 10, pocketDepthMm: 20, draftAngleDeg: 0 },
+              { toolId: 't3', xMm: 10, yMm: 25, pocketDepthMm: 20, draftAngleDeg: 0 },
+            ],
+          },
+        }),
+      ],
+      batches: [],
+    };
+    const result = parsePlanFile(JSON.stringify(plan));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = binOf(result.plan.entries[0].product);
+    if (bin === null || bin.origin !== 'traced') throw new Error('expected a traced bin');
+    expect(bin.traceSessions.map((s) => s.id)).toEqual(['s1', 's2']);
+    const reparsed = parsePlanFile(
+      serializePlanFile(result.plan.entries, result.plan.batches, result.plan.groups),
+    );
+    expect(reparsed).toEqual(result);
+  });
+
+  it('rejects a photo tool whose sessionId is not one of the bin sessions', () => {
+    const plan = {
+      version: 11,
+      entries: [
+        tracedEntry({
+          traceSessions: [{ id: 's1', traceSourceId: 'p1', paper }],
+          pockets: {
+            tools: [
+              {
+                ...toolBase('t1'),
+                source: { kind: 'photo', sessionId: 'missing', clicks: [] },
+              },
+            ],
+            placements: [
+              { toolId: 't1', xMm: 10, yMm: 10, pocketDepthMm: 20, draftAngleDeg: 0 },
+            ],
+          },
+        }),
+      ],
+      batches: [],
+    };
+    const result = parsePlanFile(JSON.stringify(plan));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('names a photo sheet the bin does not have');
+  });
+
+  it('rejects a duplicate session id', () => {
+    const plan = {
+      version: 11,
+      entries: [
+        tracedEntry({
+          traceSessions: [
+            { id: 's1', traceSourceId: 'p1', paper },
+            { id: 's1', traceSourceId: 'p2', paper },
+          ],
+          pockets: { tools: [], placements: [] },
+        }),
+      ],
+      batches: [],
+    };
+    const result = parsePlanFile(JSON.stringify(plan));
+    expect(result.ok).toBe(false);
+  });
+
+  it('migrates a v10 bin into one session and classifies its tools', () => {
+    const plan = {
+      version: 10,
+      entries: [
+        tracedEntry({
+          traceSourceId: 'photo-key',
+          paper,
+          pockets: {
+            tools: [
+              { ...toolBase('t1'), clicks: [{ x: 1, y: 2, label: 1 }] },
+              { ...toolBase('t2'), clicks: [] },
+              {
+                ...toolBase('t3'),
+                clicks: [],
+                source: {
+                  kind: 'sketch',
+                  sketch: {
+                    schemaVersion: SKETCH_SCHEMA_VERSION,
+                    entities: [
+                      { kind: 'point', id: 'pc', x: 0, y: 0, construction: false },
+                      { kind: 'circle', id: 'c1', centerId: 'pc', radiusMm: 12, construction: false },
+                    ],
+                    constraints: [],
+                  },
+                },
+              },
+            ],
+            placements: [
+              { toolId: 't1', xMm: 10, yMm: 10, pocketDepthMm: 20, draftAngleDeg: 0 },
+              { toolId: 't2', xMm: 25, yMm: 10, pocketDepthMm: 20, draftAngleDeg: 0 },
+              { toolId: 't3', xMm: 10, yMm: 25, pocketDepthMm: 20, draftAngleDeg: 0 },
+            ],
+          },
+        }),
+      ],
+      batches: [],
+    };
+    const result = parsePlanFile(JSON.stringify(plan));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = binOf(result.plan.entries[0].product);
+    if (bin === null || bin.origin !== 'traced') throw new Error('expected a traced bin');
+    expect(bin.traceSessions).toHaveLength(1);
+    const session = bin.traceSessions[0];
+    expect(session.traceSourceId).toBe('photo-key');
+    expect(session.paper.kind).toBe('a4');
+    const [t1, t2, t3] = bin.pockets.tools;
+    expect(t1.source.kind).toBe('photo');
+    if (t1.source.kind === 'photo') {
+      expect(t1.source.sessionId).toBe(session.id);
+      expect(t1.source.clicks).toEqual([{ x: 1, y: 2, label: 1 }]);
+    }
+    expect(t2.source).toEqual({ kind: 'primitive' });
+    expect(t3.source.kind).toBe('sketch');
+  });
+
+  it('migrates a v10 bin without a stored photo to sessionless primitives', () => {
+    const plan = {
+      version: 10,
+      entries: [
+        tracedEntry({
+          pockets: {
+            tools: [{ ...toolBase('t1'), clicks: [{ x: 1, y: 2, label: 1 }] }],
+            placements: [
+              { toolId: 't1', xMm: 10, yMm: 10, pocketDepthMm: 20, draftAngleDeg: 0 },
+            ],
+          },
+        }),
+      ],
+      batches: [],
+    };
+    const result = parsePlanFile(JSON.stringify(plan));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const bin = binOf(result.plan.entries[0].product);
+    if (bin === null || bin.origin !== 'traced') throw new Error('expected a traced bin');
+    expect(bin.traceSessions).toEqual([]);
+    // Without a photo the clicks reference nothing re-traceable; the tool
+    // degrades to a primitive rather than a photo tool with a dangling session.
+    expect(bin.pockets.tools[0].source).toEqual({ kind: 'primitive' });
   });
 });

@@ -250,18 +250,19 @@ describe('pockets in batches', () => {
         {
           id: 't1',
           name: 'Wrench',
-          outline: {
-            outer: [
-              { x: -10, y: -5 },
-              { x: 10, y: -5 },
-              { x: 0, y: 5 },
-            ],
-            holes: [],
-          },
+          parts: [
+            {
+              outer: [
+                { x: -10, y: -5 },
+                { x: 10, y: -5 },
+                { x: 0, y: 5 },
+              ],
+              holes: [],
+            },
+          ],
           rotationDeg: 0,
           offsetMm: 0.5,
           mirrored: false,
-          clicks: [],
           fingerHoles: [],
         },
       ],

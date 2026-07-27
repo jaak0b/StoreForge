@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@salusoft89/planegcs": "^1.2.0",
     "@techstark/opencv-js": "^5.0.0-release.1",
     "comlink": "^4.4.2",
     "fflate": "^0.8.3",

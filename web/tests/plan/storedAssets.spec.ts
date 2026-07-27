@@ -21,6 +21,13 @@ import type {
 // wrappers stay thin and untested, and these tests cover the
 // garbage-collection logic through fake stores.
 
+const PAPER_CORNERS = {
+  tl: { x: 0, y: 0 },
+  tr: { x: 210, y: 0 },
+  br: { x: 210, y: 297 },
+  bl: { x: 0, y: 297 },
+};
+
 function manualBin(): ManualBin {
   return {
     origin: 'manual',
@@ -44,25 +51,32 @@ function tracedBin(traceSourceId?: string): TracedBin {
         {
           id: 't1',
           name: 'Tool',
-          outline: {
-            outer: [
-              { x: 0, y: 0 },
-              { x: 10, y: 0 },
-              { x: 0, y: 10 },
-            ],
-            holes: [],
-          },
-          clicks: [],
+          parts: [
+            {
+              outer: [
+                { x: 0, y: 0 },
+                { x: 10, y: 0 },
+                { x: 0, y: 10 },
+              ],
+              holes: [],
+            },
+          ],
           rotationDeg: 0,
           offsetMm: 0,
           mirrored: false,
+          minHoleWidthMm: 0,
+          filledHoles: [],
           fingerHoles: [],
+          source: { kind: 'primitive' },
         },
       ],
       placements: [{ toolId: 't1', xMm: 0, yMm: 0, pocketDepthMm: 10 }],
     },
+    traceSessions:
+      traceSourceId !== undefined
+        ? [{ id: 'sess1', traceSourceId, paper: { corners: PAPER_CORNERS, kind: 'a4' } }]
+        : [],
   };
-  if (traceSourceId !== undefined) bin.traceSourceId = traceSourceId;
   return bin;
 }
 
@@ -193,6 +207,30 @@ describe('referencedAssetIds', () => {
     expect(referencedAssetIds(entries, batches).cutoutModels).toEqual(
       new Set(['model-a', 'model-b', 'model-c']),
     );
+  });
+
+  it('keeps every session photo a traced bin references and sweeps the rest', () => {
+    const bin: TracedBin = {
+      origin: 'traced',
+      gridX: 1,
+      gridY: 1,
+      heightUnits: 6,
+      magnetHoles: false,
+      pockets: { tools: [], placements: [] },
+      edits: [],
+      traceSessions: [
+        { id: 's1', traceSourceId: 'photo-a', paper: { kind: 'a4', corners: PAPER_CORNERS } },
+        { id: 's2', traceSourceId: 'photo-b', paper: { kind: 'a4', corners: PAPER_CORNERS } },
+      ],
+    };
+    const entry: QueueEntry = {
+      id: 'e1',
+      createdAt: '2026-07-25T00:00:00.000Z',
+      quantity: 1,
+      product: { kind: 'bin', bin, labelSlot: false },
+    };
+    const referenced = referencedAssetIds([entry], []);
+    expect(referenced.tracePhotos).toEqual(new Set(['photo-a', 'photo-b']));
   });
 
   it('keeps the two asset kinds apart', () => {

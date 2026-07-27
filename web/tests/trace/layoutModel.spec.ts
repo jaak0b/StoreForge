@@ -7,6 +7,7 @@ import {
   duplicateTool,
   layoutBounds,
   moveTool,
+  referencedSessionIds,
   removeTool,
   replaceToolOutline,
   requiredFootprint,
@@ -21,6 +22,7 @@ import {
   type LayoutState,
 } from '../../src/engine/trace/layoutModel';
 import type { TracedTool, ToolPlacement } from '../../src/engine/trace/types';
+import { SKETCH_SCHEMA_VERSION } from '../../src/engine/sketch/model';
 
 // Hand-derived interior figures used throughout (margin 2 mm everywhere):
 // one cell's interior is 39.6 mm, two cells give 81.6 mm, three 123.6 mm.
@@ -33,24 +35,26 @@ function lTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return {
     id: 'l-tool',
     name: 'L wrench',
-    outline: {
-      outer: [
-        { x: 0, y: 0 },
-        { x: 30, y: 0 },
-        { x: 30, y: 10 },
-        { x: 10, y: 10 },
-        { x: 10, y: 25 },
-        { x: 0, y: 25 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 30, y: 0 },
+          { x: 30, y: 10 },
+          { x: 10, y: 10 },
+          { x: 10, y: 25 },
+          { x: 0, y: 25 },
+        ],
+        holes: [],
+      },
+    ],
     rotationDeg: 0,
     offsetMm: 0,
     mirrored: false,
     minHoleWidthMm: 0,
-    filledHoleIndices: [],
-    clicks: [],
+    filledHoles: [],
     fingerHoles: [],
+    source: { kind: 'primitive' },
     ...overrides,
   };
 }
@@ -60,28 +64,30 @@ function twoHoleTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return lTool({
     id: 'holed',
     name: 'Holed plate',
-    outline: {
-      outer: [
-        { x: 0, y: 0 },
-        { x: 20, y: 0 },
-        { x: 20, y: 20 },
-        { x: 0, y: 20 },
-      ],
-      holes: [
-        [
-          { x: 3, y: 8 },
-          { x: 3, y: 12 },
-          { x: 7, y: 12 },
-          { x: 7, y: 8 },
+    parts: [
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 20, y: 0 },
+          { x: 20, y: 20 },
+          { x: 0, y: 20 },
         ],
-        [
-          { x: 13, y: 8 },
-          { x: 13, y: 12 },
-          { x: 17, y: 12 },
-          { x: 17, y: 8 },
+        holes: [
+          [
+            { x: 3, y: 8 },
+            { x: 3, y: 12 },
+            { x: 7, y: 12 },
+            { x: 7, y: 8 },
+          ],
+          [
+            { x: 13, y: 8 },
+            { x: 13, y: 12 },
+            { x: 17, y: 12 },
+            { x: 17, y: 8 },
+          ],
         ],
-      ],
-    },
+      },
+    ],
     ...overrides,
   });
 }
@@ -91,15 +97,17 @@ function barTool(overrides: Partial<TracedTool> = {}): TracedTool {
   return lTool({
     id: 'bar',
     name: 'Bar',
-    outline: {
-      outer: [
-        { x: -35, y: -6 },
-        { x: 35, y: -6 },
-        { x: 35, y: 6 },
-        { x: -35, y: 6 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: -35, y: -6 },
+          { x: 35, y: -6 },
+          { x: 35, y: 6 },
+          { x: -35, y: 6 },
+        ],
+        holes: [],
+      },
+    ],
     ...overrides,
   });
 }
@@ -109,15 +117,17 @@ function squareTool(id: string): TracedTool {
   return lTool({
     id,
     name: `Square ${id}`,
-    outline: {
-      outer: [
-        { x: -5, y: -5 },
-        { x: 5, y: -5 },
-        { x: 5, y: 5 },
-        { x: -5, y: 5 },
-      ],
-      holes: [],
-    },
+    parts: [
+      {
+        outer: [
+          { x: -5, y: -5 },
+          { x: 5, y: -5 },
+          { x: 5, y: 5 },
+          { x: -5, y: 5 },
+        ],
+        holes: [],
+      },
+    ],
   });
 }
 
@@ -409,6 +419,7 @@ describe('tool list and transform actions', () => {
       },
       'Bar',
       20,
+      { kind: 'primitive' },
     );
     // The clearance-grown box starts at 3.2 mm (cell inset 1.2 plus margin
     // 2): the recentred 70 mm bar's placement is 3.2 + 35 by 3.2 + 6, each
@@ -435,12 +446,33 @@ describe('tool list and transform actions', () => {
       },
       'Square',
       20,
+      { kind: 'primitive' },
     );
     removeTool(s, bar.id);
     // Only the 10 mm square remains: back down to one cell.
     expect(s.tools).toHaveLength(1);
     expect(s.gridX).toBe(1);
     expect(s.gridY).toBe(1);
+  });
+
+  it('stamps a new tool with the source it was given', () => {
+    const s = state([], []);
+    const tool = addTool(
+      s,
+      {
+        outer: [
+          { x: 0, y: 0 },
+          { x: 20, y: 0 },
+          { x: 20, y: 20 },
+          { x: 0, y: 20 },
+        ],
+        holes: [],
+      },
+      'Tool',
+      20,
+      { kind: 'primitive' },
+    );
+    expect(tool.source).toEqual({ kind: 'primitive' });
   });
 
   it('places sheet-position tools where they lay on the paper, not stacked', () => {
@@ -461,8 +493,8 @@ describe('tool list and transform actions', () => {
       ],
       holes: [],
     });
-    const a = addTool(s, square(40, 40), 'A', 20, [], true);
-    const b = addTool(s, square(150, 90), 'B', 20, [], true);
+    const a = addTool(s, square(40, 40), 'A', 20, { kind: 'primitive' }, true);
+    const b = addTool(s, square(150, 90), 'B', 20, { kind: 'primitive' }, true);
     expect(s.placements[0]).toEqual({ toolId: a.id, xMm: 45, yMm: 45, pocketDepthMm: 20, draftAngleDeg: 0 });
     expect(s.placements[1]).toEqual({ toolId: b.id, xMm: 155, yMm: 95, pocketDepthMm: 20, draftAngleDeg: 0 });
     const bin = binPlacement(s);
@@ -483,8 +515,8 @@ describe('tool list and transform actions', () => {
       ],
       holes: [],
     });
-    const tool = addTool(s, square(40, 40), 'A', 20, [], true);
-    replaceToolOutline(s, tool.id, square(80, 20), []);
+    const tool = addTool(s, square(40, 40), 'A', 20, { kind: 'primitive' }, true);
+    replaceToolOutline(s, tool.id, square(80, 20), { kind: 'primitive' });
     expect(s.placements[0].xMm).toBe(85);
     expect(s.placements[0].yMm).toBe(25);
   });
@@ -504,6 +536,7 @@ describe('tool list and transform actions', () => {
       },
       'Bar',
       20,
+      { kind: 'primitive' },
     );
     expect(s.gridX).toBe(1);
     expect(s.gridY).toBe(1);
@@ -528,9 +561,10 @@ describe('tool list and transform actions', () => {
       },
       'Square',
       20,
+      { kind: 'primitive' },
     );
     expect(tool.minHoleWidthMm).toBe(DEFAULT_MIN_HOLE_WIDTH_MM);
-    expect(tool.filledHoleIndices).toEqual([]);
+    expect(tool.filledHoles).toEqual([]);
   });
 
   it('updates a tool minimum hole width through setToolTransform', () => {
@@ -575,24 +609,28 @@ describe('toggleFilledHole', () => {
   it('adds then removes a hole index on repeated toggles', () => {
     const tool = twoHoleTool();
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
-    toggleFilledHole(s, 'holed', 1);
-    expect(tool.filledHoleIndices).toEqual([1]);
-    toggleFilledHole(s, 'holed', 1);
-    expect(tool.filledHoleIndices).toEqual([]);
+    toggleFilledHole(s, 'holed', 0, 1);
+    expect(tool.filledHoles).toEqual([{ partIndex: 0, holeIndex: 1 }]);
+    toggleFilledHole(s, 'holed', 0, 1);
+    expect(tool.filledHoles).toEqual([]);
   });
 
   it('ignores an index outside the tool holes', () => {
     const tool = twoHoleTool();
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
-    toggleFilledHole(s, 'holed', 2);
-    toggleFilledHole(s, 'holed', -1);
-    expect(tool.filledHoleIndices).toEqual([]);
+    toggleFilledHole(s, 'holed', 0, 2);
+    toggleFilledHole(s, 'holed', 0, -1);
+    toggleFilledHole(s, 'holed', 1, 0);
+    expect(tool.filledHoles).toEqual([]);
   });
 });
 
 describe('replaceToolOutline hole fields', () => {
   it('clears filled holes but keeps the minimum hole width', () => {
-    const tool = twoHoleTool({ filledHoleIndices: [1], minHoleWidthMm: 3.2 });
+    const tool = twoHoleTool({
+      filledHoles: [{ partIndex: 0, holeIndex: 1 }],
+      minHoleWidthMm: 3.2,
+    });
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
     replaceToolOutline(s, 'holed', {
       outer: [
@@ -602,8 +640,8 @@ describe('replaceToolOutline hole fields', () => {
         { x: 0, y: 12 },
       ],
       holes: [],
-    }, []);
-    expect(tool.filledHoleIndices).toEqual([]);
+    }, { kind: 'primitive' });
+    expect(tool.filledHoles).toEqual([]);
     expect(tool.minHoleWidthMm).toBe(3.2);
   });
 });
@@ -624,26 +662,45 @@ describe('brush strokes on tools', () => {
     const strokes = [
       { mode: 'add' as const, radiusMm: 4, points: [{ x: 5, y: 6 }] },
     ];
-    const tool = addTool(s, square, 'Square', 20, [], false, strokes);
+    const tool = addTool(s, square, 'Square', 20, {
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [],
+      brushStrokes: strokes,
+    });
     // Mutate the caller's array and its nested point after the call.
     strokes[0].points[0].x = 999;
     strokes.push({ mode: 'erase', radiusMm: 2, points: [] });
-    expect(tool.brushStrokes).toEqual([
-      { mode: 'add', radiusMm: 4, points: [{ x: 5, y: 6 }] },
-    ]);
+    expect(tool.source.kind).toBe('photo');
+    if (tool.source.kind === 'photo') {
+      expect(tool.source.brushStrokes).toEqual([
+        { mode: 'add', radiusMm: 4, points: [{ x: 5, y: 6 }] },
+      ]);
+    }
   });
 
   it('replaces brush strokes and clears filled holes on re-trace', () => {
-    const tool = twoHoleTool({ filledHoleIndices: [0] });
-    tool.brushStrokes = [{ mode: 'add', radiusMm: 4, points: [{ x: 1, y: 1 }] }];
+    const tool = twoHoleTool({ filledHoles: [{ partIndex: 0, holeIndex: 0 }] });
+    tool.source = {
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [],
+      brushStrokes: [{ mode: 'add', radiusMm: 4, points: [{ x: 1, y: 1 }] }],
+    };
     const s = state([tool], [{ toolId: 'holed', xMm: 0, yMm: 0, pocketDepthMm: 5 }]);
-    replaceToolOutline(s, 'holed', square, [], [
-      { mode: 'erase', radiusMm: 3, points: [{ x: 2, y: 2 }] },
-    ]);
-    expect(tool.brushStrokes).toEqual([
-      { mode: 'erase', radiusMm: 3, points: [{ x: 2, y: 2 }] },
-    ]);
-    expect(tool.filledHoleIndices).toEqual([]);
+    replaceToolOutline(s, 'holed', square, {
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [],
+      brushStrokes: [{ mode: 'erase', radiusMm: 3, points: [{ x: 2, y: 2 }] }],
+    });
+    expect(tool.source.kind).toBe('photo');
+    if (tool.source.kind === 'photo') {
+      expect(tool.source.brushStrokes).toEqual([
+        { mode: 'erase', radiusMm: 3, points: [{ x: 2, y: 2 }] },
+      ]);
+    }
+    expect(tool.filledHoles).toEqual([]);
   });
 
   it('copies brush strokes onto a duplicated tool', () => {
@@ -651,11 +708,49 @@ describe('brush strokes on tools', () => {
     const strokes = [
       { mode: 'add' as const, radiusMm: 4, points: [{ x: 5, y: 6 }] },
     ];
-    const original = addTool(s, square, 'Square', 20, [], false, strokes);
+    const original = addTool(s, square, 'Square', 20, {
+      kind: 'photo',
+      sessionId: 's1',
+      clicks: [],
+      brushStrokes: strokes,
+    });
     const copy = duplicateTool(s, original.id);
     expect(copy).not.toBeNull();
-    expect(copy?.brushStrokes).toEqual([
-      { mode: 'add', radiusMm: 4, points: [{ x: 5, y: 6 }] },
-    ]);
+    expect(copy?.source.kind).toBe('photo');
+    if (copy?.source.kind === 'photo') {
+      expect(copy.source.brushStrokes).toEqual([
+        { mode: 'add', radiusMm: 4, points: [{ x: 5, y: 6 }] },
+      ]);
+    }
+  });
+});
+
+describe('referencedSessionIds', () => {
+  it('collects exactly the session ids photo tools reference', () => {
+    const base = {
+      id: '',
+      name: 'Tool',
+      parts: [{ outer: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], holes: [] }],
+      rotationDeg: 0,
+      offsetMm: 0,
+      mirrored: false,
+      minHoleWidthMm: 0,
+      filledHoles: [],
+      fingerHoles: [],
+    };
+    const tools: TracedTool[] = [
+      { ...base, id: 't1', source: { kind: 'photo', sessionId: 's1', clicks: [] } },
+      { ...base, id: 't2', source: { kind: 'photo', sessionId: 's1', clicks: [] } },
+      { ...base, id: 't3', source: { kind: 'primitive' } },
+      {
+        ...base,
+        id: 't4',
+        source: {
+          kind: 'sketch',
+          sketch: { schemaVersion: SKETCH_SCHEMA_VERSION, entities: [], constraints: [] },
+        },
+      },
+    ];
+    expect(referencedSessionIds(tools)).toEqual(new Set(['s1']));
   });
 });

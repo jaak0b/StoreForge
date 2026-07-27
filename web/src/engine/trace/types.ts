@@ -1,3 +1,5 @@
+import type { Sketch } from '../sketch/model';
+
 /** Reference sheet sizes supported by the tool-trace calibration. */
 export type PaperKind = 'letter' | 'a4';
 
@@ -9,7 +11,7 @@ export interface PixelPoint {
 
 /**
  * A freehand brush stroke painted onto the segmentation mask, in
- * rectified-image pixels (the same frame as TracedTool.clicks). An 'add'
+ * rectified-image pixels (the same frame as the photo source's clicks). An 'add'
  * stroke unions its swept-disc region into the mask; an 'erase' stroke
  * subtracts it; a 'smooth' stroke leaves the mask's set and cleared regions
  * alone and instead median-filters the mask inside its swept disc, cleaning up
@@ -77,6 +79,33 @@ export interface TracedOutline {
 }
 
 /**
+ * Where a tool's outline came from, each variant owning its own re-edit
+ * data. A photo-traced tool names the trace session it was traced in and
+ * carries the clicks and brush strokes (rectified-image pixels of that
+ * session's sheet) that reproduce its segmentation. A sketched tool embeds
+ * its editable Sketch. A primitive tool (basic circle or rectangle) has no
+ * re-edit data at all. Discriminated on kind and always branched
+ * exhaustively (assertNever), mirroring Bin.origin.
+ */
+export type ToolSource =
+  | { kind: 'photo'; sessionId: string; clicks: SamPoint[]; brushStrokes?: BrushStroke[] }
+  | { kind: 'sketch'; sketch: Sketch }
+  | { kind: 'primitive' };
+
+/**
+ * One photographed reference sheet a tool bin's photo tools were traced on.
+ * The photo blob itself lives in this device's photo store under
+ * traceSourceId; the session carries what re-tracing needs to reproduce the
+ * exact rectified image the tools' clicks refer to. A session is saved with
+ * the bin iff at least one tool references its id.
+ */
+export interface TraceSession {
+  id: string;
+  traceSourceId: string;
+  paper: { corners: PaperCorners; kind: PaperKind };
+}
+
+/**
  * A finger hole punched through the tool pocket so the tool can be lifted
  * out. Coordinates are tool-local millimeters (the same frame as the tool's
  * outline points); the pocket generator subtracts the hole's outline from the
@@ -97,14 +126,16 @@ export interface FingerHole {
  * A tool destined for a shadow-board pocket, as stored in a plan entry.
  * Plain JSON throughout so it serializes with the plan file.
  *
- * `outline` is the raw traced (or primitive) silhouette in tool-local mm and
- * is never mutated by editing; the editing operations are parameters applied
+ * `parts` are the raw traced (or primitive) silhouettes in tool-local mm and
+ * are never mutated by editing; the editing operations are parameters applied
  * on read. The canonical pipeline, implemented by
- * `resolvedToolOutline(m, tool)` in `engine/trace/edit.ts`, is:
+ * `resolvedToolOutline(m, tool)` in `engine/trace/edit.ts`, runs per part and
+ * returns one resolved outline per part:
  *
- *   1. mirror (across the vertical axis through the outline centroid) and
- *      rotate (`rotationDeg` counterclockwise about the same centroid),
- *   2. remove the holes named in `filledHoleIndices`,
+ *   1. mirror (across the vertical axis through the combined centroid of all
+ *      parts) and rotate (`rotationDeg` counterclockwise about the same
+ *      combined centroid),
+ *   2. remove the holes named in `filledHoles` for that part,
  *   3. cull holes narrower than `minHoleWidthMm`,
  *   4. clearance (`offsetMm` outward offset with rounded joins).
  *
@@ -129,39 +160,40 @@ export interface FingerHole {
 export interface TracedTool {
   id: string;
   name: string;
-  outline: TracedOutline;
   /**
-   * The click prompts (rectified-image pixels) that produced the outline,
-   * kept so re-tracing from the stored photo can restore and continue the
-   * segmentation. Empty for primitive shapes and for tools imported from
-   * plans that predate click storage.
+   * The tool's silhouette as one or more disjoint outlines sharing one rigid
+   * tool-local frame: every part carries the same rotationDeg/mirrored,
+   * offsetMm and minHoleWidthMm, and no part has its own transform. Length is
+   * always at least 1; a photo, primitive or single-region tool has exactly
+   * one part. Deterministic creation order (sortPartsByCentroid in edit.ts)
+   * makes the order stable across re-traces of the same regions.
    */
-  clicks: SamPoint[];
+  parts: TracedOutline[];
   /**
-   * Brush strokes painted onto the mask during tracing (rectified-image
-   * pixels), kept so re-tracing can restore and reapply them. Absent for
-   * primitive shapes and for tools imported from plans that predate painting.
+   * Counterclockwise rotation in degrees applied about the area-weighted
+   * centroid of all parts combined (combinedCentroidOf in edit.ts).
    */
-  brushStrokes?: BrushStroke[];
-  /** Counterclockwise rotation in degrees applied about the outline centroid. */
   rotationDeg: number;
-  /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. */
+  /** Outward clearance in mm between tool and pocket wall, 0 to 4.5. Applies per part. */
   offsetMm: number;
-  /** Mirror across the vertical axis through the outline centroid. */
+  /** Mirror across the vertical axis through the combined centroid of all parts. */
   mirrored: boolean;
   /**
    * Interior holes narrower than this (their thinnest width) are filled during
    * resolve so no thin island is left standing in the pocket. 0 keeps every
-   * hole. Measured by the polygon erosion emptiness test in edit.ts.
+   * hole. Measured by the polygon erosion emptiness test in edit.ts. Applies
+   * per part.
    */
   minHoleWidthMm: number;
   /**
-   * Indices into `outline.holes` that the user manually filled, so their
-   * islands are cut away. Stable for the life of the outline; cleared on
-   * re-trace.
+   * Holes the user manually filled, addressed by which part they belong to
+   * and their index into that part's own `holes`, so their islands are cut
+   * away. Stable for the life of the parts; cleared on re-trace.
    */
-  filledHoleIndices: number[];
+  filledHoles: { partIndex: number; holeIndex: number }[];
   fingerHoles: FingerHole[];
+  /** Where the outline came from, owning that origin's re-edit data. */
+  source: ToolSource;
 }
 
 /**

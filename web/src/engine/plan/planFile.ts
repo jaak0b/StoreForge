@@ -61,13 +61,15 @@ import type {
   BrushStroke,
   FingerHole,
   MmPoint,
-  PaperCorners,
   PaperKind,
   SamPoint,
   TracedTool,
   ToolPlacement,
+  ToolSource,
+  TraceSession,
 } from '../trace/types';
 import { DEFAULT_MIN_HOLE_WIDTH_MM } from '../trace/layoutModel';
+import { deserializeSketch, validateSketch } from '../sketch/model';
 
 /*
  * Validation message convention. Every validator returns null when the value
@@ -119,12 +121,65 @@ function isMmPointList(value: unknown): value is MmPoint[] {
   );
 }
 
+function validateClickList(raw: unknown, subject: string): string | null {
+  if (!Array.isArray(raw)) {
+    return `${subject}: The clicks must be a list.`;
+  }
+  for (const rawClick of raw) {
+    const click = rawClick as Record<string, unknown> | null;
+    if (
+      typeof click !== 'object' ||
+      click === null ||
+      !isFiniteNumber(click.x) ||
+      !isFiniteNumber(click.y) ||
+      (click.label !== 0 && click.label !== 1)
+    ) {
+      return `${subject}: A click needs an x, a y and a label of 0 or 1.`;
+    }
+  }
+  return null;
+}
+
+function validateStrokeList(raw: unknown, subject: string): string | null {
+  if (!Array.isArray(raw)) {
+    return `${subject}: The brush strokes must be a list.`;
+  }
+  for (const rawStroke of raw) {
+    const stroke = rawStroke as Record<string, unknown> | null;
+    if (
+      typeof stroke !== 'object' ||
+      stroke === null ||
+      (stroke.mode !== 'add' && stroke.mode !== 'erase' && stroke.mode !== 'smooth') ||
+      !isFiniteNumber(stroke.radiusMm) ||
+      (stroke.radiusMm as number) <= 0 ||
+      !Array.isArray(stroke.points)
+    ) {
+      return `${subject}: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.`;
+    }
+    for (const rawPt of stroke.points as unknown[]) {
+      const pt = rawPt as Record<string, unknown> | null;
+      if (typeof pt !== 'object' || pt === null || !isFiniteNumber(pt.x) || !isFiniteNumber(pt.y)) {
+        return `${subject}: A brush stroke point needs an x and a y.`;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Validates a raw value as a BinPockets object (tools plus placements).
  * Returns null when it is valid, otherwise a message naming the first
- * offending part, prefixed with the given subject.
+ * offending part, prefixed with the given subject. sessionIds is the set of
+ * trace session ids the bin declares, or null for a legacy (version 10 or
+ * earlier) bin: legacy tools carry clicks and brush strokes on the tool
+ * itself, and a source, when present at all, is a sketch or a bare photo
+ * marker with no session to check against.
  */
-export function validatePockets(raw: unknown, subject: string): string | null {
+export function validatePockets(
+  raw: unknown,
+  subject: string,
+  sessionIds: ReadonlySet<string> | null,
+): string | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return `${subject}: The tool pockets must be an object.`;
   }
@@ -148,18 +203,36 @@ export function validatePockets(raw: unknown, subject: string): string | null {
     if (typeof tool.name !== 'string') {
       return `${subject}: pocket tool ${tool.id}: The tool name must be text.`;
     }
-    const outline = tool.outline as Record<string, unknown> | null | undefined;
-    if (typeof outline !== 'object' || outline === null || Array.isArray(outline)) {
-      return `${subject}: pocket tool ${tool.id}: The outline must be an object.`;
+    // A version 11 tool carries one or more disjoint parts; a version 10 or
+    // earlier tool carries a single `outline` field, migrated to a one-part
+    // `parts` list by pickPockets. Accept whichever this tool has.
+    let partsRaw: unknown[];
+    if (Array.isArray(tool.parts)) {
+      partsRaw = tool.parts;
+      if (partsRaw.length === 0) {
+        return `${subject}: pocket tool ${tool.id}: The tool needs at least one traced part.`;
+      }
+    } else if (tool.outline !== undefined) {
+      partsRaw = [tool.outline];
+    } else {
+      return `${subject}: pocket tool ${tool.id}: The tool is missing its traced parts.`;
     }
-    if (!isMmPointList(outline.outer) || (outline.outer as MmPoint[]).length < 3) {
-      return `${subject}: pocket tool ${tool.id}: The outline needs at least 3 outer points.`;
-    }
-    if (
-      !Array.isArray(outline.holes) ||
-      !outline.holes.every((loop) => isMmPointList(loop) && loop.length >= 3)
-    ) {
-      return `${subject}: pocket tool ${tool.id}: Each outline hole must be a list of points.`;
+    const partHoleCounts: number[] = [];
+    for (const rawPart of partsRaw) {
+      const part = rawPart as Record<string, unknown> | null | undefined;
+      if (typeof part !== 'object' || part === null || Array.isArray(part)) {
+        return `${subject}: pocket tool ${tool.id}: A traced part must be an object.`;
+      }
+      if (!isMmPointList(part.outer) || (part.outer as MmPoint[]).length < 3) {
+        return `${subject}: pocket tool ${tool.id}: A traced part needs at least 3 outer points.`;
+      }
+      if (
+        !Array.isArray(part.holes) ||
+        !part.holes.every((loop) => isMmPointList(loop) && loop.length >= 3)
+      ) {
+        return `${subject}: pocket tool ${tool.id}: Each part's hole must be a list of points.`;
+      }
+      partHoleCounts.push((part.holes as unknown[]).length);
     }
     if (!isFiniteNumber(tool.rotationDeg)) {
       return `${subject}: pocket tool ${tool.id}: The rotation angle must be a number.`;
@@ -170,16 +243,39 @@ export function validatePockets(raw: unknown, subject: string): string | null {
     if (typeof tool.mirrored !== 'boolean') {
       return `${subject}: pocket tool ${tool.id}: The mirrored setting must be true or false.`;
     }
-    // minHoleWidthMm and filledHoleIndices were added after the first traced
-    // entries shipped; older plans omit them, so undefined is accepted and
-    // defaulted (the default width, no filled holes) on load.
+    // minHoleWidthMm and the filled-hole list were added after the first
+    // traced entries shipped; older plans omit them, so undefined is
+    // accepted and defaulted (the default width, no filled holes) on load.
     if (tool.minHoleWidthMm !== undefined) {
       if (!isFiniteNumber(tool.minHoleWidthMm) || tool.minHoleWidthMm < 0) {
         return `${subject}: pocket tool ${tool.id}: The minimum hole width must be a number of at least 0 mm.`;
       }
     }
-    if (tool.filledHoleIndices !== undefined) {
-      const holeCount = (outline.holes as unknown[]).length;
+    if (tool.filledHoles !== undefined) {
+      if (!Array.isArray(tool.filledHoles)) {
+        return `${subject}: pocket tool ${tool.id}: The filled hole list must be a list.`;
+      }
+      for (const rawFilled of tool.filledHoles) {
+        const filled = rawFilled as Record<string, unknown> | null;
+        const partIndex = filled?.partIndex;
+        const holeIndex = filled?.holeIndex;
+        if (
+          typeof filled !== 'object' ||
+          filled === null ||
+          !Number.isInteger(partIndex) ||
+          (partIndex as number) < 0 ||
+          (partIndex as number) >= partHoleCounts.length ||
+          !Number.isInteger(holeIndex) ||
+          (holeIndex as number) < 0 ||
+          (holeIndex as number) >= partHoleCounts[partIndex as number]
+        ) {
+          return `${subject}: pocket tool ${tool.id}: A filled hole must name a whole part index and a whole hole index that refer to the tool's own parts and holes.`;
+        }
+      }
+    } else if (tool.filledHoleIndices !== undefined) {
+      // Version 10 or earlier (single-part) filled holes: whole numbers into
+      // the tool's one outline's holes, migrated onto part 0 by pickPockets.
+      const holeCount = partHoleCounts[0] ?? 0;
       if (
         !Array.isArray(tool.filledHoleIndices) ||
         !tool.filledHoleIndices.every(
@@ -187,51 +283,6 @@ export function validatePockets(raw: unknown, subject: string): string | null {
         )
       ) {
         return `${subject}: pocket tool ${tool.id}: The filled hole list must contain whole numbers referring to the tool's own holes.`;
-      }
-    }
-    // clicks were added after the first traced entries shipped; older plans
-    // simply omit them, so undefined is accepted and defaulted to an empty list.
-    if (tool.clicks !== undefined) {
-      if (!Array.isArray(tool.clicks)) {
-        return `${subject}: pocket tool ${tool.id}: The clicks must be a list.`;
-      }
-      for (const rawClick of tool.clicks) {
-        const click = rawClick as Record<string, unknown> | null;
-        if (
-          typeof click !== 'object' ||
-          click === null ||
-          !isFiniteNumber(click.x) ||
-          !isFiniteNumber(click.y) ||
-          (click.label !== 0 && click.label !== 1)
-        ) {
-          return `${subject}: pocket tool ${tool.id}: A click needs an x, a y and a label of 0 or 1.`;
-        }
-      }
-    }
-    // brushStrokes were added with the mask-painting tool, after the first
-    // traced entries shipped; older plans omit them, so undefined is accepted.
-    if (tool.brushStrokes !== undefined) {
-      if (!Array.isArray(tool.brushStrokes)) {
-        return `${subject}: pocket tool ${tool.id}: The brush strokes must be a list.`;
-      }
-      for (const rawStroke of tool.brushStrokes) {
-        const stroke = rawStroke as Record<string, unknown> | null;
-        if (
-          typeof stroke !== 'object' ||
-          stroke === null ||
-          (stroke.mode !== 'add' && stroke.mode !== 'erase' && stroke.mode !== 'smooth') ||
-          !isFiniteNumber(stroke.radiusMm) ||
-          (stroke.radiusMm as number) <= 0 ||
-          !Array.isArray(stroke.points)
-        ) {
-          return `${subject}: pocket tool ${tool.id}: A brush stroke needs a mode of add, erase or smooth, a radius above 0 mm and a list of points.`;
-        }
-        for (const rawPt of stroke.points as unknown[]) {
-          const pt = rawPt as Record<string, unknown> | null;
-          if (typeof pt !== 'object' || pt === null || !isFiniteNumber(pt.x) || !isFiniteNumber(pt.y)) {
-            return `${subject}: pocket tool ${tool.id}: A brush stroke point needs an x and a y.`;
-          }
-        }
       }
     }
     if (!Array.isArray(tool.fingerHoles)) {
@@ -254,6 +305,60 @@ export function validatePockets(raw: unknown, subject: string): string | null {
         (!isFiniteNumber(hole.x2) || !isFiniteNumber(hole.y2))
       ) {
         return `${subject}: pocket tool ${tool.id}: An elongated finger hole needs its second point, so x2 and y2 must both be numbers.`;
+      }
+    }
+    if (sessionIds === null) {
+      // Legacy mode (plan version 10 or earlier): clicks and brush strokes
+      // sit on the tool itself and the source, when present at all, is a
+      // sketch or a bare photo marker. The pick step migrates them.
+      if (tool.clicks !== undefined) {
+        const clicksProblem = validateClickList(tool.clicks, `${subject}: pocket tool ${tool.id}`);
+        if (clicksProblem !== null) return clicksProblem;
+      }
+      if (tool.brushStrokes !== undefined) {
+        const strokesProblem = validateStrokeList(
+          tool.brushStrokes,
+          `${subject}: pocket tool ${tool.id}`,
+        );
+        if (strokesProblem !== null) return strokesProblem;
+      }
+      if (tool.source !== undefined) {
+        const source = tool.source as Record<string, unknown> | null;
+        if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+          return `${subject}: pocket tool ${tool.id}: The outline source must be an object.`;
+        }
+        if (source.kind === 'sketch') {
+          const sketchProblem = validateSketch(source.sketch, `${subject}: pocket tool ${tool.id}`);
+          if (sketchProblem !== null) return sketchProblem;
+        } else if (source.kind !== 'photo') {
+          return `${subject}: pocket tool ${tool.id}: The outline source must be a photo trace or a sketch.`;
+        }
+      }
+    } else {
+      const source = tool.source as Record<string, unknown> | null | undefined;
+      if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+        return `${subject}: pocket tool ${tool.id}: The outline source must be an object.`;
+      }
+      if (source.kind === 'photo') {
+        if (typeof source.sessionId !== 'string' || !sessionIds.has(source.sessionId)) {
+          return `${subject}: pocket tool ${tool.id}: The outline source names a photo sheet the bin does not have.`;
+        }
+        const clicksProblem = validateClickList(source.clicks, `${subject}: pocket tool ${tool.id}`);
+        if (clicksProblem !== null) return clicksProblem;
+        if (source.brushStrokes !== undefined) {
+          const strokesProblem = validateStrokeList(
+            source.brushStrokes,
+            `${subject}: pocket tool ${tool.id}`,
+          );
+          if (strokesProblem !== null) return strokesProblem;
+        }
+      } else if (source.kind === 'sketch') {
+        const sketchProblem = validateSketch(source.sketch, `${subject}: pocket tool ${tool.id}`);
+        if (sketchProblem !== null) return sketchProblem;
+      } else if (source.kind === 'primitive') {
+        // A primitive source carries no further fields.
+      } else {
+        return `${subject}: pocket tool ${tool.id}: The outline source must be a photo trace, a sketch or a basic shape.`;
       }
     }
   }
@@ -293,22 +398,53 @@ export function validatePockets(raw: unknown, subject: string): string | null {
   return null;
 }
 
-/** Copies only the known BinPockets fields from a validated raw object. */
-export function pickPockets(raw: Record<string, unknown>): BinPockets {
-  const tools = (raw.tools as Record<string, unknown>[]).map((tool): TracedTool => {
-    const outline = tool.outline as Record<string, unknown>;
+/**
+ * Copies a validated tool source. A tool from a version 10 or earlier plan
+ * has no self-contained source: a sketch source is kept, a tool with stored
+ * clicks becomes a photo tool referencing the bin's one migrated session,
+ * and everything else (empty clicks, or clicks with no stored photo to
+ * re-trace against) is a primitive.
+ */
+function pickToolSource(
+  tool: Record<string, unknown>,
+  migratedSessionId: string | null,
+): ToolSource {
+  const raw = tool.source as Record<string, unknown> | undefined;
+  if (raw !== undefined && raw.kind === 'sketch') {
+    const parsed = deserializeSketch(raw.sketch);
+    if (!parsed.ok) {
+      // validatePockets already proved the sketch valid; reaching here is a
+      // programming error, not a user problem.
+      throw new Error(`A validated sketch failed to deserialize: ${parsed.error}`);
+    }
+    return { kind: 'sketch', sketch: parsed.sketch };
+  }
+  if (raw !== undefined && raw.kind === 'primitive') {
+    return { kind: 'primitive' };
+  }
+  if (raw !== undefined && raw.kind === 'photo' && typeof raw.sessionId === 'string') {
     return {
-      id: tool.id as string,
-      name: tool.name as string,
-      outline: {
-        outer: (outline.outer as MmPoint[]).map((p) => ({ x: p.x, y: p.y })),
-        holes: (outline.holes as MmPoint[][]).map((loop) => loop.map((p) => ({ x: p.x, y: p.y }))),
-      },
-      clicks: ((tool.clicks as SamPoint[] | undefined) ?? []).map((p) => ({
-        x: p.x,
-        y: p.y,
-        label: p.label,
-      })),
+      kind: 'photo',
+      sessionId: raw.sessionId,
+      clicks: (raw.clicks as SamPoint[]).map((p) => ({ x: p.x, y: p.y, label: p.label })),
+      ...(raw.brushStrokes !== undefined
+        ? {
+            brushStrokes: (raw.brushStrokes as BrushStroke[]).map((s) => ({
+              mode: s.mode,
+              radiusMm: s.radiusMm,
+              points: s.points.map((p) => ({ x: p.x, y: p.y })),
+            })),
+          }
+        : {}),
+    };
+  }
+  // Legacy tool: clicks live on the tool itself.
+  const clicks = (tool.clicks as SamPoint[] | undefined) ?? [];
+  if (clicks.length > 0 && migratedSessionId !== null) {
+    return {
+      kind: 'photo',
+      sessionId: migratedSessionId,
+      clicks: clicks.map((p) => ({ x: p.x, y: p.y, label: p.label })),
       ...(tool.brushStrokes !== undefined
         ? {
             brushStrokes: (tool.brushStrokes as BrushStroke[]).map((s) => ({
@@ -318,11 +454,47 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
             })),
           }
         : {}),
+    };
+  }
+  return { kind: 'primitive' };
+}
+
+/** Copies only the known BinPockets fields from a validated raw object. */
+export function pickPockets(
+  raw: Record<string, unknown>,
+  migratedSessionId: string | null,
+): BinPockets {
+  const tools = (raw.tools as Record<string, unknown>[]).map((tool): TracedTool => {
+    // Version 11 carries `parts`; version 10 or earlier carries one `outline`,
+    // wrapped here into a one-element parts list.
+    const rawParts = (
+      Array.isArray(tool.parts) ? tool.parts : [tool.outline]
+    ) as Record<string, unknown>[];
+    const parts = rawParts.map((part) => ({
+      outer: (part.outer as MmPoint[]).map((p) => ({ x: p.x, y: p.y })),
+      holes: (part.holes as MmPoint[][]).map((loop) => loop.map((p) => ({ x: p.x, y: p.y }))),
+    }));
+    const filledHoles =
+      tool.filledHoles !== undefined
+        ? (tool.filledHoles as { partIndex: number; holeIndex: number }[]).map((f) => ({
+            partIndex: f.partIndex,
+            holeIndex: f.holeIndex,
+          }))
+        : // Version 10 or earlier: whole numbers into the tool's one outline,
+          // which is now part 0.
+          ((tool.filledHoleIndices as number[] | undefined) ?? []).map((holeIndex) => ({
+            partIndex: 0,
+            holeIndex,
+          }));
+    return {
+      id: tool.id as string,
+      name: tool.name as string,
+      parts,
       rotationDeg: tool.rotationDeg as number,
       offsetMm: tool.offsetMm as number,
       mirrored: tool.mirrored as boolean,
       minHoleWidthMm: (tool.minHoleWidthMm as number | undefined) ?? DEFAULT_MIN_HOLE_WIDTH_MM,
-      filledHoleIndices: ((tool.filledHoleIndices as number[] | undefined) ?? []).slice(),
+      filledHoles,
       fingerHoles: (tool.fingerHoles as FingerHole[]).map((hole) => ({
         x: hole.x,
         y: hole.y,
@@ -331,6 +503,7 @@ export function pickPockets(raw: Record<string, unknown>): BinPockets {
           : {}),
         diameterMm: hole.diameterMm,
       })),
+      source: pickToolSource(tool, migratedSessionId),
     };
   });
   const placements = (raw.placements as Record<string, unknown>[]).map(
@@ -591,11 +764,53 @@ export function pickCavityEdits(raw: Record<string, unknown>): CavityEdit[] {
 
 const CORNER_KEYS = ['tl', 'tr', 'br', 'bl'] as const;
 
+/** Validates a paper object (kind plus four corners); shared by the session and the legacy bin-level field. */
+function validatePaper(raw: unknown, subject: string): string | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return `${subject}: The paper must be an object.`;
+  }
+  const paper = raw as Record<string, unknown>;
+  if (paper.kind !== 'a4' && paper.kind !== 'letter') {
+    return `${subject}: The paper kind must be a4 or letter.`;
+  }
+  const corners = paper.corners as Record<string, unknown> | null | undefined;
+  if (typeof corners !== 'object' || corners === null || Array.isArray(corners)) {
+    return `${subject}: The paper corners must be an object.`;
+  }
+  for (const key of CORNER_KEYS) {
+    const corner = corners[key] as Record<string, unknown> | null | undefined;
+    if (
+      typeof corner !== 'object' ||
+      corner === null ||
+      !isFiniteNumber(corner.x) ||
+      !isFiniteNumber(corner.y)
+    ) {
+      return `${subject}: The paper corner ${key} needs an x and a y coordinate.`;
+    }
+  }
+  return null;
+}
+
+/** Copies only the known TracePaper fields from a validated raw paper object. */
+function pickTracePaper(raw: Record<string, unknown>): TracePaper {
+  const corners = raw.corners as Record<string, Record<string, number>>;
+  return {
+    kind: raw.kind as PaperKind,
+    corners: {
+      tl: { x: corners.tl.x, y: corners.tl.y },
+      tr: { x: corners.tr.x, y: corners.tr.y },
+      br: { x: corners.br.x, y: corners.br.y },
+      bl: { x: corners.bl.x, y: corners.bl.y },
+    },
+  };
+}
+
 /**
  * Validates the optional trace-source fields (traceSourceId and paper) on a
  * raw traced bin. Returns null when they are valid or absent, otherwise a
  * message naming the first offending part. Plans from other devices simply
- * omit both; the bin is then layout-only editable.
+ * omit both; the bin is then layout-only editable. These are the version 10
+ * (and earlier) bin-level fields; version 11 moves them into traceSessions.
  */
 export function validateTraceSource(raw: Record<string, unknown>, subject: string): string | null {
   if (raw.traceSourceId !== undefined) {
@@ -604,49 +819,50 @@ export function validateTraceSource(raw: Record<string, unknown>, subject: strin
     }
   }
   if (raw.paper !== undefined) {
-    if (typeof raw.paper !== 'object' || raw.paper === null || Array.isArray(raw.paper)) {
-      return `${subject}: The paper must be an object.`;
-    }
-    const paper = raw.paper as Record<string, unknown>;
-    if (paper.kind !== 'a4' && paper.kind !== 'letter') {
-      return `${subject}: The paper kind must be a4 or letter.`;
-    }
-    const corners = paper.corners as Record<string, unknown> | null | undefined;
-    if (typeof corners !== 'object' || corners === null || Array.isArray(corners)) {
-      return `${subject}: The paper corners must be an object.`;
-    }
-    for (const key of CORNER_KEYS) {
-      const corner = corners[key] as Record<string, unknown> | null | undefined;
-      if (
-        typeof corner !== 'object' ||
-        corner === null ||
-        !isFiniteNumber(corner.x) ||
-        !isFiniteNumber(corner.y)
-      ) {
-        return `${subject}: The paper corner ${key} needs an x and a y coordinate.`;
-      }
-    }
+    return validatePaper(raw.paper, subject);
   }
   return null;
 }
 
-/** Copies only the known TracePaper fields from a validated raw object. */
-function pickTracePaper(raw: Record<string, unknown>): TracePaper {
-  const corners = raw.corners as Record<string, { x: number; y: number }>;
-  const picked = {} as Record<string, { x: number; y: number }>;
-  for (const key of CORNER_KEYS) {
-    picked[key] = { x: corners[key].x, y: corners[key].y };
+/**
+ * Validates a traced bin's list of trace sessions (the photographed sheets
+ * its photo tools reference). Returns null when valid, otherwise a message
+ * naming the first offending session.
+ */
+export function validateTraceSessions(raw: unknown, subject: string): string | null {
+  if (!Array.isArray(raw)) {
+    return `${subject}: The photo sheets must be a list.`;
   }
-  return { corners: picked as unknown as PaperCorners, kind: raw.kind as PaperKind };
+  const ids = new Set<string>();
+  for (const rawSession of raw) {
+    if (typeof rawSession !== 'object' || rawSession === null || Array.isArray(rawSession)) {
+      return `${subject}: A photo sheet is not an object.`;
+    }
+    const session = rawSession as Record<string, unknown>;
+    if (typeof session.id !== 'string' || session.id.length === 0) {
+      return `${subject}: A photo sheet is missing its id.`;
+    }
+    if (ids.has(session.id)) {
+      return `${subject}: The photo sheet id ${session.id} appears twice.`;
+    }
+    ids.add(session.id);
+    if (typeof session.traceSourceId !== 'string' || session.traceSourceId.length === 0) {
+      return `${subject}: photo sheet ${session.id}: The stored photo id must be text that is not empty.`;
+    }
+    const paperProblem = validatePaper(session.paper, `${subject}: photo sheet ${session.id}`);
+    if (paperProblem !== null) return paperProblem;
+  }
+  return null;
 }
 
-/** Copies the optional trace-source fields onto a validated traced bin. */
-function assignTraceSource(
-  target: { traceSourceId?: string; paper?: TracePaper },
-  raw: Record<string, unknown>,
-): void {
-  if (raw.traceSourceId !== undefined) target.traceSourceId = raw.traceSourceId as string;
-  if (raw.paper !== undefined) target.paper = pickTracePaper(raw.paper as Record<string, unknown>);
+/** Copies only the known TraceSession fields from a validated raw list. */
+export function pickTraceSessions(raw: Record<string, unknown>): TraceSession[] {
+  if (!Array.isArray(raw.traceSessions)) return [];
+  return (raw.traceSessions as Record<string, unknown>[]).map((session) => ({
+    id: session.id as string,
+    traceSourceId: session.traceSourceId as string,
+    paper: pickTracePaper(session.paper as Record<string, unknown>),
+  }));
 }
 
 const HEAD_TYPE_SET: ReadonlySet<string> = new Set<string>(HEAD_TYPES);
@@ -812,11 +1028,22 @@ function validateBin(raw: unknown, subject: string): string | null {
     ) {
       return `${subject}: A traced bin cannot have divider walls.`;
     }
-    const pocketsProblem = validatePockets(bin.pockets, subject);
+    let sessionIds: ReadonlySet<string> | null = null;
+    if (bin.traceSessions !== undefined) {
+      const sessionsProblem = validateTraceSessions(bin.traceSessions, subject);
+      if (sessionsProblem !== null) return sessionsProblem;
+      sessionIds = new Set(
+        (bin.traceSessions as Record<string, unknown>[]).map((s) => s.id as string),
+      );
+    } else {
+      // A bin without a session list is a version 10 (or earlier) bin still
+      // carrying the single-photo fields; validate those for the migration.
+      const legacyProblem = validateTraceSource(bin, subject);
+      if (legacyProblem !== null) return legacyProblem;
+    }
+    const pocketsProblem = validatePockets(bin.pockets, subject, sessionIds);
     if (pocketsProblem !== null) return pocketsProblem;
-    const editsProblem = validateCavityEdits(bin.edits, subject);
-    if (editsProblem !== null) return editsProblem;
-    return validateTraceSource(bin, subject);
+    return validateCavityEdits(bin.edits, subject);
   }
   if (bin.origin === 'cutout') {
     if (
@@ -842,14 +1069,30 @@ function pickBin(raw: Record<string, unknown>): Bin {
     magnetHoles: raw.magnetHoles as boolean,
   };
   if (raw.origin === 'traced') {
-    const bin: Bin = {
+    let traceSessions: TraceSession[];
+    let migratedSessionId: string | null = null;
+    if (raw.traceSessions !== undefined) {
+      traceSessions = pickTraceSessions(raw);
+    } else if (typeof raw.traceSourceId === 'string' && raw.paper !== undefined) {
+      // Version 10 migration: the bin-level photo becomes one session that
+      // every tool with stored clicks references.
+      const session: TraceSession = {
+        id: crypto.randomUUID(),
+        traceSourceId: raw.traceSourceId,
+        paper: pickTracePaper(raw.paper as Record<string, unknown>),
+      };
+      traceSessions = [session];
+      migratedSessionId = session.id;
+    } else {
+      traceSessions = [];
+    }
+    return {
       ...envelope,
       origin: 'traced',
-      pockets: pickPockets(raw.pockets as Record<string, unknown>),
+      pockets: pickPockets(raw.pockets as Record<string, unknown>, migratedSessionId),
       edits: pickCavityEdits(raw),
+      traceSessions,
     };
-    assignTraceSource(bin, raw);
-    return bin;
   }
   if (raw.origin === 'cutout') {
     return { ...envelope, origin: 'cutout', models: pickCutoutModels(raw), edits: pickCavityEdits(raw) };
@@ -1626,7 +1869,7 @@ function validateLegacyEntry(raw: unknown): string | null {
     if (entry.pockets === undefined) {
       return `entry ${id}: A traced entry must have tool pockets.`;
     }
-    const pocketsProblem = validatePockets(entry.pockets, `entry ${id}`);
+    const pocketsProblem = validatePockets(entry.pockets, `entry ${id}`, null);
     if (pocketsProblem !== null) return pocketsProblem;
     return validateTraceSource(entry, `entry ${id}`);
   }
@@ -1680,13 +1923,26 @@ function legacyProductOf(
   };
   let bin: Bin;
   if (kind === 'traced') {
+    let traceSessions: TraceSession[];
+    let migratedSessionId: string | null = null;
+    if (typeof raw.traceSourceId === 'string' && raw.paper !== undefined) {
+      const session: TraceSession = {
+        id: crypto.randomUUID(),
+        traceSourceId: raw.traceSourceId,
+        paper: pickTracePaper(raw.paper as Record<string, unknown>),
+      };
+      traceSessions = [session];
+      migratedSessionId = session.id;
+    } else {
+      traceSessions = [];
+    }
     bin = {
       ...envelope,
       origin: 'traced',
-      pockets: pickPockets(raw.pockets as Record<string, unknown>),
+      pockets: pickPockets(raw.pockets as Record<string, unknown>, migratedSessionId),
       edits: pickCavityEdits(raw),
+      traceSessions,
     };
-    assignTraceSource(bin, raw);
   } else {
     const walls = pickWalls(raw);
     bin =
@@ -1774,7 +2030,7 @@ function validateLegacyBatch(raw: unknown): string | null {
       return `batch ${id}: item ${item.id}: The source entry id must be text.`;
     }
     if (item.pockets !== undefined) {
-      const pocketsProblem = validatePockets(item.pockets, `batch ${id}: item ${item.id}`);
+      const pocketsProblem = validatePockets(item.pockets, `batch ${id}: item ${item.id}`, null);
       if (pocketsProblem !== null) return pocketsProblem;
     }
     const traceProblem = validateTraceSource(item, `batch ${id}: item ${item.id}`);
@@ -1882,7 +2138,15 @@ export function parsePlanFile(text: string): PlanParseResult {
   // cutout bins, absent in earlier versions and defaulted to an empty list
   // on pick, and version 10 adds the group entity (a persistent drawer fill)
   // and the baseplate product's optional group link, both absent from every
-  // earlier version, so nothing else changes.
+  // earlier version, so nothing else changes. Version 11 reshapes traced
+  // bins around trace sessions: the bin carries a traceSessions list (each
+  // session one photographed sheet with its stored photo id and paper
+  // corners), and every pocket tool carries a self-contained source (a
+  // photo source naming its session and owning its clicks and brush
+  // strokes, an embedded sketch, or a primitive shape). Version 10 bins
+  // carry a single bin-level traceSourceId and paper and tool-level clicks;
+  // on load these become one session, tools with clicks become photo tools
+  // referencing it, and the rest become primitives.
   const legacy = version === 1 || version === 2;
   const warnings: string[] = [];
   const entries: QueueEntry[] = [];

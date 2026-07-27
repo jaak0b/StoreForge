@@ -2,7 +2,7 @@
 import { watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useToolTrace } from '../../stores/toolTrace';
-import { boundsOf, holeIndexAt, transformTool } from '../../engine/trace/edit';
+import { boundsOfParts, holeIndexAt, transformToolParts } from '../../engine/trace/edit';
 import {
   segmentDistance,
   useTopDownCanvas,
@@ -76,7 +76,7 @@ function drawContent({ ctx, view, toPx }: DrawContext): void {
   for (const tool of tools.value) {
     const placement = store.placementOf(tool.id);
     if (placement === undefined) continue;
-    const outline = transformTool(tool.outline, tool.rotationDeg, tool.mirrored);
+    const parts = transformToolParts(tool.parts, tool.rotationDeg, tool.mirrored);
     const selected = tool.id === selectedToolId.value;
     ctx.strokeStyle = selected ? '#42a5f5' : 'rgba(255, 152, 0, 0.9)';
     ctx.fillStyle = selected ? 'rgba(66, 165, 245, 0.18)' : 'rgba(255, 152, 0, 0.12)';
@@ -90,19 +90,25 @@ function drawContent({ ctx, view, toPx }: DrawContext): void {
       });
       ctx.closePath();
     };
-    // The whole tool body first, then its outer ring.
-    traceLoop(outline.outer);
-    ctx.fill();
-    traceLoop(outline.outer);
-    ctx.stroke();
-    // Holes render in raw order (transformTool preserves it), so the index
-    // lines up with filledHoleIndices. An unfilled hole leaves a standing
-    // island (its ring is stroked); a filled hole is cut away, drawn as
-    // another patch of the tool's fill so the change reads distinctly.
-    outline.holes.forEach((loop, i) => {
-      traceLoop(loop);
-      if (tool.filledHoleIndices.includes(i)) ctx.fill();
-      else ctx.stroke();
+    parts.forEach((part, partIndex) => {
+      // The whole part body first, then its outer ring.
+      traceLoop(part.outer);
+      ctx.fill();
+      traceLoop(part.outer);
+      ctx.stroke();
+      // Holes render in raw order (transformToolParts preserves it per part),
+      // so the index lines up with filledHoles. An unfilled hole leaves a
+      // standing island (its ring is stroked); a filled hole is cut away,
+      // drawn as another patch of the tool's fill so the change reads
+      // distinctly.
+      part.holes.forEach((loop, holeIndex) => {
+        traceLoop(loop);
+        if (tool.filledHoles.some((f) => f.partIndex === partIndex && f.holeIndex === holeIndex)) {
+          ctx.fill();
+        } else {
+          ctx.stroke();
+        }
+      });
     });
     for (const hole of tool.fingerHoles) {
       holePath(
@@ -145,8 +151,8 @@ function drawContent({ ctx, view, toPx }: DrawContext): void {
       : null;
   const selectedPlacement = selected !== null ? store.placementOf(selected.id) : undefined;
   if (selected !== null && selectedPlacement !== undefined) {
-    const bounds = boundsOf(
-      transformTool(selected.outline, selected.rotationDeg, selected.mirrored),
+    const bounds = boundsOfParts(
+      transformToolParts(selected.parts, selected.rotationDeg, selected.mirrored),
     );
     const [x0, y0] = toPx({
       x: bounds.minX + selectedPlacement.xMm,
@@ -192,7 +198,7 @@ function toolAt(p: MmPoint): TracedTool | null {
     const tool = tools.value[i];
     const placement = store.placementOf(tool.id);
     if (placement === undefined) continue;
-    const bounds = boundsOf(transformTool(tool.outline, tool.rotationDeg, tool.mirrored));
+    const bounds = boundsOfParts(transformToolParts(tool.parts, tool.rotationDeg, tool.mirrored));
     if (
       p.x >= bounds.minX + placement.xMm &&
       p.x <= bounds.maxX + placement.xMm &&
@@ -302,20 +308,25 @@ function clampMove(hole: FingerHole, placement: { xMm: number; yMm: number }, d:
 }
 
 /**
- * The topmost tool whose resolved outline has an interior hole under the
- * point, with that hole's raw index, or null. Used by fill-holes mode: the
- * point is taken into the tool's transformed frame (transformTool preserves
- * hole order, so the index matches the raw outline).
+ * The topmost tool whose resolved parts have an interior hole under the
+ * point, with that part's index and the hole's raw index into it, or null.
+ * Used by fill-holes mode: the point is taken into the tool's transformed
+ * frame (transformToolParts preserves hole order per part, so the index
+ * matches the raw outline).
  */
-function outlineHoleAt(p: MmPoint): { toolId: string; index: number } | null {
+function outlineHoleAt(
+  p: MmPoint,
+): { toolId: string; partIndex: number; index: number } | null {
   for (let i = tools.value.length - 1; i >= 0; i -= 1) {
     const tool = tools.value[i];
     const placement = store.placementOf(tool.id);
     if (placement === undefined) continue;
-    const outline = transformTool(tool.outline, tool.rotationDeg, tool.mirrored);
+    const parts = transformToolParts(tool.parts, tool.rotationDeg, tool.mirrored);
     const local = { x: p.x - placement.xMm, y: p.y - placement.yMm };
-    const index = holeIndexAt(outline, local);
-    if (index !== null) return { toolId: tool.id, index };
+    for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+      const index = holeIndexAt(parts[partIndex], local);
+      if (index !== null) return { toolId: tool.id, partIndex, index };
+    }
   }
   return null;
 }
@@ -360,7 +371,7 @@ function onPointerDown(event: PointerEvent): void {
     // cut away); a click elsewhere just selects or clears. No drag.
     const hit = outlineHoleAt(p);
     if (hit !== null) {
-      store.toggleFilledHole(hit.toolId, hit.index);
+      store.toggleFilledHole(hit.toolId, hit.partIndex, hit.index);
       selectedToolId.value = hit.toolId;
       return;
     }

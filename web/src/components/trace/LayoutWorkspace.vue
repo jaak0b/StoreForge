@@ -23,12 +23,12 @@ import {
   type BinPockets,
   type Product,
   type QueueEntry,
-  type TracePaper,
   type TracedBin,
 } from '../../engine/plan/types';
-import type { PaperCorners } from '../../engine/trace/types';
+import type { TraceSession } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
+import { referencedSessionIds } from '../../engine/trace/layoutModel';
 import BinViewport from '../BinViewport.vue';
 import CarveProgressBar from '../CarveProgressBar.vue';
 import PaintToolbar from '../carve/PaintToolbar.vue';
@@ -56,6 +56,8 @@ const emit = defineEmits<{
   retrace: [toolId: string];
   /** Asks the workspace to switch to Trace mode for another tool. */
   traceAnother: [];
+  /** Asks the workspace to reopen a sketched tool's stored sketch. */
+  editSketch: [toolId: string];
   saved: [];
   cancelled: [];
 }>();
@@ -135,6 +137,7 @@ function addPrimitive(): void {
       primitiveKind.value === 'circle'
         ? `Circle ${primitiveDiameter.value} mm`
         : `Rectangle ${primitiveWidth.value} x ${primitiveHeight.value} mm`,
+      { kind: 'primitive' },
     );
     primitiveDialog.value = false;
     // The new shape lands on the layout canvas.
@@ -277,6 +280,13 @@ const paintBinding: CavityPaintBinding = {
  * The button is disabled with this as its tooltip, so an invalid layout can
  * never be queued.
  */
+/**
+ * Non-blocking placement warnings from the last landed carve (currently just
+ * cross-tool pocket overlaps): informational only, never disables Add to
+ * queue, mirroring the cutout tab's own warning rows.
+ */
+const pocketWarnings = computed<string[]>(() => carved.value?.warnings ?? []);
+
 const submitBlocker = computed<string | null>(() => {
   if (trace.placements.length === 0) {
     return 'Trace and place at least one tool before adding the bin.';
@@ -292,28 +302,29 @@ const addError = ref<string | null>(null);
 const photoNote = ref<string | null>(null);
 
 /**
- * The trace-source fields to save with the entry: when a photo with a
- * confirmed sheet is loaded, its bytes go into the photo store (a fresh
- * upload under a new id, a resumed photo under its existing one). Without a
- * photo the fields stay untouched (an edit keeps the entry's stored ones).
+ * The sessions to save with the entry: exactly those some photo tool still
+ * references, with each one's photo bytes written to the photo store first.
+ * Orphaned sessions are simply not included; persisting the plan then sweeps
+ * their stored photos. A failed photo write keeps the session out of the
+ * saved list (its tools become layout-only editable later) and says so.
  */
-async function storeTraceSource(): Promise<{ traceSourceId?: string; paper?: TracePaper }> {
-  if (trace.photoBlob === null || trace.calibration === null) return {};
-  const traceSourceId = trace.sourceId ?? crypto.randomUUID();
-  const paper: TracePaper = {
-    corners: JSON.parse(JSON.stringify(trace.calibration.corners)) as PaperCorners,
-    kind: trace.calibration.kind,
-  };
-  try {
-    await putPhoto(traceSourceId, trace.photoBlob);
-  } catch (error) {
-    // The bin is still saved; without the stored photo it is layout-only
-    // editable later, and the note says so.
-    const detail = error instanceof Error ? error.message : String(error);
-    photoNote.value = `Storing the trace photo failed (${detail}). The bin was saved, but its trace cannot be edited later without the photo.`;
-    return {};
+async function storeReferencedSessions(): Promise<TraceSession[]> {
+  const referenced = referencedSessionIds(trace.tools);
+  const saved: TraceSession[] = [];
+  for (const session of trace.sessions) {
+    if (!referenced.has(session.id)) continue;
+    const blob = trace.sessionBlobs.get(session.id);
+    if (blob !== undefined) {
+      try {
+        await putPhoto(session.traceSourceId, blob);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        photoNote.value = `Storing a trace photo failed (${detail}). The bin was saved, but tools traced on that sheet cannot be re-traced later without the photo.`;
+      }
+    }
+    saved.push(JSON.parse(JSON.stringify(session)) as TraceSession);
   }
-  return { traceSourceId, paper };
+  return saved;
 }
 
 async function addToQueue(): Promise<void> {
@@ -327,17 +338,10 @@ async function addToQueue(): Promise<void> {
   const params = pocketParams.value;
   const pockets: BinPockets = { tools: params.tools, placements: params.placements };
   const cleanNotes = notes.value.trim();
-  // The photo must be stored before the queue mutation: persisting the plan
+  // Sessions must be stored before the queue mutation: persisting the plan
   // sweeps stored photos no entry references, so the reference and the photo
-  // have to land in that order. During an edit without a newly loaded photo,
-  // the entry's stored trace-source fields carry over.
-  const source = await storeTraceSource();
-  const editingProductBin =
-    props.editingEntry !== null ? binOf(props.editingEntry.product) : null;
-  const editingBin =
-    editingProductBin !== null && editingProductBin.origin === 'traced'
-      ? editingProductBin
-      : null;
+  // have to land in that order.
+  const traceSessions = await storeReferencedSessions();
   const bin: TracedBin = {
     origin: 'traced',
     gridX: params.gridX,
@@ -349,11 +353,8 @@ async function addToQueue(): Promise<void> {
     // one is being edited, empty for a fresh trace); deep-copied out of the
     // reactive store so the saved plan holds plain JSON.
     edits: trace.edits.map(cloneEdit),
+    traceSessions,
   };
-  const traceSourceId = source.traceSourceId ?? editingBin?.traceSourceId;
-  const paper = source.paper ?? editingBin?.paper;
-  if (traceSourceId !== undefined) bin.traceSourceId = traceSourceId;
-  if (paper !== undefined) bin.paper = paper;
   let product: Product;
   if (params.fusedLabel != null) {
     product = { kind: 'binWithInsert', bin, insert: params.fusedLabel, fused: true };
@@ -407,6 +408,7 @@ function cancelEdit(): void {
         v-model:drawer-open="drawerOpen"
         :retrace-available="retraceAvailable"
         @retrace="emit('retrace', $event)"
+        @edit-sketch="emit('editSketch', $event)"
         @trace-another="emit('traceAnother')"
         @add-shape="primitiveDialog = true"
       />
@@ -454,11 +456,23 @@ function cancelEdit(): void {
         <v-alert v-if="errorMessage" type="error" density="compact" class="mb-2 float-alert">
           {{ errorMessage }}
         </v-alert>
+        <v-alert
+          v-for="(warning, i) in pocketWarnings"
+          :key="i"
+          type="warning"
+          density="compact"
+          class="mb-2 float-alert"
+        >
+          {{ warning }}
+        </v-alert>
         <v-alert v-if="addError" type="warning" density="compact" class="mb-2 float-alert">
           {{ addError }}
         </v-alert>
         <v-alert v-if="photoNote" type="warning" density="compact" class="mb-2 float-alert">
           {{ photoNote }}
+        </v-alert>
+        <v-alert v-if="trace.refinishNotice" type="warning" density="compact" class="mb-2 float-alert">
+          {{ trace.refinishNotice }}
         </v-alert>
         <div class="d-flex justify-end ga-2">
           <v-btn v-if="editingEntry !== null" variant="outlined" @click="cancelEdit">
@@ -491,6 +505,7 @@ function cancelEdit(): void {
         :quantity="quantity"
         @update:quantity="quantity = $event"
         @retrace="emit('retrace', $event)"
+        @edit-sketch="emit('editSketch', $event)"
       />
     </div>
   </div>

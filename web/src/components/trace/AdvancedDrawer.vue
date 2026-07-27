@@ -6,11 +6,12 @@ import { CLEARANCE_CHOICES, HOLE_WIDTH_CHOICES, useToolTrace } from '../../store
 import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
 import { DEFAULT_DRAFT_ANGLE_DEG, validateDraftAngleDeg } from '../../engine/carve/sweep';
-import type { FingerHole } from '../../engine/trace/types';
+import type { FingerHole, TracedTool } from '../../engine/trace/types';
 import { overallHeightMm } from '../../heightHint';
 import LabelIconField from '../LabelIconField.vue';
 import ProductSelect from '../ProductSelect.vue';
 import MoreOptions from '../MoreOptions.vue';
+import { editActionOf } from './toolEditAction';
 
 /**
  * The advanced drawer of the layout workspace, opened by the Edit button in
@@ -29,6 +30,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** Asks the workspace to re-trace the tool from its stored clicks. */
   retrace: [toolId: string];
+  /** Asks the workspace to reopen a sketched tool's stored sketch. */
+  editSketch: [toolId: string];
   'update:quantity': [value: number];
 }>();
 
@@ -141,6 +144,11 @@ function applyDefaultDepth(value: number): void {
   }
 }
 
+/** Total interior holes across every part of the tool's raw (unresolved) outline. */
+function toolHoleCount(tool: TracedTool): number {
+  return tool.parts.reduce((count, part) => count + part.holes.length, 0);
+}
+
 /** True when the hole is an elongated slot rather than a circle. */
 function isSlot(hole: FingerHole): boolean {
   return hole.x2 !== undefined && hole.y2 !== undefined;
@@ -196,7 +204,7 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
             </v-list-item-subtitle>
             <template #append>
               <v-btn
-                v-if="tool.clicks.length > 0"
+                v-if="editActionOf(tool) === 'retrace'"
                 icon
                 size="x-small"
                 variant="text"
@@ -205,6 +213,16 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
                 @click.stop="emit('retrace', tool.id)"
               >
                 <v-icon icon="mdi-magic-staff" size="16" />
+              </v-btn>
+              <v-btn
+                v-else-if="editActionOf(tool) === 'editSketch'"
+                icon
+                size="x-small"
+                variant="text"
+                title="Edit this tool's sketch."
+                @click.stop="emit('editSketch', tool.id)"
+              >
+                <v-icon icon="mdi-pencil-ruler" size="16" />
               </v-btn>
               <v-btn icon size="x-small" variant="text" @click.stop="trace.duplicateTool(tool.id)">
                 <v-icon icon="mdi-content-copy" size="16" />
@@ -304,8 +322,8 @@ function toolSummary(draftAngleDeg: number, offsetMm: number, minHoleWidthMm: nu
               pocket. 0 keeps every hole.
             </p>
             <div class="text-caption text-medium-emphasis mt-2 readout">
-              <div><span>Holes in outline</span><span>{{ tool.outline.holes.length }}</span></div>
-              <div><span>Filled</span><span>{{ tool.filledHoleIndices.length }}</span></div>
+              <div><span>Holes in outline</span><span>{{ toolHoleCount(tool) }}</span></div>
+              <div><span>Filled</span><span>{{ tool.filledHoles.length }}</span></div>
             </div>
             <v-switch
               :model-value="tool.mirrored"

@@ -74,7 +74,7 @@ export function referencedAssetIds(
     // named here, or its blobs would be swept away as orphans.
     switch (bin.origin) {
       case 'traced':
-        if (bin.traceSourceId !== undefined) tracePhotos.add(bin.traceSourceId);
+        for (const session of bin.traceSessions) tracePhotos.add(session.traceSourceId);
         return;
       case 'cutout':
         for (const model of bin.models) cutoutModels.add(model.modelSourceId);

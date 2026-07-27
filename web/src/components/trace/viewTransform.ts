@@ -30,10 +30,23 @@ export interface ViewTransform {
   panY: number;
 }
 
-/** Clamps a zoom factor into the supported [MIN_ZOOM, MAX_ZOOM] range. */
-export function clampZoom(zoom: number): number {
-  if (zoom < MIN_ZOOM) return MIN_ZOOM;
-  if (zoom > MAX_ZOOM) return MAX_ZOOM;
+/** A supported zoom range, min and max inclusive. */
+export interface ZoomRange {
+  min: number;
+  max: number;
+}
+
+/** The default zoom range every caller gets unless it passes its own. */
+export const DEFAULT_ZOOM_RANGE: ZoomRange = { min: MIN_ZOOM, max: MAX_ZOOM };
+
+/**
+ * Clamps a zoom factor into a supported range, [MIN_ZOOM, MAX_ZOOM] unless the
+ * caller passes a different range (e.g. the sketch canvas's wider zoom-out
+ * range for its unbounded design space).
+ */
+export function clampZoom(zoom: number, range: ZoomRange = DEFAULT_ZOOM_RANGE): number {
+  if (zoom < range.min) return range.min;
+  if (zoom > range.max) return range.max;
   return zoom;
 }
 
@@ -43,12 +56,24 @@ export function clampZoom(zoom: number): number {
  * as large as the canvas, so panX lies in [canvasWidth * (1 - zoom), 0] and
  * panY in [canvasHeight * (1 - zoom), 0]. At zoom 1 the only valid pan is
  * (0, 0), which recentres the view.
+ *
+ * Pass `unbounded: true` to skip the clamp entirely and return the pan
+ * unchanged. This is for callers with no fixed content frame to keep in view
+ * (the sketch canvas's open-ended design space, unlike the photo trace
+ * canvas's fixed image bounds): there the "canvas width/height" the caller
+ * would otherwise have to invent is an arbitrary virtual window, not a real
+ * content extent, so any clamp derived from it fences the user near whatever
+ * window happened to be current rather than the actual sketch content.
  */
 export function clampPan(
   transform: ViewTransform,
   canvasWidth: number,
   canvasHeight: number,
+  options?: { unbounded?: boolean },
 ): { panX: number; panY: number } {
+  if (options?.unbounded) {
+    return { panX: transform.panX, panY: transform.panY };
+  }
   const minPanX = canvasWidth * (1 - transform.zoom);
   const minPanY = canvasHeight * (1 - transform.zoom);
   return {
@@ -86,14 +111,16 @@ export function zoomToCursor(
   anchor: Vec2,
   canvasWidth: number,
   canvasHeight: number,
+  zoomRange: ZoomRange = DEFAULT_ZOOM_RANGE,
+  options?: { unbounded?: boolean },
 ): ViewTransform {
-  const zoom = clampZoom(newZoom);
+  const zoom = clampZoom(newZoom, zoomRange);
   const imagePoint = screenToImage(anchor, transform);
   const panned = {
     zoom,
     panX: anchor.x - imagePoint.x * zoom,
     panY: anchor.y - imagePoint.y * zoom,
   };
-  const { panX, panY } = clampPan(panned, canvasWidth, canvasHeight);
+  const { panX, panY } = clampPan(panned, canvasWidth, canvasHeight, options);
   return { zoom, panX, panY };
 }
