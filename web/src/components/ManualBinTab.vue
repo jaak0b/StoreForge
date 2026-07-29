@@ -12,6 +12,8 @@ import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { overallHeightMm } from '../heightHint';
+import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
+import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
 import BinViewport from './BinViewport.vue';
 import LabelIconField from './LabelIconField.vue';
 import ProductSelect from './ProductSelect.vue';
@@ -170,10 +172,39 @@ function saveEntry(): void {
     if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    saveError.value = queue.add(product, quantity.value, cleanNotes);
-    if (saveError.value !== null) return;
+    const result = queue.add(product, quantity.value, cleanNotes);
+    saveError.value = result.problem;
+    if (result.problem !== null) return;
   }
   resetForm();
+}
+
+/** Queues the design and moves it onto the newest build plate in one step. */
+function addToPlate(): void {
+  const cleanNotes = notes.value.trim();
+  const result = queue.add(designedProduct(), quantity.value, cleanNotes);
+  saveError.value = result.problem;
+  if (result.problem !== null) return;
+  queue.addEntryToNewestBatch(result.id, quantity.value);
+  resetForm();
+}
+
+// Direct downloads of the designed product, without touching the queue. The
+// warnings a generation can return are shown, never dropped.
+const downloadWarnings = ref<string[]>([]);
+
+async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+  saveError.value = null;
+  downloadWarnings.value = [];
+  try {
+    const product = designedProduct();
+    downloadWarnings.value =
+      format === 'stl'
+        ? await downloadProductStl(product)
+        : await downloadProduct3mf(product);
+  } catch (error) {
+    saveError.value = error instanceof Error ? error.message : 'The download failed.';
+  }
 }
 
 function cancelEdit(): void {
@@ -292,10 +323,24 @@ const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generate
         {{ saveError }}
       </v-alert>
 
+      <v-alert
+        v-if="downloadWarnings.length > 0"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-4"
+      >
+        <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">{{ warning }}</p>
+      </v-alert>
+
       <div class="d-flex ga-2 mt-4">
-        <v-btn color="primary" variant="flat" size="large" class="flex-grow-1" @click="saveEntry">
-          {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
-        </v-btn>
+        <AddToQueueSplitButton
+          class="flex-grow-1"
+          :editing="editingEntry !== null"
+          @add="saveEntry"
+          @add-to-plate="addToPlate"
+          @download="downloadDesign"
+        />
         <v-btn
           v-if="editingEntry !== null"
           variant="outlined"

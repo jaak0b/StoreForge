@@ -33,6 +33,8 @@ import {
 } from '../engine/plan/screwListImport';
 import { applySuggestion, suggestShorthand, type ScrewSuggestion } from '../engine/plan/screwSuggest';
 import { overallHeightMm } from '../heightHint';
+import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
+import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
 import BinViewport from './BinViewport.vue';
 import ProductSelect from './ProductSelect.vue';
 import MoreOptions from './MoreOptions.vue';
@@ -533,10 +535,7 @@ function addToQueue(): void {
     app.stopEditing();
     return;
   }
-  for (const { product, quantity } of pending.value.batches) {
-    saveError.value = queue.add(product, quantity, cleanNotes);
-    if (saveError.value !== null) return;
-  }
+  if (queueBatches(cleanNotes) === null) return;
   const n = pending.value.batches.length;
   addedText.value =
     n === 1
@@ -544,6 +543,62 @@ function addToQueue(): void {
       : `Added ${n} entries to the queue.`;
   addedSnackbar.value = true;
   if (isMultiple.value) shorthand.value = '';
+}
+
+/**
+ * Adds every pending batch to the queue. Returns the new entries as id and
+ * quantity pairs, or null when the queue refused one (saveError then carries
+ * the refusal; earlier batches stay added, matching the plain add's behavior).
+ */
+function queueBatches(cleanNotes: string): { id: string; quantity: number }[] | null {
+  const added: { id: string; quantity: number }[] = [];
+  for (const { product, quantity } of pending.value.batches) {
+    const result = queue.add(product, quantity, cleanNotes);
+    saveError.value = result.problem;
+    if (result.problem !== null) return null;
+    added.push({ id: result.id, quantity });
+  }
+  return added;
+}
+
+/** Queues every pending batch and moves each onto the newest build plate. */
+function addToPlate(): void {
+  if (!formValid.value || editingEntry.value !== null) return;
+  saveError.value = null;
+  const added = queueBatches(store.notes.trim());
+  if (added === null) return;
+  for (const { id, quantity } of added) {
+    queue.addEntryToNewestBatch(id, quantity);
+  }
+  const n = added.length;
+  addedText.value =
+    n === 1
+      ? `Added ${productLabelText(pending.value.batches[0].product)} to the newest build plate.`
+      : `Added ${n} entries to the newest build plate.`;
+  addedSnackbar.value = true;
+  if (isMultiple.value) shorthand.value = '';
+}
+
+// Direct downloads of the pending products, without touching the queue. A
+// multi-screw list downloads one file per entry, sequentially. The warnings a
+// generation can return are shown, never dropped.
+const downloadWarnings = ref<string[]>([]);
+
+async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+  if (!formValid.value) return;
+  saveError.value = null;
+  downloadWarnings.value = [];
+  try {
+    for (const { product } of pending.value.batches) {
+      const warnings =
+        format === 'stl'
+          ? await downloadProductStl(product)
+          : await downloadProduct3mf(product);
+      downloadWarnings.value = [...downloadWarnings.value, ...warnings];
+    }
+  } catch (error) {
+    saveError.value = error instanceof Error ? error.message : 'The download failed.';
+  }
 }
 
 function cancelEdit(): void {
@@ -710,16 +765,14 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       </MoreOptions>
 
       <div class="d-flex ga-2 mt-4">
-        <v-btn
-          color="primary"
-          variant="flat"
-          size="large"
+        <AddToQueueSplitButton
           class="flex-grow-1"
+          :editing="editingEntry !== null"
           :disabled="!formValid"
-          @click="addToQueue"
-        >
-          {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
-        </v-btn>
+          @add="addToQueue"
+          @add-to-plate="addToPlate"
+          @download="downloadDesign"
+        />
         <v-btn v-if="editingEntry !== null" variant="outlined" size="large" @click="cancelEdit">
           Cancel edit
         </v-btn>
@@ -729,6 +782,15 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       </v-alert>
       <v-alert v-if="saveError" type="error" density="compact" class="mt-2">
         {{ saveError }}
+      </v-alert>
+      <v-alert
+        v-if="downloadWarnings.length > 0"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-2"
+      >
+        <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">{{ warning }}</p>
       </v-alert>
       <v-alert
         v-if="editingEntry !== null"

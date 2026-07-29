@@ -120,6 +120,35 @@ export function createBatch(
   };
 }
 
+/**
+ * Appends one queue entry's amount to an existing batch as a new item. The
+ * product is snapshotted like createBatch does, so the batch keeps working
+ * after the entry is edited or deleted; the count is clamped to the entry's
+ * quantity the same way. The queue itself is not touched: the caller removes
+ * the taken amount from the entry, mirroring how createBatch returns updated
+ * entries.
+ */
+export function addEntryToBatch(
+  batch: PrintBatch,
+  entry: QueueEntry,
+  count: number,
+  id: string,
+): PrintBatch {
+  const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
+  return {
+    ...batch,
+    items: [
+      ...batch.items,
+      {
+        id,
+        product: snapshotProduct(entry.product),
+        count: taken,
+        sourceEntryId: entry.id,
+      },
+    ],
+  };
+}
+
 /** Result of confirming an amount of a batch item. */
 export interface ConfirmBatchItemResult {
   /** The updated batch, or null when it emptied out. */

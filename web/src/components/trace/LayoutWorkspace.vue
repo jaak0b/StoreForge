@@ -29,6 +29,8 @@ import type { TraceSession } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
 import { referencedSessionIds } from '../../engine/trace/layoutModel';
+import { downloadProduct3mf, downloadProductStl } from '../../binDownloads';
+import AddToQueueSplitButton from '../AddToQueueSplitButton.vue';
 import BinViewport from '../BinViewport.vue';
 import CarveProgressBar from '../CarveProgressBar.vue';
 import PaintToolbar from '../carve/PaintToolbar.vue';
@@ -327,21 +329,14 @@ async function storeReferencedSessions(): Promise<TraceSession[]> {
   return saved;
 }
 
-async function addToQueue(): Promise<void> {
-  addError.value = null;
-  photoNote.value = null;
-  // The button is disabled while a blocker stands; this guard backs it up.
-  if (submitBlocker.value !== null) {
-    addError.value = submitBlocker.value;
-    return;
-  }
+/**
+ * The product the layout currently designs, built around the given stored
+ * trace sessions: the queueing paths pass the sessions they just stored, and
+ * a direct download passes none, since nothing references a photo then.
+ */
+function designedProduct(traceSessions: TraceSession[]): Product {
   const params = pocketParams.value;
   const pockets: BinPockets = { tools: params.tools, placements: params.placements };
-  const cleanNotes = notes.value.trim();
-  // Sessions must be stored before the queue mutation: persisting the plan
-  // sweeps stored photos no entry references, so the reference and the photo
-  // have to land in that order.
-  const traceSessions = await storeReferencedSessions();
   const bin: TracedBin = {
     origin: 'traced',
     gridX: params.gridX,
@@ -355,14 +350,28 @@ async function addToQueue(): Promise<void> {
     edits: trace.edits.map(cloneEdit),
     traceSessions,
   };
-  let product: Product;
   if (params.fusedLabel != null) {
-    product = { kind: 'binWithInsert', bin, insert: params.fusedLabel, fused: true };
-  } else if (params.insert !== null) {
-    product = { kind: 'binWithInsert', bin, insert: params.insert };
-  } else {
-    product = { kind: 'bin', bin, labelSlot: params.labelSlot };
+    return { kind: 'binWithInsert', bin, insert: params.fusedLabel, fused: true };
   }
+  if (params.insert !== null) {
+    return { kind: 'binWithInsert', bin, insert: params.insert };
+  }
+  return { kind: 'bin', bin, labelSlot: params.labelSlot };
+}
+
+async function addToQueue(): Promise<void> {
+  addError.value = null;
+  photoNote.value = null;
+  // The button is disabled while a blocker stands; this guard backs it up.
+  if (submitBlocker.value !== null) {
+    addError.value = submitBlocker.value;
+    return;
+  }
+  const cleanNotes = notes.value.trim();
+  // Sessions must be stored before the queue mutation: persisting the plan
+  // sweeps stored photos no entry references, so the reference and the photo
+  // have to land in that order.
+  const product = designedProduct(await storeReferencedSessions());
   if (props.editingEntry !== null) {
     addError.value = queue.update(props.editingEntry.id, {
       product,
@@ -372,12 +381,54 @@ async function addToQueue(): Promise<void> {
     if (addError.value !== null) return;
     app.stopEditing();
   } else {
-    addError.value = queue.add(product, quantity.value, cleanNotes);
-    if (addError.value !== null) return;
+    const result = queue.add(product, quantity.value, cleanNotes);
+    addError.value = result.problem;
+    if (result.problem !== null) return;
   }
   trace.reset();
   quantity.value = 1;
   emit('saved');
+}
+
+/** Queues the bin and moves it onto the newest build plate in one step. */
+async function addToPlate(): Promise<void> {
+  addError.value = null;
+  photoNote.value = null;
+  if (submitBlocker.value !== null) {
+    addError.value = submitBlocker.value;
+    return;
+  }
+  const cleanNotes = notes.value.trim();
+  const product = designedProduct(await storeReferencedSessions());
+  const result = queue.add(product, quantity.value, cleanNotes);
+  addError.value = result.problem;
+  if (result.problem !== null) return;
+  queue.addEntryToNewestBatch(result.id, quantity.value);
+  trace.reset();
+  quantity.value = 1;
+  emit('saved');
+}
+
+// Direct downloads of the designed bin, without touching the queue. The
+// warnings a generation can return are shown, never dropped.
+const downloadWarnings = ref<string[]>([]);
+
+async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+  addError.value = null;
+  downloadWarnings.value = [];
+  if (submitBlocker.value !== null) {
+    addError.value = submitBlocker.value;
+    return;
+  }
+  try {
+    const product = designedProduct([]);
+    downloadWarnings.value =
+      format === 'stl'
+        ? await downloadProductStl(product)
+        : await downloadProduct3mf(product);
+  } catch (error) {
+    addError.value = error instanceof Error ? error.message : 'The download failed.';
+  }
 }
 
 /** Display title of the entry being edited. */
@@ -471,6 +522,15 @@ function cancelEdit(): void {
         <v-alert v-if="photoNote" type="warning" density="compact" class="mb-2 float-alert">
           {{ photoNote }}
         </v-alert>
+        <v-alert
+          v-for="(warning, i) in downloadWarnings"
+          :key="`download-${i}`"
+          type="warning"
+          density="compact"
+          class="mb-2 float-alert"
+        >
+          {{ warning }}
+        </v-alert>
         <v-alert v-if="trace.refinishNotice" type="warning" density="compact" class="mb-2 float-alert">
           {{ trace.refinishNotice }}
         </v-alert>
@@ -481,14 +541,14 @@ function cancelEdit(): void {
           <v-tooltip :disabled="submitBlocker === null" :text="submitBlocker ?? ''" location="top">
             <template #activator="{ props: tooltipProps }">
               <div v-bind="tooltipProps" class="d-flex">
-                <v-btn
-                  color="primary"
-                  variant="flat"
+                <AddToQueueSplitButton
+                  :editing="editingEntry !== null"
                   :disabled="submitBlocker !== null"
-                  @click="addToQueue"
-                >
-                  {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
-                </v-btn>
+                  size="default"
+                  @add="addToQueue"
+                  @add-to-plate="addToPlate"
+                  @download="downloadDesign"
+                />
               </div>
             </template>
           </v-tooltip>

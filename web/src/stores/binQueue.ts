@@ -30,6 +30,7 @@ import {
 } from '../engine/baseplate/drawerFill';
 import { CLIP_TOLERANCE_DEFAULT, type BaseplateBrim } from '../engine/baseplate/constants';
 import {
+  addEntryToBatch,
   confirmBatchItem,
   createBatch,
   failBatchItem,
@@ -46,6 +47,12 @@ import { releaseCutoutModels } from '../workerClient';
 import { useCutout } from './cutout';
 
 const STORAGE_KEY = 'storeforge.plan';
+
+/**
+ * Result of an interactive add: the new entry's id on success, or the
+ * user-worded refusal with nothing queued. Exactly one of the two is set.
+ */
+export type AddResult = { id: string; problem: null } | { id: null; problem: string };
 
 /**
  * Checks a product and quantity with the plan file's own validators before an
@@ -304,12 +311,12 @@ export const useBinQueue = defineStore('binQueue', {
      * add lands here, so this is the single place an invalid product or
      * quantity is refused before it can be persisted; the file importer's
      * validator is reused so the queue and the file format cannot disagree.
-     * Returns null on success or the user-worded problem, in which case the
-     * queue is not touched.
+     * Returns the new entry's id on success or the user-worded problem, in
+     * which case the queue is not touched.
      */
-    add(product: Product, quantity = 1, notes?: string): string | null {
+    add(product: Product, quantity = 1, notes?: string): AddResult {
       const problem = validateQueueMutation(product, quantity);
-      if (problem !== null) return problem;
+      if (problem !== null) return { id: null, problem };
       const entry: QueueEntry = {
         id: crypto.randomUUID(),
         quantity,
@@ -319,7 +326,7 @@ export const useBinQueue = defineStore('binQueue', {
       if (notes !== undefined && notes !== '') entry.notes = notes;
       this.entries.push(entry);
       this.persist();
-      return null;
+      return { id: entry.id, problem: null };
     },
     /**
      * Applies partial changes to an existing entry. The product is replaced
@@ -436,6 +443,38 @@ export const useBinQueue = defineStore('binQueue', {
       this.batches.push(result.batch);
       this.persist();
       return result.batch.id;
+    },
+    /**
+     * Moves an amount of a queue entry onto the newest build plate batch. When
+     * no batch exists yet a new one is created for it, named the same way the
+     * queue page names a new plate. The taken amount leaves the queue exactly
+     * as batch creation does; nothing happens when the entry is missing.
+     */
+    addEntryToNewestBatch(entryId: string, count: number): void {
+      const entry = this.entryById(entryId);
+      if (entry === null) return;
+      const newest = this.batches.reduce<PrintBatch | null>(
+        (latest, batch) =>
+          latest === null || batch.createdAt > latest.createdAt ? batch : latest,
+        null,
+      );
+      if (newest === null) {
+        this.createBatch(
+          [{ entryId, count }],
+          `Build plate ${this.batches.length + 1}`,
+        );
+        return;
+      }
+      const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
+      const updated = addEntryToBatch(newest, entry, taken, crypto.randomUUID());
+      this.batches = this.batches.map((b) => (b.id === newest.id ? updated : b));
+      this.entries =
+        taken === entry.quantity
+          ? this.entries.filter((e) => e.id !== entryId)
+          : this.entries.map((e) =>
+              e.id === entryId ? { ...e, quantity: e.quantity - taken } : e,
+            );
+      this.persist();
     },
     /** Renames a batch. */
     renameBatch(batchId: string, name: string) {
