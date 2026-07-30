@@ -47,6 +47,8 @@ import {
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import { overallHeightMm } from '../../heightHint';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
+import { downloadProduct3mf, downloadProductStl } from '../../binDownloads';
+import AddToQueueSplitButton from '../AddToQueueSplitButton.vue';
 import CutoutViewport from './CutoutViewport.vue';
 import PaintToolbar from '../carve/PaintToolbar.vue';
 import ModelList from './ModelList.vue';
@@ -932,10 +934,41 @@ function saveEntry(): void {
     if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    saveError.value = queue.add(product, quantity.value, cleanNotes);
-    if (saveError.value !== null) return;
+    const result = queue.add(product, quantity.value, cleanNotes);
+    saveError.value = result.problem;
+    if (result.problem !== null) return;
   }
   resetTab();
+}
+
+/** Queues the bin and moves it onto the newest build plate in one step. */
+function addToPlate(): void {
+  if (submitBlocker.value !== null) return;
+  const cleanNotes = notes.value.trim();
+  const result = queue.add(designedProduct(), quantity.value, cleanNotes);
+  saveError.value = result.problem;
+  if (result.problem !== null) return;
+  queue.addEntryToNewestBatch(result.id, quantity.value);
+  resetTab();
+}
+
+// Direct downloads of the designed bin, without touching the queue. The
+// placement warnings a carve can return are shown, never dropped.
+const downloadWarnings = ref<string[]>([]);
+
+async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+  if (submitBlocker.value !== null) return;
+  saveError.value = null;
+  downloadWarnings.value = [];
+  try {
+    const product = designedProduct();
+    downloadWarnings.value =
+      format === 'stl'
+        ? await downloadProductStl(product)
+        : await downloadProduct3mf(product);
+  } catch (error) {
+    saveError.value = error instanceof Error ? error.message : 'The download failed.';
+  }
 }
 
 function cancelEdit(): void {
@@ -1116,16 +1149,14 @@ function editingTitle(entry: QueueEntry): string {
         {{ editError }}
       </v-alert>
       <div class="d-flex ga-2 mt-4">
-        <v-btn
-          color="primary"
-          variant="flat"
-          size="large"
+        <AddToQueueSplitButton
           class="flex-grow-1"
+          :editing="editingEntry !== null"
           :disabled="submitBlocker !== null"
-          @click="saveEntry"
-        >
-          {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
-        </v-btn>
+          @add="saveEntry"
+          @add-to-plate="addToPlate"
+          @download="downloadDesign"
+        />
         <v-btn v-if="editingEntry !== null" variant="outlined" size="large" @click="cancelEdit">
           Cancel edit
         </v-btn>
@@ -1135,6 +1166,15 @@ function editingTitle(entry: QueueEntry): string {
       </div>
       <v-alert v-if="saveError" type="error" density="compact" class="mt-2">
         {{ saveError }}
+      </v-alert>
+      <v-alert
+        v-if="downloadWarnings.length > 0"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-2"
+      >
+        <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">{{ warning }}</p>
       </v-alert>
       <v-alert
         v-if="editingEntry !== null"

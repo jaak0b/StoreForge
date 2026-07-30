@@ -18,6 +18,8 @@ import { originOf, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { baseplateCellCount } from '../engine/baseplate/generator';
 import { validateProduct } from '../engine/plan/planFile';
+import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
+import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
 import BinViewport from './BinViewport.vue';
 import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
 import ConnectionClipCard from './ConnectionClipCard.vue';
@@ -187,10 +189,39 @@ function saveEntry(): void {
     if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    saveError.value = queue.add(product, quantity.value, cleanNotes);
-    if (saveError.value !== null) return;
+    const result = queue.add(product, quantity.value, cleanNotes);
+    saveError.value = result.problem;
+    if (result.problem !== null) return;
   }
   resetForm();
+}
+
+/** Queues the baseplate and moves it onto the newest build plate in one step. */
+function addToPlate(): void {
+  const cleanNotes = store.notes.trim();
+  const result = queue.add(store.product, quantity.value, cleanNotes);
+  saveError.value = result.problem;
+  if (result.problem !== null) return;
+  queue.addEntryToNewestBatch(result.id, quantity.value);
+  resetForm();
+}
+
+// Direct downloads of the designed baseplate, without touching the queue. The
+// warnings a generation can return are shown, never dropped.
+const downloadWarnings = ref<string[]>([]);
+
+async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+  saveError.value = null;
+  downloadWarnings.value = [];
+  try {
+    const product = store.product;
+    downloadWarnings.value =
+      format === 'stl'
+        ? await downloadProductStl(product)
+        : await downloadProduct3mf(product);
+  } catch (error) {
+    saveError.value = error instanceof Error ? error.message : 'The download failed.';
+  }
 }
 
 function cancelEdit(): void {
@@ -238,7 +269,7 @@ function addClips(): void {
     if (clipSaveError.value !== null) return;
     app.stopEditing();
   } else {
-    clipSaveError.value = queue.add(product, clipQuantity.value);
+    clipSaveError.value = queue.add(product, clipQuantity.value).problem;
   }
 }
 
@@ -425,11 +456,24 @@ const drawerMode = computed(() => app.viewingDrawerId !== null);
       <v-alert v-if="saveError" type="error" class="mt-4" density="compact">
         {{ saveError }}
       </v-alert>
+      <v-alert
+        v-if="downloadWarnings.length > 0"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-4"
+      >
+        <p v-for="warning in downloadWarnings" :key="warning" class="mb-1">{{ warning }}</p>
+      </v-alert>
 
       <div class="d-flex ga-2 mt-4">
-        <v-btn color="primary" variant="flat" size="large" class="flex-grow-1" @click="saveEntry">
-          {{ editingEntry !== null ? 'Save changes' : 'Add to queue' }}
-        </v-btn>
+        <AddToQueueSplitButton
+          class="flex-grow-1"
+          :editing="editingEntry !== null"
+          @add="saveEntry"
+          @add-to-plate="addToPlate"
+          @download="downloadDesign"
+        />
         <v-btn v-if="editingEntry !== null" variant="outlined" size="large" @click="cancelEdit">
           Cancel edit
         </v-btn>

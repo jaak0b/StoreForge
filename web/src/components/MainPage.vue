@@ -91,6 +91,96 @@ function rowTitleFull(entry: QueueEntry): string {
 const selectedIds = ref<Set<string>>(new Set());
 const plateCounts = ref<Map<string, number>>(new Map());
 
+// Anchor for shift-click range selection: the id of the last entry row the
+// user clicked, if it is still rendered.
+const lastClickedId = ref<string | null>(null);
+
+function onRowClick(entry: QueueEntry, event: MouseEvent): void {
+  const orderedIds = queueRows.value
+    .filter((row) => row.kind !== 'group')
+    .map((row) => row.entry.id);
+  const anchorIndex =
+    lastClickedId.value !== null ? orderedIds.indexOf(lastClickedId.value) : -1;
+  if (event.shiftKey && anchorIndex !== -1) {
+    event.preventDefault();
+    const clickedIndex = orderedIds.indexOf(entry.id);
+    const start = Math.min(anchorIndex, clickedIndex);
+    const end = Math.max(anchorIndex, clickedIndex);
+    const selecting = !selectedIds.value.has(entry.id);
+    const entriesById = new Map(queue.entries.map((e) => [e.id, e]));
+    const nextIds = new Set(selectedIds.value);
+    const nextCounts = new Map(plateCounts.value);
+    for (let i = start; i <= end; i++) {
+      const id = orderedIds[i];
+      if (selecting) {
+        nextIds.add(id);
+        if (!nextCounts.has(id)) {
+          const target = entriesById.get(id);
+          if (target !== undefined) nextCounts.set(id, target.quantity);
+        }
+      } else {
+        nextIds.delete(id);
+        nextCounts.delete(id);
+      }
+    }
+    selectedIds.value = nextIds;
+    plateCounts.value = nextCounts;
+  } else {
+    toggleSelected(entry);
+  }
+  lastClickedId.value = entry.id;
+}
+
+/**
+ * The ids of a group's plate rows: the consecutive entry rows following its
+ * header in queueRows, which mirrors partitionQueue's ordering.
+ */
+function groupEntryIds(group: Group): string[] {
+  const rows = queueRows.value;
+  const headerIndex = rows.findIndex(
+    (row) => row.kind === 'group' && row.group.id === group.id,
+  );
+  if (headerIndex === -1) return [];
+  const ids: string[] = [];
+  for (let i = headerIndex + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.kind !== 'entry' || !row.grouped) break;
+    ids.push(row.entry.id);
+  }
+  return ids;
+}
+
+// Group header click: select all the group's plate rows, or deselect them
+// all when every one is already selected.
+function onGroupClick(group: Group): void {
+  const ids = groupEntryIds(group);
+  if (ids.length === 0) return;
+  const allSelected = ids.every((id) => selectedIds.value.has(id));
+  const entriesById = new Map(queue.entries.map((e) => [e.id, e]));
+  const nextIds = new Set(selectedIds.value);
+  const nextCounts = new Map(plateCounts.value);
+  for (const id of ids) {
+    if (allSelected) {
+      nextIds.delete(id);
+      nextCounts.delete(id);
+    } else {
+      nextIds.add(id);
+      if (!nextCounts.has(id)) {
+        const target = entriesById.get(id);
+        if (target !== undefined) nextCounts.set(id, target.quantity);
+      }
+    }
+  }
+  selectedIds.value = nextIds;
+  plateCounts.value = nextCounts;
+  lastClickedId.value = ids[ids.length - 1];
+}
+
+function isGroupSelected(group: Group): boolean {
+  const ids = groupEntryIds(group);
+  return ids.length > 0 && ids.every((id) => selectedIds.value.has(id));
+}
+
 function toggleSelected(entry: QueueEntry): void {
   const nextIds = new Set(selectedIds.value);
   const nextCounts = new Map(plateCounts.value);
@@ -248,8 +338,9 @@ function removeRow(entry: QueueEntry): void {
         v-if="row.kind === 'group'"
         :key="`g-${row.group.id}`"
         class="group-header"
+        :class="{ selected: isGroupSelected(row.group) }"
         role="button"
-        @click="app.openDrawer(row.group.id)"
+        @click="onGroupClick(row.group)"
       >
         <v-icon icon="mdi-view-grid-outline" size="18" class="mr-2 text-medium-emphasis" />
         <span class="row-text">
@@ -259,8 +350,11 @@ function removeRow(entry: QueueEntry): void {
         <v-chip size="small" variant="tonal" color="primary">
           {{ row.descriptor.counts.done }} / {{ row.descriptor.counts.total }} printed
         </v-chip>
-        <v-icon icon="mdi-chevron-right" size="20" class="text-medium-emphasis" />
         <div class="row-actions d-flex ga-1 justify-end" @click.stop>
+          <v-btn icon size="small" variant="text" @click="app.openDrawer(row.group.id)">
+            <v-icon icon="mdi-pencil-outline" size="18" />
+            <v-tooltip activator="parent" location="bottom">Edit drawer</v-tooltip>
+          </v-btn>
           <v-btn
             icon
             size="small"
@@ -279,14 +373,14 @@ function removeRow(entry: QueueEntry): void {
         class="qrow"
         :class="{ selected: selectedIds.has(row.entry.id), grouped: row.grouped }"
         role="button"
-        @click="editRow(row.entry)"
+        @click="onRowClick(row.entry, $event)"
       >
       <template v-for="entry in [row.entry]" :key="entry.id">
         <v-checkbox-btn
           :model-value="selectedIds.has(entry.id)"
           density="compact"
           class="flex-grow-0 row-check"
-          @click.stop="toggleSelected(entry)"
+          @click.stop="onRowClick(entry, $event)"
         />
         <span class="row-text">
           <span class="row-title" :title="rowTitleFull(entry)">
@@ -332,6 +426,10 @@ function removeRow(entry: QueueEntry): void {
         </div>
         <div v-else></div>
         <div class="row-actions d-flex ga-1 justify-end" @click.stop>
+          <v-btn icon size="small" variant="text" @click="editRow(entry)">
+            <v-icon icon="mdi-pencil-outline" size="18" />
+            <v-tooltip activator="parent" location="bottom">Edit</v-tooltip>
+          </v-btn>
           <v-menu>
             <template #activator="{ props: menuProps }">
               <v-btn
@@ -414,6 +512,7 @@ function removeRow(entry: QueueEntry): void {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
   border-radius: 10px;
   cursor: pointer;
+  user-select: none;
   background: rgb(var(--v-theme-surface));
 }
 
@@ -429,6 +528,7 @@ function removeRow(entry: QueueEntry): void {
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
   border-radius: 10px;
   cursor: pointer;
+  user-select: none;
   background: rgba(var(--v-theme-primary), 0.04);
 }
 
@@ -463,7 +563,8 @@ function removeRow(entry: QueueEntry): void {
   border-color: rgb(var(--v-theme-primary));
 }
 
-.qrow.selected {
+.qrow.selected,
+.group-header.selected {
   border-color: rgb(var(--v-theme-primary));
   background: rgba(var(--v-theme-primary), 0.08);
 }

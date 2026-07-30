@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addEntryToBatch,
   confirmBatchItem,
   createBatch,
   failBatchItem,
@@ -92,6 +93,46 @@ describe('createBatch', () => {
     });
     const result = makeBatch([entry(), other], [{ entryId: 'a1', count: 1 }]);
     expect(result.entries).toEqual([entry({ quantity: 4 }), other]);
+  });
+});
+
+describe('addEntryToBatch', () => {
+  it('appends the entry as a new item and leaves existing items in place', () => {
+    const batch = makeBatch([entry()], [{ entryId: 'a1', count: 2 }]).batch!;
+    const other = entry({
+      id: 'b2',
+      quantity: 3,
+      product: { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M5 nuts', text2: '', icon: null } },
+    });
+    const updated = addEntryToBatch(batch, other, 3, 'item9');
+    expect(updated.items.map((i) => i.id)).toEqual(['item1', 'item9']);
+    expect(updated.items[1]).toEqual({
+      id: 'item9',
+      product: snapshotProduct(other.product),
+      count: 3,
+      sourceEntryId: 'b2',
+    });
+  });
+
+  it('does not mutate the given batch', () => {
+    const batch = makeBatch([entry()], [{ entryId: 'a1', count: 2 }]).batch!;
+    addEntryToBatch(batch, entry({ id: 'b2' }), 1, 'item9');
+    expect(batch.items.map((i) => i.id)).toEqual(['item1']);
+  });
+
+  it('clamps the count to the entry quantity and floors to at least 1', () => {
+    const batch = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]).batch!;
+    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 99, 'x').items[1].count).toBe(4);
+    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 0, 'x').items[1].count).toBe(1);
+  });
+
+  it('snapshots the product so a later entry edit does not reach the batch', () => {
+    const source = entry();
+    const batch = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]).batch!;
+    const updated = addEntryToBatch(batch, source, 1, 'item9');
+    (source.product as { insert: { text: string } }).insert.text = 'edited later';
+    const item = updated.items[1];
+    expect(item.product.kind === 'binWithInsert' && item.product.insert.text).toBe('M3 bolts');
   });
 });
 
