@@ -63,14 +63,20 @@ const emit = defineEmits<{
 
 <style scoped>
 .split-main {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
+  /* !important: the host tab's rounded-lg utility class sets all corners with
+     !important, and the shared edge must stay square. */
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
 }
 .split-arrow {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
   min-width: 44px;
   padding: 0;
+  margin-left: 0;
+}
+.split-root {
+  gap: 0;
 }
 </style>
