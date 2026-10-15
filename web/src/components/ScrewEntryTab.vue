@@ -8,6 +8,7 @@ import { useBinQueue } from '../stores/binQueue';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { previewBinParams } from '../engine/plan/geometry';
 import {
+  assertNever,
   binOf,
   originOf,
   type LabelContent,
@@ -24,6 +25,7 @@ import {
   composeLabelText,
   composeShorthand,
   screwBinWidthUnits,
+  screwLiesFlat,
   isLengthlessHead,
   HEAD_ALIASES,
   HEAD_ICON_NAME,
@@ -79,6 +81,58 @@ const heightRules = [
 
 const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
+/**
+ * The user's chosen bin size in grid units, or null while the size follows the
+ * screw automatically. The size fields read the automatic suggestion until the
+ * user edits one, which sticks the current values here; the Auto button clears
+ * it. An override applies to every batch of a comma-separated list.
+ */
+const overrideSize = ref<{ width: number; depth: number } | null>(null);
+const sizeIsOverride = computed(() => overrideSize.value !== null);
+
+/** The automatic bin size for the first parsed batch, from the engine's single
+ * sizing entry point. A screw bin is one cell deep by default. */
+const suggestedSize = computed<{ width: number; depth: number }>(() => {
+  const batch = firstBatch.value;
+  return {
+    width: screwBinWidthUnits({
+      thread: batch?.thread ?? null,
+      lengthMm: batch?.lengthMm ?? null,
+      head: batch?.head ?? null,
+    }),
+    depth: 1,
+  };
+});
+
+const widthUnits = computed({
+  get: () => overrideSize.value?.width ?? suggestedSize.value.width,
+  set: (value: number) => {
+    overrideSize.value = { width: value, depth: depthUnits.value };
+  },
+});
+
+const depthUnits = computed({
+  get: () => overrideSize.value?.depth ?? suggestedSize.value.depth,
+  set: (value: number) => {
+    overrideSize.value = { width: widthUnits.value, depth: value };
+  },
+});
+
+const SIZE_INVALID_MESSAGE =
+  'The bin width and depth must be whole numbers of at least 1 grid unit.';
+
+const sizeValid = computed(
+  () =>
+    Number.isInteger(widthUnits.value) &&
+    widthUnits.value >= 1 &&
+    Number.isInteger(depthUnits.value) &&
+    depthUnits.value >= 1,
+);
+
+function resetSizeToAuto(): void {
+  overrideSize.value = null;
+}
+
 function headIconPath(headType: HeadType): string {
   return iconByName(HEAD_ICON_NAME[headType]).path;
 }
@@ -123,13 +177,15 @@ function sizedContentFor(batch: {
   // Bins are sized from the overall length through the engine's single sizing
   // entry point: for heads measured under the head the head height is added,
   // and for heads measured overall (like countersunk) the nominal length is
-  // used as is.
+  // used as is. A user-chosen size overrides the suggestion for every batch.
   return {
-    cells: screwBinWidthUnits({
-      thread: batch.thread,
-      lengthMm: batch.lengthMm,
-      head: batch.head,
-    }),
+    cells:
+      overrideSize.value?.width ??
+      screwBinWidthUnits({
+        thread: batch.thread,
+        lengthMm: batch.lengthMm,
+        head: batch.head,
+      }),
     content: {
       text: composeLabelText(
         batch.thread,
@@ -161,7 +217,7 @@ function productFor(
   const bin = {
     origin: 'screw' as const,
     gridX: cells,
-    gridY: 1,
+    gridY: overrideSize.value?.depth ?? 1,
     heightUnits: binHeightUnits,
     magnetHoles: store.magnetHoles,
     walls: wallsFor(),
@@ -300,6 +356,26 @@ function enteredTextFor(batch: ScrewBatch): string | null {
   return batch.enteredLengthText;
 }
 
+/**
+ * The size in grid units a stored screw product was queued at; a standalone
+ * insert is one cell deep. Only screw products are passed in, so a kind that
+ * never carries a screw is a broken invariant and throws.
+ */
+function storedSizeOf(product: Product): { width: number; depth: number } {
+  switch (product.kind) {
+    case 'insert':
+      return { width: product.cells, depth: 1 };
+    case 'bin':
+    case 'binWithInsert':
+      return { width: product.bin.gridX, depth: product.bin.gridY };
+    case 'baseplate':
+    case 'clip':
+      throw new Error(`A screw queue entry cannot be a ${product.kind} product.`);
+    default:
+      return assertNever(product);
+  }
+}
+
 // Editing a screw queue row rehydrates the breakdown, height and shared
 // options from the entry's stored screw description.
 watch(
@@ -319,6 +395,15 @@ watch(
     if (screw === null) return;
     if (bin !== null) heightUnits.value = bin.heightUnits;
     shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
+    // The stored size counts as an override only where it differs from the
+    // automatic suggestion for this screw; otherwise the size keeps following
+    // the shorthand as it is edited.
+    const autoWidth = screwBinWidthUnits(screw);
+    const stored = storedSizeOf(product);
+    overrideSize.value =
+      stored.width === autoWidth && stored.depth === 1
+        ? null
+        : { width: stored.width, depth: stored.depth };
     const patch: Record<string, unknown> = {
       // The tab offers only these two choices, and a stored screw bin without
       // its insert is repaired to one on load, so nothing else can arrive.
@@ -361,7 +446,13 @@ const pending = computed<{
 }>(() => {
   if (editingEntry.value !== null) {
     const batch = firstBatch.value;
-    if (isMultiple.value || batch === null || !quickBatchComplete(batch) || !heightValid.value) {
+    if (
+      isMultiple.value ||
+      batch === null ||
+      !quickBatchComplete(batch) ||
+      !heightValid.value ||
+      !sizeValid.value
+    ) {
       return { batches: [] };
     }
     const screw = screwFor(batch);
@@ -370,6 +461,7 @@ const pending = computed<{
   const complete = completeBatches.value;
   if (complete.length === 0) return { batches: [] };
   if (!isMultiple.value && !heightValid.value) return { batches: [] };
+  if (!sizeValid.value) return { batches: [] };
   const height = isMultiple.value ? DEFAULT_HEIGHT_UNITS : heightUnits.value;
   return {
     batches: complete.map((batch) => {
@@ -398,16 +490,18 @@ const singleFootprint = computed<number | null>(() =>
 );
 
 // The divider editor draws the interior from the store's footprint, so the
-// derived screw footprint is published there. gridY is 1 because a screw bin
-// is always one cell deep.
+// derived screw footprint is published there. The depth is 1 unless the user's
+// size override chose a deeper bin.
 watch(
-  singleFootprint,
-  (cells) => {
-    if (cells === null) return;
+  [singleFootprint, depthUnits],
+  ([cells, depth]) => {
+    // An invalid in-progress size is not published; the last valid footprint
+    // stands until the fields are corrected.
+    if (cells === null || !sizeValid.value) return;
     // Routed through the setters so grid mode regenerates its walls when the
     // derived screw footprint changes, keeping the grid declarative.
     store.setGridX(cells);
-    store.setGridY(1);
+    store.setGridY(depth);
   },
   { immediate: true },
 );
@@ -436,7 +530,30 @@ const wallProblem = computed<string | null>(() => {
       'several widths. Enter one screw at a time, or delete the walls, to continue.'
     );
   }
-  return validateWalls(store.walls, singleFootprint.value, 1);
+  return validateWalls(store.walls, singleFootprint.value, depthUnits.value);
+});
+
+/**
+ * A gentle warning when the chosen width is too narrow for a screw to lie
+ * flat: shown, never blocking, since undersizing on purpose is the point of
+ * the override. The fit test is the engine's screwLiesFlat, which measures
+ * the overall length against the clear top opening at the stacking lip.
+ */
+const undersizeHint = computed<string | null>(() => {
+  const override = overrideSize.value;
+  if (override === null || !sizeValid.value) return null;
+  const tooLong = completeBatches.value.some(
+    (batch) =>
+      !screwLiesFlat(
+        { thread: batch.thread, lengthMm: batch.lengthMm, head: batch.head },
+        override.width,
+      ),
+  );
+  if (!tooLong) return null;
+  return (
+    "At this width the bin's top opening is smaller than the screw's overall " +
+    'length, so the screw will sit tilted rather than lying flat.'
+  );
 });
 
 const resultText = computed(() => {
@@ -740,6 +857,48 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       </v-alert>
 
       <ProductSelect v-model="productChoice" v-model:fused="fused" hide-bin-alone class="mt-4" />
+
+      <div class="text-caption text-medium-emphasis mb-1 mt-4">
+        {{ insertOnly ? 'Insert width (grid cells of 42 mm)' : 'Bin size (grid units of 42 mm)' }}
+      </div>
+      <div class="d-flex align-center ga-2">
+        <v-text-field
+          v-model.number="widthUnits"
+          type="number"
+          min="1"
+          step="1"
+          label="Width"
+          density="comfortable"
+          hide-details
+        />
+        <template v-if="!insertOnly">
+          <span class="text-medium-emphasis">x</span>
+          <v-text-field
+            v-model.number="depthUnits"
+            type="number"
+            min="1"
+            step="1"
+            label="Depth"
+            density="comfortable"
+            hide-details
+          />
+        </template>
+        <v-btn v-if="sizeIsOverride" variant="outlined" size="small" @click="resetSizeToAuto">
+          Auto
+          <v-tooltip activator="parent" location="top" max-width="280">
+            Returns to the bin size computed automatically from the screw.
+          </v-tooltip>
+        </v-btn>
+      </div>
+      <p v-if="!sizeIsOverride" class="text-caption text-medium-emphasis mt-1 mb-0">
+        The size follows the screw automatically; edit a field to choose your own.
+      </p>
+      <p v-if="undersizeHint !== null" class="text-caption text-medium-emphasis mt-1 mb-0">
+        {{ undersizeHint }}
+      </p>
+      <v-alert v-if="!sizeValid" type="warning" density="compact" variant="tonal" class="mt-2">
+        {{ SIZE_INVALID_MESSAGE }}
+      </v-alert>
 
       <DividerControl v-if="!insertOnly" :notice="dividerNotice" class="mt-4" />
 
