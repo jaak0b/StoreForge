@@ -9,6 +9,7 @@ import {
   overallLengthMm,
   parseShorthand,
   screwBinWidthUnits,
+  screwLiesFlat,
   threadDiameterMm,
 } from '../../src/engine/plan/screwListImport';
 
@@ -443,6 +444,56 @@ describe('screwBinWidthUnits', () => {
 
   it('returns one unit for a lengthless head', () => {
     expect(screwBinWidthUnits({ thread: 'M5', lengthMm: 20, head: 'hex nut' })).toBe(1);
+  });
+});
+
+describe('screwLiesFlat', () => {
+  // The clear top opening at the stacking lip is 36.3 mm at one unit
+  // (41.5 - 2 * 2.6) and 78.3 mm at two units (83.5 - 2 * 2.6). The fit test
+  // compares the overall length against it with no handling clearance.
+
+  it('lays an M3x30 cap head screw flat in one unit although sizing suggests two', () => {
+    // Overall 30 + 3 = 33 mm fits the 36.3 mm opening; the suggestion adds the
+    // 4 mm handling clearance (37 mm), which forces two units.
+    const spec = { thread: 'M3', lengthMm: 30, head: 'cap head screw' as const };
+
+    expect(screwLiesFlat(spec, 1)).toBe(true);
+    expect(screwBinWidthUnits(spec)).toBe(2);
+  });
+
+  it('tilts an M3x40 cap head screw in one unit', () => {
+    // Overall 40 + 3 = 43 mm exceeds the 36.3 mm opening.
+    expect(screwLiesFlat({ thread: 'M3', lengthMm: 40, head: 'cap head screw' }, 1)).toBe(false);
+  });
+
+  it('lays an M3x40 cap head screw flat in two units', () => {
+    // Overall 43 mm fits the 78.3 mm opening.
+    expect(screwLiesFlat({ thread: 'M3', lengthMm: 40, head: 'cap head screw' }, 2)).toBe(true);
+  });
+
+  it('lays a screw exactly as long as the one unit opening flat', () => {
+    // A countersunk length is its overall length, so 36.3 mm meets the opening.
+    expect(screwLiesFlat({ thread: 'M3', lengthMm: 36.3, head: 'countersunk screw' }, 1)).toBe(true);
+  });
+
+  it('tilts a screw just longer than the one unit opening', () => {
+    expect(screwLiesFlat({ thread: 'M3', lengthMm: 36.4, head: 'countersunk screw' }, 1)).toBe(false);
+  });
+
+  it('measures the overall length, so a cap head tilts where a countersunk head of the same nominal length lies flat', () => {
+    // Nominal 35 mm: countersunk overall 35 mm fits 36.3 mm; cap head overall
+    // 35 + 3 = 38 mm does not.
+    expect(screwLiesFlat({ thread: 'M3', lengthMm: 35, head: 'countersunk screw' }, 1)).toBe(true);
+    expect(screwLiesFlat({ thread: 'M3', lengthMm: 35, head: 'cap head screw' }, 1)).toBe(false);
+  });
+
+  it('lays a lengthless fastener flat even when a length is given', () => {
+    // A 50 mm length would tilt a screw; a nut ignores it.
+    expect(screwLiesFlat({ thread: 'M5', lengthMm: 50, head: 'hex nut' }, 1)).toBe(true);
+  });
+
+  it('lays a screw without a length flat', () => {
+    expect(screwLiesFlat({ thread: 'M3', lengthMm: null, head: 'cap head screw' }, 1)).toBe(true);
   });
 });
 

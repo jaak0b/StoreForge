@@ -649,6 +649,24 @@ export function computeBinWidthUnits(lengthMm: number): number {
 }
 
 /**
+ * The overall length a fastener is sized by: overallLengthMm with the
+ * lengthless check applied first, so a nut, washer or insert measures nothing
+ * even when a length is present. Null when there is nothing to measure. The
+ * single home of that composition for every fit question about a screw.
+ */
+function effectiveOverallLengthMm(spec: {
+  thread: string | null;
+  lengthMm: number | null;
+  head: HeadType | null;
+}): number | null {
+  return overallLengthMm({
+    thread: spec.thread,
+    lengthMm: isLengthlessHead(spec.head) ? null : spec.lengthMm,
+    head: spec.head,
+  });
+}
+
+/**
  * THE bin sizing entry point for a screw: the single chain every flow calls to
  * turn a screw's fields into a bin width in grid units. It composes the
  * lengthless check (a nut, washer or insert is sized without a length),
@@ -662,9 +680,25 @@ export function screwBinWidthUnits(spec: {
   lengthMm: number | null;
   head: HeadType | null;
 }): number {
-  const effectiveLength = isLengthlessHead(spec.head) ? null : spec.lengthMm;
-  const overall = overallLengthMm({ thread: spec.thread, lengthMm: effectiveLength, head: spec.head });
+  const overall = effectiveOverallLengthMm(spec);
   return overall !== null ? computeBinWidthUnits(overall) : 1;
+}
+
+/**
+ * Whether a fastener fits lying flat across the clear top opening at the
+ * stacking lip (binTopOpeningMm) of a bin the given number of grid units wide.
+ * It measures the same overall length as screwBinWidthUnits but deliberately
+ * leaves out HANDLING_CLEARANCE_MM: computeBinWidthUnits picks the comfortable
+ * size with room to grab the screw, so a width below that suggestion can still
+ * hold it flat (an M3x30 cap head screw in a 1 unit bin). True when there is
+ * nothing to measure (a lengthless fastener, or no length given).
+ */
+export function screwLiesFlat(
+  spec: { thread: string | null; lengthMm: number | null; head: HeadType | null },
+  widthUnits: number,
+): boolean {
+  const overall = effectiveOverallLengthMm(spec);
+  return overall === null || overall <= binTopOpeningMm(widthUnits);
 }
 
 /**
