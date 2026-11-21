@@ -48,6 +48,42 @@ function groupLinkOf(product: Product): { groupId: string; plateIds: string[] } 
   return product.kind === 'baseplate' && product.group !== undefined ? product.group : null;
 }
 
+/** Result of taking an amount out of one queue entry. */
+export interface TakenFromEntry {
+  /** The new batch item carrying a snapshot of the taken amount. */
+  item: BatchItem;
+  /** The entry with the taken amount removed, or null when nothing is left. */
+  remaining: QueueEntry | null;
+}
+
+/**
+ * Takes an amount out of one queue entry as a new batch item: the single split
+ * every path that moves queue copies into a batch goes through. The count is
+ * floored to at least 1 and clamped to the entry's quantity. The item gets a
+ * snapshot of the product; a linked baseplate's plate ids are split so the
+ * item carries the first count ids and the remaining entry keeps the rest,
+ * upholding quantity === plateIds.length on both sides. A linked clip carries
+ * only its groupId, which both sides keep unchanged.
+ */
+export function takeFromEntry(entry: QueueEntry, count: number, itemId: string): TakenFromEntry {
+  const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
+  const product = snapshotProduct(entry.product);
+  let remainingProduct = entry.product;
+  if (product.kind === 'baseplate' && product.group !== undefined) {
+    const link = product.group;
+    product.group = { groupId: link.groupId, plateIds: link.plateIds.slice(0, taken) };
+    remainingProduct = {
+      ...product,
+      group: { groupId: link.groupId, plateIds: link.plateIds.slice(taken) },
+    };
+  }
+  const left = entry.quantity - taken;
+  return {
+    item: { id: itemId, product, count: taken, sourceEntryId: entry.id },
+    remaining: left > 0 ? { ...entry, quantity: left, product: remainingProduct } : null,
+  };
+}
+
 /** Result of creating a batch: the updated queue and the new batch. */
 export interface CreateBatchResult {
   /** The queue with the taken amounts removed (rows emptied out are gone). */
@@ -60,7 +96,7 @@ export interface CreateBatchResult {
  * Moves the selected amounts out of the queue into a new named batch. A
  * partial amount decrements the entry's quantity and leaves the remainder
  * queued; taking the full quantity removes the entry. Selections that name
- * a missing entry are ignored.
+ * a missing (or already emptied) entry are ignored.
  */
 export function createBatch(
   entries: QueueEntry[],
@@ -70,82 +106,50 @@ export function createBatch(
   createdAt: string = new Date().toISOString(),
 ): CreateBatchResult {
   const items: BatchItem[] = [];
-  const remaining = new Map(entries.map((entry) => [entry.id, entry.quantity]));
-  // For a linked baseplate row, the plate ids it still carries after the taken
-  // amount has been sliced off, so the remaining queue row keeps the invariant
-  // that its quantity equals its plate set. Only linked rows appear here.
-  const remainingPlateIds = new Map<string, string[]>();
-  for (const entry of entries) {
-    const link = groupLinkOf(entry.product);
-    if (link !== null) remainingPlateIds.set(entry.id, [...link.plateIds]);
-  }
+  // The current state of every entry as selections take from it; an entry
+  // emptied out maps to null.
+  const current = new Map<string, QueueEntry | null>(entries.map((entry) => [entry.id, entry]));
   for (const selection of selections) {
-    const entry = entries.find((e) => e.id === selection.entryId);
-    if (entry === undefined) continue;
-    const count = Math.min(Math.max(1, Math.floor(selection.count)), entry.quantity);
-    const product = snapshotProduct(entry.product);
-    if (product.kind === 'baseplate' && product.group !== undefined) {
-      const available = remainingPlateIds.get(entry.id) ?? product.group.plateIds;
-      const taken = available.slice(0, count);
-      remainingPlateIds.set(entry.id, available.slice(count));
-      product.group = { groupId: product.group.groupId, plateIds: taken };
-    }
-    items.push({
-      id: ids.itemId(),
-      product,
-      count,
-      sourceEntryId: entry.id,
-    });
-    remaining.set(entry.id, entry.quantity - count);
+    const entry = current.get(selection.entryId);
+    if (entry === undefined || entry === null) continue;
+    const result = takeFromEntry(entry, selection.count, ids.itemId());
+    items.push(result.item);
+    current.set(entry.id, result.remaining);
   }
   if (items.length === 0) return { entries, batch: null };
   const updatedEntries = entries
-    .map((entry) => {
-      const left = remaining.get(entry.id) ?? entry.quantity;
-      if (left === entry.quantity) return entry;
-      const next: QueueEntry = { ...entry, quantity: left };
-      const link = groupLinkOf(next.product);
-      if (link !== null) {
-        next.product = {
-          ...next.product,
-          group: { groupId: link.groupId, plateIds: remainingPlateIds.get(entry.id) ?? [] },
-        } as Product;
-      }
-      return next;
-    })
-    .filter((entry) => entry.quantity > 0);
+    .map((entry) => current.get(entry.id) ?? null)
+    .filter((entry): entry is QueueEntry => entry !== null);
   return {
     entries: updatedEntries,
     batch: { id: ids.batchId, name, items, createdAt },
   };
 }
 
+/** Result of appending an entry's amount to an existing batch. */
+export interface AddEntryToBatchResult {
+  /** The batch with the new item appended. */
+  batch: PrintBatch;
+  /** The entry with the taken amount removed, or null when nothing is left. */
+  remaining: QueueEntry | null;
+}
+
 /**
- * Appends one queue entry's amount to an existing batch as a new item. The
- * product is snapshotted like createBatch does, so the batch keeps working
- * after the entry is edited or deleted; the count is clamped to the entry's
- * quantity the same way. The queue itself is not touched: the caller removes
- * the taken amount from the entry, mirroring how createBatch returns updated
- * entries.
+ * Appends one queue entry's amount to an existing batch as a new item, taken
+ * exactly the way createBatch takes it (see takeFromEntry). Returns the
+ * updated batch and the remaining entry; the caller replaces (or removes) the
+ * entry in its queue.
  */
 export function addEntryToBatch(
   batch: PrintBatch,
   entry: QueueEntry,
   count: number,
   id: string,
-): PrintBatch {
-  const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
+): AddEntryToBatchResult {
+  const result = takeFromEntry(entry, count, id);
   return {
-    ...batch,
-    items: [
-      ...batch.items,
-      {
-        id,
-        product: snapshotProduct(entry.product),
-        count: taken,
-        sourceEntryId: entry.id,
-      },
-    ],
+    batch: { ...batch, items: [...batch.items, result.item] },
+    remaining: result.remaining,
   };
 }
 

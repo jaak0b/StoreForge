@@ -536,15 +536,13 @@ export const useBinQueue = defineStore('binQueue', {
         );
         return;
       }
-      const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
-      const updated = addEntryToBatch(newest, entry, taken, crypto.randomUUID());
-      this.batches = this.batches.map((b) => (b.id === newest.id ? updated : b));
+      const result = addEntryToBatch(newest, entry, count, crypto.randomUUID());
+      this.batches = this.batches.map((b) => (b.id === newest.id ? result.batch : b));
+      const remaining = result.remaining;
       this.entries =
-        taken === entry.quantity
+        remaining === null
           ? this.entries.filter((e) => e.id !== entryId)
-          : this.entries.map((e) =>
-              e.id === entryId ? { ...e, quantity: e.quantity - taken } : e,
-            );
+          : this.entries.map((e) => (e.id === entryId ? remaining : e));
       this.persist();
     },
     /** Renames a batch. */

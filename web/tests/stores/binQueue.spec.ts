@@ -350,6 +350,31 @@ describe('binQueue drawer groups', () => {
     expect(store.entries[0].quantity).toBe(2);
     expect(linkOf(store.entries[0].product)!.plateIds).toContain(plannedPlate.id);
   });
+  it('moving part of a linked row onto the newest batch splits its plate ids between item and row', () => {
+    const store = useBinQueue();
+    const brim = { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 };
+    const plates: DrawerFillPlate[] = [
+      { unitsX: 2, unitsY: 2, brim, column: 0, row: 0 },
+      { unitsX: 2, unitsY: 2, brim, column: 1, row: 0 },
+      { unitsX: 2, unitsY: 2, brim, column: 2, row: 0 },
+    ];
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer').problem).toBeNull();
+    const rowId = store.entries[0].id;
+    store.createBatch([{ entryId: rowId, count: 1 }], 'Printer');
+
+    store.addEntryToNewestBatch(rowId, 1);
+
+    const row = store.entries[0];
+    const items = store.batches[0].items;
+    expect(row.quantity).toBe(1);
+    expect(linkOf(row.product)!.plateIds).toHaveLength(1);
+    expect(items.map((item) => item.count)).toEqual([1, 1]);
+    expect(items.map((item) => linkOf(item.product)!.plateIds.length)).toEqual([1, 1]);
+    // Every plate of the group sits in exactly one place: the row or one batch item.
+    const placed = [row, ...items].flatMap((holder) => linkOf(holder.product)!.plateIds);
+    expect(new Set(placed)).toEqual(new Set(store.groups[0].payload.plates.map((p) => p.id)));
+    expect(placed).toHaveLength(3);
+  });
 });
 
 describe('binQueue empty group auto-delete', () => {
