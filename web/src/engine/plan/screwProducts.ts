@@ -1,5 +1,5 @@
 import type { DividerWall } from '../gridfinity/dividerModel';
-import type { ProductChoice } from './manualProduct';
+import { binProduct, type ProductChoice } from './manualProduct';
 import {
   composeLabelText,
   HEAD_ICON_NAME,
@@ -198,7 +198,7 @@ export interface SkippedScrewBatch {
   /** What the batch had, as plain prose; empty when nothing was recognized. */
   recognized: string;
   missing: MissingScrewField;
-  /** A complete sentence naming the entry and why it was skipped. */
+  /** A complete sentence naming the entry and the field it lacks. */
   reason: string;
 }
 
@@ -219,9 +219,9 @@ function skipReason(index: number, recognized: string, missing: MissingScrewFiel
   const entry = recognized === '' ? `Entry ${index + 1}` : `Entry ${index + 1} (${recognized})`;
   switch (missing) {
     case 'thread':
-      return `${entry} has no thread size, so it was skipped.`;
+      return `${entry} has no thread size.`;
     case 'length':
-      return `${entry} has no length, so it was skipped.`;
+      return `${entry} has no length.`;
     default:
       return assertNever(missing);
   }
@@ -265,10 +265,11 @@ function buildScrewProduct(
       return { kind: 'insert', origin: 'screw', cells, content, screw };
     case 'binWithInsert':
     case 'bin':
-    case 'plainBin': {
-      const product: Product = {
-        kind: 'binWithInsert',
-        bin: {
+    case 'plainBin':
+      // A screw bin is printed to carry the label naming its fastener, so every
+      // bin choice packages it with its insert.
+      return binProduct(
+        {
           origin: 'screw',
           gridX: cells,
           gridY: options.sizeOverride?.depth ?? SCREW_BIN_DEPTH_UNITS,
@@ -279,11 +280,10 @@ function buildScrewProduct(
           walls: options.walls.map((wall) => ({ ...wall })),
           screw,
         },
-        insert: content,
-      };
-      if (options.fused) product.fused = true;
-      return product;
-    }
+        'binWithInsert',
+        content,
+        options.fused,
+      );
     default:
       return assertNever(options.productChoice);
   }

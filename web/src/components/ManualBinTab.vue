@@ -7,11 +7,12 @@ import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
-import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
+import type { PartMeshes } from '../engine/gridfinity/types';
 import type { DividerWall } from '../engine/gridfinity/dividerModel';
-import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
+import { assertNever, originOf, type Product, type QueueEntry } from '../engine/plan/types';
+import { binPreviewParams } from '../engine/plan/geometry';
 import { describeProduct } from '../engine/plan/rowDescriptor';
-import { manualProduct } from '../engine/plan/manualProduct';
+import { designChoiceOf, manualProduct } from '../engine/plan/manualProduct';
 import { overallHeightMm } from '../heightHint';
 import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
@@ -84,9 +85,7 @@ function loadEditingEntry(entryId: string | null): void {
     if (bin.origin !== 'manual') return;
     const content = product.kind === 'binWithInsert' ? product.insert : null;
     store.$patch({
-      productChoice:
-        product.kind === 'binWithInsert' ? 'binWithInsert' : product.labelSlot ? 'bin' : 'plainBin',
-      fused: product.kind === 'binWithInsert' ? product.fused ?? false : false,
+      ...designChoiceOf(product),
       gridX: bin.gridX,
       gridY: bin.gridY,
       heightUnits: bin.heightUnits,
@@ -205,29 +204,26 @@ function editingTitle(entry: QueueEntry): string {
   return describeProduct(entry.product).title;
 }
 
-/** Everything the preview depends on, regenerated on any change. */
-interface PreviewSpec {
-  insertOnly: boolean;
-  bin: SlottedBinParams;
-  cells: number;
-  content: { text: string; text2: string; icon: string | null };
-}
-
-const previewSpec = computed<PreviewSpec>(() => ({
-  insertOnly: insertOnly.value,
-  bin: store.binParams,
-  cells: store.gridX,
-  content: store.content,
-}));
-
-function generatePreview(spec: PreviewSpec): Promise<PartMeshes> {
-  if (spec.insertOnly) {
-    return generateInsert({ cells: spec.cells, content: spec.content });
+/**
+ * The preview follows the product Add to queue would create, so the preview
+ * and the queued entry come from the same engine mapping.
+ */
+function generatePreview(product: Product): Promise<PartMeshes> {
+  switch (product.kind) {
+    case 'insert':
+      return generateInsert({ cells: product.cells, content: product.content });
+    case 'bin':
+    case 'binWithInsert':
+      return generateSlottedBin(binPreviewParams(product));
+    case 'baseplate':
+    case 'clip':
+      throw new Error(`The Manual bin tab never designs a ${product.kind} product.`);
+    default:
+      return assertNever(product);
   }
-  return generateSlottedBin(spec.bin);
 }
 
-const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generatePreview);
+const { meshes, errorMessage } = useBinPreview(designedProduct, generatePreview);
 </script>
 
 <template>

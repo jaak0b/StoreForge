@@ -7,6 +7,7 @@ import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { previewBinParams } from '../engine/plan/geometry';
+import { designChoiceOf } from '../engine/plan/manualProduct';
 import {
   assertNever,
   binOf,
@@ -33,7 +34,6 @@ import {
   DEFAULT_SCREW_HEIGHT_UNITS,
   SCREW_BIN_DEPTH_UNITS,
   SCREW_HEIGHT_INVALID_MESSAGE,
-  SCREW_SIZE_INVALID_MESSAGE,
   incompleteScrewBatchHint,
   isScrewBatchComplete,
   isValidScrewBinSize,
@@ -44,6 +44,7 @@ import {
   suggestedScrewBinSize,
   type ScrewProductOptions,
   type ScrewProductsResult,
+  type SkippedScrewBatch,
 } from '../engine/plan/screwProducts';
 import { applySuggestion, suggestShorthand, type ScrewSuggestion } from '../engine/plan/screwSuggest';
 import { overallHeightMm } from '../heightHint';
@@ -77,8 +78,6 @@ const shorthandFocused = ref(false);
 const previewLoaded = ref(!smAndDown.value);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
-
-const heightValid = computed(() => isValidScrewHeight(heightUnits.value));
 
 const heightRules = [(v: number) => isValidScrewHeight(v) || SCREW_HEIGHT_INVALID_MESSAGE];
 
@@ -201,6 +200,7 @@ function syncCursor(): void {
 }
 
 function onShorthandInput(): void {
+  skippedAtAdd.value = [];
   menuDismissed.value = false;
   highlightIndex.value = 0;
   syncCursor();
@@ -211,6 +211,7 @@ function chooseSuggestion(s: ScrewSuggestion): void {
   const cursor = el?.selectionStart ?? cursorPos.value;
   const applied = applySuggestion(shorthand.value, cursor, s);
   shorthand.value = applied.value;
+  skippedAtAdd.value = [];
   highlightIndex.value = 0;
   void nextTick(() => {
     const restored = inputEl();
@@ -316,10 +317,9 @@ watch(
         ? null
         : { width: stored.width, depth: stored.depth };
     const patch: Record<string, unknown> = {
-      // The tab offers only these two choices, and a stored screw bin without
-      // its insert is repaired to one on load, so nothing else can arrive.
-      productChoice: product.kind === 'insert' ? 'insert' : 'binWithInsert',
-      fused: product.kind === 'binWithInsert' ? product.fused ?? false : false,
+      // A stored screw bin without its insert is repaired to one on load, so
+      // only an insert or a bin with its insert arrives here.
+      ...designChoiceOf(product),
       notes: entry.notes ?? '',
     };
     if (bin !== null && bin.origin === 'screw') {
@@ -454,6 +454,21 @@ const batchSummaries = computed(() =>
 );
 
 /**
+ * The incomplete entries of a comma-separated list, as the engine's screw
+ * product builder reports them. A single incomplete screw is covered by the
+ * caption under the textbox instead.
+ */
+const pendingSkipped = computed<SkippedScrewBatch[]>(() =>
+  isMultiple.value ? pending.value.skipped : [],
+);
+
+/**
+ * The incomplete entries the last add of a list left out. The add clears the
+ * textbox, so they stay listed until the user types again.
+ */
+const skippedAtAdd = ref<SkippedScrewBatch[]>([]);
+
+/**
  * The caption under the textbox for an incomplete single batch: what is
  * recognized and the next missing field. Empty for a complete batch
  * (resultText covers it) and for a multi-screw list.
@@ -500,7 +515,17 @@ function addToQueue(): void {
       ? `Added ${productLabelText(pending.value.products[0].product)} to the queue.`
       : `Added ${n} entries to the queue.`;
   addedSnackbar.value = true;
-  if (isMultiple.value) shorthand.value = '';
+  clearAddedList();
+}
+
+/**
+ * After a list was added, clears the textbox and keeps its incomplete entries
+ * listed, since they were not added.
+ */
+function clearAddedList(): void {
+  if (!isMultiple.value) return;
+  skippedAtAdd.value = pending.value.skipped;
+  shorthand.value = '';
 }
 
 /**
@@ -531,7 +556,7 @@ function addToPlate(): void {
       ? `Added ${productLabelText(pending.value.products[0].product)} to the newest build plate.`
       : `Added ${n} entries to the newest build plate.`;
   addedSnackbar.value = true;
-  if (isMultiple.value) shorthand.value = '';
+  clearAddedList();
 }
 
 // Direct downloads of the pending products, without touching the queue. A
@@ -658,6 +683,27 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       </ul>
 
       <v-alert
+        v-if="pendingSkipped.length > 0"
+        type="warning"
+        density="compact"
+        variant="tonal"
+        class="mt-2"
+      >
+        <p class="mb-1">Complete these entries, or adding the list leaves them out.</p>
+        <p v-for="s in pendingSkipped" :key="s.index" class="mb-0">{{ s.reason }}</p>
+      </v-alert>
+      <v-alert
+        v-else-if="skippedAtAdd.length > 0"
+        type="warning"
+        density="compact"
+        variant="tonal"
+        class="mt-2"
+      >
+        <p class="mb-1">These entries were incomplete and were not added.</p>
+        <p v-for="s in skippedAtAdd" :key="s.index" class="mb-0">{{ s.reason }}</p>
+      </v-alert>
+
+      <v-alert
         v-for="(error, i) in parsed.errors"
         :key="i"
         type="warning"
@@ -666,16 +712,6 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         class="mt-2"
       >
         {{ error }}
-      </v-alert>
-
-      <v-alert
-        v-if="!insertOnly && !isMultiple && !heightValid"
-        type="warning"
-        density="compact"
-        variant="tonal"
-        class="mt-2"
-      >
-        {{ SCREW_HEIGHT_INVALID_MESSAGE }}
       </v-alert>
 
       <ProductSelect v-model="productChoice" v-model:fused="fused" hide-bin-alone class="mt-4" />
@@ -691,6 +727,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
           step="1"
           label="Width"
           density="comfortable"
+          :error="!sizeValid"
           hide-details
         />
         <template v-if="!insertOnly">
@@ -702,6 +739,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
             step="1"
             label="Depth"
             density="comfortable"
+            :error="!sizeValid"
             hide-details
           />
         </template>
@@ -718,9 +756,6 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
       <p v-if="undersizeHint !== null" class="text-caption text-medium-emphasis mt-1 mb-0">
         {{ undersizeHint }}
       </p>
-      <v-alert v-if="!sizeValid" type="warning" density="compact" variant="tonal" class="mt-2">
-        {{ SCREW_SIZE_INVALID_MESSAGE }}
-      </v-alert>
 
       <DividerControl v-if="!insertOnly" :notice="dividerNotice" class="mt-4" />
 
@@ -758,6 +793,15 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
           Cancel edit
         </v-btn>
       </div>
+      <v-alert
+        v-if="pending.problem !== null"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mt-2"
+      >
+        {{ pending.problem }}
+      </v-alert>
       <v-alert v-if="wallProblem" type="warning" variant="tonal" density="compact" class="mt-2">
         {{ wallProblem }}
       </v-alert>

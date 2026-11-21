@@ -37,13 +37,19 @@ import { modelNotStoredMessage, relinkCutoutModel } from '../../engine/plan/miss
 import { MIN_HEIGHT_UNITS } from '../../engine/gridfinity/constants';
 import type { SlottedBinParams } from '../../engine/gridfinity/types';
 import {
-  assertNever,
   binOf,
+  type BinProduct,
+  type BinWithInsertProduct,
   type CutoutBin,
   type CutoutModel,
-  type Product,
   type QueueEntry,
 } from '../../engine/plan/types';
+import { binPreviewParams } from '../../engine/plan/geometry';
+import {
+  binProduct,
+  designChoiceOf,
+  type BinProductChoice,
+} from '../../engine/plan/manualProduct';
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import { overallHeightMm } from '../../heightHint';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
@@ -106,8 +112,12 @@ const boundsById = ref<Record<string, MeshBounds>>({});
  * pocket. The shared product choice is coerced rather than overwritten, so
  * opening this tab never changes what another tab is designing.
  */
+const binChoice = computed<BinProductChoice>(() =>
+  designer.productChoice === 'insert' ? 'plainBin' : designer.productChoice,
+);
+
 const productChoice = computed<ProductChoice>({
-  get: () => (designer.productChoice === 'insert' ? 'plainBin' : designer.productChoice),
+  get: () => binChoice.value,
   set: (value) => {
     designer.productChoice = value;
   },
@@ -126,30 +136,34 @@ const clearanceCeilingMm = computed(() => maxClearanceMm(cutout.gridX, cutout.gr
 // ---------------------------------------------------------------------------
 
 /**
- * The bin envelope and label packaging of the current design. The footprint is
- * this tab's own (the models decide it, not the manual designer's fields) and a
- * cutout bin never has divider walls, because its interior is filled solid
- * before the models are subtracted from it.
+ * The cutout bin of the current design. The footprint is this tab's own (the
+ * models decide it, not the manual designer's fields). The models and edits
+ * are deep copied out of the reactive store, so the result is plain JSON.
  */
-const binParams = computed<SlottedBinParams>(() => {
-  const withInsert = productChoice.value === 'binWithInsert';
-  const isFused = withInsert && designer.fused;
-  const content = {
-    text: designer.labelText,
-    text2: designer.labelText2,
-    icon: designer.labelIcon,
-  };
+function designedBin(): CutoutBin {
   return {
+    origin: 'cutout',
     gridX: cutout.gridX,
     gridY: cutout.gridY,
     heightUnits: designer.heightUnits,
     magnetHoles: designer.magnetHoles,
-    walls: [],
-    labelSlot: productChoice.value !== 'plainBin' && !isFused,
-    insert: withInsert && !isFused ? content : null,
-    fusedLabel: isFused ? content : null,
+    models: JSON.parse(JSON.stringify(cutout.models)) as CutoutModel[],
+    edits: cutout.edits.map(cloneEdit),
   };
-});
+}
+
+/** The product this tab currently designs, through the engine's single product-choice mapping. */
+function designedProduct(): BinProduct | BinWithInsertProduct {
+  return binProduct(designedBin(), binChoice.value, designer.content, designer.fused);
+}
+
+/**
+ * The bin envelope and label packaging of the current design, derived from the
+ * designed product the same way every preview is. A cutout bin never has
+ * divider walls, because its interior is filled solid before the models are
+ * subtracted from it.
+ */
+const binParams = computed<SlottedBinParams>(() => binPreviewParams(designedProduct()));
 
 /**
  * The carve request: the bin plus the models it carves, as plain JSON. Vue's
@@ -767,29 +781,6 @@ async function loadStoredModel(model: CutoutModel): Promise<void> {
   if (failure !== null) cutout.setError(model.id, failure);
 }
 
-/**
- * The designer choice a stored product was ordered as. A cutout bin is never a
- * standalone insert, but the case is answered rather than left out: a product
- * kind added later must not fall silently into one of the others.
- */
-function choiceOf(product: Product): ProductChoice {
-  switch (product.kind) {
-    case 'binWithInsert':
-      return 'binWithInsert';
-    case 'bin':
-      return product.labelSlot ? 'bin' : 'plainBin';
-    case 'insert':
-      return 'plainBin';
-    case 'baseplate':
-    case 'clip':
-      // Neither ever reaches this tab: their edits route to the Baseplate
-      // tab. Answered like the insert case rather than left to a fallthrough.
-      return 'plainBin';
-    default:
-      return assertNever(product);
-  }
-}
-
 /** Loads a cutout queue entry into the tab for editing. */
 function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
   // Opening a second bin without saving the first leaves the first bin's models
@@ -819,8 +810,7 @@ function loadEntry(bin: CutoutBin, entry: QueueEntry): void {
   queue.retainCutoutWorkerCache();
   const content = entry.product.kind === 'binWithInsert' ? entry.product.insert : null;
   designer.$patch({
-    productChoice: choiceOf(entry.product),
-    fused: entry.product.kind === 'binWithInsert' ? entry.product.fused ?? false : false,
+    ...designChoiceOf(entry.product),
     heightUnits: bin.heightUnits,
     magnetHoles: bin.magnetHoles,
     labelText: content?.text ?? '',
@@ -892,27 +882,6 @@ function resetTab(): void {
   // Files an abandoned design uploaded are unreferenced now; the sweep is what
   // collects them, and it runs off a plan change.
   void queue.sweepStoredAssets();
-}
-
-/** The product this tab currently designs. */
-function designedProduct(): Product {
-  const bin: CutoutBin = {
-    origin: 'cutout',
-    gridX: cutout.gridX,
-    gridY: cutout.gridY,
-    heightUnits: designer.heightUnits,
-    magnetHoles: designer.magnetHoles,
-    models: JSON.parse(JSON.stringify(cutout.models)) as CutoutModel[],
-    edits: cutout.edits.map(cloneEdit),
-  };
-  const params = binParams.value;
-  if (params.fusedLabel != null) {
-    return { kind: 'binWithInsert', bin, insert: params.fusedLabel, fused: true };
-  }
-  if (params.insert !== null) {
-    return { kind: 'binWithInsert', bin, insert: params.insert };
-  }
-  return { kind: 'bin', bin, labelSlot: params.labelSlot };
 }
 
 // The queue's refusal of an invalid design, shown beside the save button.

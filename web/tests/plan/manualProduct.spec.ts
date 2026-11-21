@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { manualProduct, type ManualDesign } from '../../src/engine/plan/manualProduct';
+import {
+  binProduct,
+  designChoiceOf,
+  manualProduct,
+  type ManualDesign,
+} from '../../src/engine/plan/manualProduct';
+import type { CutoutBin, Product } from '../../src/engine/plan/types';
 
 /** A 2 x 3 x 5 design with magnets, one wall and a label. */
 function design(overrides: Partial<ManualDesign> = {}): ManualDesign {
@@ -75,5 +81,94 @@ describe('manualProduct', () => {
     if (product.kind !== 'binWithInsert') throw new Error('expected a bin with insert');
     expect(product.bin.origin === 'manual' && product.bin.walls[0].x1).toBe(0);
     expect(product.insert.text).toBe('Pliers');
+  });
+});
+
+/** A 3 x 2 x 6 cutout bin with no models, as a carve flow builds it. */
+function cutoutBin(): CutoutBin {
+  return { origin: 'cutout', gridX: 3, gridY: 2, heightUnits: 6, magnetHoles: false, models: [], edits: [] };
+}
+
+const LABEL = { text: 'Calipers', text2: '', icon: null };
+
+describe('binProduct', () => {
+  it('pairs any bin with a copy of its insert content for a bin with insert', () => {
+    const content = { ...LABEL };
+
+    const product = binProduct(cutoutBin(), 'binWithInsert', content, false);
+    content.text = 'changed';
+
+    expect(product).toEqual({
+      kind: 'binWithInsert',
+      bin: cutoutBin(),
+      insert: { text: 'Calipers', text2: '', icon: null },
+    });
+  });
+
+  it('sets the fused flag on a fused bin with insert', () => {
+    expect(binProduct(cutoutBin(), 'binWithInsert', LABEL, true)).toEqual({
+      kind: 'binWithInsert',
+      bin: cutoutBin(),
+      insert: { text: 'Calipers', text2: '', icon: null },
+      fused: true,
+    });
+  });
+
+  it('keeps the label slot for a bin and drops it for a plain bin, ignoring fused', () => {
+    expect(binProduct(cutoutBin(), 'bin', LABEL, true)).toEqual({
+      kind: 'bin',
+      bin: cutoutBin(),
+      labelSlot: true,
+    });
+    expect(binProduct(cutoutBin(), 'plainBin', LABEL, true)).toEqual({
+      kind: 'bin',
+      bin: cutoutBin(),
+      labelSlot: false,
+    });
+  });
+});
+
+describe('designChoiceOf', () => {
+  it.each<[string, Product, { productChoice: string; fused: boolean }]>([
+    [
+      'a fused bin with insert',
+      { kind: 'binWithInsert', bin: cutoutBin(), insert: LABEL, fused: true },
+      { productChoice: 'binWithInsert', fused: true },
+    ],
+    [
+      'a bin with insert without the fused flag',
+      { kind: 'binWithInsert', bin: cutoutBin(), insert: LABEL },
+      { productChoice: 'binWithInsert', fused: false },
+    ],
+    [
+      'a bin with the label slot',
+      { kind: 'bin', bin: cutoutBin(), labelSlot: true },
+      { productChoice: 'bin', fused: false },
+    ],
+    [
+      'a bin without the label slot',
+      { kind: 'bin', bin: cutoutBin(), labelSlot: false },
+      { productChoice: 'plainBin', fused: false },
+    ],
+    [
+      'a standalone insert',
+      { kind: 'insert', origin: 'manual', cells: 2, content: LABEL },
+      { productChoice: 'insert', fused: false },
+    ],
+  ])('reads %s back as the choice it was ordered with', (_name, product, expected) => {
+    expect(designChoiceOf(product)).toEqual(expected);
+  });
+
+  it('throws for a baseplate, which is never designed through a product choice', () => {
+    const plate: Product = {
+      kind: 'baseplate',
+      unitsX: 4,
+      unitsY: 2,
+      magnets: null,
+      screwHoles: false,
+      connectable: false,
+    };
+
+    expect(() => designChoiceOf(plate)).toThrow('not designed through a product choice');
   });
 });

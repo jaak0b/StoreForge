@@ -9,6 +9,8 @@ import {
   type BaseplateProduct,
   type Bin,
   type BinPockets,
+  type BinProduct,
+  type BinWithInsertProduct,
   type CavityEdit,
   type CutoutModel,
   type Product,
@@ -202,6 +204,25 @@ export function partsOf(product: Product): PrintablePart[] {
 export function previewBinParams(product: Product): SlottedBinParams | null {
   switch (product.kind) {
     case 'bin':
+    case 'binWithInsert':
+      return binPreviewParams(product);
+    case 'insert':
+    case 'baseplate':
+    case 'clip':
+      return null;
+    default:
+      return assertNever(product);
+  }
+}
+
+/**
+ * The live preview parameters of a bin-bearing product: previewBinParams for
+ * the products that always have a bin, so a designer holding one needs no
+ * null check.
+ */
+export function binPreviewParams(product: BinProduct | BinWithInsertProduct): SlottedBinParams {
+  switch (product.kind) {
+    case 'bin':
       return toSlottedBinParams(product.bin, product.labelSlot, null);
     case 'binWithInsert':
       // Fused shows the raised label on the bin (no slot, no resting insert);
@@ -209,10 +230,6 @@ export function previewBinParams(product: Product): SlottedBinParams | null {
       return product.fused
         ? toSlottedBinParams(product.bin, false, null, product.insert)
         : toSlottedBinParams(product.bin, true, product.insert);
-    case 'insert':
-    case 'baseplate':
-    case 'clip':
-      return null;
     default:
       return assertNever(product);
   }

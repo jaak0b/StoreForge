@@ -191,13 +191,13 @@ describe('screwProducts', () => {
         index: 0,
         recognized: 'M3, countersunk screw',
         missing: 'length',
-        reason: 'Entry 1 (M3, countersunk screw) has no length, so it was skipped.',
+        reason: 'Entry 1 (M3, countersunk screw) has no length.',
       },
       {
         index: 2,
         recognized: 'countersunk screw, 20 mm',
         missing: 'thread',
-        reason: 'Entry 3 (countersunk screw, 20 mm) has no thread size, so it was skipped.',
+        reason: 'Entry 3 (countersunk screw, 20 mm) has no thread size.',
       },
     ]);
   });

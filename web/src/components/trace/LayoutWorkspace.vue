@@ -21,10 +21,13 @@ import {
   binOf,
   insertOf,
   type BinPockets,
-  type Product,
+  type BinProduct,
+  type BinWithInsertProduct,
   type QueueEntry,
   type TracedBin,
 } from '../../engine/plan/types';
+import { binPreviewParams } from '../../engine/plan/geometry';
+import { binProduct, type BinProductChoice } from '../../engine/plan/manualProduct';
 import type { TraceSession } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
@@ -152,37 +155,63 @@ function addPrimitive(): void {
 }
 
 /**
- * The pocket-bin parameters of the current design, as plain JSON. The layout
- * model converts the world-frame layout to the pocket generator's
- * bin-centred coordinates (toBinLocal), so previews and saved entries share
- * one conversion.
+ * The product choice this design is built with. The watch above replaces a
+ * standalone insert choice with the trace default; until it has run, the same
+ * default stands in, since pockets need a bin.
  */
-const pocketParams = computed<PocketBinParams>(() => {
+const binChoice = computed<BinProductChoice>(() =>
+  designer.productChoice === 'insert' ? traceDefaultChoice : designer.productChoice,
+);
+
+/**
+ * The traced bin of the current design, built around the given stored trace
+ * sessions, as plain JSON. The layout model converts the world-frame layout to
+ * the pocket generator's bin-centred coordinates (toBinLocal), so previews and
+ * saved entries share one conversion.
+ */
+function designedBin(traceSessions: TraceSession[]): TracedBin {
   const local = trace.toBinLocal();
-  const withInsert = designer.productChoice === 'binWithInsert';
-  const content = {
-    text: designer.labelText,
-    text2: designer.labelText2,
-    icon: designer.labelIcon,
+  const pockets: BinPockets = {
+    tools: JSON.parse(JSON.stringify(trace.tools)),
+    placements: JSON.parse(JSON.stringify(local.placements)),
   };
-  const fusedContent = withInsert && designer.fused ? content : null;
   return {
+    origin: 'traced',
     gridX: local.gridX,
     gridY: local.gridY,
     heightUnits: designer.heightUnits,
     magnetHoles: designer.magnetHoles,
-    // The pocket generator rejects divider walls, so a pocket bin never has any.
-    walls: [],
-    // A fused bin has no insert channel; the label is raised on the solid
-    // fused shelf the body builder puts in the channel's place.
-    labelSlot: designer.productChoice !== 'plainBin' && fusedContent === null,
-    insert: withInsert && !designer.fused ? content : null,
-    fusedLabel: fusedContent,
-    tools: JSON.parse(JSON.stringify(trace.tools)),
-    placements: JSON.parse(JSON.stringify(local.placements)),
-    // The manual cavity edits fold onto the pocket carve, so the preview shows
-    // them; deep-copied for the same reason the tools and placements are.
+    pockets,
+    // The edit session holds the current edits (rehydrated from the entry when
+    // one is being edited, empty for a fresh trace); deep-copied out of the
+    // reactive store so the saved plan holds plain JSON.
     edits: trace.edits.map(cloneEdit),
+    traceSessions,
+  };
+}
+
+/**
+ * The product the layout currently designs, built around the given stored
+ * trace sessions: the queueing paths pass the sessions they just stored, and
+ * a direct download passes none, since nothing references a photo then.
+ */
+function designedProduct(traceSessions: TraceSession[]): BinProduct | BinWithInsertProduct {
+  return binProduct(designedBin(traceSessions), binChoice.value, designer.content, designer.fused);
+}
+
+/**
+ * The pocket-bin parameters of the current design: the bin envelope and label
+ * packaging derived from the designed product the same way every preview is
+ * (a pocket bin never has divider walls), plus the pockets and the manual
+ * cavity edits, which fold onto the pocket carve so the preview shows them.
+ */
+const pocketParams = computed<PocketBinParams>(() => {
+  const bin = designedBin([]);
+  return {
+    ...binPreviewParams(binProduct(bin, binChoice.value, designer.content, designer.fused)),
+    tools: bin.pockets.tools,
+    placements: bin.pockets.placements,
+    edits: bin.edits,
   };
 });
 
@@ -327,36 +356,6 @@ async function storeReferencedSessions(): Promise<TraceSession[]> {
     saved.push(JSON.parse(JSON.stringify(session)) as TraceSession);
   }
   return saved;
-}
-
-/**
- * The product the layout currently designs, built around the given stored
- * trace sessions: the queueing paths pass the sessions they just stored, and
- * a direct download passes none, since nothing references a photo then.
- */
-function designedProduct(traceSessions: TraceSession[]): Product {
-  const params = pocketParams.value;
-  const pockets: BinPockets = { tools: params.tools, placements: params.placements };
-  const bin: TracedBin = {
-    origin: 'traced',
-    gridX: params.gridX,
-    gridY: params.gridY,
-    heightUnits: params.heightUnits,
-    magnetHoles: params.magnetHoles,
-    pockets,
-    // The edit session holds the current edits (rehydrated from the entry when
-    // one is being edited, empty for a fresh trace); deep-copied out of the
-    // reactive store so the saved plan holds plain JSON.
-    edits: trace.edits.map(cloneEdit),
-    traceSessions,
-  };
-  if (params.fusedLabel != null) {
-    return { kind: 'binWithInsert', bin, insert: params.fusedLabel, fused: true };
-  }
-  if (params.insert !== null) {
-    return { kind: 'binWithInsert', bin, insert: params.insert };
-  }
-  return { kind: 'bin', bin, labelSlot: params.labelSlot };
 }
 
 async function addToQueue(): Promise<void> {

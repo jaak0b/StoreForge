@@ -1,5 +1,4 @@
 import { defineStore } from 'pinia';
-import type { InsertContentParams, SlottedBinParams } from '../engine/gridfinity/types';
 import * as divider from '../engine/gridfinity/dividerModel';
 import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import type { LabelContent } from '../engine/plan/types';
@@ -96,33 +95,6 @@ export const useBinDesigner = defineStore('binDesigner', {
         text: state.labelText,
         text2: state.labelText2,
         icon: state.labelIcon,
-      };
-    },
-    /**
-     * The geometry parameters of the designed bin, with the insert content
-     * riding along for the preview when the product includes the insert.
-     */
-    binParams(state): SlottedBinParams {
-      const content: InsertContentParams = {
-        text: state.labelText,
-        text2: state.labelText2,
-        icon: state.labelIcon,
-      };
-      const withInsert = state.productChoice === 'binWithInsert';
-      const fused = withInsert && state.fused;
-      return {
-        gridX: state.gridX,
-        gridY: state.gridY,
-        heightUnits: state.heightUnits,
-        magnetHoles: state.magnetHoles,
-        // Detached plain objects: the walls travel to the geometry worker by
-        // structured clone, which cannot clone the store's reactive proxies.
-        walls: state.walls.map((wall) => ({ ...wall })),
-        // A fused bin has no insert channel; the label is raised on the solid
-        // fused shelf the body builder puts in the channel's place.
-        labelSlot: state.productChoice !== 'plainBin' && !fused,
-        insert: withInsert && !fused ? content : null,
-        fusedLabel: fused ? content : null,
       };
     },
     /** The selected wall, or null when nothing is selected. */
