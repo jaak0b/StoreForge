@@ -286,7 +286,8 @@ function removeRow(entry: QueueEntry): void {
   const nextIds = new Set(selectedIds.value);
   nextIds.delete(entry.id);
   selectedIds.value = nextIds;
-  queue.remove(entry.id);
+  const problem = queue.remove(entry.id);
+  if (problem !== null) errorMessage.value = problem;
 }
 </script>
 

@@ -101,6 +101,11 @@ function planAxis(
   return null;
 }
 
+/** The default name of a drawer group planned from this input, e.g. "Drawer 420 × 300 mm". */
+export function drawerGroupName(input: DrawerFillInput): string {
+  return `Drawer ${input.drawerWidthMm} × ${input.drawerDepthMm} mm`;
+}
+
 /**
  * Plans a wall-to-wall set of baseplates for a drawer. Whole 42 mm cells
  * are floored per axis; the leftover width splits evenly onto the left and

@@ -11,7 +11,6 @@ import {
   assertNever,
   binOf,
   originOf,
-  type LabelContent,
   type Product,
   type QueueEntry,
   type ScrewSpec,
@@ -22,17 +21,30 @@ import type { PartMeshes } from '../engine/gridfinity/types';
 import { validateWalls, type DividerWall } from '../engine/gridfinity/dividerModel';
 import { iconByName } from '../engine/label/icons';
 import {
-  composeLabelText,
   composeShorthand,
-  screwBinWidthUnits,
   screwLiesFlat,
-  isLengthlessHead,
   HEAD_ALIASES,
   HEAD_ICON_NAME,
   parseShorthand,
   type HeadType,
   type ScrewBatch,
 } from '../engine/plan/screwListImport';
+import {
+  DEFAULT_SCREW_HEIGHT_UNITS,
+  SCREW_BIN_DEPTH_UNITS,
+  SCREW_HEIGHT_INVALID_MESSAGE,
+  SCREW_SIZE_INVALID_MESSAGE,
+  incompleteScrewBatchHint,
+  isScrewBatchComplete,
+  isValidScrewBinSize,
+  isValidScrewHeight,
+  previewScrewProduct,
+  screwBatchLabelText,
+  screwProducts,
+  suggestedScrewBinSize,
+  type ScrewProductOptions,
+  type ScrewProductsResult,
+} from '../engine/plan/screwProducts';
 import { applySuggestion, suggestShorthand, type ScrewSuggestion } from '../engine/plan/screwSuggest';
 import { overallHeightMm } from '../heightHint';
 import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
@@ -58,12 +70,7 @@ const store = useBinDesigner();
 const { productChoice, fused } = storeToRefs(store);
 const { smAndDown } = useDisplay();
 
-/** Default bin height for a screw entry when nothing else determines it; the
- * engine does not derive a minimum height from screw length, so this is a
- * plain starting value the user can raise. */
-const DEFAULT_HEIGHT_UNITS = 6;
-
-const heightUnits = ref(DEFAULT_HEIGHT_UNITS);
+const heightUnits = ref(DEFAULT_SCREW_HEIGHT_UNITS);
 const shorthand = ref('M3x20 fhcs x1');
 const shorthandFocused = ref(false);
 
@@ -71,13 +78,9 @@ const previewLoaded = ref(!smAndDown.value);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
 
-const HEIGHT_INVALID_MESSAGE = 'The height must be a number of at least 2 height units.';
+const heightValid = computed(() => isValidScrewHeight(heightUnits.value));
 
-const heightValid = computed(() => Number.isFinite(heightUnits.value) && heightUnits.value >= 2);
-
-const heightRules = [
-  (v: number) => (Number.isFinite(v) && v >= 2) || HEIGHT_INVALID_MESSAGE,
-];
+const heightRules = [(v: number) => isValidScrewHeight(v) || SCREW_HEIGHT_INVALID_MESSAGE];
 
 const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
@@ -90,19 +93,8 @@ const heightMm = computed(() => overallHeightMm(heightUnits.value));
 const overrideSize = ref<{ width: number; depth: number } | null>(null);
 const sizeIsOverride = computed(() => overrideSize.value !== null);
 
-/** The automatic bin size for the first parsed batch, from the engine's single
- * sizing entry point. A screw bin is one cell deep by default. */
-const suggestedSize = computed<{ width: number; depth: number }>(() => {
-  const batch = firstBatch.value;
-  return {
-    width: screwBinWidthUnits({
-      thread: batch?.thread ?? null,
-      lengthMm: batch?.lengthMm ?? null,
-      head: batch?.head ?? null,
-    }),
-    depth: 1,
-  };
-});
+/** The automatic bin size for the first parsed batch. */
+const suggestedSize = computed(() => suggestedScrewBinSize(firstBatch.value));
 
 const widthUnits = computed({
   get: () => overrideSize.value?.width ?? suggestedSize.value.width,
@@ -118,15 +110,8 @@ const depthUnits = computed({
   },
 });
 
-const SIZE_INVALID_MESSAGE =
-  'The bin width and depth must be whole numbers of at least 1 grid unit.';
-
-const sizeValid = computed(
-  () =>
-    Number.isInteger(widthUnits.value) &&
-    widthUnits.value >= 1 &&
-    Number.isInteger(depthUnits.value) &&
-    depthUnits.value >= 1,
+const sizeValid = computed(() =>
+  isValidScrewBinSize({ width: widthUnits.value, depth: depthUnits.value }),
 );
 
 function resetSizeToAuto(): void {
@@ -147,6 +132,9 @@ function headIconForSuggestion(s: ScrewSuggestion): string | null {
 }
 
 /**
+ * Everything besides the parsed batches that decides what this tab creates,
+ * as the engine's screw product builder takes it.
+ *
  * The divider walls of a screw bin live in the designer store, the same place
  * the Manual bin tab edits them, so both tabs share one editor and one wall
  * list. This tab derives the bin footprint from the screw rather than from a
@@ -159,76 +147,15 @@ function headIconForSuggestion(s: ScrewSuggestion): string | null {
  * derived footprint cannot hold blocks the submit with the validator's own
  * message (see wallProblem) rather than disappearing on save.
  */
-function wallsFor(): DividerWall[] {
-  // Detached plain objects: the walls travel to the geometry worker by
-  // structured clone, which cannot clone the store's reactive proxies.
-  return store.walls.map((wall) => ({ ...wall }));
-}
-
-/** The width in cells and label content a screw batch turns into. */
-function sizedContentFor(batch: {
-  thread: string | null;
-  lengthMm: number | null;
-  head: HeadType | null;
-  enteredLengthText?: string | null;
-}): { cells: number; content: LabelContent } {
-  const noLength = isLengthlessHead(batch.head);
-  const effectiveLength = noLength ? null : batch.lengthMm;
-  // Bins are sized from the overall length through the engine's single sizing
-  // entry point: for heads measured under the head the head height is added,
-  // and for heads measured overall (like countersunk) the nominal length is
-  // used as is. A user-chosen size overrides the suggestion for every batch.
-  return {
-    cells:
-      overrideSize.value?.width ??
-      screwBinWidthUnits({
-        thread: batch.thread,
-        lengthMm: batch.lengthMm,
-        head: batch.head,
-      }),
-    content: {
-      text: composeLabelText(
-        batch.thread,
-        effectiveLength,
-        batch.head,
-        batch.enteredLengthText ?? null,
-      ),
-      text2: '',
-      icon: batch.head !== null ? HEAD_ICON_NAME[batch.head] : null,
-    },
-  };
-}
-
-/** The product a screw batch turns into, per the current product choice. */
-function productFor(
-  batch: {
-    thread: string | null;
-    lengthMm: number | null;
-    head: HeadType | null;
-    enteredLengthText?: string | null;
-  },
-  screw: ScrewSpec,
-  binHeightUnits: number,
-): Product {
-  const { cells, content } = sizedContentFor(batch);
-  if (insertOnly.value) {
-    return { kind: 'insert', origin: 'screw', cells, content, screw };
-  }
-  const bin = {
-    origin: 'screw' as const,
-    gridX: cells,
-    gridY: overrideSize.value?.depth ?? 1,
-    heightUnits: binHeightUnits,
-    magnetHoles: store.magnetHoles,
-    walls: wallsFor(),
-    screw,
-  };
-  // A screw bin is printed to carry its label, so the tab offers no bin-alone
-  // choice and never produces one.
-  const product: Product = { kind: 'binWithInsert', bin, insert: content };
-  if (store.fused) product.fused = true;
-  return product;
-}
+const screwOptions = computed<ScrewProductOptions>(() => ({
+  productChoice: productChoice.value,
+  heightUnits: heightUnits.value,
+  sizeOverride: overrideSize.value,
+  magnetHoles: store.magnetHoles,
+  fused: store.fused,
+  walls: store.walls,
+  keepEnteredLengthFrom: editingScrew.value,
+}));
 
 function productSizeText(product: Product): string {
   if (product.kind === 'insert') return `${product.cells}u insert`;
@@ -248,12 +175,7 @@ const parsed = computed(() => parseShorthand(shorthand.value));
 const isMultiple = computed(() => parsed.value.batches.length > 1);
 const firstBatch = computed<ScrewBatch | null>(() => parsed.value.batches[0] ?? null);
 
-function quickBatchComplete(batch: ScrewBatch): boolean {
-  const noLength = isLengthlessHead(batch.head);
-  return batch.thread !== null && (noLength || batch.lengthMm !== null);
-}
-
-const completeBatches = computed(() => parsed.value.batches.filter(quickBatchComplete));
+const completeBatches = computed(() => parsed.value.batches.filter(isScrewBatchComplete));
 
 // The autocomplete menu. The caret position drives which field of the segment
 // under it the engine suggests completions for; the component holds no grammar
@@ -346,17 +268,6 @@ const editingScrew = computed<ScrewSpec | null>(() => {
 });
 
 /**
- * The imperial length text a batch prints on its label. The loaded entry's
- * inch text survives only while the length is unchanged; editing the length
- * drops the stale inch text and falls back to whatever the shorthand parses.
- */
-function enteredTextFor(batch: ScrewBatch): string | null {
-  const screw = editingScrew.value;
-  if (screw !== null && batch.lengthMm === screw.lengthMm) return screw.enteredLengthText;
-  return batch.enteredLengthText;
-}
-
-/**
  * The size in grid units a stored screw product was queued at; a standalone
  * insert is one cell deep. Only screw products are passed in, so a kind that
  * never carries a screw is a broken invariant and throws.
@@ -364,7 +275,7 @@ function enteredTextFor(batch: ScrewBatch): string | null {
 function storedSizeOf(product: Product): { width: number; depth: number } {
   switch (product.kind) {
     case 'insert':
-      return { width: product.cells, depth: 1 };
+      return { width: product.cells, depth: SCREW_BIN_DEPTH_UNITS };
     case 'bin':
     case 'binWithInsert':
       return { width: product.bin.gridX, depth: product.bin.gridY };
@@ -398,10 +309,10 @@ watch(
     // The stored size counts as an override only where it differs from the
     // automatic suggestion for this screw; otherwise the size keeps following
     // the shorthand as it is edited.
-    const autoWidth = screwBinWidthUnits(screw);
+    const auto = suggestedScrewBinSize(screw);
     const stored = storedSizeOf(product);
     overrideSize.value =
-      stored.width === autoWidth && stored.depth === 1
+      stored.width === auto.width && stored.depth === auto.depth
         ? null
         : { width: stored.width, depth: stored.depth };
     const patch: Record<string, unknown> = {
@@ -425,50 +336,15 @@ watch(
   { immediate: true },
 );
 
-/** The screw description a complete parsed batch turns into. */
-function screwFor(batch: ScrewBatch): ScrewSpec {
-  const noLength = isLengthlessHead(batch.head);
-  return {
-    thread: batch.thread!,
-    lengthMm: noLength ? null : batch.lengthMm,
-    head: batch.head,
-    enteredLengthText: enteredTextFor(batch),
-  };
-}
-
 /** What Add to queue will do, driving both the hint line and the button's
- * enabled state. A comma list uses every complete parsed batch verbatim at the
- * default height; a single screw uses the editable Height field. While
- * editing, only a single screw is valid, since one queue row is being
- * updated. */
-const pending = computed<{
-  batches: Array<{ product: Product; quantity: number }>;
-}>(() => {
-  if (editingEntry.value !== null) {
-    const batch = firstBatch.value;
-    if (
-      isMultiple.value ||
-      batch === null ||
-      !quickBatchComplete(batch) ||
-      !heightValid.value ||
-      !sizeValid.value
-    ) {
-      return { batches: [] };
-    }
-    const screw = screwFor(batch);
-    return { batches: [{ product: productFor(screw, screw, heightUnits.value), quantity: batch.quantity }] };
+ * enabled state, from the engine's screw product builder (which owns the
+ * completeness check, sizing and the height rule). While editing, only a
+ * single screw is valid, since one queue row is being updated. */
+const pending = computed<ScrewProductsResult>(() => {
+  if (editingEntry.value !== null && isMultiple.value) {
+    return { products: [], skipped: [], problem: null };
   }
-  const complete = completeBatches.value;
-  if (complete.length === 0) return { batches: [] };
-  if (!isMultiple.value && !heightValid.value) return { batches: [] };
-  if (!sizeValid.value) return { batches: [] };
-  const height = isMultiple.value ? DEFAULT_HEIGHT_UNITS : heightUnits.value;
-  return {
-    batches: complete.map((batch) => {
-      const screw = screwFor(batch);
-      return { product: productFor(screw, screw, height), quantity: batch.quantity };
-    }),
-  };
+  return screwProducts(parsed.value.batches, screwOptions.value);
 });
 
 /**
@@ -478,7 +354,7 @@ const pending = computed<{
  */
 const pendingFootprints = computed<number[]>(() => [
   ...new Set(
-    pending.value.batches
+    pending.value.products
       .map(({ product }) => binOf(product)?.gridX ?? null)
       .filter((cells): cells is number => cells !== null),
   ),
@@ -561,8 +437,8 @@ const resultText = computed(() => {
     const n = completeBatches.value.length;
     return n > 0 ? `Adds ${n} ${n === 1 ? 'entry' : 'entries'}.` : '';
   }
-  if (pending.value.batches.length === 0) return '';
-  const product = pending.value.batches[0].product;
+  if (pending.value.products.length === 0) return '';
+  const product = pending.value.products[0].product;
   if (product.kind === 'insert') {
     return `Resulting label insert: ${product.content.text} (${product.cells}u wide).`;
   }
@@ -571,63 +447,28 @@ const resultText = computed(() => {
 
 /** One label-text summary per parsed batch, for the multi-screw hint list. */
 const batchSummaries = computed(() =>
-  parsed.value.batches.map((batch) => {
-    const noLength = isLengthlessHead(batch.head);
-    return {
-      text: composeLabelText(
-        batch.thread,
-        noLength ? null : batch.lengthMm,
-        batch.head,
-        enteredTextFor(batch),
-      ),
-      quantity: batch.quantity,
-    };
-  }),
+  parsed.value.batches.map((batch) => ({
+    text: screwBatchLabelText(batch, editingScrew.value),
+    quantity: batch.quantity,
+  })),
 );
 
-/** The next field a single incomplete batch still needs, in the order a screw
- * is described: a thread, then a length (unless the head carries none), then a
- * head type. Null once the batch is complete. */
-function nextMissingField(batch: ScrewBatch): string | null {
-  if (batch.thread === null) return 'Add a thread size.';
-  const noLength = isLengthlessHead(batch.head);
-  if (!noLength && batch.lengthMm === null) return 'Add a length.';
-  if (batch.head === null) return 'Add a head type.';
-  return null;
-}
-
-/** What a single incomplete batch has so far, as plain prose. */
-function recognizedState(batch: ScrewBatch): string {
-  const parts: string[] = [];
-  if (batch.thread !== null) parts.push(batch.thread);
-  if (batch.head !== null) parts.push(batch.head);
-  const noLength = isLengthlessHead(batch.head);
-  if (!noLength && batch.lengthMm !== null) {
-    parts.push(batch.enteredLengthText ?? `${batch.lengthMm} mm`);
-  }
-  return parts.join(', ');
-}
-
 /**
- * The caption under the textbox for an incomplete single batch: one sentence
- * of what is recognized, one sentence naming the next missing field. Empty for
- * a complete batch (resultText covers it) and for a multi-screw list.
+ * The caption under the textbox for an incomplete single batch: what is
+ * recognized and the next missing field. Empty for a complete batch
+ * (resultText covers it) and for a multi-screw list.
  */
 const incompleteHint = computed(() => {
   if (isMultiple.value) return '';
   const batch = firstBatch.value;
-  if (batch === null || quickBatchComplete(batch)) return '';
-  const missing = nextMissingField(batch);
-  const state = recognizedState(batch);
-  if (missing === null) return '';
-  return state === '' ? missing : `${state}. ${missing}`;
+  return batch === null ? '' : incompleteScrewBatchHint(batch);
 });
 
 /** The single hint caption: the resulting bin, the multi-add count, or the
  * incomplete-batch guidance, whichever applies. */
 const hintText = computed(() => (resultText.value !== '' ? resultText.value : incompleteHint.value));
 
-const formValid = computed(() => pending.value.batches.length > 0 && wallProblem.value === null);
+const formValid = computed(() => pending.value.products.length > 0 && wallProblem.value === null);
 
 const addedSnackbar = ref(false);
 const addedText = ref('');
@@ -640,7 +481,7 @@ function addToQueue(): void {
   const cleanNotes = store.notes.trim();
   const editing = editingEntry.value;
   if (editing !== null) {
-    const { product, quantity } = pending.value.batches[0];
+    const { product, quantity } = pending.value.products[0];
     saveError.value = queue.update(editing.id, {
       product,
       quantity,
@@ -653,29 +494,26 @@ function addToQueue(): void {
     return;
   }
   if (queueBatches(cleanNotes) === null) return;
-  const n = pending.value.batches.length;
+  const n = pending.value.products.length;
   addedText.value =
     n === 1
-      ? `Added ${productLabelText(pending.value.batches[0].product)} to the queue.`
+      ? `Added ${productLabelText(pending.value.products[0].product)} to the queue.`
       : `Added ${n} entries to the queue.`;
   addedSnackbar.value = true;
   if (isMultiple.value) shorthand.value = '';
 }
 
 /**
- * Adds every pending batch to the queue. Returns the new entries as id and
- * quantity pairs, or null when the queue refused one (saveError then carries
- * the refusal; earlier batches stay added, matching the plain add's behavior).
+ * Adds every pending product to the queue, all or nothing. Returns the new
+ * entries as id and quantity pairs, or null when the queue refused one
+ * (saveError then carries the refusal and nothing was added).
  */
 function queueBatches(cleanNotes: string): { id: string; quantity: number }[] | null {
-  const added: { id: string; quantity: number }[] = [];
-  for (const { product, quantity } of pending.value.batches) {
-    const result = queue.add(product, quantity, cleanNotes);
-    saveError.value = result.problem;
-    if (result.problem !== null) return null;
-    added.push({ id: result.id, quantity });
-  }
-  return added;
+  const items = pending.value.products;
+  const result = queue.addMany(items, cleanNotes);
+  saveError.value = result.problem;
+  if (result.problem !== null) return null;
+  return result.ids.map((id, i) => ({ id, quantity: items[i].quantity }));
 }
 
 /** Queues every pending batch and moves each onto the newest build plate. */
@@ -690,7 +528,7 @@ function addToPlate(): void {
   const n = added.length;
   addedText.value =
     n === 1
-      ? `Added ${productLabelText(pending.value.batches[0].product)} to the newest build plate.`
+      ? `Added ${productLabelText(pending.value.products[0].product)} to the newest build plate.`
       : `Added ${n} entries to the newest build plate.`;
   addedSnackbar.value = true;
   if (isMultiple.value) shorthand.value = '';
@@ -706,7 +544,7 @@ async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
   saveError.value = null;
   downloadWarnings.value = [];
   try {
-    for (const { product } of pending.value.batches) {
+    for (const { product } of pending.value.products) {
       const warnings =
         format === 'stl'
           ? await downloadProductStl(product)
@@ -724,27 +562,11 @@ function cancelEdit(): void {
 
 // The preview follows whichever product Add to queue would create first; while
 // the batch is still incomplete it previews from whatever has parsed so far.
-const previewProduct = computed<Product>(() => {
-  const ready = pending.value.batches[0]?.product;
-  if (ready !== undefined) return ready;
-  const batch = firstBatch.value;
-  const noLength = isLengthlessHead(batch?.head);
-  return productFor(
-    {
-      thread: batch?.thread ?? null,
-      lengthMm: noLength ? null : batch?.lengthMm ?? null,
-      head: batch?.head ?? null,
-      enteredLengthText: batch?.enteredLengthText ?? null,
-    },
-    {
-      thread: batch?.thread ?? '',
-      lengthMm: noLength ? null : batch?.lengthMm ?? null,
-      head: batch?.head ?? null,
-      enteredLengthText: batch?.enteredLengthText ?? null,
-    },
-    heightUnits.value,
-  );
-});
+const previewProduct = computed<Product>(
+  () =>
+    pending.value.products[0]?.product ??
+    previewScrewProduct(firstBatch.value, screwOptions.value),
+);
 
 function generatePreview(product: Product): Promise<PartMeshes> {
   if (product.kind === 'insert') {
@@ -853,7 +675,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         variant="tonal"
         class="mt-2"
       >
-        {{ HEIGHT_INVALID_MESSAGE }}
+        {{ SCREW_HEIGHT_INVALID_MESSAGE }}
       </v-alert>
 
       <ProductSelect v-model="productChoice" v-model:fused="fused" hide-bin-alone class="mt-4" />
@@ -897,7 +719,7 @@ const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, gener
         {{ undersizeHint }}
       </p>
       <v-alert v-if="!sizeValid" type="warning" density="compact" variant="tonal" class="mt-2">
-        {{ SIZE_INVALID_MESSAGE }}
+        {{ SCREW_SIZE_INVALID_MESSAGE }}
       </v-alert>
 
       <DividerControl v-if="!insertOnly" :notice="dividerNotice" class="mt-4" />

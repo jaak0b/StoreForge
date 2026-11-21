@@ -11,6 +11,7 @@ import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
 import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
+import { manualProduct } from '../engine/plan/manualProduct';
 import { overallHeightMm } from '../heightHint';
 import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
@@ -131,30 +132,18 @@ const editingEntry = computed<QueueEntry | null>(() => {
   return entry !== null && originOf(entry.product) === 'manual' ? entry : null;
 });
 
-/** The product the form currently designs. */
+/** The product the form currently designs, through the engine's single manual mapping. */
 function designedProduct(): Product {
-  if (insertOnly.value) {
-    return {
-      kind: 'insert',
-      origin: 'manual',
-      cells: store.gridX,
-      content: store.content,
-    };
-  }
-  const bin = {
-    origin: 'manual' as const,
+  return manualProduct({
+    productChoice: store.productChoice,
     gridX: store.gridX,
     gridY: store.gridY,
     heightUnits: store.heightUnits,
     magnetHoles: store.magnetHoles,
-    walls: copyWalls(store.walls),
-  };
-  if (productChoice.value === 'binWithInsert') {
-    const product: Product = { kind: 'binWithInsert', bin, insert: store.content };
-    if (store.fused) product.fused = true;
-    return product;
-  }
-  return { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
+    walls: store.walls,
+    content: store.content,
+    fused: store.fused,
+  });
 }
 
 // The queue's refusal of an invalid design, shown beside the save button.

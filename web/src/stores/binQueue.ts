@@ -17,6 +17,7 @@ import {
   mergeEntries,
   mergeGroups,
   parsePlanFile,
+  pickProduct,
   repairGroupLinks,
   resyncLinkedPlateProducts,
   serializePlanFile,
@@ -25,6 +26,7 @@ import {
 } from '../engine/plan/planFile';
 import {
   drawerFillClipCount,
+  drawerGroupName,
   planDrawerFill,
   type DrawerFillPlate,
 } from '../engine/baseplate/drawerFill';
@@ -55,15 +57,56 @@ const STORAGE_KEY = 'storeforge.plan';
 export type AddResult = { id: string; problem: null } | { id: null; problem: string };
 
 /**
- * Checks a product and quantity with the plan file's own validators before an
- * interactive queue mutation. Returns null when valid, otherwise the
- * user-worded message the mutation hands back to the form.
+ * Result of adding several products at once: the new entries' ids in input
+ * order on success, or the user-worded refusal with nothing queued.
  */
-function validateQueueMutation(product: Product, quantity: number): string | null {
+export type AddManyResult = { ids: string[]; problem: null } | { ids: null; problem: string };
+
+/**
+ * Result of adding a drawer group: the new group's id on success, or the
+ * user-worded refusal with nothing queued. Exactly one of the two is set.
+ */
+export type AddDrawerResult =
+  | { groupId: string; problem: null }
+  | { groupId: null; problem: string };
+
+/** One product to queue, at a quantity. */
+export interface QueueItem {
+  product: Product;
+  quantity: number;
+}
+
+const UNKNOWN_ENTRY_PROBLEM =
+  'This queue entry no longer exists. It may have been removed or moved onto a build plate.';
+
+/**
+ * Checks a product and quantity with the plan file's own validators before an
+ * interactive queue mutation, and returns the product as the plan file's own
+ * sanitizer copies it (known fields only, detached from the caller), so the
+ * queue stores exactly what a reload of the saved plan would produce. A product
+ * the loader would only accept by repairing it is refused here instead, since
+ * an interactive add has no channel for the repair warning.
+ */
+function checkQueueMutation(
+  product: Product,
+  quantity: number,
+): { product: Product; problem: null } | { product: null; problem: string } {
   if (!isPositiveInteger(quantity, 1)) {
-    return 'The quantity must be a whole number of at least 1.';
+    return { product: null, problem: 'The quantity must be a whole number of at least 1.' };
   }
-  return validateProduct(product, 'This design');
+  const subject = 'This design';
+  const problem = validateProduct(product, subject);
+  if (problem !== null) return { product: null, problem };
+  const repairs: string[] = [];
+  const clean = pickProduct(product as unknown as Record<string, unknown>, subject, repairs);
+  if (repairs.length > 0) {
+    return {
+      product: null,
+      problem:
+        'This design is a screw bin without its label insert. A screw bin is always ordered with its label insert, so choose Bin + label insert.',
+    };
+  }
+  return { product: clean, problem: null };
 }
 
 /** Whether two plate brims are equal on all four sides. */
@@ -315,28 +358,53 @@ export const useBinQueue = defineStore('binQueue', {
      * which case the queue is not touched.
      */
     add(product: Product, quantity = 1, notes?: string): AddResult {
-      const problem = validateQueueMutation(product, quantity);
-      if (problem !== null) return { id: null, problem };
-      const entry: QueueEntry = {
-        id: crypto.randomUUID(),
-        quantity,
-        createdAt: new Date().toISOString(),
-        product,
-      };
-      if (notes !== undefined && notes !== '') entry.notes = notes;
-      this.entries.push(entry);
+      const result = this.addMany([{ product, quantity }], notes);
+      if (result.problem !== null) return { id: null, problem: result.problem };
+      return { id: result.ids[0], problem: null };
+    },
+    /**
+     * Adds one queued entry per item, all or nothing: every product and
+     * quantity is validated and sanitized first, and the queue is left
+     * untouched if any is refused. The same notes apply to every new entry.
+     * Returns the new ids in item order, or the first user-worded problem
+     * (naming the item's position when there are several).
+     */
+    addMany(items: QueueItem[], notes?: string): AddManyResult {
+      if (items.length === 0) {
+        return { ids: null, problem: 'There is nothing to add to the queue.' };
+      }
+      const now = new Date().toISOString();
+      const entries: QueueEntry[] = [];
+      for (const [index, item] of items.entries()) {
+        const checked = checkQueueMutation(item.product, item.quantity);
+        if (checked.problem !== null) {
+          const problem =
+            items.length === 1 ? checked.problem : `Entry ${index + 1}: ${checked.problem}`;
+          return { ids: null, problem };
+        }
+        const entry: QueueEntry = {
+          id: crypto.randomUUID(),
+          quantity: item.quantity,
+          createdAt: now,
+          product: checked.product,
+        };
+        if (notes !== undefined && notes !== '') entry.notes = notes;
+        entries.push(entry);
+      }
+      this.entries.push(...entries);
       this.persist();
-      return { id: entry.id, problem: null };
+      return { ids: entries.map((entry) => entry.id), problem: null };
     },
     /**
      * Applies partial changes to an existing entry. The product is replaced
      * wholesale when given (the sync-safe way to edit a discriminated union);
      * id and createdAt never change. Validates like add and returns null on
-     * success or the user-worded problem, leaving the entry unchanged.
+     * success or the user-worded problem, leaving the entry unchanged; an
+     * unknown id is a problem too. The stored product is the sanitized copy.
      */
     update(id: string, changes: QueueEntryUpdate): string | null {
       const index = this.entries.findIndex((e) => e.id === id);
-      if (index === -1) return null;
+      if (index === -1) return UNKNOWN_ENTRY_PROBLEM;
       const updated = { ...this.entries[index], ...changes };
       // A linked drawer-plate row's quantity is bound to its plate set: lowering
       // it trims the trailing plate ids (those plates become planned again, and
@@ -355,8 +423,9 @@ export const useBinQueue = defineStore('binQueue', {
           };
         }
       }
-      const problem = validateQueueMutation(updated.product, updated.quantity);
-      if (problem !== null) return problem;
+      const checked = checkQueueMutation(updated.product, updated.quantity);
+      if (checked.problem !== null) return checked.problem;
+      updated.product = checked.product;
       this.entries[index] = updated;
       this.persist();
       return null;
@@ -414,13 +483,14 @@ export const useBinQueue = defineStore('binQueue', {
      * plate has printed), the now-empty group is deleted automatically: a drawer
      * the user emptied by hand before printing any of it leaves no orphan header.
      * A group with printing or printed plates survives, and confirming a print is
-     * not user removal, so it never triggers this cleanup.
+     * not user removal, so it never triggers this cleanup. Returns null on
+     * success or the user-worded problem when no entry has this id.
      */
-    remove(id: string) {
+    remove(id: string): string | null {
       const removed = this.entryById(id);
+      if (removed === null) return UNKNOWN_ENTRY_PROBLEM;
       const groupId =
-        removed !== null &&
-        (removed.product.kind === 'baseplate' || removed.product.kind === 'clip')
+        removed.product.kind === 'baseplate' || removed.product.kind === 'clip'
           ? removed.product.group?.groupId
           : undefined;
       this.entries = this.entries.filter((e) => e.id !== id);
@@ -428,6 +498,7 @@ export const useBinQueue = defineStore('binQueue', {
         this.groups = this.groups.filter((g) => g.id !== groupId);
       }
       this.persist();
+      return null;
     },
     /**
      * Moves the selected amounts out of the queue into a new named batch.
@@ -580,7 +651,7 @@ export const useBinQueue = defineStore('binQueue', {
      * Adds a drawer group and queues one baseplate per planned plate. All or
      * nothing: the group and every plate product are validated first, and the
      * store is left untouched if any is refused, so a rejected plate never
-     * leaves the drawer partially queued. Returns null on success or the
+     * leaves the drawer partially queued. Returns the new group's id or the
      * user-worded problem. plannerPlates come from planDrawerFill; each
      * plate's brim is the planner's own, never recomputed here.
      */
@@ -590,7 +661,7 @@ export const useBinQueue = defineStore('binQueue', {
       plannerPlates: DrawerFillPlate[],
       name: string,
       clipToleranceMm: number = CLIP_TOLERANCE_DEFAULT,
-    ): string | null {
+    ): AddDrawerResult {
       const groupId = crypto.randomUUID();
       const now = new Date().toISOString();
       const plates: DrawerPlate[] = plannerPlates.map((plate) => ({
@@ -612,21 +683,42 @@ export const useBinQueue = defineStore('binQueue', {
       };
       if (clipPlan.clips !== null) group.payload.clips = clipPlan.clips;
       const groupProblem = validateGroup(group, `group ${groupId}`);
-      if (groupProblem !== null) return groupProblem;
+      if (groupProblem !== null) return { groupId: null, problem: groupProblem };
       const entries = linkedEntriesForPlates(plates, options, groupId, now);
       for (const entry of entries) {
         const problem = validateProduct(entry.product, 'A planned plate');
-        if (problem !== null) return problem;
+        if (problem !== null) return { groupId: null, problem };
       }
       if (clipPlan.entry !== null) {
         const clipProblem = validateProduct(clipPlan.entry.product, 'The drawer connection clips');
-        if (clipProblem !== null) return clipProblem;
+        if (clipProblem !== null) return { groupId: null, problem: clipProblem };
       }
       this.groups.push(group);
       this.entries.push(...entries);
       if (clipPlan.entry !== null) this.entries.push(clipPlan.entry);
       this.persist();
-      return null;
+      return { groupId, problem: null };
+    },
+    /**
+     * Plans a drawer fill from the drawer and build plate sizes and queues it
+     * as a new drawer group named after the drawer size. The planner's own
+     * user-worded error is returned when the sizes cannot be filled; otherwise
+     * this is addDrawerGroup with the planned plates, all or nothing.
+     */
+    addDrawerFromSize(
+      input: DrawerFillInput,
+      options: DrawerPlateOptions,
+      clipToleranceMm: number = CLIP_TOLERANCE_DEFAULT,
+    ): AddDrawerResult {
+      const outcome = planDrawerFill(input);
+      if ('error' in outcome) return { groupId: null, problem: outcome.error };
+      return this.addDrawerGroup(
+        input,
+        options,
+        outcome.plates,
+        drawerGroupName(input),
+        clipToleranceMm,
+      );
     },
     /**
      * Applies changes to a drawer group. A name or options change is

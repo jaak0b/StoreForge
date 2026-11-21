@@ -2,7 +2,8 @@
 import { computed, ref, watch } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
-import { useBaseplateDesigner, type HoleMode } from '../stores/baseplateDesigner';
+import { useBaseplateDesigner } from '../stores/baseplateDesigner';
+import { drawerPlateOptionsFromFields, type HoleMode } from '../engine/baseplate/plateOptions';
 import {
   CLIP_TOLERANCE_DEFAULT,
   MAGNET_DIAMETER_DEFAULT,
@@ -158,15 +159,16 @@ const connectable = computed<boolean>({
   },
 });
 
-/** The options the controls currently describe, collapsed like the designer's getter. */
-const editedOptions = computed<DrawerPlateOptions>(() => ({
-  magnets:
-    magnetMode.value === 'full'
-      ? { diameterMm: magnetDiameterMm.value, heightMm: magnetHeightMm.value }
-      : null,
-  screwHoles: screwHoleMode.value === 'full',
-  connectable: connectable.value,
-}));
+/** The options the controls currently describe, through the engine's single magnet collapse. */
+const editedOptions = computed<DrawerPlateOptions>(() =>
+  drawerPlateOptionsFromFields({
+    magnetMode: magnetMode.value,
+    magnetDiameterMm: magnetDiameterMm.value,
+    magnetHeightMm: magnetHeightMm.value,
+    screwHoleMode: screwHoleMode.value,
+    connectable: connectable.value,
+  }),
+);
 
 // --- Live plan (create mode) ----------------------------------------------
 
@@ -299,18 +301,15 @@ function rowHighlighted(plates: DrawerFillPlate[]): boolean {
 
 const actionError = ref<string | null>(null);
 
-/** Queues the planned plates as a new drawer group (create mode). */
+/** Plans and queues the entered drawer as a new drawer group (create mode). */
 function addPlates(): void {
   actionError.value = null;
   if (filledInput.value === null) return;
-  const name = `Drawer ${filledInput.value.drawerWidthMm} × ${filledInput.value.drawerDepthMm} mm`;
-  actionError.value = queue.addDrawerGroup(
+  actionError.value = queue.addDrawerFromSize(
     filledInput.value,
     editedOptions.value,
-    plannedPlates.value,
-    name,
     clipToleranceMm.value,
-  );
+  ).problem;
 }
 
 /** Re-queues the not-queued plate a rectangle belongs to (edit mode); a queued one does nothing. */

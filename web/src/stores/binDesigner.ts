@@ -3,15 +3,10 @@ import type { InsertContentParams, SlottedBinParams } from '../engine/gridfinity
 import * as divider from '../engine/gridfinity/dividerModel';
 import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import type { LabelContent } from '../engine/plan/types';
+import type { ProductChoice } from '../engine/plan/manualProduct';
 
-/**
- * What a designer form produces: a bin plus its matching label insert, a
- * bin with an empty slot, a plain bin without the slot, or a standalone
- * insert for a bin that already exists. Maps onto the plan layer's Product
- * kinds ('bin' and 'plainBin' both save as the bin product, with labelSlot
- * true and false); the tab that saves the entry adds its own origin.
- */
-export type ProductChoice = 'binWithInsert' | 'bin' | 'plainBin' | 'insert';
+/** The designer's product choice; defined with the manual product mapping in the engine. */
+export type { ProductChoice };
 
 /**
  * How the divider walls are being edited in the form. This is editing state
