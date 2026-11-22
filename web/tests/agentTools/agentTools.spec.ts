@@ -27,7 +27,7 @@ vi.stubGlobal('localStorage', {
   clear: () => memoryStore.clear(),
 });
 
-import { registerAgentTools } from '../../src/agentTools/registerAgentTools';
+import { agentTools, registerAgentTools } from '../../src/agentTools/registerAgentTools';
 import {
   loadModelContext,
   type AgentTool,
@@ -311,6 +311,43 @@ describe('add_bin', () => {
   });
 });
 
+/** The prototype of every non-array object inside a JSON value, the value itself included. */
+function objectPrototypes(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value.flatMap(objectPrototypes);
+  if (typeof value !== 'object' || value === null) return [];
+  return [Object.getPrototypeOf(value), ...Object.values(value).flatMap(objectPrototypes)];
+}
+
+describe('realm-neutral registration', () => {
+  // The relay widget's iframe realm only accepts objects with a null prototype
+  // (or its own realm's Object.prototype, which the page can never produce).
+  it('registers every schema and annotation object with a null prototype', () => {
+    for (const tool of context.tools.values()) {
+      const prototypes = [
+        ...objectPrototypes(tool.inputSchema),
+        ...objectPrototypes(tool.annotations),
+      ];
+      expect(new Set(prototypes), tool.name).toEqual(new Set([null]));
+    }
+  });
+
+  it('registers schemas and annotations deep-equal to the tool definitions', () => {
+    const registered = [...context.tools.values()].map((tool) => ({
+      name: tool.name,
+      inputSchema: JSON.parse(JSON.stringify(tool.inputSchema)),
+      annotations: JSON.parse(JSON.stringify(tool.annotations ?? null)),
+    }));
+
+    const source = agentTools(pinia).map((tool) => ({
+      name: tool.name,
+      inputSchema: JSON.parse(JSON.stringify(tool.inputSchema)),
+      annotations: JSON.parse(JSON.stringify(tool.annotations ?? null)),
+    }));
+
+    expect(registered).toEqual(source);
+  });
+});
+
 describe('add_screws', () => {
   it('adds the complete screws and reports the incomplete one as skipped', async () => {
     const { isError, body } = await call('add_screws', {
@@ -323,6 +360,7 @@ describe('add_screws', () => {
       ['M5 x 12', 4],
     ]);
     expect(body.skipped).toEqual(['Entry 3 (M4, countersunk screw) has no length.']);
+    expect(body.parseErrors).toEqual([]);
     const products = useBinQueue().entries.map((e) => e.product);
     expect(products.map((p) => (p.kind === 'binWithInsert' ? p.insert.icon : null))).toEqual([
       'countersunk screw',

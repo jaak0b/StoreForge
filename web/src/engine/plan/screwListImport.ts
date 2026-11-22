@@ -184,7 +184,11 @@ export interface ScrewBatch {
 export interface ParsedShorthand {
   /** One batch per comma-separated segment that contained anything readable. */
   batches: ScrewBatch[];
-  /** User-worded problems, each naming the token or segment it refers to. */
+  /**
+   * User-worded problems with tokens that could not be read, each naming the
+   * token. A batch that lacks a thread or length is not an error here; its
+   * null field is reported by missingScrewField.
+   */
   errors: string[];
 }
 
@@ -411,13 +415,10 @@ function parseBatchSegment(text: string, errors: string[]): ScrewBatch | null {
     i += 1;
   }
 
+  // A missing thread or length is not a parse error: the batch carries it as
+  // null, and missingScrewField (screwProducts.ts) reports it, so every
+  // consumer names each incomplete entry once.
   if (!sawAnything) return null;
-  if (thread === null) {
-    errors.push(`Can't find a thread size (like M3 or #8) in '${text}'.`);
-  }
-  if (!lengthSeen && !isLengthlessHead(head)) {
-    errors.push(`'${text}' has no length. Add one like 'x20' or fill it in on the row.`);
-  }
   return {
     thread,
     lengthMm,

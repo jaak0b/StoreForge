@@ -59,6 +59,25 @@ export function toolResult(body: object, isError = false): ToolResult {
   return result;
 }
 
+/**
+ * A deep copy of a JSON value whose objects all have a null prototype (arrays
+ * stay arrays). Tool schemas and annotations are registered through this so
+ * that a consumer in another JavaScript realm accepts them: the WebMCP local
+ * relay widget runs in its own iframe realm and treats a value as a plain
+ * object only when its prototype is null or that realm's own
+ * Object.prototype. An object built in the page realm fails that check, and
+ * the widget drops every such tool as malformed. A null prototype is the same
+ * in every realm, and JSON serialization (what native WebMCP and the polyfill
+ * do with a schema) is unaffected.
+ */
+export function realmNeutralCopy<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item: unknown) => realmNeutralCopy(item)) as T;
+  if (typeof value !== 'object' || value === null) return value;
+  const copy = Object.create(null) as Record<string, unknown>;
+  for (const [key, item] of Object.entries(value)) copy[key] = realmNeutralCopy(item);
+  return copy as T;
+}
+
 /** A document that may or may not carry a WebMCP model context. */
 export interface ModelContextHost {
   modelContext?: ModelContextLike;

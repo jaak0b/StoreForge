@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@mcp-b/global": "^6.2.0",
+    "@mcp-b/webmcp-local-relay": "6.2.0",
     "@salusoft89/planegcs": "^1.2.0",
     "@techstark/opencv-js": "^5.0.0-release.1",
     "comlink": "^4.4.2",

@@ -5,6 +5,7 @@ import { useApp } from './stores/app';
 import { useBinQueue } from './stores/binQueue';
 import { triggerDownload } from './binDownloads';
 import MainPage from './components/MainPage.vue';
+import SettingsDialog from './components/SettingsDialog.vue';
 
 const app = useApp();
 const queue = useBinQueue();
@@ -117,6 +118,10 @@ function finishImport(mode: 'merge' | 'replace'): void {
           Export backup
         </v-btn>
       </template>
+      <v-btn icon variant="text" @click="app.settingsOpen = true">
+        <v-icon icon="mdi-cog-outline" />
+        <v-tooltip activator="parent" location="bottom">Settings</v-tooltip>
+      </v-btn>
       <v-btn icon variant="text" @click="app.shortcutSheetOpen = true">
         <v-icon icon="mdi-help-circle-outline" />
         <v-tooltip activator="parent" location="bottom">Keyboard shortcuts (?)</v-tooltip>
@@ -169,6 +174,8 @@ function finishImport(mode: 'merge' | 'replace'): void {
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <SettingsDialog />
 
     <v-dialog v-model="app.shortcutSheetOpen" max-width="460">
       <v-card>

@@ -1,4 +1,4 @@
-import { createApp } from 'vue';
+import { createApp, watch } from 'vue';
 import { createPinia } from 'pinia';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
@@ -10,6 +10,9 @@ import App from './App.vue';
 import { useBinQueue } from './stores/binQueue';
 import { loadModelContext, type ModelContextHost } from './agentTools/modelContext';
 import { registerAgentTools } from './agentTools/registerAgentTools';
+import { loadLocalRelay, relayScriptUrl } from './agentTools/localRelay';
+import { useApp } from './stores/app';
+import { useSettings } from './stores/settings';
 // Every colour the theme names lives in one module, because the 3D viewports
 // need the same figures and no CSS variable reaches a WebGL material.
 import {
@@ -87,8 +90,25 @@ void useBinQueue(pinia).sweepStoredAssets();
 
 // WebMCP agent tools: the native document.modelContext when the browser has
 // one, otherwise the polyfill, which is fetched as its own chunk only then.
+// The local relay only forwards tools that are already registered, so it is
+// loaded after registration: at startup when the setting is on, or as soon as
+// the user turns it on.
 void loadModelContext(document as Document & ModelContextHost, window, () => import('@mcp-b/global'))
-  .then((modelContext) => registerAgentTools({ modelContext, pinia }))
+  .then((modelContext) => {
+    registerAgentTools({ modelContext, pinia });
+    const settings = useSettings(pinia);
+    const app = useApp(pinia);
+    const scriptUrl = relayScriptUrl(import.meta.env.BASE_URL, document.baseURI);
+    watch(
+      () => settings.allowLocalAgent,
+      (allowed) => {
+        if (!allowed) return;
+        loadLocalRelay<HTMLScriptElement>(document, scriptUrl);
+        app.localAgentRelayLoaded = true;
+      },
+      { immediate: true },
+    );
+  })
   .catch((error: unknown) => {
     console.error('The WebMCP agent tools could not be registered.', error);
   });
