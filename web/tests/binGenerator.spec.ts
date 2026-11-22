@@ -293,10 +293,11 @@ describe('buildBinManifold', () => {
     const saved = solidBase.volume() - base.volume();
     // The 1x1 pocket still saves several cubic centimetres of filament even
     // with the thicker base walls and the rib lattice standing in the pocket.
-    // With the ribs widened to BASE_RIB_THICKNESS = 1.6 mm the ribs occupy
-    // more of the pocket, so the pocket now saves about 3804 mm^3 (measured
-    // 2026-07-19); the bound follows from the 1.6 mm rib width.
-    expect(saved).toBeGreaterThan(3500);
+    // This bin has no magnet holes, so its foot shell is 3.85 mm (the measured
+    // 3.05 mm plus the 0.8 mm bed-adhesion extra) and the ribs are 1.6 mm
+    // wide; the pocket saves 3384.97 mm^3 (measured 2026-11-22, down from
+    // about 3804 mm^3 with the 3.05 mm shell). The bound sits just under it.
+    expect(saved).toBeGreaterThan(3350);
     expect(base.volume()).toBeGreaterThan(0);
     solidBase.delete();
     foot.delete();
@@ -305,22 +306,70 @@ describe('buildBinManifold', () => {
     bin.delete();
   });
 
-  it('gives the first layer the measured Pred base area for bed adhesion', () => {
-    const bin = buildBinManifold(m, params());
+  it('gives a bin without magnet holes the thicker first layer for bed adhesion', () => {
+    const bin = buildBinManifold(m, params({ magnetHoles: false }));
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
     // First-layer plan slice, 0.1 mm above the bed, is what adheres to the
-    // build plate. The base uses a 3.05 mm foot shell plus the rib lattice at
-    // BASE_RIB_THICKNESS = 1.6 mm (the owner's four-perimeter printability
-    // width, see constants). With the 1.6 mm central cross and diagonals the
-    // slice measures 613.37 mm^2 of solid per cell (measured 2026-07-19); the
-    // range below is pinned tightly around that value, which follows directly
-    // from the 1.6 mm rib width. Pinning it guards the adhesion fix: a
-    // regression thinning the base back to sparse lines would fall far below.
+    // build plate. Without magnet holes the foot shell is 3.85 mm (the
+    // measured Pred 3.05 mm plus the owner's 0.8 mm bed-adhesion extra, two
+    // 0.4 mm lines), with the 1.6 mm rib lattice inside. The slice measures
+    // 693.49 mm^2 of solid per cell (measured 2026-11-22; it was 613.37 mm^2
+    // with the 3.05 mm shell). Pinned tightly: losing the extra wall drops the
+    // area by about 80 mm^2, far outside the range.
     const cs = bin.slice(0.1);
-    expect(cs.area()).toBeGreaterThan(611);
-    expect(cs.area()).toBeLessThan(616);
+    expect(cs.area()).toBeGreaterThan(692);
+    expect(cs.area()).toBeLessThan(695);
     cs.delete();
     bin.delete();
   });
+
+  it('keeps the magnet bin first layer at its measured area', () => {
+    const bin = buildBinManifold(m, params({ magnetHoles: true }));
+    expect(bin.status()).toBe('NoError');
+    expect(bin.genus()).toBe(0);
+    // Magnet bins keep the measured 3.05 mm foot shell: their solid corner
+    // bosses already give the first layer enough contact. The slice at 0.1 mm
+    // measures 656.46 mm^2 per cell (measured 2026-11-22), unchanged by the
+    // bed-adhesion extra that applies only to bins without magnet holes.
+    const cs = bin.slice(0.1);
+    expect(cs.area()).toBeGreaterThan(655);
+    expect(cs.area()).toBeLessThan(658);
+    cs.delete();
+    bin.delete();
+  });
+
+  it.each([
+    // Outer foot edge at z = 0.1 is 17.9 mm from the cell centre (35.6 mm foot
+    // bottom plus 0.1 mm of 45-degree chamfer per side). The shell's inner face
+    // sits one wall thickness further in: 17.9 - 3.85 = 14.05 mm without magnet
+    // holes, 17.9 - 3.05 = 14.85 mm with them (hand calculated).
+    { magnetHoles: false, innerX: 14.05 },
+    { magnetHoles: true, innerX: 14.85 },
+  ])(
+    'puts the extra base wall inside the pocket, not on the outer foot (magnetHoles $magnetHoles)',
+    ({ magnetHoles, innerX }) => {
+      const bin = buildBinManifold(m, params({ magnetHoles }));
+      const cs = bin.slice(0.1);
+      // Outer first-layer footprint is the same for both variants.
+      const bounds = cs.bounds();
+      expect(bounds.min[0]).toBeCloseTo(-17.9, 3);
+      expect(bounds.max[0]).toBeCloseTo(17.9, 3);
+      expect(bounds.min[1]).toBeCloseTo(-17.9, 3);
+      expect(bounds.max[1]).toBeCloseTo(17.9, 3);
+      // A thin strip across the +X mid-edge wall at y = 5 (clear of the
+      // central cross rib and the diagonals) holds only the foot shell.
+      const strip = m.CrossSection.square([10, 0.2]).translate([10, 4.9]);
+      const wall = cs.intersect(strip);
+      const wallBounds = wall.bounds();
+      expect(wallBounds.min[0]).toBeCloseTo(innerX, 2);
+      expect(wallBounds.max[0]).toBeCloseTo(17.9, 3);
+      wall.delete();
+      strip.delete();
+      cs.delete();
+      bin.delete();
+    },
+  );
 
   it('keeps a 2x1 bin with magnets and dividers watertight when pocketed', () => {
     const bin = buildBinManifold(
@@ -364,9 +413,11 @@ describe('buildBinManifold', () => {
  * Re-recorded when dividers were confined to the container: the divider no
  * longer keeps a root strip out of the base pocket, which cost the bin the
  * 9.80 mm cubed of that root the surrounding foot shell and rib lattice did
- * not already occupy.
+ * not already occupy. Re-recorded 2026-11-22 when bins without magnet holes
+ * got the 0.8 mm thicker foot shell: the bin gained 1678.03 mm cubed, about
+ * 419.5 per cell, the same change the 1x1 pocket volume shows.
  */
-const EVEN_DIVIDER_2X2_VOLUME_MM3 = 37993.07879669753;
+const EVEN_DIVIDER_2X2_VOLUME_MM3 = 39671.111944439894;
 
 describe('interior dividers', () => {
   it('keeps the solid watertight with dividers on both axes', () => {

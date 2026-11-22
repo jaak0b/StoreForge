@@ -28,7 +28,7 @@ import {
   BASE_TOP_RADIUS,
   binInteriorSizeMm,
   binOuterSizeMm,
-  BASE_WALL_THICKNESS,
+  baseWallThickness,
   BASE_RIB_THICKNESS,
   BASE_TOP_SIZE,
   CORNER_SEGMENTS,
@@ -95,12 +95,12 @@ export function buildFoot(m: ManifoldToplevel): Manifold {
 /**
  * Pocket cutter hollowing the base of one cell, in the style of the lite base
  * in kennetek/gridfinity-rebuilt-openscad (gridfinity-rebuilt-lite.scad): the
- * foot becomes a shell of BASE_WALL_THICKNESS following its own chamfered
+ * foot becomes a shell of baseWallThickness(magnetHoles) following its own chamfered
  * profile, and the hollow continues up past the foot top to leave only a solid
  * floor plate of FLOOR_PLATE_THICKNESS (kennetek h_bot) under the interior
  * cavity. The 45-degree shell walls and the flat bridged plate print without
  * support. When magnetHoles is set, a solid boss column is kept around each
- * magnet hole (BASE_WALL_THICKNESS of plastic around the cutter) so magnets
+ * magnet hole (the same wall thickness of plastic around the cutter) so magnets
  * seat in solid material; each boss deliberately overlaps the corner of the
  * foot shell, so it is welded to the shell walls as well as to the floor
  * plate above.
@@ -112,18 +112,19 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
 
   // Same three sections as buildFoot, inset by the base wall thickness. Both
   // chamfers keep their 45-degree slope because every section shifts equally.
+  const wall = baseWallThickness(magnetHoles);
   const topSize = BASE_TOP_SIZE;
   const midSize = topSize - 2 * FOOT_UPPER_CHAMFER;
   const bottomSize = midSize - 2 * FOOT_LOWER_CHAMFER;
   const topPoly = insetPolygon(
     m,
     roundedRectPolygon(topSize, topSize, BASE_TOP_RADIUS),
-    BASE_WALL_THICKNESS,
+    wall,
   );
   const midPoly = insetPolygon(
     m,
     roundedRectPolygon(midSize, midSize, BASE_TOP_RADIUS - FOOT_UPPER_CHAMFER),
-    BASE_WALL_THICKNESS,
+    wall,
   );
   const bottomPoly = insetPolygon(
     m,
@@ -132,7 +133,7 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
       bottomSize,
       BASE_TOP_RADIUS - FOOT_UPPER_CHAMFER - FOOT_LOWER_CHAMFER,
     ),
-    BASE_WALL_THICKNESS,
+    wall,
   );
   // If the inset consumed any foot section, the shell walls would meet in the
   // middle: the whole cell base simply stays solid instead of being pocketed.
@@ -161,7 +162,9 @@ function buildCellBasePocket(m: ManifoldToplevel, magnetHoles: boolean): Manifol
 
   if (magnetHoles) {
     const offset = PITCH / 2 - MAGNET_HOLE_FROM_CELL_EDGE;
-    const bossRadius = MAGNET_HOLE_DIAMETER / 2 + BASE_WALL_THICKNESS;
+    // Bosses exist only with magnet holes, so wall is the measured magnet-bin
+    // shell thickness here.
+    const bossRadius = MAGNET_HOLE_DIAMETER / 2 + wall;
     const bosses: Manifold[] = [];
     for (const sx of [-1, 1]) {
       for (const sy of [-1, 1]) {

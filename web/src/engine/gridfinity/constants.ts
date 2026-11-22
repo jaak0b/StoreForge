@@ -53,6 +53,25 @@ export const WALL_THICKNESS = 0.95;
 export const BASE_WALL_THICKNESS = 3.05;
 
 /**
+ * Extra thickness added to the inner foot wall of bins without magnet holes:
+ * the owner's bed-adhesion choice of two 0.4 mm extrusion lines. Bins with
+ * magnet holes keep solid magnet bosses in every foot corner, which already
+ * give their first layer enough contact area to print fine without it; bins
+ * without magnet holes lack those corner bosses and get the two extra lines
+ * instead. A deliberate printability decision, not a value fitted to a scan.
+ */
+export const BASE_WALL_ADHESION_EXTRA = 0.8;
+
+/**
+ * Thickness of the hollowed foot's shell for a bin: the measured
+ * BASE_WALL_THICKNESS with magnet holes, plus BASE_WALL_ADHESION_EXTRA
+ * without. The single source for sizing the base pocket.
+ */
+export function baseWallThickness(magnetHoles: boolean): number {
+  return magnetHoles ? BASE_WALL_THICKNESS : BASE_WALL_THICKNESS + BASE_WALL_ADHESION_EXTRA;
+}
+
+/**
  * Thickness of the internal lattice ribs standing inside the hollowed foot:
  * the per-cell central "+" cross and the two diagonal ribs. The Pred reference
  * bin (first-layer plan slice) measures these ribs at about 0.8 mm (central
