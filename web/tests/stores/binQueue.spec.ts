@@ -574,6 +574,33 @@ describe('binQueue entry mutations', () => {
     content: { text: 'Bits', text2: '', icon: null },
   };
 
+  it('stores notes trimmed and stores blank notes as none', () => {
+    const store = useBinQueue();
+
+    const trimmed = store.add(INSERT, 1, '  drawer 3  ');
+    const blank = store.add(INSERT, 1, '   ');
+
+    expect(store.entryById(trimmed.id!)!.notes).toBe('drawer 3');
+    expect('notes' in store.entryById(blank.id!)!).toBe(false);
+  });
+
+  it('clears the notes of an entry updated with blank notes', () => {
+    const store = useBinQueue();
+    const { id } = store.add(INSERT, 1, 'drawer 3');
+
+    store.update(id!, { notes: ' ' });
+
+    expect('notes' in store.entryById(id!)!).toBe(false);
+  });
+
+  it('refuses to remove an unknown drawer with a user-worded problem', () => {
+    const store = useBinQueue();
+
+    expect(store.removeGroup('no-such-id')).toBe(
+      'This drawer no longer exists. It may have been removed.',
+    );
+  });
+
   it('refuses to update an unknown entry with a user-worded problem', () => {
     const store = useBinQueue();
 

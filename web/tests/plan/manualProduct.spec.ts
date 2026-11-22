@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   binProduct,
   designChoiceOf,
+  manualDesignOf,
   manualProduct,
   type ManualDesign,
 } from '../../src/engine/plan/manualProduct';
@@ -170,5 +171,49 @@ describe('designChoiceOf', () => {
     };
 
     expect(() => designChoiceOf(plate)).toThrow('not designed through a product choice');
+  });
+});
+
+describe('manualDesignOf', () => {
+  it.each<[string, ManualDesign]>([
+    ['a bin with its insert', design()],
+    ['a fused bin with its insert', design({ fused: true })],
+    ['a bin with an empty label slot', design({ productChoice: 'bin', content: { text: '', text2: '', icon: null } })],
+    ['a bin without the label slot', design({ productChoice: 'plainBin', content: { text: '', text2: '', icon: null } })],
+  ])('reads %s back as the design it was built from', (_name, original) => {
+    expect(manualDesignOf(manualProduct(original))).toEqual(original);
+  });
+
+  it('reads a standalone insert back with the default bin fields', () => {
+    const product: Product = {
+      kind: 'insert',
+      origin: 'manual',
+      cells: 3,
+      content: { text: 'Bits', text2: '', icon: 'hex nut' },
+    };
+
+    expect(manualDesignOf(product)).toEqual({
+      productChoice: 'insert',
+      gridX: 3,
+      gridY: 1,
+      heightUnits: 6,
+      magnetHoles: false,
+      walls: [],
+      content: { text: 'Bits', text2: '', icon: 'hex nut' },
+      fused: false,
+    });
+  });
+
+  it('returns a design that shares no walls with the stored product', () => {
+    const product = manualProduct(design());
+
+    const loaded = manualDesignOf(product)!;
+    loaded.walls[0].x1 = 99;
+
+    expect(product).toMatchObject({ bin: { walls: [{ x1: 0, y1: 20, x2: 70, y2: 20 }] } });
+  });
+
+  it('returns null for a bin that was not designed by hand', () => {
+    expect(manualDesignOf({ kind: 'bin', bin: cutoutBin(), labelSlot: true })).toBeNull();
   });
 });

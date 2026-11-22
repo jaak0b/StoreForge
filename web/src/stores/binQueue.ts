@@ -76,8 +76,23 @@ export interface QueueItem {
   quantity: number;
 }
 
-const UNKNOWN_ENTRY_PROBLEM =
+export const UNKNOWN_ENTRY_PROBLEM =
   'This queue entry no longer exists. It may have been removed or moved onto a build plate.';
+
+/** The quantity an add queues when the caller names none. */
+export const DEFAULT_ENTRY_QUANTITY = 1;
+
+export const UNKNOWN_GROUP_PROBLEM = 'This drawer no longer exists. It may have been removed.';
+
+/**
+ * The stored form of entry notes: trimmed, with blank notes stored as no notes
+ * at all. Every add and update stores notes through here, so no flow keeps
+ * stray whitespace or an empty notes field.
+ */
+export function cleanNotes(notes: string | undefined): string | undefined {
+  const trimmed = notes?.trim() ?? '';
+  return trimmed === '' ? undefined : trimmed;
+}
 
 /**
  * Checks a product and quantity with the plan file's own validators before an
@@ -357,7 +372,7 @@ export const useBinQueue = defineStore('binQueue', {
      * Returns the new entry's id on success or the user-worded problem, in
      * which case the queue is not touched.
      */
-    add(product: Product, quantity = 1, notes?: string): AddResult {
+    add(product: Product, quantity = DEFAULT_ENTRY_QUANTITY, notes?: string): AddResult {
       const result = this.addMany([{ product, quantity }], notes);
       if (result.problem !== null) return { id: null, problem: result.problem };
       return { id: result.ids[0], problem: null };
@@ -365,7 +380,8 @@ export const useBinQueue = defineStore('binQueue', {
     /**
      * Adds one queued entry per item, all or nothing: every product and
      * quantity is validated and sanitized first, and the queue is left
-     * untouched if any is refused. The same notes apply to every new entry.
+     * untouched if any is refused. The same notes (stored through cleanNotes)
+     * apply to every new entry.
      * Returns the new ids in item order, or the first user-worded problem
      * (naming the item's position when there are several).
      */
@@ -374,6 +390,7 @@ export const useBinQueue = defineStore('binQueue', {
         return { ids: null, problem: 'There is nothing to add to the queue.' };
       }
       const now = new Date().toISOString();
+      const storedNotes = cleanNotes(notes);
       const entries: QueueEntry[] = [];
       for (const [index, item] of items.entries()) {
         const checked = checkQueueMutation(item.product, item.quantity);
@@ -388,7 +405,7 @@ export const useBinQueue = defineStore('binQueue', {
           createdAt: now,
           product: checked.product,
         };
-        if (notes !== undefined && notes !== '') entry.notes = notes;
+        if (storedNotes !== undefined) entry.notes = storedNotes;
         entries.push(entry);
       }
       this.entries.push(...entries);
@@ -406,6 +423,11 @@ export const useBinQueue = defineStore('binQueue', {
       const index = this.entries.findIndex((e) => e.id === id);
       if (index === -1) return UNKNOWN_ENTRY_PROBLEM;
       const updated = { ...this.entries[index], ...changes };
+      if ('notes' in changes) {
+        const storedNotes = cleanNotes(changes.notes);
+        if (storedNotes === undefined) delete updated.notes;
+        else updated.notes = storedNotes;
+      }
       // A linked drawer-plate row's quantity is bound to its plate set: lowering
       // it trims the trailing plate ids (those plates become planned again, and
       // can be re-queued from the drawer view); raising it past the linked plate
@@ -948,9 +970,11 @@ export const useBinQueue = defineStore('binQueue', {
      * Removes a group and every still-queued plate that belongs to it. Batch
      * items are left alone: a plate already sent to a printer keeps its
      * snapshot, and its group link simply stops resolving, which the load-time
-     * repair strips the next time the plan is read.
+     * repair strips the next time the plan is read. Returns null on success or
+     * the user-worded problem when no group has this id.
      */
-    removeGroup(id: string) {
+    removeGroup(id: string): string | null {
+      if (this.groupById(id) === null) return UNKNOWN_GROUP_PROBLEM;
       this.groups = this.groups.filter((g) => g.id !== id);
       this.entries = this.entries.filter(
         (entry) =>
@@ -960,6 +984,7 @@ export const useBinQueue = defineStore('binQueue', {
           ),
       );
       this.persist();
+      return null;
     },
   },
 });

@@ -170,6 +170,26 @@ export function suggestedScrewBinSize(
   };
 }
 
+/**
+ * The footprint a stored screw product was built with: a screw bin's grid
+ * size, or a screw insert's width at the screw bin depth. A baseplate or clip
+ * is never a screw entry, so passing one is a broken invariant and throws.
+ */
+export function screwBinSizeOf(product: Product): ScrewBinSize {
+  switch (product.kind) {
+    case 'insert':
+      return { width: product.cells, depth: SCREW_BIN_DEPTH_UNITS };
+    case 'bin':
+    case 'binWithInsert':
+      return { width: product.bin.gridX, depth: product.bin.gridY };
+    case 'baseplate':
+    case 'clip':
+      throw new Error(`A screw queue entry cannot be a ${product.kind} product.`);
+    default:
+      return assertNever(product);
+  }
+}
+
 /** Everything besides the batches that decides the products a screw entry creates. */
 export interface ScrewProductOptions {
   /**

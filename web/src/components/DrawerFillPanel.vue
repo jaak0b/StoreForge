@@ -3,7 +3,12 @@ import { computed, ref, watch } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
 import { useBaseplateDesigner } from '../stores/baseplateDesigner';
-import { drawerPlateOptionsFromFields, type HoleMode } from '../engine/baseplate/plateOptions';
+import {
+  DRAWER_CONNECTABLE_DEFAULT,
+  HOLE_MODE_DEFAULT,
+  drawerPlateOptionsFromFields,
+  type HoleMode,
+} from '../engine/baseplate/plateOptions';
 import {
   CLIP_TOLERANCE_DEFAULT,
   MAGNET_DIAMETER_DEFAULT,
@@ -86,15 +91,13 @@ watch(
 // exactly as before. The proxies below pick the source by mode, keeping one set
 // of option controls in the markup.
 
-const localMagnetMode = ref<HoleMode>('none');
+const localMagnetMode = ref<HoleMode>(HOLE_MODE_DEFAULT);
 const localMagnetDiameterMm = ref(MAGNET_DIAMETER_DEFAULT);
 const localMagnetHeightMm = ref(MAGNET_HEIGHT_DEFAULT);
-const localScrewHoleMode = ref<HoleMode>('none');
-// Connectable is local in both modes and defaults on: filling a drawer wall to
-// wall is exactly the case connecting plates is for, so a new drawer starts
-// connectable (the single-plate designer keeps its own separate default). Edit
-// mode overwrites this from the saved group below.
-const localConnectable = ref(true);
+const localScrewHoleMode = ref<HoleMode>(HOLE_MODE_DEFAULT);
+// Connectable is local in both modes and starts from the shared drawer default.
+// Edit mode overwrites this from the saved group below.
+const localConnectable = ref(DRAWER_CONNECTABLE_DEFAULT);
 // The clip fit the drawer prints its connection clips at, local in both modes.
 // Edit mode seeds it from the group's stored clip plan below.
 const clipToleranceMm = ref(CLIP_TOLERANCE_DEFAULT);

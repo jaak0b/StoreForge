@@ -178,18 +178,17 @@ const brimCapError = computed<string | null>(() => {
 });
 
 function saveEntry(): void {
-  const cleanNotes = store.notes.trim();
   const product = store.product;
   if (editingEntry.value !== null) {
     saveError.value = queue.update(editingEntry.value.id, {
       product,
       quantity: quantity.value,
-      notes: cleanNotes === '' ? undefined : cleanNotes,
+      notes: store.notes,
     });
     if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    const result = queue.add(product, quantity.value, cleanNotes);
+    const result = queue.add(product, quantity.value, store.notes);
     saveError.value = result.problem;
     if (result.problem !== null) return;
   }
@@ -198,8 +197,7 @@ function saveEntry(): void {
 
 /** Queues the baseplate and moves it onto the newest build plate in one step. */
 function addToPlate(): void {
-  const cleanNotes = store.notes.trim();
-  const result = queue.add(store.product, quantity.value, cleanNotes);
+  const result = queue.add(store.product, quantity.value, store.notes);
   saveError.value = result.problem;
   if (result.problem !== null) return;
   queue.addEntryToNewestBatch(result.id, quantity.value);

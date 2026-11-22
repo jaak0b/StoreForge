@@ -2,7 +2,12 @@ import { defineStore } from 'pinia';
 import * as divider from '../engine/gridfinity/dividerModel';
 import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import type { LabelContent } from '../engine/plan/types';
-import type { ProductChoice } from '../engine/plan/manualProduct';
+import {
+  choiceHasLabel,
+  DEFAULT_MANUAL_DESIGN,
+  type ManualDesign,
+  type ProductChoice,
+} from '../engine/plan/manualProduct';
 
 /** The designer's product choice; defined with the manual product mapping in the engine. */
 export type { ProductChoice };
@@ -27,11 +32,11 @@ export type DividerMode = 'none' | 'grid' | 'custom';
  */
 export const useBinDesigner = defineStore('binDesigner', {
   state: () => ({
-    productChoice: 'binWithInsert' as ProductChoice,
-    gridX: 1,
-    gridY: 1,
-    heightUnits: 6,
-    magnetHoles: false,
+    productChoice: DEFAULT_MANUAL_DESIGN.productChoice as ProductChoice,
+    gridX: DEFAULT_MANUAL_DESIGN.gridX,
+    gridY: DEFAULT_MANUAL_DESIGN.gridY,
+    heightUnits: DEFAULT_MANUAL_DESIGN.heightUnits,
+    magnetHoles: DEFAULT_MANUAL_DESIGN.magnetHoles,
     /**
      * The divider walls being edited: the editing representation itself, not
      * a projection of anything else. The canvas editor mutates these through
@@ -72,22 +77,22 @@ export const useBinDesigner = defineStore('binDesigner', {
      * means no screen-space affordance to honour.
      */
     snapToleranceMm: 0,
-    labelText: '',
-    labelText2: '',
-    labelIcon: null as string | null,
+    labelText: DEFAULT_MANUAL_DESIGN.content.text,
+    labelText2: DEFAULT_MANUAL_DESIGN.content.text2,
+    labelIcon: DEFAULT_MANUAL_DESIGN.content.icon as string | null,
     /**
      * Whether a Bin + label insert product prints as one fused piece (label
      * raised on the bin, no swappable insert slot). Only meaningful when the
      * product choice is binWithInsert.
      */
-    fused: false,
+    fused: DEFAULT_MANUAL_DESIGN.fused,
     notes: '',
     moreOptionsOpen: false,
   }),
   getters: {
     /** Whether the chosen product carries a label: the single source for label-field visibility. */
     hasLabel(state): boolean {
-      return state.productChoice === 'binWithInsert' || state.productChoice === 'insert';
+      return choiceHasLabel(state.productChoice);
     },
     /** The designed label content. */
     content(state): LabelContent {
@@ -107,6 +112,27 @@ export const useBinDesigner = defineStore('binDesigner', {
   // single home for divider wall logic; the only thing added here is which
   // wall the editor has selected, a view concern the model does not carry.
   actions: {
+    /**
+     * Loads a whole design into the form (from manualDesignOf when editing a
+     * queue entry): every design field, a detached copy of the walls with no
+     * wall selected, and the divider mode inferred from the loaded walls.
+     */
+    loadDesign(design: ManualDesign): void {
+      this.$patch({
+        productChoice: design.productChoice,
+        fused: design.fused,
+        gridX: design.gridX,
+        gridY: design.gridY,
+        heightUnits: design.heightUnits,
+        magnetHoles: design.magnetHoles,
+        walls: design.walls.map((wall) => ({ ...wall })),
+        selectedWallIndex: null,
+        labelText: design.content.text,
+        labelText2: design.content.text2,
+        labelIcon: design.content.icon,
+      });
+      this.inferDividerModeFromWalls();
+    },
     selectWall(index: number | null): void {
       this.selectedWallIndex =
         index !== null && index >= 0 && index < this.walls.length ? index : null;

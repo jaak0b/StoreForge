@@ -889,7 +889,6 @@ const saveError = ref<string | null>(null);
 
 function saveEntry(): void {
   if (submitBlocker.value !== null) return;
-  const cleanNotes = notes.value.trim();
   const product = designedProduct();
   const entry = editingEntry.value;
   // The model files are already in IndexedDB and still held, so the queue
@@ -898,12 +897,12 @@ function saveEntry(): void {
     saveError.value = queue.update(entry.id, {
       product,
       quantity: quantity.value,
-      notes: cleanNotes === '' ? undefined : cleanNotes,
+      notes: notes.value,
     });
     if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    const result = queue.add(product, quantity.value, cleanNotes);
+    const result = queue.add(product, quantity.value, notes.value);
     saveError.value = result.problem;
     if (result.problem !== null) return;
   }
@@ -913,8 +912,7 @@ function saveEntry(): void {
 /** Queues the bin and moves it onto the newest build plate in one step. */
 function addToPlate(): void {
   if (submitBlocker.value !== null) return;
-  const cleanNotes = notes.value.trim();
-  const result = queue.add(designedProduct(), quantity.value, cleanNotes);
+  const result = queue.add(designedProduct(), quantity.value, notes.value);
   saveError.value = result.problem;
   if (result.problem !== null) return;
   queue.addEntryToNewestBatch(result.id, quantity.value);

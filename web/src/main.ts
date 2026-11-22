@@ -8,6 +8,8 @@ import '@mdi/font/css/materialdesignicons.css';
 import './styles.css';
 import App from './App.vue';
 import { useBinQueue } from './stores/binQueue';
+import { loadModelContext, type ModelContextHost } from './agentTools/modelContext';
+import { registerAgentTools } from './agentTools/registerAgentTools';
 // Every colour the theme names lives in one module, because the 3D viewports
 // need the same figures and no CSS variable reaches a WebGL material.
 import {
@@ -82,3 +84,11 @@ createApp(App).use(pinia).use(vuetify).mount('#app');
 // mutation never persisted) are cleaned up once at startup. The same pass reads
 // which cutout models this device holds, so rows can name the ones it does not.
 void useBinQueue(pinia).sweepStoredAssets();
+
+// WebMCP agent tools: the native document.modelContext when the browser has
+// one, otherwise the polyfill, which is fetched as its own chunk only then.
+void loadModelContext(document as Document & ModelContextHost, () => import('@mcp-b/global'))
+  .then((modelContext) => registerAgentTools({ modelContext, pinia }))
+  .catch((error: unknown) => {
+    console.error('The WebMCP agent tools could not be registered.', error);
+  });

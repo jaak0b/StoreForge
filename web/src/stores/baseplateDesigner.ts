@@ -6,7 +6,7 @@ import {
   type BaseplateMagnets,
   type BaseplateParams,
 } from '../engine/baseplate/constants';
-import { magnetsForMode, type HoleMode } from '../engine/baseplate/plateOptions';
+import { HOLE_MODE_DEFAULT, magnetsForMode, type HoleMode } from '../engine/baseplate/plateOptions';
 import { baseplateParamsOf } from '../engine/plan/geometry';
 import type { BaseplateProduct } from '../engine/plan/types';
 
@@ -25,10 +25,10 @@ export const useBaseplateDesigner = defineStore('baseplateDesigner', {
   state: () => ({
     unitsX: 2,
     unitsY: 2,
-    magnetMode: 'none' as HoleMode,
+    magnetMode: HOLE_MODE_DEFAULT,
     magnetDiameterMm: MAGNET_DIAMETER_DEFAULT,
     magnetHeightMm: MAGNET_HEIGHT_DEFAULT,
-    screwHoleMode: 'none' as HoleMode,
+    screwHoleMode: HOLE_MODE_DEFAULT,
     connectable: false,
     notes: '',
     /**

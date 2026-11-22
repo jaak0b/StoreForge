@@ -9,9 +9,9 @@ import { describeProduct } from '../engine/plan/rowDescriptor';
 import { previewBinParams } from '../engine/plan/geometry';
 import { designChoiceOf } from '../engine/plan/manualProduct';
 import {
-  assertNever,
   binOf,
   originOf,
+  screwOf,
   type Product,
   type QueueEntry,
   type ScrewSpec,
@@ -32,7 +32,6 @@ import {
 } from '../engine/plan/screwListImport';
 import {
   DEFAULT_SCREW_HEIGHT_UNITS,
-  SCREW_BIN_DEPTH_UNITS,
   SCREW_HEIGHT_INVALID_MESSAGE,
   incompleteScrewBatchHint,
   isScrewBatchComplete,
@@ -40,6 +39,7 @@ import {
   isValidScrewHeight,
   previewScrewProduct,
   screwBatchLabelText,
+  screwBinSizeOf,
   screwProducts,
   suggestedScrewBinSize,
   type ScrewProductOptions,
@@ -261,32 +261,8 @@ const editingEntry = computed<QueueEntry | null>(() => {
 /** The screw description stored on the entry being edited, or null. */
 const editingScrew = computed<ScrewSpec | null>(() => {
   const entry = editingEntry.value;
-  if (entry === null) return null;
-  const product = entry.product;
-  if (product.kind === 'insert') return product.origin === 'screw' ? product.screw : null;
-  const bin = binOf(product);
-  return bin !== null && bin.origin === 'screw' ? bin.screw : null;
+  return entry === null ? null : screwOf(entry.product);
 });
-
-/**
- * The size in grid units a stored screw product was queued at; a standalone
- * insert is one cell deep. Only screw products are passed in, so a kind that
- * never carries a screw is a broken invariant and throws.
- */
-function storedSizeOf(product: Product): { width: number; depth: number } {
-  switch (product.kind) {
-    case 'insert':
-      return { width: product.cells, depth: SCREW_BIN_DEPTH_UNITS };
-    case 'bin':
-    case 'binWithInsert':
-      return { width: product.bin.gridX, depth: product.bin.gridY };
-    case 'baseplate':
-    case 'clip':
-      throw new Error(`A screw queue entry cannot be a ${product.kind} product.`);
-    default:
-      return assertNever(product);
-  }
-}
 
 // Editing a screw queue row rehydrates the breakdown, height and shared
 // options from the entry's stored screw description.
@@ -298,12 +274,7 @@ watch(
     if (entry === null || originOf(entry.product) !== 'screw') return;
     const product = entry.product;
     const bin = binOf(product);
-    const screw =
-      product.kind === 'insert'
-        ? (product.origin === 'screw' ? product.screw : null)
-        : bin !== null && bin.origin === 'screw'
-          ? bin.screw
-          : null;
+    const screw = screwOf(product);
     if (screw === null) return;
     if (bin !== null) heightUnits.value = bin.heightUnits;
     shorthand.value = composeShorthand(screw.thread, screw.lengthMm, screw.head, entry.quantity);
@@ -311,7 +282,7 @@ watch(
     // automatic suggestion for this screw; otherwise the size keeps following
     // the shorthand as it is edited.
     const auto = suggestedScrewBinSize(screw);
-    const stored = storedSizeOf(product);
+    const stored = screwBinSizeOf(product);
     overrideSize.value =
       stored.width === auto.width && stored.depth === auto.depth
         ? null
@@ -493,14 +464,13 @@ const saveError = ref<string | null>(null);
 function addToQueue(): void {
   if (!formValid.value) return;
   saveError.value = null;
-  const cleanNotes = store.notes.trim();
   const editing = editingEntry.value;
   if (editing !== null) {
     const { product, quantity } = pending.value.products[0];
     saveError.value = queue.update(editing.id, {
       product,
       quantity,
-      notes: cleanNotes === '' ? undefined : cleanNotes,
+      notes: store.notes,
     });
     if (saveError.value !== null) return;
     addedText.value = `Updated ${productLabelText(product)} in the queue.`;
@@ -508,7 +478,7 @@ function addToQueue(): void {
     app.stopEditing();
     return;
   }
-  if (queueBatches(cleanNotes) === null) return;
+  if (queueBatches() === null) return;
   const n = pending.value.products.length;
   addedText.value =
     n === 1
@@ -533,9 +503,9 @@ function clearAddedList(): void {
  * entries as id and quantity pairs, or null when the queue refused one
  * (saveError then carries the refusal and nothing was added).
  */
-function queueBatches(cleanNotes: string): { id: string; quantity: number }[] | null {
+function queueBatches(): { id: string; quantity: number }[] | null {
   const items = pending.value.products;
-  const result = queue.addMany(items, cleanNotes);
+  const result = queue.addMany(items, store.notes);
   saveError.value = result.problem;
   if (result.problem !== null) return null;
   return result.ids.map((id, i) => ({ id, quantity: items[i].quantity }));
@@ -545,7 +515,7 @@ function queueBatches(cleanNotes: string): { id: string; quantity: number }[] | 
 function addToPlate(): void {
   if (!formValid.value || editingEntry.value !== null) return;
   saveError.value = null;
-  const added = queueBatches(store.notes.trim());
+  const added = queueBatches();
   if (added === null) return;
   for (const { id, quantity } of added) {
     queue.addEntryToNewestBatch(id, quantity);

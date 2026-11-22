@@ -366,7 +366,6 @@ async function addToQueue(): Promise<void> {
     addError.value = submitBlocker.value;
     return;
   }
-  const cleanNotes = notes.value.trim();
   // Sessions must be stored before the queue mutation: persisting the plan
   // sweeps stored photos no entry references, so the reference and the photo
   // have to land in that order.
@@ -375,12 +374,12 @@ async function addToQueue(): Promise<void> {
     addError.value = queue.update(props.editingEntry.id, {
       product,
       quantity: quantity.value,
-      notes: cleanNotes === '' ? undefined : cleanNotes,
+      notes: notes.value,
     });
     if (addError.value !== null) return;
     app.stopEditing();
   } else {
-    const result = queue.add(product, quantity.value, cleanNotes);
+    const result = queue.add(product, quantity.value, notes.value);
     addError.value = result.problem;
     if (result.problem !== null) return;
   }
@@ -397,9 +396,8 @@ async function addToPlate(): Promise<void> {
     addError.value = submitBlocker.value;
     return;
   }
-  const cleanNotes = notes.value.trim();
   const product = designedProduct(await storeReferencedSessions());
-  const result = queue.add(product, quantity.value, cleanNotes);
+  const result = queue.add(product, quantity.value, notes.value);
   addError.value = result.problem;
   if (result.problem !== null) return;
   queue.addEntryToNewestBatch(result.id, quantity.value);

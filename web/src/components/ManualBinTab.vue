@@ -8,11 +8,10 @@ import { useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
 import type { PartMeshes } from '../engine/gridfinity/types';
-import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import { assertNever, originOf, type Product, type QueueEntry } from '../engine/plan/types';
 import { binPreviewParams } from '../engine/plan/geometry';
 import { describeProduct } from '../engine/plan/rowDescriptor';
-import { designChoiceOf, manualProduct } from '../engine/plan/manualProduct';
+import { manualDesignOf, manualProduct } from '../engine/plan/manualProduct';
 import { overallHeightMm } from '../heightHint';
 import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
@@ -50,11 +49,6 @@ const insertOnly = computed(() => productChoice.value === 'insert');
 
 const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
-/** Detaches a wall list, so the form and a stored entry never share one. */
-function copyWalls(walls: DividerWall[]): DividerWall[] {
-  return walls.map((wall) => ({ ...wall }));
-}
-
 function resetForm(): void {
   const keepOpen = store.moreOptionsOpen;
   store.$reset();
@@ -70,38 +64,10 @@ function loadEditingEntry(entryId: string | null): void {
   }
   const entry = queue.entryById(entryId);
   if (entry === null || originOf(entry.product) !== 'manual') return;
-  const product = entry.product;
-  if (product.kind === 'insert') {
-    store.$patch({
-      productChoice: 'insert',
-      gridX: product.cells,
-      labelText: product.content.text,
-      labelText2: product.content.text2,
-      labelIcon: product.content.icon,
-      notes: entry.notes ?? '',
-    });
-  } else if (product.kind === 'bin' || product.kind === 'binWithInsert') {
-    const bin = product.bin;
-    if (bin.origin !== 'manual') return;
-    const content = product.kind === 'binWithInsert' ? product.insert : null;
-    store.$patch({
-      ...designChoiceOf(product),
-      gridX: bin.gridX,
-      gridY: bin.gridY,
-      heightUnits: bin.heightUnits,
-      magnetHoles: bin.magnetHoles,
-      // Copied, so editing the loaded walls never writes through to the
-      // stored queue entry before the edit is saved.
-      walls: copyWalls(bin.walls),
-      selectedWallIndex: null,
-      labelText: content?.text ?? '',
-      labelText2: content?.text2 ?? '',
-      labelIcon: content?.icon ?? null,
-      notes: entry.notes ?? '',
-    });
-    // No walls opens with dividers off; walls present opens the free editor.
-    store.inferDividerModeFromWalls();
-  }
+  const design = manualDesignOf(entry.product);
+  if (design === null) return;
+  store.loadDesign(design);
+  store.notes = entry.notes ?? '';
   quantity.value = entry.quantity;
   if (store.labelText2 !== '' || entry.notes !== undefined || entry.quantity > 1) {
     store.moreOptionsOpen = true;
@@ -149,18 +115,17 @@ function designedProduct(): Product {
 const saveError = ref<string | null>(null);
 
 function saveEntry(): void {
-  const cleanNotes = notes.value.trim();
   const product = designedProduct();
   if (editingEntry.value !== null) {
     saveError.value = queue.update(editingEntry.value.id, {
       product,
       quantity: quantity.value,
-      notes: cleanNotes === '' ? undefined : cleanNotes,
+      notes: notes.value,
     });
     if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    const result = queue.add(product, quantity.value, cleanNotes);
+    const result = queue.add(product, quantity.value, notes.value);
     saveError.value = result.problem;
     if (result.problem !== null) return;
   }
@@ -169,8 +134,7 @@ function saveEntry(): void {
 
 /** Queues the design and moves it onto the newest build plate in one step. */
 function addToPlate(): void {
-  const cleanNotes = notes.value.trim();
-  const result = queue.add(designedProduct(), quantity.value, cleanNotes);
+  const result = queue.add(designedProduct(), quantity.value, notes.value);
   saveError.value = result.problem;
   if (result.problem !== null) return;
   queue.addEntryToNewestBatch(result.id, quantity.value);

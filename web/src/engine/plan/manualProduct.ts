@@ -41,6 +41,74 @@ export interface ManualDesign {
 /** A product choice that yields a bin: every choice except the standalone insert. */
 export type BinProductChoice = Exclude<ProductChoice, 'insert'>;
 
+/** One product choice as the product picker offers it. */
+export interface ProductChoiceInfo {
+  value: ProductChoice;
+  title: string;
+  subtitle: string;
+}
+
+/** Every product choice in picker order, with the title and subtitle the picker shows. */
+export const PRODUCT_CHOICES: readonly ProductChoiceInfo[] = [
+  {
+    value: 'binWithInsert',
+    title: 'Bin + label insert',
+    subtitle: 'A bin plus the matching swappable label insert for its slot.',
+  },
+  {
+    value: 'bin',
+    title: 'Bin with empty label slot',
+    subtitle: 'A bin with the label slot left empty; print inserts for it later.',
+  },
+  {
+    value: 'plainBin',
+    title: 'Bin without label slot',
+    subtitle: 'A plain bin with no label feature at all.',
+  },
+  {
+    value: 'insert',
+    title: 'Label insert only',
+    subtitle: 'Just the insert, for a bin you already have.',
+  },
+];
+
+/**
+ * The choices that order a bin without its insert. A screw entry never offers
+ * them: a screw bin is printed to carry the label naming its fastener.
+ */
+export const BIN_ALONE_CHOICES: readonly ProductChoice[] = ['bin', 'plainBin'];
+
+/** Whether a product choice prints label content: the bin with its insert, or the insert alone. */
+export function choiceHasLabel(choice: ProductChoice): boolean {
+  switch (choice) {
+    case 'binWithInsert':
+    case 'insert':
+      return true;
+    case 'bin':
+    case 'plainBin':
+      return false;
+    default:
+      return assertNever(choice);
+  }
+}
+
+/**
+ * The design a fresh designer form starts from: a 1 x 1 bin, 6 height units
+ * tall, without magnet holes or divider walls, ordered with an empty label
+ * insert. The designer store initializes from it, so a new form and any other
+ * flow that designs a manual product start from the same values.
+ */
+export const DEFAULT_MANUAL_DESIGN: Readonly<ManualDesign> = Object.freeze({
+  productChoice: 'binWithInsert',
+  gridX: 1,
+  gridY: 1,
+  heightUnits: 6,
+  magnetHoles: false,
+  walls: Object.freeze([]) as readonly DividerWall[],
+  content: Object.freeze({ text: '', text2: '', icon: null }) as LabelContent,
+  fused: false,
+});
+
 /**
  * The single mapping from a bin product choice to a queue Product, for any
  * already-built bin (manual, screw, traced or cutout): 'binWithInsert' pairs
@@ -146,5 +214,50 @@ export function manualProduct(design: ManualDesign): Product {
     }
     default:
       return assertNever(design.productChoice);
+  }
+}
+
+/**
+ * The inverse of manualProduct: the design a stored manual product was made
+ * from, for loading a queue entry back into a designer. Fields a standalone
+ * insert does not carry (depth, height, magnet holes, walls) take the
+ * DEFAULT_MANUAL_DESIGN values, and a bin ordered without its insert carries
+ * empty label content. The walls and content are detached copies. Returns null
+ * for a product that was not designed by hand (screw, traced or cutout bins,
+ * baseplates and clips).
+ */
+export function manualDesignOf(product: Product): ManualDesign | null {
+  switch (product.kind) {
+    case 'insert':
+      if (product.origin !== 'manual') return null;
+      return {
+        ...DEFAULT_MANUAL_DESIGN,
+        ...designChoiceOf(product),
+        gridX: product.cells,
+        walls: [],
+        content: { ...product.content },
+      };
+    case 'bin':
+    case 'binWithInsert': {
+      const bin = product.bin;
+      if (bin.origin !== 'manual') return null;
+      return {
+        ...designChoiceOf(product),
+        gridX: bin.gridX,
+        gridY: bin.gridY,
+        heightUnits: bin.heightUnits,
+        magnetHoles: bin.magnetHoles,
+        walls: bin.walls.map((wall) => ({ ...wall })),
+        content:
+          product.kind === 'binWithInsert'
+            ? { ...product.insert }
+            : { ...DEFAULT_MANUAL_DESIGN.content },
+      };
+    }
+    case 'baseplate':
+    case 'clip':
+      return null;
+    default:
+      return assertNever(product);
   }
 }

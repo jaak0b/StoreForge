@@ -469,6 +469,43 @@ export function binOf(product: Product): Bin | null {
 }
 
 /**
+ * Returns the screw description a product carries (a screw bin or a screw
+ * insert), or null for any product not created from a screw entry.
+ */
+export function screwOf(product: Product): ScrewSpec | null {
+  switch (product.kind) {
+    case 'bin':
+    case 'binWithInsert':
+      return product.bin.origin === 'screw' ? product.bin.screw : null;
+    case 'insert':
+      return product.origin === 'screw' ? product.screw : null;
+    case 'baseplate':
+    case 'clip':
+      return null;
+    default:
+      return assertNever(product);
+  }
+}
+
+/**
+ * The id of the drawer group a product row belongs to (a linked drawer plate
+ * or connection clip), or null for a product outside any drawer.
+ */
+export function drawerGroupIdOf(product: Product): string | null {
+  switch (product.kind) {
+    case 'baseplate':
+    case 'clip':
+      return product.group?.groupId ?? null;
+    case 'bin':
+    case 'binWithInsert':
+    case 'insert':
+      return null;
+    default:
+      return assertNever(product);
+  }
+}
+
+/**
  * The origin tab of a product: the tab that created it and owns its edit. A
  * baseplate and a connection clip are both edited on the Baseplate tab, which
  * the tab mapping collapses.
