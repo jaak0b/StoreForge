@@ -1,4 +1,4 @@
-import type { Group, QueueEntry } from './types';
+import { drawerGroupIdOf, type Group, type QueueEntry } from './types';
 
 /**
  * Partitions the flat queue into drawer group sections and loose entries, so
@@ -35,11 +35,8 @@ export function partitionQueue(entries: QueueEntry[], groups: Group[]): QueuePar
   for (const group of groups) sections.set(group.id, { group, entries: [] });
   const loose: QueueEntry[] = [];
   for (const entry of entries) {
-    const product = entry.product;
-    const section =
-      (product.kind === 'baseplate' || product.kind === 'clip') && product.group !== undefined
-        ? sections.get(product.group.groupId)
-        : undefined;
+    const groupId = drawerGroupIdOf(entry.product);
+    const section = groupId === null ? undefined : sections.get(groupId);
     if (section !== undefined) section.entries.push(entry);
     else loose.push(entry);
   }

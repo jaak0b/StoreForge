@@ -25,6 +25,8 @@ import {
   type DrawerPlate,
   type DrawerPlateOptions,
   assertNever,
+  drawerGroupIdOf,
+  drawerPlateLinkOf,
 } from './types';
 import {
   CAVITY_EDIT_RADIUS_MAX_MM,
@@ -2292,36 +2294,41 @@ export function repairGroupLinks(
     groups.map((group) => [group.id, new Set(group.payload.plates.map((plate) => plate.id))]),
   );
   const groupIds = new Set(groups.map((group) => group.id));
-  for (const entry of entries) {
-    if (entry.product.kind === 'baseplate') {
-      repairBaseplateLink(
-        entry.product,
-        (quantity) => {
-          entry.quantity = quantity;
-        },
-        platesByGroup,
-        `Entry ${entry.id}`,
-        warnings,
-      );
-    } else if (entry.product.kind === 'clip') {
-      repairClipLink(entry.product, groupIds, `Entry ${entry.id}`, warnings);
+  const repair = (product: Product, setCount: (count: number) => void, subject: string): void => {
+    switch (product.kind) {
+      case 'baseplate':
+        repairBaseplateLink(product, setCount, platesByGroup, subject, warnings);
+        break;
+      case 'clip':
+        repairClipLink(product, groupIds, subject, warnings);
+        break;
+      case 'bin':
+      case 'binWithInsert':
+      case 'insert':
+        // No drawer group link to repair.
+        break;
+      default:
+        assertNever(product);
     }
+  };
+  for (const entry of entries) {
+    repair(
+      entry.product,
+      (quantity) => {
+        entry.quantity = quantity;
+      },
+      `Entry ${entry.id}`,
+    );
   }
   for (const batch of batches) {
     for (const item of batch.items) {
-      if (item.product.kind === 'baseplate') {
-        repairBaseplateLink(
-          item.product,
-          (count) => {
-            item.count = count;
-          },
-          platesByGroup,
-          `Batch ${batch.id} item ${item.id}`,
-          warnings,
-        );
-      } else if (item.product.kind === 'clip') {
-        repairClipLink(item.product, groupIds, `Batch ${batch.id} item ${item.id}`, warnings);
-      }
+      repair(
+        item.product,
+        (count) => {
+          item.count = count;
+        },
+        `Batch ${batch.id} item ${item.id}`,
+      );
     }
   }
 }
@@ -2373,39 +2380,46 @@ export function resyncLinkedPlateProducts(entries: QueueEntry[], groups: Group[]
   const groupsById = new Map(groups.map((group) => [group.id, group]));
   for (const entry of entries) {
     const product = entry.product;
-    if (product.kind === 'baseplate' && product.group !== undefined) {
-      const group = groupsById.get(product.group.groupId);
-      if (group === undefined) continue;
-      switch (group.payload.kind) {
-        case 'drawer': {
-          const platesById = new Map(group.payload.plates.map((plate) => [plate.id, plate]));
-          const plates = product.group.plateIds.map((id) => platesById.get(id));
-          if (plates.length === 0 || plates.some((plate) => plate === undefined)) continue;
-          entry.product = baseplateProductForPlates(
-            plates as DrawerPlate[],
-            group.payload.options,
-            group.id,
-          );
-          break;
-        }
-        default:
-          assertNever(group.payload.kind);
-      }
-    } else if (product.kind === 'clip' && product.group !== undefined) {
-      const group = groupsById.get(product.group.groupId);
-      if (group === undefined) continue;
-      switch (group.payload.kind) {
-        case 'drawer': {
-          const clips = group.payload.clips;
-          if (clips !== undefined) {
-            entry.product = { ...product, toleranceMm: clips.toleranceMm };
-          }
-          break;
-        }
-        default:
-          assertNever(group.payload.kind);
-      }
+    const groupId = drawerGroupIdOf(product);
+    if (groupId === null) continue;
+    const group = groupsById.get(groupId);
+    if (group === undefined) continue;
+    switch (group.payload.kind) {
+      case 'drawer':
+        entry.product = resyncedDrawerProduct(product, group.id, group.payload);
+        break;
+      default:
+        assertNever(group.payload.kind);
     }
+  }
+}
+
+/**
+ * A linked drawer row's product rebuilt from its drawer: a plate row from the
+ * plates its plateIds name and the drawer's options, a clip row from the
+ * drawer's clip plan. A link that does not resolve (a plate id is gone), or a
+ * clip row of a drawer without a clip plan, is returned unchanged.
+ */
+function resyncedDrawerProduct(product: Product, groupId: string, drawer: DrawerGroup): Product {
+  switch (product.kind) {
+    case 'baseplate': {
+      const link = drawerPlateLinkOf(product);
+      if (link === null) return product;
+      const platesById = new Map(drawer.plates.map((plate) => [plate.id, plate]));
+      const plates = link.plateIds.map((id) => platesById.get(id));
+      if (plates.length === 0 || plates.some((plate) => plate === undefined)) return product;
+      return baseplateProductForPlates(plates as DrawerPlate[], drawer.options, groupId);
+    }
+    case 'clip':
+      return drawer.clips === undefined
+        ? product
+        : { ...product, toleranceMm: drawer.clips.toleranceMm };
+    case 'bin':
+    case 'binWithInsert':
+    case 'insert':
+      return product;
+    default:
+      return assertNever(product);
   }
 }
 

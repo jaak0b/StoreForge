@@ -34,6 +34,7 @@ import type {
   ConnectionClipProduct,
   DrawerFillInput,
   DrawerPlateOptions,
+  Product,
 } from '../../src/engine/plan/types';
 import {
   drawerFillClipCount,
@@ -90,8 +91,9 @@ describe('binQueue drawer groups', () => {
 
   it('adds a drawer group and queues one linked plate per planned plate', () => {
     const store = useBinQueue();
-    const problem = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer');
-    expect(problem).toBeNull();
+    const result = store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer');
+    expect(result.problem).toBeNull();
+    expect(result.groupId).toBe(store.groups[0]?.id);
     expect(store.groups).toHaveLength(1);
     expect(store.entries).toHaveLength(2);
     const id = store.groups[0].id;
@@ -117,14 +119,15 @@ describe('binQueue drawer groups', () => {
       connectable: false,
     };
     const result = store.addDrawerGroup(INPUT, badOptions, plannerPlates(), 'Bad');
-    expect(result).not.toBeNull();
+    expect(result.groupId).toBeNull();
+    expect(result.problem).toEqual(expect.any(String));
     expect(store.groups).toHaveLength(0);
     expect(store.entries).toHaveLength(0);
   });
 
   it('marks a plate done when its batch item is confirmed', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const firstEntry = store.entries[0];
     const plateId = linkOf(firstEntry.product)!.plateIds[0];
@@ -137,7 +140,7 @@ describe('binQueue drawer groups', () => {
 
   it('marks every plate of a batch done on confirmAll', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const batchId = store.createBatch(
       store.entries.map((e) => ({ entryId: e.id, count: 1 })),
@@ -150,7 +153,7 @@ describe('binQueue drawer groups', () => {
 
   it('returns a failed plate to the queue with its group link intact', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const firstEntry = store.entries[0];
     const plateId = linkOf(firstEntry.product)!.plateIds[0];
@@ -166,7 +169,7 @@ describe('binQueue drawer groups', () => {
 
   it('removeGroup removes still-queued linked entries but not batch items', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const firstEntry = store.entries[0];
     const batchId = store.createBatch([{ entryId: firstEntry.id, count: 1 }], 'Printer')!;
@@ -179,7 +182,7 @@ describe('binQueue drawer groups', () => {
 
   it('re-stamps still-queued plate products on a non-structural options change', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const newOptions: DrawerPlateOptions = {
       magnets: { diameterMm: 6, heightMm: 2 },
@@ -211,7 +214,7 @@ describe('binQueue drawer groups', () => {
 
   it('clears progress and re-queues fresh plates on a structural edit', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     // Confirm one plate so there is progress to clear.
     const firstEntry = store.entries[0];
@@ -235,7 +238,7 @@ describe('binQueue drawer groups', () => {
 
   it('requeues a single planned plate as a fresh linked entry', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     // Batch both plates so the queue is empty and every plate is "planned".
     const batchId = store.createBatch(
@@ -260,7 +263,7 @@ describe('binQueue drawer groups', () => {
 
   it('requeues nothing for a group or plate that does not exist', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     expect(store.requeueGroupPlate('no-such-group', 'x')).toBeNull();
     expect(store.requeueGroupPlate(id, 'no-such-plate')).toBeNull();
@@ -279,7 +282,7 @@ describe('binQueue drawer groups', () => {
       { unitsX: 3, unitsY: 2, brim: brimB, column: 2, row: 0 },
       { unitsX: 3, unitsY: 2, brim: brimB, column: 3, row: 0 },
     ];
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Wide drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Wide drawer').problem).toBeNull();
     expect(store.groups[0].payload.plates).toHaveLength(4);
     expect(store.entries).toHaveLength(2);
     for (const entry of store.entries) {
@@ -295,7 +298,7 @@ describe('binQueue drawer groups', () => {
       { unitsX: 2, unitsY: 2, brim, column: 0, row: 0 },
       { unitsX: 2, unitsY: 2, brim, column: 1, row: 0 },
     ];
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer').problem).toBeNull();
     const entry = store.entries[0];
     expect(entry.quantity).toBe(2);
     expect(store.update(entry.id, { quantity: 1 })).toBeNull();
@@ -305,7 +308,7 @@ describe('binQueue drawer groups', () => {
 
   it('refuses to raise a linked row quantity beyond its planned plates', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const entry = store.entries[0];
     expect(entry.quantity).toBe(1);
     const problem = store.update(entry.id, { quantity: 2 });
@@ -315,9 +318,9 @@ describe('binQueue drawer groups', () => {
 
   it('duplicating a linked row produces an unlinked standalone plate', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const source = store.entries[0];
-    const newId = store.duplicate(source.id)!;
+    const newId = store.duplicate(source.id).id!;
     const copy = store.entries.find((e) => e.id === newId)!;
     expect(copy.product.kind).toBe('baseplate');
     expect(linkOf(copy.product)).toBeUndefined();
@@ -330,7 +333,7 @@ describe('binQueue drawer groups', () => {
       { unitsX: 2, unitsY: 2, brim, column: 0, row: 0 },
       { unitsX: 2, unitsY: 2, brim, column: 1, row: 0 },
     ];
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer').problem).toBeNull();
     // One merged row of quantity two; batch one plate away so it becomes planned.
     const entry = store.entries[0];
     const batchId = store.createBatch([{ entryId: entry.id, count: 1 }], 'Printer')!;
@@ -347,6 +350,31 @@ describe('binQueue drawer groups', () => {
     expect(store.entries[0].quantity).toBe(2);
     expect(linkOf(store.entries[0].product)!.plateIds).toContain(plannedPlate.id);
   });
+  it('moving part of a linked row onto the newest batch splits its plate ids between item and row', () => {
+    const store = useBinQueue();
+    const brim = { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 };
+    const plates: DrawerFillPlate[] = [
+      { unitsX: 2, unitsY: 2, brim, column: 0, row: 0 },
+      { unitsX: 2, unitsY: 2, brim, column: 1, row: 0 },
+      { unitsX: 2, unitsY: 2, brim, column: 2, row: 0 },
+    ];
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plates, 'Drawer').problem).toBeNull();
+    const rowId = store.entries[0].id;
+    store.createBatch([{ entryId: rowId, count: 1 }], 'Printer');
+
+    store.addEntryToNewestBatch(rowId, 1);
+
+    const row = store.entries[0];
+    const items = store.batches[0].items;
+    expect(row.quantity).toBe(1);
+    expect(linkOf(row.product)!.plateIds).toHaveLength(1);
+    expect(items.map((item) => item.count)).toEqual([1, 1]);
+    expect(items.map((item) => linkOf(item.product)!.plateIds.length)).toEqual([1, 1]);
+    // Every plate of the group sits in exactly one place: the row or one batch item.
+    const placed = [row, ...items].flatMap((holder) => linkOf(holder.product)!.plateIds);
+    expect(new Set(placed)).toEqual(new Set(store.groups[0].payload.plates.map((p) => p.id)));
+    expect(placed).toHaveLength(3);
+  });
 });
 
 describe('binQueue empty group auto-delete', () => {
@@ -360,7 +388,7 @@ describe('binQueue empty group auto-delete', () => {
 
   it('deletes an unprinted group when its last queued row is removed', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     for (const e of [...store.entries]) store.remove(e.id);
     expect(store.groupById(id)).toBeNull();
@@ -369,7 +397,7 @@ describe('binQueue empty group auto-delete', () => {
 
   it('keeps a group with printed plates when its last queued row is removed', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const first = store.entries[0];
     const batchId = store.createBatch([{ entryId: first.id, count: 1 }], 'Printer')!;
@@ -381,7 +409,7 @@ describe('binQueue empty group auto-delete', () => {
 
   it('keeps a group with a linked batch item when its last queued row is removed', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const first = store.entries[0];
     store.createBatch([{ entryId: first.id, count: 1 }], 'Printer');
@@ -391,7 +419,7 @@ describe('binQueue empty group auto-delete', () => {
 
   it('does not auto-delete when the queue empties through print confirmation', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const id = store.groups[0].id;
     const batchId = store.createBatch(
       store.entries.map((e) => ({ entryId: e.id, count: 1 })),
@@ -415,7 +443,7 @@ describe('binQueue drawer connection clips', () => {
 
   it('queues one linked clip row at the computed count and stores the plan', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1)).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1).problem).toBeNull();
     const id = store.groups[0].id;
     const count = expectedClips(plannerPlates());
     expect(count).toBeGreaterThan(0);
@@ -431,7 +459,7 @@ describe('binQueue drawer connection clips', () => {
     const single: DrawerFillPlate[] = [
       { unitsX: 3, unitsY: 2, brim: { leftMm: 0, rightMm: 0, frontMm: 0, backMm: 0 }, column: 0, row: 0 },
     ];
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, single, 'Solo')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, single, 'Solo').problem).toBeNull();
     const id = store.groups[0].id;
     expect(clipRows(store, id)).toHaveLength(0);
     expect(store.groups[0].payload.clips).toBeUndefined();
@@ -439,7 +467,7 @@ describe('binQueue drawer connection clips', () => {
 
   it('queues no clip row for a non-connectable drawer', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Plain')).toBeNull();
+    expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Plain').problem).toBeNull();
     const id = store.groups[0].id;
     expect(clipRows(store, id)).toHaveLength(0);
     expect(store.groups[0].payload.clips).toBeUndefined();
@@ -447,7 +475,7 @@ describe('binQueue drawer connection clips', () => {
 
   it('removes the clip row and clip plan when connectable is turned off', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1)).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1).problem).toBeNull();
     const id = store.groups[0].id;
     expect(clipRows(store, id)).toHaveLength(1);
     expect(store.updateDrawerGroup(id, { options: OPTIONS })).toBeNull();
@@ -457,7 +485,7 @@ describe('binQueue drawer connection clips', () => {
 
   it('re-stamps the queued clip row tolerance without changing its quantity', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0)).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0).problem).toBeNull();
     const id = store.groups[0].id;
     const before = clipRows(store, id)[0];
     expect(store.updateDrawerGroup(id, { options: CONNECTABLE, clipToleranceMm: 0.2 })).toBeNull();
@@ -471,7 +499,7 @@ describe('binQueue drawer connection clips', () => {
   it('recomputes the clip count and re-stamps the clip row on a structural re-plan', () => {
     const store = useBinQueue();
     // Start with two side-by-side plates (one interior edge).
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1)).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1).problem).toBeNull();
     const id = store.groups[0].id;
     // Re-plan to a single plate: no interior edges, so the clips disappear.
     const single: DrawerFillInput = { ...INPUT, drawerWidthMm: 130, plateWidthMm: 470 };
@@ -497,7 +525,7 @@ describe('binQueue drawer connection clips', () => {
 
   it('removeGroup removes the still-queued clip row', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1)).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1).problem).toBeNull();
     const id = store.groups[0].id;
     expect(clipRows(store, id)).toHaveLength(1);
     store.removeGroup(id);
@@ -506,10 +534,10 @@ describe('binQueue drawer connection clips', () => {
 
   it('duplicating a linked clip row produces an unlinked standalone clip', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1)).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1).problem).toBeNull();
     const id = store.groups[0].id;
     const clip = clipRows(store, id)[0];
-    const newId = store.duplicate(clip.id)!;
+    const newId = store.duplicate(clip.id).id!;
     const copy = store.entries.find((e) => e.id === newId)!;
     expect(copy.product.kind).toBe('clip');
     expect((copy.product as ConnectionClipProduct).group).toBeUndefined();
@@ -517,7 +545,7 @@ describe('binQueue drawer connection clips', () => {
 
   it('confirming the clip row leaves the plan without touching plate progress', () => {
     const store = useBinQueue();
-    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1)).toBeNull();
+    expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1).problem).toBeNull();
     const id = store.groups[0].id;
     const clip = clipRows(store, id)[0];
     const batchId = store.createBatch([{ entryId: clip.id, count: clip.quantity }], 'Printer')!;
@@ -527,5 +555,226 @@ describe('binQueue drawer connection clips', () => {
     // plate-based only.
     expect(store.groups[0].payload.donePlateIds).toHaveLength(0);
     expect(store.groupProgress(id)).toEqual({ done: 0, total: 2 });
+  });
+});
+
+describe('binQueue entry mutations', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    const store = useBinQueue();
+    store.entries = [];
+    store.batches = [];
+    store.groups = [];
+  });
+
+  const INSERT: Product = {
+    kind: 'insert',
+    origin: 'manual',
+    cells: 2,
+    content: { text: 'Bits', text2: '', icon: null },
+  };
+
+  it('stores notes trimmed and stores blank notes as none', () => {
+    const store = useBinQueue();
+
+    const trimmed = store.add(INSERT, 1, '  drawer 3  ');
+    const blank = store.add(INSERT, 1, '   ');
+
+    expect(store.entryById(trimmed.id!)!.notes).toBe('drawer 3');
+    expect('notes' in store.entryById(blank.id!)!).toBe(false);
+  });
+
+  it('clears the notes of an entry updated with blank notes', () => {
+    const store = useBinQueue();
+    const { id } = store.add(INSERT, 1, 'drawer 3');
+
+    store.update(id!, { notes: ' ' });
+
+    expect('notes' in store.entryById(id!)!).toBe(false);
+  });
+
+  it('refuses to remove an unknown drawer with a user-worded problem', () => {
+    const store = useBinQueue();
+
+    expect(store.removeGroup('no-such-id')).toBe(
+      'This drawer no longer exists. It may have been removed.',
+    );
+  });
+
+  it('refuses to update an unknown entry with a user-worded problem', () => {
+    const store = useBinQueue();
+
+    const problem = store.update('no-such-id', { quantity: 2 });
+
+    expect(problem).toBe(
+      'This queue entry no longer exists. It may have been removed or moved onto a build plate.',
+    );
+  });
+
+  it('refuses to duplicate an unknown entry with a user-worded problem and leaves the queue unchanged', () => {
+    const store = useBinQueue();
+    store.add(INSERT, 1);
+
+    const result = store.duplicate('no-such-id');
+
+    expect(result).toEqual({
+      id: null,
+      problem: 'This queue entry no longer exists. It may have been removed or moved onto a build plate.',
+    });
+    expect(store.entries).toHaveLength(1);
+  });
+
+  it('refuses to remove an unknown entry and leaves the queue unchanged', () => {
+    const store = useBinQueue();
+    store.add(INSERT, 1);
+
+    const problem = store.remove('no-such-id');
+
+    expect(problem).toBe(
+      'This queue entry no longer exists. It may have been removed or moved onto a build plate.',
+    );
+    expect(store.entries).toHaveLength(1);
+  });
+
+  it('removes a known entry and reports success', () => {
+    const store = useBinQueue();
+    const { id } = store.add(INSERT, 1);
+
+    expect(store.remove(id!)).toBeNull();
+    expect(store.entries).toEqual([]);
+  });
+
+  it('stores a sanitized copy on add, dropping unknown fields', () => {
+    const store = useBinQueue();
+    const dirty = { ...INSERT, extra: 'not part of the plan' } as Product;
+
+    store.add(dirty, 1);
+
+    expect(store.entries[0].product).toEqual(INSERT);
+    expect(store.entries[0].product).not.toBe(dirty);
+  });
+
+  it('stores a sanitized copy on update, dropping unknown fields', () => {
+    const store = useBinQueue();
+    const { id } = store.add(INSERT, 1);
+    const dirty = { ...INSERT, cells: 3, extra: 'not part of the plan' } as Product;
+
+    expect(store.update(id!, { product: dirty })).toBeNull();
+
+    expect(store.entries[0].product).toEqual({ ...INSERT, cells: 3 });
+  });
+
+  it('refuses a screw bin ordered without its insert instead of repairing it silently', () => {
+    const store = useBinQueue();
+    const bareScrewBin = {
+      kind: 'bin',
+      labelSlot: true,
+      bin: {
+        origin: 'screw',
+        gridX: 1,
+        gridY: 1,
+        heightUnits: 6,
+        magnetHoles: false,
+        walls: [],
+        screw: { thread: 'M3', lengthMm: 20, head: 'countersunk screw', enteredLengthText: null },
+      },
+    } as unknown as Product;
+
+    const result = store.add(bareScrewBin, 1);
+
+    expect(result.problem).toBe(
+      'This design is a screw bin without its label insert. A screw bin is always ordered with its label insert, so choose Bin + label insert.',
+    );
+    expect(store.entries).toEqual([]);
+  });
+
+  it('adds several products in order with shared notes', () => {
+    const store = useBinQueue();
+    const second: Product = { ...INSERT, cells: 1 };
+
+    const result = store.addMany(
+      [
+        { product: INSERT, quantity: 2 },
+        { product: second, quantity: 5 },
+      ],
+      'drawer 3',
+    );
+
+    expect(result.problem).toBeNull();
+    expect(store.entries.map((e) => [e.id, e.quantity, e.notes])).toEqual([
+      [result.ids![0], 2, 'drawer 3'],
+      [result.ids![1], 5, 'drawer 3'],
+    ]);
+  });
+
+  it('adds nothing when any of several products is refused, naming its position', () => {
+    const store = useBinQueue();
+
+    const result = store.addMany([
+      { product: INSERT, quantity: 1 },
+      { product: INSERT, quantity: 0 },
+    ]);
+
+    expect(result.problem).toBe('Entry 2: The quantity must be a whole number of at least 1.');
+    expect(store.entries).toEqual([]);
+  });
+});
+
+describe('binQueue addDrawerFromSize', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    const store = useBinQueue();
+    store.entries = [];
+    store.batches = [];
+    store.groups = [];
+  });
+
+  it('plans the drawer and queues it as a group named after the drawer size', () => {
+    const store = useBinQueue();
+
+    // 470 x 300 mm on a 260 mm wide build plate splits into 6 + 5 columns.
+    const result = store.addDrawerFromSize(
+      { drawerWidthMm: 470, drawerDepthMm: 300, plateWidthMm: 260, plateDepthMm: 300 },
+      OPTIONS,
+    );
+
+    expect(result.problem).toBeNull();
+    const group = store.groupById(result.groupId!)!;
+    expect(group.name).toBe('Drawer 470 × 300 mm');
+    expect(group.payload.plates.map((p) => [p.unitsX, p.unitsY])).toEqual([
+      [6, 7],
+      [5, 7],
+    ]);
+    expect(
+      store.entries.map((e) => (e.product.kind === 'baseplate' ? e.product.unitsX : null)),
+    ).toEqual([6, 5]);
+  });
+
+  it('returns the planner error and queues nothing when the drawer is too small', () => {
+    const store = useBinQueue();
+
+    const result = store.addDrawerFromSize(
+      { drawerWidthMm: 30, drawerDepthMm: 300, plateWidthMm: 260, plateDepthMm: 300 },
+      OPTIONS,
+    );
+
+    expect(result).toEqual({
+      groupId: null,
+      problem: 'The drawer must be at least 42 mm in both width and depth to fit one grid cell.',
+    });
+    expect(store.groups).toEqual([]);
+    expect(store.entries).toEqual([]);
+  });
+
+  it('stores the clip tolerance for a connectable drawer', () => {
+    const store = useBinQueue();
+
+    const result = store.addDrawerFromSize(
+      { drawerWidthMm: 470, drawerDepthMm: 300, plateWidthMm: 260, plateDepthMm: 300 },
+      CONNECTABLE,
+      0.2,
+    );
+
+    expect(store.groupById(result.groupId!)!.payload.clips?.toleranceMm).toBe(0.2);
   });
 });

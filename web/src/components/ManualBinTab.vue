@@ -4,13 +4,14 @@ import { storeToRefs } from 'pinia';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBinDesigner } from '../stores/binDesigner';
-import { useBinQueue } from '../stores/binQueue';
+import { DEFAULT_ENTRY_QUANTITY, useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
-import type { PartMeshes, SlottedBinParams } from '../engine/gridfinity/types';
-import type { DividerWall } from '../engine/gridfinity/dividerModel';
-import { originOf, type Product, type QueueEntry } from '../engine/plan/types';
+import type { PartMeshes } from '../engine/gridfinity/types';
+import { assertNever, originOf, type Product, type QueueEntry } from '../engine/plan/types';
+import { binPreviewParams } from '../engine/plan/geometry';
 import { describeProduct } from '../engine/plan/rowDescriptor';
+import { manualDesignOf, manualProduct } from '../engine/plan/manualProduct';
 import { overallHeightMm } from '../heightHint';
 import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
 import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
@@ -41,23 +42,18 @@ const previewLoaded = ref(!smAndDown.value);
 const { productChoice, fused, gridX, gridY, heightUnits, labelText, labelIcon, notes } =
   storeToRefs(store);
 
-const quantity = ref(1);
+const quantity = ref(DEFAULT_ENTRY_QUANTITY);
 const gridXField = ref<{ focus: () => void } | null>(null);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
 
 const heightMm = computed(() => overallHeightMm(heightUnits.value));
 
-/** Detaches a wall list, so the form and a stored entry never share one. */
-function copyWalls(walls: DividerWall[]): DividerWall[] {
-  return walls.map((wall) => ({ ...wall }));
-}
-
 function resetForm(): void {
   const keepOpen = store.moreOptionsOpen;
   store.$reset();
   store.moreOptionsOpen = keepOpen;
-  quantity.value = 1;
+  quantity.value = DEFAULT_ENTRY_QUANTITY;
 }
 
 /** Loads the entry being edited into the form; null resets to a new design. */
@@ -68,40 +64,10 @@ function loadEditingEntry(entryId: string | null): void {
   }
   const entry = queue.entryById(entryId);
   if (entry === null || originOf(entry.product) !== 'manual') return;
-  const product = entry.product;
-  if (product.kind === 'insert') {
-    store.$patch({
-      productChoice: 'insert',
-      gridX: product.cells,
-      labelText: product.content.text,
-      labelText2: product.content.text2,
-      labelIcon: product.content.icon,
-      notes: entry.notes ?? '',
-    });
-  } else if (product.kind === 'bin' || product.kind === 'binWithInsert') {
-    const bin = product.bin;
-    if (bin.origin !== 'manual') return;
-    const content = product.kind === 'binWithInsert' ? product.insert : null;
-    store.$patch({
-      productChoice:
-        product.kind === 'binWithInsert' ? 'binWithInsert' : product.labelSlot ? 'bin' : 'plainBin',
-      fused: product.kind === 'binWithInsert' ? product.fused ?? false : false,
-      gridX: bin.gridX,
-      gridY: bin.gridY,
-      heightUnits: bin.heightUnits,
-      magnetHoles: bin.magnetHoles,
-      // Copied, so editing the loaded walls never writes through to the
-      // stored queue entry before the edit is saved.
-      walls: copyWalls(bin.walls),
-      selectedWallIndex: null,
-      labelText: content?.text ?? '',
-      labelText2: content?.text2 ?? '',
-      labelIcon: content?.icon ?? null,
-      notes: entry.notes ?? '',
-    });
-    // No walls opens with dividers off; walls present opens the free editor.
-    store.inferDividerModeFromWalls();
-  }
+  const design = manualDesignOf(entry.product);
+  if (design === null) return;
+  store.loadDesign(design);
+  store.notes = entry.notes ?? '';
   quantity.value = entry.quantity;
   if (store.labelText2 !== '' || entry.notes !== undefined || entry.quantity > 1) {
     store.moreOptionsOpen = true;
@@ -131,48 +97,35 @@ const editingEntry = computed<QueueEntry | null>(() => {
   return entry !== null && originOf(entry.product) === 'manual' ? entry : null;
 });
 
-/** The product the form currently designs. */
+/** The product the form currently designs, through the engine's single manual mapping. */
 function designedProduct(): Product {
-  if (insertOnly.value) {
-    return {
-      kind: 'insert',
-      origin: 'manual',
-      cells: store.gridX,
-      content: store.content,
-    };
-  }
-  const bin = {
-    origin: 'manual' as const,
+  return manualProduct({
+    productChoice: store.productChoice,
     gridX: store.gridX,
     gridY: store.gridY,
     heightUnits: store.heightUnits,
     magnetHoles: store.magnetHoles,
-    walls: copyWalls(store.walls),
-  };
-  if (productChoice.value === 'binWithInsert') {
-    const product: Product = { kind: 'binWithInsert', bin, insert: store.content };
-    if (store.fused) product.fused = true;
-    return product;
-  }
-  return { kind: 'bin', bin, labelSlot: productChoice.value !== 'plainBin' };
+    walls: store.walls,
+    content: store.content,
+    fused: store.fused,
+  });
 }
 
 // The queue's refusal of an invalid design, shown beside the save button.
 const saveError = ref<string | null>(null);
 
 function saveEntry(): void {
-  const cleanNotes = notes.value.trim();
   const product = designedProduct();
   if (editingEntry.value !== null) {
     saveError.value = queue.update(editingEntry.value.id, {
       product,
       quantity: quantity.value,
-      notes: cleanNotes === '' ? undefined : cleanNotes,
+      notes: notes.value,
     });
     if (saveError.value !== null) return;
     app.stopEditing();
   } else {
-    const result = queue.add(product, quantity.value, cleanNotes);
+    const result = queue.add(product, quantity.value, notes.value);
     saveError.value = result.problem;
     if (result.problem !== null) return;
   }
@@ -181,8 +134,7 @@ function saveEntry(): void {
 
 /** Queues the design and moves it onto the newest build plate in one step. */
 function addToPlate(): void {
-  const cleanNotes = notes.value.trim();
-  const result = queue.add(designedProduct(), quantity.value, cleanNotes);
+  const result = queue.add(designedProduct(), quantity.value, notes.value);
   saveError.value = result.problem;
   if (result.problem !== null) return;
   queue.addEntryToNewestBatch(result.id, quantity.value);
@@ -216,29 +168,26 @@ function editingTitle(entry: QueueEntry): string {
   return describeProduct(entry.product).title;
 }
 
-/** Everything the preview depends on, regenerated on any change. */
-interface PreviewSpec {
-  insertOnly: boolean;
-  bin: SlottedBinParams;
-  cells: number;
-  content: { text: string; text2: string; icon: string | null };
-}
-
-const previewSpec = computed<PreviewSpec>(() => ({
-  insertOnly: insertOnly.value,
-  bin: store.binParams,
-  cells: store.gridX,
-  content: store.content,
-}));
-
-function generatePreview(spec: PreviewSpec): Promise<PartMeshes> {
-  if (spec.insertOnly) {
-    return generateInsert({ cells: spec.cells, content: spec.content });
+/**
+ * The preview follows the product Add to queue would create, so the preview
+ * and the queued entry come from the same engine mapping.
+ */
+function generatePreview(product: Product): Promise<PartMeshes> {
+  switch (product.kind) {
+    case 'insert':
+      return generateInsert({ cells: product.cells, content: product.content });
+    case 'bin':
+    case 'binWithInsert':
+      return generateSlottedBin(binPreviewParams(product));
+    case 'baseplate':
+    case 'clip':
+      throw new Error(`The Manual bin tab never designs a ${product.kind} product.`);
+    default:
+      return assertNever(product);
   }
-  return generateSlottedBin(spec.bin);
 }
 
-const { meshes, errorMessage } = useBinPreview(() => previewSpec.value, generatePreview);
+const { meshes, errorMessage } = useBinPreview(designedProduct, generatePreview);
 </script>
 
 <template>

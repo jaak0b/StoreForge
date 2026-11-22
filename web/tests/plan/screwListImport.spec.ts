@@ -158,21 +158,17 @@ describe('parseShorthand', () => {
     expect(result.batches[0].lengthMm).toBeNull();
   });
 
-  it('reports a batch that is missing its thread', () => {
+  it('keeps a batch that is missing its thread, with no parse error', () => {
     const result = parseShorthand('20 fhcs');
-    expect(result.errors).toEqual([
-      "Can't find a thread size (like M3 or #8) in '20 fhcs'.",
-    ]);
+    expect(result.errors).toEqual([]);
     expect(result.batches).toEqual([
       { thread: null, lengthMm: 20, head: 'countersunk screw', quantity: 1, enteredUnit: 'metric', enteredLengthText: null, quantityExplicit: false },
     ]);
   });
 
-  it('reports a screw batch that is missing its length', () => {
+  it('keeps a screw batch that is missing its length, with no parse error', () => {
     const result = parseShorthand('m3 fhcs');
-    expect(result.errors).toEqual([
-      "'m3 fhcs' has no length. Add one like 'x20' or fill it in on the row.",
-    ]);
+    expect(result.errors).toEqual([]);
     expect(result.batches[0].lengthMm).toBeNull();
   });
 

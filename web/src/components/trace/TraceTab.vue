@@ -6,6 +6,7 @@ import { useBinDesigner } from '../../stores/binDesigner';
 import { useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { assertNever, binOf } from '../../engine/plan/types';
+import { designChoiceOf } from '../../engine/plan/manualProduct';
 import type { TraceSession } from '../../engine/trace/types';
 import { previewReplacementParts, worldFromEntry } from '../../engine/trace/layoutModel';
 import { matchPartsByGeometry, placementPreservingCentroid } from '../../engine/trace/edit';
@@ -330,13 +331,7 @@ watch(
     trace.gridManual = true;
     const content = entry.product.kind === 'binWithInsert' ? entry.product.insert : null;
     designer.$patch({
-      productChoice:
-        entry.product.kind === 'binWithInsert'
-          ? 'binWithInsert'
-          : entry.product.kind === 'bin' && !entry.product.labelSlot
-            ? 'plainBin'
-            : 'bin',
-      fused: entry.product.kind === 'binWithInsert' ? entry.product.fused ?? false : false,
+      ...designChoiceOf(entry.product),
       heightUnits: bin.heightUnits,
       magnetHoles: bin.magnetHoles,
       labelText: content?.text ?? '',

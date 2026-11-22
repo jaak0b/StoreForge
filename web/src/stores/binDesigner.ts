@@ -1,17 +1,16 @@
 import { defineStore } from 'pinia';
-import type { InsertContentParams, SlottedBinParams } from '../engine/gridfinity/types';
 import * as divider from '../engine/gridfinity/dividerModel';
 import type { DividerWall } from '../engine/gridfinity/dividerModel';
 import type { LabelContent } from '../engine/plan/types';
+import {
+  choiceHasLabel,
+  DEFAULT_MANUAL_DESIGN,
+  type ManualDesign,
+  type ProductChoice,
+} from '../engine/plan/manualProduct';
 
-/**
- * What a designer form produces: a bin plus its matching label insert, a
- * bin with an empty slot, a plain bin without the slot, or a standalone
- * insert for a bin that already exists. Maps onto the plan layer's Product
- * kinds ('bin' and 'plainBin' both save as the bin product, with labelSlot
- * true and false); the tab that saves the entry adds its own origin.
- */
-export type ProductChoice = 'binWithInsert' | 'bin' | 'plainBin' | 'insert';
+/** The designer's product choice; defined with the manual product mapping in the engine. */
+export type { ProductChoice };
 
 /**
  * How the divider walls are being edited in the form. This is editing state
@@ -33,11 +32,11 @@ export type DividerMode = 'none' | 'grid' | 'custom';
  */
 export const useBinDesigner = defineStore('binDesigner', {
   state: () => ({
-    productChoice: 'binWithInsert' as ProductChoice,
-    gridX: 1,
-    gridY: 1,
-    heightUnits: 6,
-    magnetHoles: false,
+    productChoice: DEFAULT_MANUAL_DESIGN.productChoice as ProductChoice,
+    gridX: DEFAULT_MANUAL_DESIGN.gridX,
+    gridY: DEFAULT_MANUAL_DESIGN.gridY,
+    heightUnits: DEFAULT_MANUAL_DESIGN.heightUnits,
+    magnetHoles: DEFAULT_MANUAL_DESIGN.magnetHoles,
     /**
      * The divider walls being edited: the editing representation itself, not
      * a projection of anything else. The canvas editor mutates these through
@@ -78,22 +77,22 @@ export const useBinDesigner = defineStore('binDesigner', {
      * means no screen-space affordance to honour.
      */
     snapToleranceMm: 0,
-    labelText: '',
-    labelText2: '',
-    labelIcon: null as string | null,
+    labelText: DEFAULT_MANUAL_DESIGN.content.text,
+    labelText2: DEFAULT_MANUAL_DESIGN.content.text2,
+    labelIcon: DEFAULT_MANUAL_DESIGN.content.icon as string | null,
     /**
      * Whether a Bin + label insert product prints as one fused piece (label
      * raised on the bin, no swappable insert slot). Only meaningful when the
      * product choice is binWithInsert.
      */
-    fused: false,
+    fused: DEFAULT_MANUAL_DESIGN.fused,
     notes: '',
     moreOptionsOpen: false,
   }),
   getters: {
     /** Whether the chosen product carries a label: the single source for label-field visibility. */
     hasLabel(state): boolean {
-      return state.productChoice === 'binWithInsert' || state.productChoice === 'insert';
+      return choiceHasLabel(state.productChoice);
     },
     /** The designed label content. */
     content(state): LabelContent {
@@ -101,33 +100,6 @@ export const useBinDesigner = defineStore('binDesigner', {
         text: state.labelText,
         text2: state.labelText2,
         icon: state.labelIcon,
-      };
-    },
-    /**
-     * The geometry parameters of the designed bin, with the insert content
-     * riding along for the preview when the product includes the insert.
-     */
-    binParams(state): SlottedBinParams {
-      const content: InsertContentParams = {
-        text: state.labelText,
-        text2: state.labelText2,
-        icon: state.labelIcon,
-      };
-      const withInsert = state.productChoice === 'binWithInsert';
-      const fused = withInsert && state.fused;
-      return {
-        gridX: state.gridX,
-        gridY: state.gridY,
-        heightUnits: state.heightUnits,
-        magnetHoles: state.magnetHoles,
-        // Detached plain objects: the walls travel to the geometry worker by
-        // structured clone, which cannot clone the store's reactive proxies.
-        walls: state.walls.map((wall) => ({ ...wall })),
-        // A fused bin has no insert channel; the label is raised on the solid
-        // fused shelf the body builder puts in the channel's place.
-        labelSlot: state.productChoice !== 'plainBin' && !fused,
-        insert: withInsert && !fused ? content : null,
-        fusedLabel: fused ? content : null,
       };
     },
     /** The selected wall, or null when nothing is selected. */
@@ -140,6 +112,27 @@ export const useBinDesigner = defineStore('binDesigner', {
   // single home for divider wall logic; the only thing added here is which
   // wall the editor has selected, a view concern the model does not carry.
   actions: {
+    /**
+     * Loads a whole design into the form (from manualDesignOf when editing a
+     * queue entry): every design field, a detached copy of the walls with no
+     * wall selected, and the divider mode inferred from the loaded walls.
+     */
+    loadDesign(design: ManualDesign): void {
+      this.$patch({
+        productChoice: design.productChoice,
+        fused: design.fused,
+        gridX: design.gridX,
+        gridY: design.gridY,
+        heightUnits: design.heightUnits,
+        magnetHoles: design.magnetHoles,
+        walls: design.walls.map((wall) => ({ ...wall })),
+        selectedWallIndex: null,
+        labelText: design.content.text,
+        labelText2: design.content.text2,
+        labelIcon: design.content.icon,
+      });
+      this.inferDividerModeFromWalls();
+    },
     selectWall(index: number | null): void {
       this.selectedWallIndex =
         index !== null && index >= 0 && index < this.walls.length ? index : null;

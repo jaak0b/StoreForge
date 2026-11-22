@@ -6,15 +6,15 @@ import {
   type BaseplateMagnets,
   type BaseplateParams,
 } from '../engine/baseplate/constants';
+import { HOLE_MODE_DEFAULT, magnetsForMode, type HoleMode } from '../engine/baseplate/plateOptions';
 import { baseplateParamsOf } from '../engine/plan/geometry';
 import type { BaseplateProduct } from '../engine/plan/types';
 
-/** Whether an optional hole feature is stamped into every cell or absent. */
-export type HoleMode = 'none' | 'full';
+export type { HoleMode };
 
 /**
  * The Baseplate tab's form state: raw field values only. The magnet collapse
- * (magnet mode none means null magnets) lives in the getter and nowhere else,
+ * (magnet mode none means null magnets) is the engine's magnetsForMode,
  * so a value the user typed and then toggled off is never persisted.
  * `product` is the single place a form value becomes a stored field, and
  * `params` derives from it through baseplateParamsOf, the same mapping the
@@ -25,10 +25,10 @@ export const useBaseplateDesigner = defineStore('baseplateDesigner', {
   state: () => ({
     unitsX: 2,
     unitsY: 2,
-    magnetMode: 'none' as HoleMode,
+    magnetMode: HOLE_MODE_DEFAULT,
     magnetDiameterMm: MAGNET_DIAMETER_DEFAULT,
     magnetHeightMm: MAGNET_HEIGHT_DEFAULT,
-    screwHoleMode: 'none' as HoleMode,
+    screwHoleMode: HOLE_MODE_DEFAULT,
     connectable: false,
     notes: '',
     /**
@@ -44,11 +44,9 @@ export const useBaseplateDesigner = defineStore('baseplateDesigner', {
     brimBackMm: 0,
   }),
   getters: {
-    /** The stored magnet dimensions: the single magnet-mode collapse. */
+    /** The stored magnet dimensions, through the engine's single magnet-mode collapse. */
     magnets(state): BaseplateMagnets | null {
-      return state.magnetMode === 'full'
-        ? { diameterMm: state.magnetDiameterMm, heightMm: state.magnetHeightMm }
-        : null;
+      return magnetsForMode(state.magnetMode, state.magnetDiameterMm, state.magnetHeightMm);
     },
     /**
      * The stored brim: the single all-zero collapse. An empty number field

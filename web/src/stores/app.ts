@@ -21,6 +21,14 @@ export const useApp = defineStore('app', {
     shortcutSheetOpen: false,
     /** Id of the drawer group whose detail view is open, or null for none. */
     viewingDrawerId: null as string | null,
+    /** Whether the settings dialog is open. */
+    settingsOpen: false,
+    /**
+     * Whether the WebMCP local relay was loaded in this page. It has no
+     * teardown, so it stays connected until a reload even after the setting
+     * is turned off.
+     */
+    localAgentRelayLoaded: false,
   }),
   actions: {
     /**

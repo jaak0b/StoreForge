@@ -41,6 +41,19 @@ function entry(overrides: Partial<QueueEntry> = {}): QueueEntry {
   };
 }
 
+/** A drawer-linked baseplate product carrying the given plate ids of group g1. */
+function linkedPlate(plateIds: string[]): Product {
+  return {
+    kind: 'baseplate',
+    unitsX: 3,
+    unitsY: 2,
+    magnets: null,
+    screwHoles: false,
+    connectable: false,
+    group: { groupId: 'g1', plateIds },
+  };
+}
+
 function idFactory(prefix: string): () => string {
   let n = 0;
   return () => `${prefix}${++n}`;
@@ -94,6 +107,14 @@ describe('createBatch', () => {
     const result = makeBatch([entry(), other], [{ entryId: 'a1', count: 1 }]);
     expect(result.entries).toEqual([entry({ quantity: 4 }), other]);
   });
+  it('splits a linked baseplate row between the batch item and the remaining entry', () => {
+    const plateRow = entry({ id: 'p1', quantity: 3, product: linkedPlate(['x1', 'x2', 'x3']) });
+
+    const result = makeBatch([plateRow], [{ entryId: 'p1', count: 1 }]);
+
+    expect(result.batch!.items[0].product).toEqual(linkedPlate(['x1']));
+    expect(result.entries).toEqual([entry({ id: 'p1', quantity: 2, product: linkedPlate(['x2', 'x3']) })]);
+  });
 });
 
 describe('addEntryToBatch', () => {
@@ -104,7 +125,7 @@ describe('addEntryToBatch', () => {
       quantity: 3,
       product: { kind: 'binWithInsert', bin: manualBin(), insert: { text: 'M5 nuts', text2: '', icon: null } },
     });
-    const updated = addEntryToBatch(batch, other, 3, 'item9');
+    const updated = addEntryToBatch(batch, other, 3, 'item9').batch;
     expect(updated.items.map((i) => i.id)).toEqual(['item1', 'item9']);
     expect(updated.items[1]).toEqual({
       id: 'item9',
@@ -122,17 +143,57 @@ describe('addEntryToBatch', () => {
 
   it('clamps the count to the entry quantity and floors to at least 1', () => {
     const batch = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]).batch!;
-    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 99, 'x').items[1].count).toBe(4);
-    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 0, 'x').items[1].count).toBe(1);
+    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 99, 'x').batch.items[1].count).toBe(4);
+    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 0, 'x').batch.items[1].count).toBe(1);
   });
 
   it('snapshots the product so a later entry edit does not reach the batch', () => {
     const source = entry();
     const batch = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]).batch!;
-    const updated = addEntryToBatch(batch, source, 1, 'item9');
+    const updated = addEntryToBatch(batch, source, 1, 'item9').batch;
     (source.product as { insert: { text: string } }).insert.text = 'edited later';
     const item = updated.items[1];
     expect(item.product.kind === 'binWithInsert' && item.product.insert.text).toBe('M3 bolts');
+  });
+
+  it('returns the entry with the taken amount removed, or null when all of it was taken', () => {
+    const batch = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]).batch!;
+    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 3, 'x').remaining).toEqual(
+      entry({ id: 'b2', quantity: 1 }),
+    );
+    expect(addEntryToBatch(batch, entry({ id: 'b2', quantity: 4 }), 4, 'x').remaining).toBeNull();
+  });
+
+  it('splits a linked baseplate row so item and remainder each keep quantity equal to their plate ids', () => {
+    const batch = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]).batch!;
+    const plateRow = entry({ id: 'p1', quantity: 3, product: linkedPlate(['x1', 'x2', 'x3']) });
+
+    const result = addEntryToBatch(batch, plateRow, 2, 'item9');
+
+    expect(result.batch.items[1]).toEqual({
+      id: 'item9',
+      product: linkedPlate(['x1', 'x2']),
+      count: 2,
+      sourceEntryId: 'p1',
+    });
+    expect(result.remaining).toEqual(entry({ id: 'p1', quantity: 1, product: linkedPlate(['x3']) }));
+  });
+
+  it('keeps a linked clip row group link on both the item and the remainder', () => {
+    const batch = makeBatch([entry()], [{ entryId: 'a1', count: 1 }]).batch!;
+    const clipRow = entry({
+      id: 'c1',
+      quantity: 6,
+      product: { kind: 'clip', toleranceMm: 0.2, group: { groupId: 'g1' } },
+    });
+
+    const result = addEntryToBatch(batch, clipRow, 4, 'item9');
+
+    expect(result.batch.items[1].product).toEqual({ kind: 'clip', toleranceMm: 0.2, group: { groupId: 'g1' } });
+    expect(result.batch.items[1].count).toBe(4);
+    expect(result.remaining).toEqual(
+      entry({ id: 'c1', quantity: 2, product: { kind: 'clip', toleranceMm: 0.2, group: { groupId: 'g1' } } }),
+    );
   });
 });
 

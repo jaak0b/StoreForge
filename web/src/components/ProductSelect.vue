@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { ProductChoice } from '../stores/binDesigner';
+import { BIN_ALONE_CHOICES, PRODUCT_CHOICES } from '../engine/plan/manualProduct';
 
 /**
  * The shared product picker: what the entry produces. Every bin has the
@@ -29,33 +30,8 @@ const choice = defineModel<ProductChoice>({ required: true });
 // meaningful, when the choice is binWithInsert.
 const fused = defineModel<boolean>('fused', { default: false });
 
-const ALL_ITEMS: Array<{ value: ProductChoice; title: string; subtitle: string }> = [
-  {
-    value: 'binWithInsert',
-    title: 'Bin + label insert',
-    subtitle: 'A bin plus the matching swappable label insert for its slot.',
-  },
-  {
-    value: 'bin',
-    title: 'Bin with empty label slot',
-    subtitle: 'A bin with the label slot left empty; print inserts for it later.',
-  },
-  {
-    value: 'plainBin',
-    title: 'Bin without label slot',
-    subtitle: 'A plain bin with no label feature at all.',
-  },
-  {
-    value: 'insert',
-    title: 'Label insert only',
-    subtitle: 'Just the insert, for a bin you already have.',
-  },
-];
-
-const BIN_ALONE_CHOICES: ProductChoice[] = ['bin', 'plainBin'];
-
 const items = computed(() =>
-  ALL_ITEMS.filter(
+  PRODUCT_CHOICES.filter(
     (item) =>
       !(props.hideInsertOnly && item.value === 'insert') &&
       !(props.hideBinAlone && BIN_ALONE_CHOICES.includes(item.value)),

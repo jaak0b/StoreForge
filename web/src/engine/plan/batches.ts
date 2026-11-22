@@ -1,4 +1,12 @@
-import type { BatchItem, PrintBatch, Product, QueueEntry } from './types';
+import {
+  drawerPlateLinkOf,
+  withDrawerPlateIds,
+  type BatchItem,
+  type DrawerPlateLink,
+  type PrintBatch,
+  type Product,
+  type QueueEntry,
+} from './types';
 
 /**
  * Pure print-batch operations over the plan's entries and batches. A batch
@@ -37,15 +45,43 @@ export function productKey(product: Product): string {
  * sets rather than sitting as two rows.
  */
 export function mergeKey(product: Product): string {
-  if (product.kind === 'baseplate' && product.group !== undefined) {
-    return JSON.stringify({ ...product, group: { groupId: product.group.groupId, plateIds: [] } });
-  }
-  return productKey(product);
+  return drawerPlateLinkOf(product) !== null
+    ? productKey(withDrawerPlateIds(product, []))
+    : productKey(product);
 }
 
-/** The linked-baseplate group link of a product, or null when it carries none. */
-function groupLinkOf(product: Product): { groupId: string; plateIds: string[] } | null {
-  return product.kind === 'baseplate' && product.group !== undefined ? product.group : null;
+/** Result of taking an amount out of one queue entry. */
+export interface TakenFromEntry {
+  /** The new batch item carrying a snapshot of the taken amount. */
+  item: BatchItem;
+  /** The entry with the taken amount removed, or null when nothing is left. */
+  remaining: QueueEntry | null;
+}
+
+/**
+ * Takes an amount out of one queue entry as a new batch item: the single split
+ * every path that moves queue copies into a batch goes through. The count is
+ * floored to at least 1 and clamped to the entry's quantity. The item gets a
+ * snapshot of the product; a linked baseplate's plate ids are split so the
+ * item carries the first count ids and the remaining entry keeps the rest,
+ * upholding quantity === plateIds.length on both sides. A linked clip carries
+ * only its groupId, which both sides keep unchanged.
+ */
+export function takeFromEntry(entry: QueueEntry, count: number, itemId: string): TakenFromEntry {
+  const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
+  const product = snapshotProduct(entry.product);
+  let itemProduct = product;
+  let remainingProduct = entry.product;
+  const link = drawerPlateLinkOf(product);
+  if (link !== null) {
+    itemProduct = withDrawerPlateIds(product, link.plateIds.slice(0, taken));
+    remainingProduct = withDrawerPlateIds(product, link.plateIds.slice(taken));
+  }
+  const left = entry.quantity - taken;
+  return {
+    item: { id: itemId, product: itemProduct, count: taken, sourceEntryId: entry.id },
+    remaining: left > 0 ? { ...entry, quantity: left, product: remainingProduct } : null,
+  };
 }
 
 /** Result of creating a batch: the updated queue and the new batch. */
@@ -60,7 +96,7 @@ export interface CreateBatchResult {
  * Moves the selected amounts out of the queue into a new named batch. A
  * partial amount decrements the entry's quantity and leaves the remainder
  * queued; taking the full quantity removes the entry. Selections that name
- * a missing entry are ignored.
+ * a missing (or already emptied) entry are ignored.
  */
 export function createBatch(
   entries: QueueEntry[],
@@ -70,82 +106,50 @@ export function createBatch(
   createdAt: string = new Date().toISOString(),
 ): CreateBatchResult {
   const items: BatchItem[] = [];
-  const remaining = new Map(entries.map((entry) => [entry.id, entry.quantity]));
-  // For a linked baseplate row, the plate ids it still carries after the taken
-  // amount has been sliced off, so the remaining queue row keeps the invariant
-  // that its quantity equals its plate set. Only linked rows appear here.
-  const remainingPlateIds = new Map<string, string[]>();
-  for (const entry of entries) {
-    const link = groupLinkOf(entry.product);
-    if (link !== null) remainingPlateIds.set(entry.id, [...link.plateIds]);
-  }
+  // The current state of every entry as selections take from it; an entry
+  // emptied out maps to null.
+  const current = new Map<string, QueueEntry | null>(entries.map((entry) => [entry.id, entry]));
   for (const selection of selections) {
-    const entry = entries.find((e) => e.id === selection.entryId);
-    if (entry === undefined) continue;
-    const count = Math.min(Math.max(1, Math.floor(selection.count)), entry.quantity);
-    const product = snapshotProduct(entry.product);
-    if (product.kind === 'baseplate' && product.group !== undefined) {
-      const available = remainingPlateIds.get(entry.id) ?? product.group.plateIds;
-      const taken = available.slice(0, count);
-      remainingPlateIds.set(entry.id, available.slice(count));
-      product.group = { groupId: product.group.groupId, plateIds: taken };
-    }
-    items.push({
-      id: ids.itemId(),
-      product,
-      count,
-      sourceEntryId: entry.id,
-    });
-    remaining.set(entry.id, entry.quantity - count);
+    const entry = current.get(selection.entryId);
+    if (entry === undefined || entry === null) continue;
+    const result = takeFromEntry(entry, selection.count, ids.itemId());
+    items.push(result.item);
+    current.set(entry.id, result.remaining);
   }
   if (items.length === 0) return { entries, batch: null };
   const updatedEntries = entries
-    .map((entry) => {
-      const left = remaining.get(entry.id) ?? entry.quantity;
-      if (left === entry.quantity) return entry;
-      const next: QueueEntry = { ...entry, quantity: left };
-      const link = groupLinkOf(next.product);
-      if (link !== null) {
-        next.product = {
-          ...next.product,
-          group: { groupId: link.groupId, plateIds: remainingPlateIds.get(entry.id) ?? [] },
-        } as Product;
-      }
-      return next;
-    })
-    .filter((entry) => entry.quantity > 0);
+    .map((entry) => current.get(entry.id) ?? null)
+    .filter((entry): entry is QueueEntry => entry !== null);
   return {
     entries: updatedEntries,
     batch: { id: ids.batchId, name, items, createdAt },
   };
 }
 
+/** Result of appending an entry's amount to an existing batch. */
+export interface AddEntryToBatchResult {
+  /** The batch with the new item appended. */
+  batch: PrintBatch;
+  /** The entry with the taken amount removed, or null when nothing is left. */
+  remaining: QueueEntry | null;
+}
+
 /**
- * Appends one queue entry's amount to an existing batch as a new item. The
- * product is snapshotted like createBatch does, so the batch keeps working
- * after the entry is edited or deleted; the count is clamped to the entry's
- * quantity the same way. The queue itself is not touched: the caller removes
- * the taken amount from the entry, mirroring how createBatch returns updated
- * entries.
+ * Appends one queue entry's amount to an existing batch as a new item, taken
+ * exactly the way createBatch takes it (see takeFromEntry). Returns the
+ * updated batch and the remaining entry; the caller replaces (or removes) the
+ * entry in its queue.
  */
 export function addEntryToBatch(
   batch: PrintBatch,
   entry: QueueEntry,
   count: number,
   id: string,
-): PrintBatch {
-  const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
+): AddEntryToBatchResult {
+  const result = takeFromEntry(entry, count, id);
   return {
-    ...batch,
-    items: [
-      ...batch.items,
-      {
-        id,
-        product: snapshotProduct(entry.product),
-        count: taken,
-        sourceEntryId: entry.id,
-      },
-    ],
+    batch: { ...batch, items: [...batch.items, result.item] },
+    remaining: result.remaining,
   };
 }
 
@@ -159,7 +163,7 @@ export interface ConfirmBatchItemResult {
    * other product. plateIds holds only the confirmed subset, in the item's
    * order.
    */
-  done: { groupId: string; plateIds: string[] } | null;
+  done: DrawerPlateLink | null;
 }
 
 /**
@@ -174,21 +178,18 @@ export function confirmBatchItem(
   itemId: string,
   amount: number,
 ): ConfirmBatchItemResult {
-  let done: { groupId: string; plateIds: string[] } | null = null;
+  let done: DrawerPlateLink | null = null;
   const items = batch.items
     .map((item) => {
       if (item.id !== itemId) return item;
       const confirmed = Math.min(Math.max(1, Math.floor(amount)), item.count);
-      const link = groupLinkOf(item.product);
+      const link = drawerPlateLinkOf(item.product);
       if (link !== null) {
         done = { groupId: link.groupId, plateIds: link.plateIds.slice(0, confirmed) };
         return {
           ...item,
           count: item.count - confirmed,
-          product: {
-            ...item.product,
-            group: { groupId: link.groupId, plateIds: link.plateIds.slice(confirmed) },
-          } as Product,
+          product: withDrawerPlateIds(item.product, link.plateIds.slice(confirmed)),
         };
       }
       return { ...item, count: item.count - confirmed };
@@ -224,12 +225,12 @@ export function failBatchItem(
   const target =
     entries.find((entry) => entry.id === item.sourceEntryId) ??
     entries.find((entry) => mergeKey(entry.product) === itemKey);
-  const itemLink = groupLinkOf(item.product);
+  const itemLink = drawerPlateLinkOf(item.product);
   let updatedEntries: QueueEntry[];
   if (target !== undefined) {
     updatedEntries = entries.map((entry) => {
       if (entry.id !== target.id) return entry;
-      const targetLink = groupLinkOf(entry.product);
+      const targetLink = drawerPlateLinkOf(entry.product);
       // Two linked rows for the same spec combine their plate sets; the plate
       // set size is the quantity, upholding the linked-entry invariant.
       if (itemLink !== null && targetLink !== null) {
@@ -237,7 +238,7 @@ export function failBatchItem(
         return {
           ...entry,
           quantity: plateIds.length,
-          product: { ...entry.product, group: { groupId: targetLink.groupId, plateIds } } as Product,
+          product: withDrawerPlateIds(entry.product, plateIds),
         };
       }
       return { ...entry, quantity: entry.quantity + item.count };

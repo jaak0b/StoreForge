@@ -1,14 +1,20 @@
 import { defineStore } from 'pinia';
-import type {
-  BaseplateProduct,
-  DrawerFillInput,
-  DrawerPlate,
-  DrawerPlateOptions,
-  Group,
-  PrintBatch,
-  Product,
-  QueueEntry,
-  QueueEntryUpdate,
+import {
+  drawerClipGroupIdOf,
+  drawerGroupIdOf,
+  drawerPlateLinkOf,
+  standsForDrawerPlate,
+  withDrawerPlateIds,
+  withoutDrawerLink,
+  type BaseplateProduct,
+  type DrawerFillInput,
+  type DrawerPlate,
+  type DrawerPlateOptions,
+  type Group,
+  type PrintBatch,
+  type Product,
+  type QueueEntry,
+  type QueueEntryUpdate,
 } from '../engine/plan/types';
 import {
   baseplateProductForPlates,
@@ -17,6 +23,7 @@ import {
   mergeEntries,
   mergeGroups,
   parsePlanFile,
+  pickProduct,
   repairGroupLinks,
   resyncLinkedPlateProducts,
   serializePlanFile,
@@ -25,6 +32,7 @@ import {
 } from '../engine/plan/planFile';
 import {
   drawerFillClipCount,
+  drawerGroupName,
   planDrawerFill,
   type DrawerFillPlate,
 } from '../engine/baseplate/drawerFill';
@@ -55,15 +63,71 @@ const STORAGE_KEY = 'storeforge.plan';
 export type AddResult = { id: string; problem: null } | { id: null; problem: string };
 
 /**
- * Checks a product and quantity with the plan file's own validators before an
- * interactive queue mutation. Returns null when valid, otherwise the
- * user-worded message the mutation hands back to the form.
+ * Result of adding several products at once: the new entries' ids in input
+ * order on success, or the user-worded refusal with nothing queued.
  */
-function validateQueueMutation(product: Product, quantity: number): string | null {
+export type AddManyResult = { ids: string[]; problem: null } | { ids: null; problem: string };
+
+/**
+ * Result of adding a drawer group: the new group's id on success, or the
+ * user-worded refusal with nothing queued. Exactly one of the two is set.
+ */
+export type AddDrawerResult =
+  | { groupId: string; problem: null }
+  | { groupId: null; problem: string };
+
+/** One product to queue, at a quantity. */
+export interface QueueItem {
+  product: Product;
+  quantity: number;
+}
+
+export const UNKNOWN_ENTRY_PROBLEM =
+  'This queue entry no longer exists. It may have been removed or moved onto a build plate.';
+
+/** The quantity an add queues when the caller names none. */
+export const DEFAULT_ENTRY_QUANTITY = 1;
+
+export const UNKNOWN_GROUP_PROBLEM = 'This drawer no longer exists. It may have been removed.';
+
+/**
+ * The stored form of entry notes: trimmed, with blank notes stored as no notes
+ * at all. Every add and update stores notes through here, so no flow keeps
+ * stray whitespace or an empty notes field.
+ */
+export function cleanNotes(notes: string | undefined): string | undefined {
+  const trimmed = notes?.trim() ?? '';
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/**
+ * Checks a product and quantity with the plan file's own validators before an
+ * interactive queue mutation, and returns the product as the plan file's own
+ * sanitizer copies it (known fields only, detached from the caller), so the
+ * queue stores exactly what a reload of the saved plan would produce. A product
+ * the loader would only accept by repairing it is refused here instead, since
+ * an interactive add has no channel for the repair warning.
+ */
+function checkQueueMutation(
+  product: Product,
+  quantity: number,
+): { product: Product; problem: null } | { product: null; problem: string } {
   if (!isPositiveInteger(quantity, 1)) {
-    return 'The quantity must be a whole number of at least 1.';
+    return { product: null, problem: 'The quantity must be a whole number of at least 1.' };
   }
-  return validateProduct(product, 'This design');
+  const subject = 'This design';
+  const problem = validateProduct(product, subject);
+  if (problem !== null) return { product: null, problem };
+  const repairs: string[] = [];
+  const clean = pickProduct(product as unknown as Record<string, unknown>, subject, repairs);
+  if (repairs.length > 0) {
+    return {
+      product: null,
+      problem:
+        'This design is a screw bin without its label insert. A screw bin is always ordered with its label insert, so choose Bin + label insert.',
+    };
+  }
+  return { product: clean, problem: null };
 }
 
 /** Whether two plate brims are equal on all four sides. */
@@ -314,49 +378,82 @@ export const useBinQueue = defineStore('binQueue', {
      * Returns the new entry's id on success or the user-worded problem, in
      * which case the queue is not touched.
      */
-    add(product: Product, quantity = 1, notes?: string): AddResult {
-      const problem = validateQueueMutation(product, quantity);
-      if (problem !== null) return { id: null, problem };
-      const entry: QueueEntry = {
-        id: crypto.randomUUID(),
-        quantity,
-        createdAt: new Date().toISOString(),
-        product,
-      };
-      if (notes !== undefined && notes !== '') entry.notes = notes;
-      this.entries.push(entry);
+    add(product: Product, quantity = DEFAULT_ENTRY_QUANTITY, notes?: string): AddResult {
+      const result = this.addMany([{ product, quantity }], notes);
+      if (result.problem !== null) return { id: null, problem: result.problem };
+      return { id: result.ids[0], problem: null };
+    },
+    /**
+     * Adds one queued entry per item, all or nothing: every product and
+     * quantity is validated and sanitized first, and the queue is left
+     * untouched if any is refused. The same notes (stored through cleanNotes)
+     * apply to every new entry.
+     * Returns the new ids in item order, or the first user-worded problem
+     * (naming the item's position when there are several).
+     */
+    addMany(items: QueueItem[], notes?: string): AddManyResult {
+      if (items.length === 0) {
+        return { ids: null, problem: 'There is nothing to add to the queue.' };
+      }
+      const now = new Date().toISOString();
+      const storedNotes = cleanNotes(notes);
+      const entries: QueueEntry[] = [];
+      for (const [index, item] of items.entries()) {
+        const checked = checkQueueMutation(item.product, item.quantity);
+        if (checked.problem !== null) {
+          const problem =
+            items.length === 1 ? checked.problem : `Entry ${index + 1}: ${checked.problem}`;
+          return { ids: null, problem };
+        }
+        const entry: QueueEntry = {
+          id: crypto.randomUUID(),
+          quantity: item.quantity,
+          createdAt: now,
+          product: checked.product,
+        };
+        if (storedNotes !== undefined) entry.notes = storedNotes;
+        entries.push(entry);
+      }
+      this.entries.push(...entries);
       this.persist();
-      return { id: entry.id, problem: null };
+      return { ids: entries.map((entry) => entry.id), problem: null };
     },
     /**
      * Applies partial changes to an existing entry. The product is replaced
      * wholesale when given (the sync-safe way to edit a discriminated union);
      * id and createdAt never change. Validates like add and returns null on
-     * success or the user-worded problem, leaving the entry unchanged.
+     * success or the user-worded problem, leaving the entry unchanged; an
+     * unknown id is a problem too. The stored product is the sanitized copy.
      */
     update(id: string, changes: QueueEntryUpdate): string | null {
       const index = this.entries.findIndex((e) => e.id === id);
-      if (index === -1) return null;
+      if (index === -1) return UNKNOWN_ENTRY_PROBLEM;
       const updated = { ...this.entries[index], ...changes };
+      if ('notes' in changes) {
+        const storedNotes = cleanNotes(changes.notes);
+        if (storedNotes === undefined) delete updated.notes;
+        else updated.notes = storedNotes;
+      }
       // A linked drawer-plate row's quantity is bound to its plate set: lowering
       // it trims the trailing plate ids (those plates become planned again, and
       // can be re-queued from the drawer view); raising it past the linked plate
       // count is refused, since a new slot has to come from the drawer, not from
       // an arbitrary quantity bump.
-      if (updated.product.kind === 'baseplate' && updated.product.group !== undefined) {
-        const link = updated.product.group;
+      const link = drawerPlateLinkOf(updated.product);
+      if (link !== null) {
         if (updated.quantity > link.plateIds.length) {
           return 'This is a drawer plate row, so its quantity is set by the drawer plan. Open the drawer to queue more of its plates.';
         }
         if (updated.quantity < link.plateIds.length) {
-          updated.product = {
-            ...updated.product,
-            group: { groupId: link.groupId, plateIds: link.plateIds.slice(0, updated.quantity) },
-          };
+          updated.product = withDrawerPlateIds(
+            updated.product,
+            link.plateIds.slice(0, updated.quantity),
+          );
         }
       }
-      const problem = validateQueueMutation(updated.product, updated.quantity);
-      if (problem !== null) return problem;
+      const checked = checkQueueMutation(updated.product, updated.quantity);
+      if (checked.problem !== null) return checked.problem;
+      updated.product = checked.product;
       this.entries[index] = updated;
       this.persist();
       return null;
@@ -365,21 +462,16 @@ export const useBinQueue = defineStore('binQueue', {
      * Duplicates an entry as a fresh copy. A drawer-linked plate row duplicates
      * to an UNLINKED standalone baseplate: a duplicate has no slot in the
      * drawer plan, so it keeps the plate's geometry but drops the group link
-     * (and with it the plateIds bookkeeping). Returns the new id.
+     * (and with it the plateIds bookkeeping); a drawer-linked clip row likewise
+     * duplicates to an unlinked standalone clip. Returns the new id, or the
+     * user-worded problem when no entry has this id.
      */
-    duplicate(id: string): string | null {
+    duplicate(id: string): AddResult {
       const source = this.entryById(id);
-      if (source === null) return null;
-      const product = JSON.parse(JSON.stringify(source.product)) as Product;
-      // A drawer-linked plate or clip duplicates to an unlinked standalone copy:
-      // a duplicate has no place in the drawer plan, so it keeps the geometry but
-      // drops the group link.
-      if (
-        (product.kind === 'baseplate' || product.kind === 'clip') &&
-        product.group !== undefined
-      ) {
-        delete product.group;
-      }
+      if (source === null) return { id: null, problem: UNKNOWN_ENTRY_PROBLEM };
+      // A duplicate has no place in the drawer plan, so it keeps the geometry
+      // but drops the group link.
+      const product = withoutDrawerLink(JSON.parse(JSON.stringify(source.product)) as Product);
       const copy: QueueEntry = {
         ...source,
         product,
@@ -388,7 +480,7 @@ export const useBinQueue = defineStore('binQueue', {
       };
       this.entries.push(copy);
       this.persist();
-      return copy.id;
+      return { id: copy.id, problem: null };
     },
     /**
      * Whether a group still has any trace in the plan: a still-queued linked row
@@ -402,9 +494,7 @@ export const useBinQueue = defineStore('binQueue', {
       const group = this.groupById(groupId);
       if (group === null) return false;
       if (group.payload.donePlateIds.length > 0) return true;
-      const linksGroup = (product: Product): boolean =>
-        (product.kind === 'baseplate' || product.kind === 'clip') &&
-        product.group?.groupId === groupId;
+      const linksGroup = (product: Product): boolean => drawerGroupIdOf(product) === groupId;
       if (this.entries.some((entry) => linksGroup(entry.product))) return true;
       return this.batches.some((batch) => batch.items.some((item) => linksGroup(item.product)));
     },
@@ -414,20 +504,19 @@ export const useBinQueue = defineStore('binQueue', {
      * plate has printed), the now-empty group is deleted automatically: a drawer
      * the user emptied by hand before printing any of it leaves no orphan header.
      * A group with printing or printed plates survives, and confirming a print is
-     * not user removal, so it never triggers this cleanup.
+     * not user removal, so it never triggers this cleanup. Returns null on
+     * success or the user-worded problem when no entry has this id.
      */
-    remove(id: string) {
+    remove(id: string): string | null {
       const removed = this.entryById(id);
-      const groupId =
-        removed !== null &&
-        (removed.product.kind === 'baseplate' || removed.product.kind === 'clip')
-          ? removed.product.group?.groupId
-          : undefined;
+      if (removed === null) return UNKNOWN_ENTRY_PROBLEM;
+      const groupId = drawerGroupIdOf(removed.product);
       this.entries = this.entries.filter((e) => e.id !== id);
-      if (groupId !== undefined && !this.groupHasTrace(groupId)) {
+      if (groupId !== null && !this.groupHasTrace(groupId)) {
         this.groups = this.groups.filter((g) => g.id !== groupId);
       }
       this.persist();
+      return null;
     },
     /**
      * Moves the selected amounts out of the queue into a new named batch.
@@ -465,15 +554,13 @@ export const useBinQueue = defineStore('binQueue', {
         );
         return;
       }
-      const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
-      const updated = addEntryToBatch(newest, entry, taken, crypto.randomUUID());
-      this.batches = this.batches.map((b) => (b.id === newest.id ? updated : b));
+      const result = addEntryToBatch(newest, entry, count, crypto.randomUUID());
+      this.batches = this.batches.map((b) => (b.id === newest.id ? result.batch : b));
+      const remaining = result.remaining;
       this.entries =
-        taken === entry.quantity
+        remaining === null
           ? this.entries.filter((e) => e.id !== entryId)
-          : this.entries.map((e) =>
-              e.id === entryId ? { ...e, quantity: e.quantity - taken } : e,
-            );
+          : this.entries.map((e) => (e.id === entryId ? remaining : e));
       this.persist();
     },
     /** Renames a batch. */
@@ -504,9 +591,8 @@ export const useBinQueue = defineStore('binQueue', {
       const batch = this.batchById(batchId);
       if (batch !== null) {
         for (const item of batch.items) {
-          if (item.product.kind === 'baseplate' && item.product.group !== undefined) {
-            this.markGroupPlatesDone(item.product.group.groupId, item.product.group.plateIds);
-          }
+          const link = drawerPlateLinkOf(item.product);
+          if (link !== null) this.markGroupPlatesDone(link.groupId, link.plateIds);
         }
       }
       this.batches = this.batches.filter((b) => b.id !== batchId);
@@ -580,7 +666,7 @@ export const useBinQueue = defineStore('binQueue', {
      * Adds a drawer group and queues one baseplate per planned plate. All or
      * nothing: the group and every plate product are validated first, and the
      * store is left untouched if any is refused, so a rejected plate never
-     * leaves the drawer partially queued. Returns null on success or the
+     * leaves the drawer partially queued. Returns the new group's id or the
      * user-worded problem. plannerPlates come from planDrawerFill; each
      * plate's brim is the planner's own, never recomputed here.
      */
@@ -590,7 +676,7 @@ export const useBinQueue = defineStore('binQueue', {
       plannerPlates: DrawerFillPlate[],
       name: string,
       clipToleranceMm: number = CLIP_TOLERANCE_DEFAULT,
-    ): string | null {
+    ): AddDrawerResult {
       const groupId = crypto.randomUUID();
       const now = new Date().toISOString();
       const plates: DrawerPlate[] = plannerPlates.map((plate) => ({
@@ -612,21 +698,42 @@ export const useBinQueue = defineStore('binQueue', {
       };
       if (clipPlan.clips !== null) group.payload.clips = clipPlan.clips;
       const groupProblem = validateGroup(group, `group ${groupId}`);
-      if (groupProblem !== null) return groupProblem;
+      if (groupProblem !== null) return { groupId: null, problem: groupProblem };
       const entries = linkedEntriesForPlates(plates, options, groupId, now);
       for (const entry of entries) {
         const problem = validateProduct(entry.product, 'A planned plate');
-        if (problem !== null) return problem;
+        if (problem !== null) return { groupId: null, problem };
       }
       if (clipPlan.entry !== null) {
         const clipProblem = validateProduct(clipPlan.entry.product, 'The drawer connection clips');
-        if (clipProblem !== null) return clipProblem;
+        if (clipProblem !== null) return { groupId: null, problem: clipProblem };
       }
       this.groups.push(group);
       this.entries.push(...entries);
       if (clipPlan.entry !== null) this.entries.push(clipPlan.entry);
       this.persist();
-      return null;
+      return { groupId, problem: null };
+    },
+    /**
+     * Plans a drawer fill from the drawer and build plate sizes and queues it
+     * as a new drawer group named after the drawer size. The planner's own
+     * user-worded error is returned when the sizes cannot be filled; otherwise
+     * this is addDrawerGroup with the planned plates, all or nothing.
+     */
+    addDrawerFromSize(
+      input: DrawerFillInput,
+      options: DrawerPlateOptions,
+      clipToleranceMm: number = CLIP_TOLERANCE_DEFAULT,
+    ): AddDrawerResult {
+      const outcome = planDrawerFill(input);
+      if ('error' in outcome) return { groupId: null, problem: outcome.error };
+      return this.addDrawerGroup(
+        input,
+        options,
+        outcome.plates,
+        drawerGroupName(input),
+        clipToleranceMm,
+      );
     },
     /**
      * Applies changes to a drawer group. A name or options change is
@@ -707,13 +814,7 @@ export const useBinQueue = defineStore('binQueue', {
         }
         // Drop every still-queued row this group owns (its plates and its clips),
         // then re-queue from the fresh plan; batched rows are left alone.
-        this.entries = this.entries.filter(
-          (entry) =>
-            !(
-              (entry.product.kind === 'baseplate' || entry.product.kind === 'clip') &&
-              entry.product.group?.groupId === id
-            ),
-        );
+        this.entries = this.entries.filter((entry) => drawerGroupIdOf(entry.product) !== id);
         payload.input = input;
         payload.options = options;
         payload.plates = newPlates;
@@ -733,7 +834,7 @@ export const useBinQueue = defineStore('binQueue', {
         const options = changes.options;
         const restamped: { entry: QueueEntry; product: BaseplateProduct }[] = [];
         for (const entry of this.entries) {
-          if (entry.product.kind !== 'baseplate' || entry.product.group?.groupId !== id) continue;
+          if (entry.product.kind !== 'baseplate' || drawerGroupIdOf(entry.product) !== id) continue;
           // Re-stamp the shared options only: the plate set (group.plateIds),
           // the cell size and the brim stay exactly as they were.
           const product: BaseplateProduct = {
@@ -758,11 +859,11 @@ export const useBinQueue = defineStore('binQueue', {
         const connectable = payload.options.connectable;
         const count = connectable ? drawerFillClipCount(payload.plates) : 0;
         const queuedClips = this.entries.filter(
-          (entry) => entry.product.kind === 'clip' && entry.product.group?.groupId === id,
+          (entry) => drawerClipGroupIdOf(entry.product) === id,
         );
         if (count === 0) {
           this.entries = this.entries.filter(
-            (entry) => !(entry.product.kind === 'clip' && entry.product.group?.groupId === id),
+            (entry) => drawerClipGroupIdOf(entry.product) !== id,
           );
           delete payload.clips;
         } else {
@@ -811,11 +912,8 @@ export const useBinQueue = defineStore('binQueue', {
       if (plate === undefined) return null;
       const options = group.payload.options;
       // A plate already carried by some queued row must not be queued twice.
-      const alreadyQueued = this.entries.some(
-        (entry) =>
-          entry.product.kind === 'baseplate' &&
-          entry.product.group?.groupId === groupId &&
-          entry.product.group.plateIds.includes(plateId),
+      const alreadyQueued = this.entries.some((entry) =>
+        standsForDrawerPlate(entry.product, groupId, plateId),
       );
       if (alreadyQueued) return null;
       // Merge into a matching queued row when one exists, keeping quantity in
@@ -823,14 +921,15 @@ export const useBinQueue = defineStore('binQueue', {
       const match = this.entries.find(
         (entry) =>
           entry.product.kind === 'baseplate' &&
-          entry.product.group?.groupId === groupId &&
+          drawerGroupIdOf(entry.product) === groupId &&
           entry.product.unitsX === plate.unitsX &&
           entry.product.unitsY === plate.unitsY &&
           brimEqual(entry.product.brim ?? plate.brim, plate.brim),
       );
-      if (match !== undefined && match.product.kind === 'baseplate' && match.product.group) {
-        const plateIds = [...match.product.group.plateIds, plateId];
-        match.product = { ...match.product, group: { groupId, plateIds } };
+      const matchLink = match === undefined ? null : drawerPlateLinkOf(match.product);
+      if (match !== undefined && matchLink !== null) {
+        const plateIds = [...matchLink.plateIds, plateId];
+        match.product = withDrawerPlateIds(match.product, plateIds);
         match.quantity = plateIds.length;
         this.persist();
         return null;
@@ -858,18 +957,15 @@ export const useBinQueue = defineStore('binQueue', {
      * Removes a group and every still-queued plate that belongs to it. Batch
      * items are left alone: a plate already sent to a printer keeps its
      * snapshot, and its group link simply stops resolving, which the load-time
-     * repair strips the next time the plan is read.
+     * repair strips the next time the plan is read. Returns null on success or
+     * the user-worded problem when no group has this id.
      */
-    removeGroup(id: string) {
+    removeGroup(id: string): string | null {
+      if (this.groupById(id) === null) return UNKNOWN_GROUP_PROBLEM;
       this.groups = this.groups.filter((g) => g.id !== id);
-      this.entries = this.entries.filter(
-        (entry) =>
-          !(
-            (entry.product.kind === 'baseplate' || entry.product.kind === 'clip') &&
-            entry.product.group?.groupId === id
-          ),
-      );
+      this.entries = this.entries.filter((entry) => drawerGroupIdOf(entry.product) !== id);
       this.persist();
+      return null;
     },
   },
 });
