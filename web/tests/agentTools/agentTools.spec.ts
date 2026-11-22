@@ -31,6 +31,7 @@ import { registerAgentTools } from '../../src/agentTools/registerAgentTools';
 import {
   loadModelContext,
   type AgentTool,
+  type PolyfillWindow,
   type JsonSchema,
   type ModelContextLike,
 } from '../../src/agentTools/modelContext';
@@ -151,32 +152,76 @@ describe('agent tool registration', () => {
 });
 
 describe('loadModelContext', () => {
-  it('uses the native context without loading the polyfill', async () => {
-    const native = fakeModelContext();
-    const loadPolyfill = vi.fn(() => Promise.resolve());
+  /** A window at a fixed page origin, as the polyfill loading sees it. */
+  function pageWindow(): PolyfillWindow {
+    return { location: { origin: 'https://app.example' } };
+  }
 
-    const resolved = await loadModelContext({ modelContext: native }, loadPolyfill);
+  it('uses the native context without loading or configuring the polyfill', async () => {
+    const native = fakeModelContext();
+    const win = pageWindow();
+    const loadPolyfill = vi.fn(() => Promise.resolve({ initializeWebModelContext: () => {} }));
+
+    const resolved = await loadModelContext({ modelContext: native }, win, loadPolyfill);
 
     expect(resolved).toBe(native);
     expect(loadPolyfill).not.toHaveBeenCalled();
+    expect(win.__webModelContextOptions).toBeUndefined();
   });
 
   it('loads the polyfill when the context is missing and returns what it installs', async () => {
     const host: { modelContext?: ModelContextLike } = {};
     const installed = fakeModelContext();
 
-    const resolved = await loadModelContext(host, () => {
-      host.modelContext = installed;
-      return Promise.resolve();
-    });
+    const resolved = await loadModelContext(host, pageWindow(), () =>
+      Promise.resolve({
+        initializeWebModelContext: () => {
+          host.modelContext = installed;
+        },
+      }),
+    );
 
     expect(resolved).toBe(installed);
   });
 
-  it('rejects when the polyfill installs nothing', async () => {
-    await expect(loadModelContext({}, () => Promise.resolve())).rejects.toThrow(
-      'did not install document.modelContext',
+  it('turns off auto-initialization before the polyfill module loads', async () => {
+    const host: { modelContext?: ModelContextLike } = {};
+    const win = pageWindow();
+    let optionsAtImport: unknown = 'not imported';
+
+    await loadModelContext(host, win, () => {
+      optionsAtImport = structuredClone(win.__webModelContextOptions);
+      return Promise.resolve({
+        initializeWebModelContext: () => {
+          host.modelContext = fakeModelContext();
+        },
+      });
+    });
+
+    expect(optionsAtImport).toEqual({ autoInitialize: false });
+  });
+
+  it('initializes the polyfill so only the page origin may connect to its tab server', async () => {
+    const host: { modelContext?: ModelContextLike } = {};
+    const initialize = vi.fn((_options?: unknown) => {
+      host.modelContext = fakeModelContext();
+    });
+
+    await loadModelContext(host, pageWindow(), () =>
+      Promise.resolve({ initializeWebModelContext: initialize }),
     );
+
+    expect(initialize.mock.calls).toEqual([
+      [{ transport: { tabServer: { allowedOrigins: ['https://app.example'] } } }],
+    ]);
+  });
+
+  it('rejects when the polyfill installs nothing', async () => {
+    await expect(
+      loadModelContext({}, pageWindow(), () =>
+        Promise.resolve({ initializeWebModelContext: () => {} }),
+      ),
+    ).rejects.toThrow('did not install document.modelContext');
   });
 });
 

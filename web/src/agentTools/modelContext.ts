@@ -5,6 +5,8 @@
  * nothing here may assume a real browser context.
  */
 
+import type { WebModelContextInitOptions } from '@mcp-b/global';
+
 /** A JSON Schema fragment, as a tool's inputSchema nests them. */
 export type JsonSchema = Record<string, unknown>;
 
@@ -62,20 +64,50 @@ export interface ModelContextHost {
   modelContext?: ModelContextLike;
 }
 
+/** The slice of the @mcp-b/global module the loader calls. */
+export interface WebMcpPolyfill {
+  initializeWebModelContext(options?: WebModelContextInitOptions): void;
+}
+
+/**
+ * The slice of `window` the polyfill loading touches: the page origin, and the
+ * options @mcp-b/global reads from the window when its module is imported.
+ */
+export interface PolyfillWindow {
+  location: { origin: string };
+  __webModelContextOptions?: WebModelContextInitOptions;
+}
+
+/**
+ * The @mcp-b/global initialization options for a page at the given origin.
+ * Its tab server transport otherwise accepts every origin (allowedOrigins
+ * ['*']); here only the page's own origin may connect.
+ */
+export function polyfillInitOptions(origin: string): WebModelContextInitOptions {
+  return { transport: { tabServer: { allowedOrigins: [origin] } } };
+}
+
 /**
  * The page's model context: the native one when the browser provides it,
- * otherwise the @mcp-b/global polyfill, which installs `document.modelContext`
- * when its module is imported. The polyfill is only loaded when the native API
- * is missing, through a dynamic import so it stays in its own chunk. Throws
- * when the context is still missing afterwards (the polyfill declines to
- * install outside a secure context, for one).
+ * otherwise the @mcp-b/global polyfill. The polyfill is only loaded when the
+ * native API is missing, through a dynamic import so it stays in its own
+ * chunk. Its auto-initialization on import is turned off (the documented
+ * `window.__webModelContextOptions = { autoInitialize: false }`), and it is
+ * then initialized explicitly with polyfillInitOptions, so its transport only
+ * accepts the page's own origin and an initialization failure reaches the
+ * caller instead of the polyfill's own console log. Throws when the context
+ * is still missing afterwards (the polyfill declines to install outside a
+ * secure context, for one).
  */
 export async function loadModelContext(
   host: ModelContextHost,
-  loadPolyfill: () => Promise<unknown>,
+  win: PolyfillWindow,
+  loadPolyfill: () => Promise<WebMcpPolyfill>,
 ): Promise<ModelContextLike> {
   if (host.modelContext !== undefined) return host.modelContext;
-  await loadPolyfill();
+  win.__webModelContextOptions = { autoInitialize: false };
+  const polyfill = await loadPolyfill();
+  polyfill.initializeWebModelContext(polyfillInitOptions(win.location.origin));
   const context = host.modelContext;
   if (context === undefined) {
     throw new Error(

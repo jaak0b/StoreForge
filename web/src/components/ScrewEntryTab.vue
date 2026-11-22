@@ -158,11 +158,19 @@ const screwOptions = computed<ScrewProductOptions>(() => ({
 }));
 
 function productSizeText(product: Product): string {
-  if (product.kind === 'insert') return `${product.cells}u insert`;
-  const bin = binOf(product);
-  // This tab only ever composes insert and bin-bearing products.
-  if (bin === null) return '';
-  return `${bin.gridX} x ${bin.gridY} x ${bin.heightUnits}`;
+  switch (product.kind) {
+    case 'insert':
+      return `${product.cells}u insert`;
+    case 'bin':
+    case 'binWithInsert':
+      return `${product.bin.gridX} x ${product.bin.gridY} x ${product.bin.heightUnits}`;
+    case 'baseplate':
+    case 'clip':
+      // This tab only ever composes insert and bin-bearing products.
+      return '';
+    default:
+      return assertNever(product);
+  }
 }
 
 function productLabelText(product: Product): string {
@@ -411,10 +419,17 @@ const resultText = computed(() => {
   }
   if (pending.value.products.length === 0) return '';
   const product = pending.value.products[0].product;
-  if (product.kind === 'insert') {
-    return `Resulting label insert: ${product.content.text} (${product.cells}u wide).`;
+  switch (product.kind) {
+    case 'insert':
+      return `Resulting label insert: ${product.content.text} (${product.cells}u wide).`;
+    case 'bin':
+    case 'binWithInsert':
+    case 'baseplate':
+    case 'clip':
+      return `Resulting bin: ${productLabelText(product)} (${productSizeText(product)}).`;
+    default:
+      return assertNever(product);
   }
-  return `Resulting bin: ${productLabelText(product)} (${productSizeText(product)}).`;
 });
 
 /** One label-text summary per parsed batch, for the multi-screw hint list. */

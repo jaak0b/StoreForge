@@ -2294,36 +2294,41 @@ export function repairGroupLinks(
     groups.map((group) => [group.id, new Set(group.payload.plates.map((plate) => plate.id))]),
   );
   const groupIds = new Set(groups.map((group) => group.id));
-  for (const entry of entries) {
-    if (entry.product.kind === 'baseplate') {
-      repairBaseplateLink(
-        entry.product,
-        (quantity) => {
-          entry.quantity = quantity;
-        },
-        platesByGroup,
-        `Entry ${entry.id}`,
-        warnings,
-      );
-    } else if (entry.product.kind === 'clip') {
-      repairClipLink(entry.product, groupIds, `Entry ${entry.id}`, warnings);
+  const repair = (product: Product, setCount: (count: number) => void, subject: string): void => {
+    switch (product.kind) {
+      case 'baseplate':
+        repairBaseplateLink(product, setCount, platesByGroup, subject, warnings);
+        break;
+      case 'clip':
+        repairClipLink(product, groupIds, subject, warnings);
+        break;
+      case 'bin':
+      case 'binWithInsert':
+      case 'insert':
+        // No drawer group link to repair.
+        break;
+      default:
+        assertNever(product);
     }
+  };
+  for (const entry of entries) {
+    repair(
+      entry.product,
+      (quantity) => {
+        entry.quantity = quantity;
+      },
+      `Entry ${entry.id}`,
+    );
   }
   for (const batch of batches) {
     for (const item of batch.items) {
-      if (item.product.kind === 'baseplate') {
-        repairBaseplateLink(
-          item.product,
-          (count) => {
-            item.count = count;
-          },
-          platesByGroup,
-          `Batch ${batch.id} item ${item.id}`,
-          warnings,
-        );
-      } else if (item.product.kind === 'clip') {
-        repairClipLink(item.product, groupIds, `Batch ${batch.id} item ${item.id}`, warnings);
-      }
+      repair(
+        item.product,
+        (count) => {
+          item.count = count;
+        },
+        `Batch ${batch.id} item ${item.id}`,
+      );
     }
   }
 }

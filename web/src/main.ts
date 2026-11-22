@@ -87,7 +87,7 @@ void useBinQueue(pinia).sweepStoredAssets();
 
 // WebMCP agent tools: the native document.modelContext when the browser has
 // one, otherwise the polyfill, which is fetched as its own chunk only then.
-void loadModelContext(document as Document & ModelContextHost, () => import('@mcp-b/global'))
+void loadModelContext(document as Document & ModelContextHost, window, () => import('@mcp-b/global'))
   .then((modelContext) => registerAgentTools({ modelContext, pinia }))
   .catch((error: unknown) => {
     console.error('The WebMCP agent tools could not be registered.', error);
