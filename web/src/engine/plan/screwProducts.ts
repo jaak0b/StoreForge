@@ -198,7 +198,11 @@ export interface ScrewProductOptions {
    * printed to carry the label naming its fastener and is never ordered bare.
    */
   productChoice: ProductChoice;
-  /** Bin height for a single screw. A list of several batches uses DEFAULT_SCREW_HEIGHT_UNITS. */
+  /**
+   * Bin height for a single screw. A list of several batches uses
+   * DEFAULT_SCREW_HEIGHT_UNITS. Neither checked nor used for the 'insert'
+   * choice, since an insert has no height.
+   */
   heightUnits: number;
   /** The user's chosen footprint, applied to every batch, or null to size each screw automatically. */
   sizeOverride: ScrewBinSize | null;
@@ -229,7 +233,7 @@ export interface ScrewProductsResult {
   skipped: SkippedScrewBatch[];
   /**
    * Why no product could be built from the complete batches (an invalid height
-   * for a single screw, or an invalid size override), or null. When set,
+   * for a single screw bin, or an invalid size override), or null. When set,
    * products is empty.
    */
   problem: string | null;
@@ -310,6 +314,29 @@ function buildScrewProduct(
 }
 
 /**
+ * Why the height stops a screw submit, or null. A standalone insert has no
+ * height at all, so the height is neither checked nor used for it. A bin
+ * choice checks the height only for a single screw, since a list of several
+ * uses DEFAULT_SCREW_HEIGHT_UNITS.
+ */
+function screwHeightProblem(
+  productChoice: ProductChoice,
+  multiple: boolean,
+  heightUnits: number,
+): string | null {
+  switch (productChoice) {
+    case 'insert':
+      return null;
+    case 'binWithInsert':
+    case 'bin':
+    case 'plainBin':
+      return !multiple && !isValidScrewHeight(heightUnits) ? SCREW_HEIGHT_INVALID_MESSAGE : null;
+    default:
+      return assertNever(productChoice);
+  }
+}
+
+/**
  * Turns parsed screw batches into the products a screw entry queues. Every
  * complete batch becomes one product at the batch's quantity; every incomplete
  * batch is listed in skipped with its reason. A single batch uses the given
@@ -334,9 +361,8 @@ export function screwProducts(
   });
   if (complete.length === 0) return { products: [], skipped, problem: null };
   const multiple = batches.length > 1;
-  if (!multiple && !isValidScrewHeight(options.heightUnits)) {
-    return { products: [], skipped, problem: SCREW_HEIGHT_INVALID_MESSAGE };
-  }
+  const heightProblem = screwHeightProblem(options.productChoice, multiple, options.heightUnits);
+  if (heightProblem !== null) return { products: [], skipped, problem: heightProblem };
   if (options.sizeOverride !== null && !isValidScrewBinSize(options.sizeOverride)) {
     return { products: [], skipped, problem: SCREW_SIZE_INVALID_MESSAGE };
   }

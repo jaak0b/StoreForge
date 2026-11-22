@@ -1,7 +1,7 @@
 import type { Pinia } from 'pinia';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { drawerGroupIdOf } from '../engine/plan/types';
-import { UNKNOWN_ENTRY_PROBLEM, useBinQueue } from '../stores/binQueue';
+import { useBinQueue } from '../stores/binQueue';
 import { toolResult, type AgentTool } from './modelContext';
 import { inputFields, requiredString, runTool } from './toolInput';
 
@@ -23,9 +23,12 @@ export function duplicateEntryTool(pinia: Pinia): AgentTool {
     execute: (input) =>
       runTool(() => {
         const queue = useBinQueue(pinia);
-        const id = queue.duplicate(requiredString(inputFields(input), 'id'));
-        if (id === null) return toolResult({ problem: UNKNOWN_ENTRY_PROBLEM }, true);
-        return toolResult({ id, title: describeProduct(queue.entryById(id)!.product).title });
+        const result = queue.duplicate(requiredString(inputFields(input), 'id'));
+        if (result.problem !== null) return toolResult({ problem: result.problem }, true);
+        return toolResult({
+          id: result.id,
+          title: describeProduct(queue.entryById(result.id)!.product).title,
+        });
       }),
   };
 }

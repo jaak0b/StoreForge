@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useApp } from '../stores/app';
 import { useBinQueue } from '../stores/binQueue';
-import { originOf, type Group, type QueueEntry } from '../engine/plan/types';
+import { drawerGroupIdOf, originOf, type Group, type QueueEntry } from '../engine/plan/types';
 import {
   describeGroup,
   describeProduct,
@@ -228,14 +228,11 @@ function createPlate(): void {
 // isolation would desync the group), and every other row loads into the tab
 // that owns its origin for editing.
 function editRow(entry: QueueEntry): void {
-  const product = entry.product;
-  if (
-    (product.kind === 'baseplate' || product.kind === 'clip') &&
-    product.group !== undefined
-  ) {
-    app.openDrawer(product.group.groupId);
+  const groupId = drawerGroupIdOf(entry.product);
+  if (groupId !== null) {
+    app.openDrawer(groupId);
   } else {
-    app.editEntry(entry.id, originOf(product));
+    app.editEntry(entry.id, originOf(entry.product));
   }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -288,6 +285,11 @@ function removeRow(entry: QueueEntry): void {
   selectedIds.value = nextIds;
   const problem = queue.remove(entry.id);
   if (problem !== null) errorMessage.value = problem;
+}
+
+function duplicateRow(entry: QueueEntry): void {
+  const result = queue.duplicate(entry.id);
+  if (result.problem !== null) errorMessage.value = result.problem;
 }
 </script>
 
@@ -462,7 +464,7 @@ function removeRow(entry: QueueEntry): void {
               </template>
             </v-list>
           </v-menu>
-          <v-btn icon size="small" variant="text" @click="queue.duplicate(entry.id)">
+          <v-btn icon size="small" variant="text" @click="duplicateRow(entry)">
             <v-icon icon="mdi-content-copy" size="18" />
             <v-tooltip activator="parent" location="bottom">Duplicate</v-tooltip>
           </v-btn>

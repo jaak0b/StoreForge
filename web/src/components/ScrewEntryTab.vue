@@ -6,9 +6,10 @@ import { useApp } from '../stores/app';
 import { useBinDesigner } from '../stores/binDesigner';
 import { useBinQueue } from '../stores/binQueue';
 import { describeProduct } from '../engine/plan/rowDescriptor';
-import { previewBinParams } from '../engine/plan/geometry';
+import { binPreviewParams } from '../engine/plan/geometry';
 import { designChoiceOf } from '../engine/plan/manualProduct';
 import {
+  assertNever,
   binOf,
   originOf,
   screwOf,
@@ -564,13 +565,21 @@ const previewProduct = computed<Product>(
 );
 
 function generatePreview(product: Product): Promise<PartMeshes> {
-  if (product.kind === 'insert') {
-    return generateInsert({ cells: product.cells, content: product.content });
+  switch (product.kind) {
+    case 'insert':
+      return generateInsert({ cells: product.cells, content: product.content });
+    case 'bin':
+    case 'binWithInsert':
+      // The plan layer already derives a product's preview parameters,
+      // including which origins carry divider walls; deriving them a second
+      // time here is how the two would drift apart.
+      return generateSlottedBin(binPreviewParams(product));
+    case 'baseplate':
+    case 'clip':
+      throw new Error(`The Screw entry tab never designs a ${product.kind} product.`);
+    default:
+      return assertNever(product);
   }
-  // The plan layer already derives a product's preview parameters, including
-  // which origins carry divider walls; deriving them a second time here is how
-  // the two would drift apart.
-  return generateSlottedBin(previewBinParams(product)!);
 }
 
 const { meshes, errorMessage } = useBinPreview(() => previewProduct.value, generatePreview);

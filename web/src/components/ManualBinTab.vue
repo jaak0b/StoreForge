@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBinDesigner } from '../stores/binDesigner';
-import { useBinQueue } from '../stores/binQueue';
+import { DEFAULT_ENTRY_QUANTITY, useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateInsert, generateSlottedBin } from '../workerClient';
 import type { PartMeshes } from '../engine/gridfinity/types';
@@ -42,7 +42,7 @@ const previewLoaded = ref(!smAndDown.value);
 const { productChoice, fused, gridX, gridY, heightUnits, labelText, labelIcon, notes } =
   storeToRefs(store);
 
-const quantity = ref(1);
+const quantity = ref(DEFAULT_ENTRY_QUANTITY);
 const gridXField = ref<{ focus: () => void } | null>(null);
 
 const insertOnly = computed(() => productChoice.value === 'insert');
@@ -53,7 +53,7 @@ function resetForm(): void {
   const keepOpen = store.moreOptionsOpen;
   store.$reset();
   store.moreOptionsOpen = keepOpen;
-  quantity.value = 1;
+  quantity.value = DEFAULT_ENTRY_QUANTITY;
 }
 
 /** Loads the entry being edited into the form; null resets to a new design. */

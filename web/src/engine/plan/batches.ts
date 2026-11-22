@@ -1,4 +1,12 @@
-import type { BatchItem, PrintBatch, Product, QueueEntry } from './types';
+import {
+  drawerPlateLinkOf,
+  withDrawerPlateIds,
+  type BatchItem,
+  type DrawerPlateLink,
+  type PrintBatch,
+  type Product,
+  type QueueEntry,
+} from './types';
 
 /**
  * Pure print-batch operations over the plan's entries and batches. A batch
@@ -37,15 +45,9 @@ export function productKey(product: Product): string {
  * sets rather than sitting as two rows.
  */
 export function mergeKey(product: Product): string {
-  if (product.kind === 'baseplate' && product.group !== undefined) {
-    return JSON.stringify({ ...product, group: { groupId: product.group.groupId, plateIds: [] } });
-  }
-  return productKey(product);
-}
-
-/** The linked-baseplate group link of a product, or null when it carries none. */
-function groupLinkOf(product: Product): { groupId: string; plateIds: string[] } | null {
-  return product.kind === 'baseplate' && product.group !== undefined ? product.group : null;
+  return drawerPlateLinkOf(product) !== null
+    ? productKey(withDrawerPlateIds(product, []))
+    : productKey(product);
 }
 
 /** Result of taking an amount out of one queue entry. */
@@ -68,18 +70,16 @@ export interface TakenFromEntry {
 export function takeFromEntry(entry: QueueEntry, count: number, itemId: string): TakenFromEntry {
   const taken = Math.min(Math.max(1, Math.floor(count)), entry.quantity);
   const product = snapshotProduct(entry.product);
+  let itemProduct = product;
   let remainingProduct = entry.product;
-  if (product.kind === 'baseplate' && product.group !== undefined) {
-    const link = product.group;
-    product.group = { groupId: link.groupId, plateIds: link.plateIds.slice(0, taken) };
-    remainingProduct = {
-      ...product,
-      group: { groupId: link.groupId, plateIds: link.plateIds.slice(taken) },
-    };
+  const link = drawerPlateLinkOf(product);
+  if (link !== null) {
+    itemProduct = withDrawerPlateIds(product, link.plateIds.slice(0, taken));
+    remainingProduct = withDrawerPlateIds(product, link.plateIds.slice(taken));
   }
   const left = entry.quantity - taken;
   return {
-    item: { id: itemId, product, count: taken, sourceEntryId: entry.id },
+    item: { id: itemId, product: itemProduct, count: taken, sourceEntryId: entry.id },
     remaining: left > 0 ? { ...entry, quantity: left, product: remainingProduct } : null,
   };
 }
@@ -163,7 +163,7 @@ export interface ConfirmBatchItemResult {
    * other product. plateIds holds only the confirmed subset, in the item's
    * order.
    */
-  done: { groupId: string; plateIds: string[] } | null;
+  done: DrawerPlateLink | null;
 }
 
 /**
@@ -178,21 +178,18 @@ export function confirmBatchItem(
   itemId: string,
   amount: number,
 ): ConfirmBatchItemResult {
-  let done: { groupId: string; plateIds: string[] } | null = null;
+  let done: DrawerPlateLink | null = null;
   const items = batch.items
     .map((item) => {
       if (item.id !== itemId) return item;
       const confirmed = Math.min(Math.max(1, Math.floor(amount)), item.count);
-      const link = groupLinkOf(item.product);
+      const link = drawerPlateLinkOf(item.product);
       if (link !== null) {
         done = { groupId: link.groupId, plateIds: link.plateIds.slice(0, confirmed) };
         return {
           ...item,
           count: item.count - confirmed,
-          product: {
-            ...item.product,
-            group: { groupId: link.groupId, plateIds: link.plateIds.slice(confirmed) },
-          } as Product,
+          product: withDrawerPlateIds(item.product, link.plateIds.slice(confirmed)),
         };
       }
       return { ...item, count: item.count - confirmed };
@@ -228,12 +225,12 @@ export function failBatchItem(
   const target =
     entries.find((entry) => entry.id === item.sourceEntryId) ??
     entries.find((entry) => mergeKey(entry.product) === itemKey);
-  const itemLink = groupLinkOf(item.product);
+  const itemLink = drawerPlateLinkOf(item.product);
   let updatedEntries: QueueEntry[];
   if (target !== undefined) {
     updatedEntries = entries.map((entry) => {
       if (entry.id !== target.id) return entry;
-      const targetLink = groupLinkOf(entry.product);
+      const targetLink = drawerPlateLinkOf(entry.product);
       // Two linked rows for the same spec combine their plate sets; the plate
       // set size is the quantity, upholding the linked-entry invariant.
       if (itemLink !== null && targetLink !== null) {
@@ -241,7 +238,7 @@ export function failBatchItem(
         return {
           ...entry,
           quantity: plateIds.length,
-          product: { ...entry.product, group: { groupId: targetLink.groupId, plateIds } } as Product,
+          product: withDrawerPlateIds(entry.product, plateIds),
         };
       }
       return { ...entry, quantity: entry.quantity + item.count };

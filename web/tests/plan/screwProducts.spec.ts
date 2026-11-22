@@ -75,6 +75,37 @@ describe('screwProducts', () => {
     ]);
   });
 
+  it('builds an insert for a single screw whatever the height field holds, since an insert has no height', () => {
+    const result = screwProducts(
+      parseShorthand('m3x20 fhcs').batches,
+      options({ productChoice: 'insert', heightUnits: Number.NaN }),
+    );
+
+    expect(result.problem).toBeNull();
+    expect(result.products).toEqual([
+      {
+        quantity: 1,
+        product: {
+          kind: 'insert',
+          origin: 'screw',
+          cells: 1,
+          content: { text: 'M3 x 20', text2: '', icon: 'countersunk screw' },
+          screw: { thread: 'M3', lengthMm: 20, head: 'countersunk screw', enteredLengthText: null },
+        },
+      },
+    ]);
+  });
+
+  it('still refuses an invalid height for a single screw bin', () => {
+    const result = screwProducts(
+      parseShorthand('m3x20 fhcs').batches,
+      options({ heightUnits: 1 }),
+    );
+
+    expect(result.products).toEqual([]);
+    expect(result.problem).toBe('The height must be a number of at least 2 height units.');
+  });
+
   it.each(['bin', 'plainBin'] as const)(
     'still orders a screw bin with its insert when the choice is %s',
     (productChoice) => {

@@ -3,6 +3,8 @@ import { baseplateOuterMm } from '../baseplate/generator';
 import {
   assertNever,
   binOf,
+  drawerClipGroupIdOf,
+  standsForDrawerPlate,
   type Bin,
   type BinEnvelope,
   type CutoutBin,
@@ -273,16 +275,6 @@ export interface GroupDescriptor {
   queuedClipCount: number;
 }
 
-/** Whether a product is a linked baseplate that stands for the given plate in the given group. */
-function isPlateProduct(product: Product, groupId: string, plateId: string): boolean {
-  return (
-    product.kind === 'baseplate' &&
-    product.group !== undefined &&
-    product.group.groupId === groupId &&
-    product.group.plateIds.includes(plateId)
-  );
-}
-
 /**
  * Derives the status of every plate in a group and the roll-up counts, from the
  * group's own done list and the plan's queue entries and batches. Precedence is
@@ -306,12 +298,12 @@ export function describeGroup(
           status = 'done';
         } else if (
           batches.some((batch) =>
-            batch.items.some((item) => isPlateProduct(item.product, group.id, plate.id)),
+            batch.items.some((item) => standsForDrawerPlate(item.product, group.id, plate.id)),
           )
         ) {
           status = 'printing';
         } else if (
-          entries.some((entry) => isPlateProduct(entry.product, group.id, plate.id))
+          entries.some((entry) => standsForDrawerPlate(entry.product, group.id, plate.id))
         ) {
           status = 'queued';
         } else {
@@ -322,7 +314,7 @@ export function describeGroup(
       });
       const queuedClipCount = entries.reduce(
         (sum, entry) =>
-          entry.product.kind === 'clip' && entry.product.group?.groupId === group.id
+          drawerClipGroupIdOf(entry.product) === group.id
             ? sum + entry.quantity
             : sum,
         0,

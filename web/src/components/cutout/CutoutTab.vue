@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner, type ProductChoice } from '../../stores/binDesigner';
-import { useBinQueue } from '../../stores/binQueue';
+import { DEFAULT_ENTRY_QUANTITY, useBinQueue } from '../../stores/binQueue';
 import { cloneEdit, useCutout } from '../../stores/cutout';
 import { useBinPreview } from '../../composables/useBinPreview';
 import {
@@ -101,7 +101,7 @@ const heightMm = computed(() => overallHeightMm(heightUnits.value));
  */
 const CLEARANCE_STEP_MM = 0.05;
 
-const quantity = ref(1);
+const quantity = ref(DEFAULT_ENTRY_QUANTITY);
 /** Files the last upload refused, each naming the file and why. */
 const uploadErrors = ref<string[]>([]);
 /** Exact bounds of each placed model, as the viewport measures them. */
@@ -871,7 +871,7 @@ function resetTab(): void {
   boundsById.value = {};
   uploadErrors.value = [];
   carved.value = null;
-  quantity.value = 1;
+  quantity.value = DEFAULT_ENTRY_QUANTITY;
   designer.labelText = '';
   designer.labelText2 = '';
   designer.labelIcon = null;

@@ -320,7 +320,7 @@ describe('binQueue drawer groups', () => {
     const store = useBinQueue();
     expect(store.addDrawerGroup(INPUT, OPTIONS, plannerPlates(), 'Top drawer').problem).toBeNull();
     const source = store.entries[0];
-    const newId = store.duplicate(source.id)!;
+    const newId = store.duplicate(source.id).id!;
     const copy = store.entries.find((e) => e.id === newId)!;
     expect(copy.product.kind).toBe('baseplate');
     expect(linkOf(copy.product)).toBeUndefined();
@@ -537,7 +537,7 @@ describe('binQueue drawer connection clips', () => {
     expect(store.addDrawerGroup(INPUT, CONNECTABLE, plannerPlates(), 'Top drawer', 0.1).problem).toBeNull();
     const id = store.groups[0].id;
     const clip = clipRows(store, id)[0];
-    const newId = store.duplicate(clip.id)!;
+    const newId = store.duplicate(clip.id).id!;
     const copy = store.entries.find((e) => e.id === newId)!;
     expect(copy.product.kind).toBe('clip');
     expect((copy.product as ConnectionClipProduct).group).toBeUndefined();
@@ -609,6 +609,19 @@ describe('binQueue entry mutations', () => {
     expect(problem).toBe(
       'This queue entry no longer exists. It may have been removed or moved onto a build plate.',
     );
+  });
+
+  it('refuses to duplicate an unknown entry with a user-worded problem and leaves the queue unchanged', () => {
+    const store = useBinQueue();
+    store.add(INSERT, 1);
+
+    const result = store.duplicate('no-such-id');
+
+    expect(result).toEqual({
+      id: null,
+      problem: 'This queue entry no longer exists. It may have been removed or moved onto a build plate.',
+    });
+    expect(store.entries).toHaveLength(1);
   });
 
   it('refuses to remove an unknown entry and leaves the queue unchanged', () => {

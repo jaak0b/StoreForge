@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { useApp } from '../stores/app';
 import { useBaseplateDesigner } from '../stores/baseplateDesigner';
-import { useBinQueue } from '../stores/binQueue';
+import { DEFAULT_ENTRY_QUANTITY, useBinQueue } from '../stores/binQueue';
 import { useBinPreview } from '../composables/useBinPreview';
 import { generateBaseplate } from '../workerClient';
 import type { PartMeshes } from '../engine/gridfinity/types';
@@ -51,7 +51,7 @@ const previewLoaded = ref(!smAndDown.value);
  */
 const LIVE_PREVIEW_MAX_CELLS = 25;
 
-const quantity = ref(1);
+const quantity = ref(DEFAULT_ENTRY_QUANTITY);
 const widthField = ref<{ focus: () => void } | null>(null);
 
 // The single-plate form's More options disclosure; collapsed by default and
@@ -61,7 +61,7 @@ const moreOptionsOpen = ref(false);
 // The connection clip's two fields. Component-local because neither is part
 // of any baseplate design and neither needs to survive a tab switch.
 const clipToleranceMm = ref(CLIP_TOLERANCE_DEFAULT);
-const clipQuantity = ref(1);
+const clipQuantity = ref(DEFAULT_ENTRY_QUANTITY);
 
 /** Which size section the tab shows: the units X/Y form, or the drawer-fill form. Pure view state, never part of a queued product. */
 const sizeMode = ref<'single' | 'fill'>('single');
@@ -108,7 +108,7 @@ const { meshes, errorMessage } = useBinPreview(() => requestedParams.value, gene
 
 function resetForm(): void {
   store.$reset();
-  quantity.value = 1;
+  quantity.value = DEFAULT_ENTRY_QUANTITY;
 }
 
 /** Loads the entry being edited into the form; null resets to a new design. */
@@ -277,7 +277,7 @@ const clipSaveError = ref<string | null>(null);
 function cancelClipEdit(): void {
   app.stopEditing();
   clipToleranceMm.value = CLIP_TOLERANCE_DEFAULT;
-  clipQuantity.value = 1;
+  clipQuantity.value = DEFAULT_ENTRY_QUANTITY;
 }
 
 function editingTitle(entry: QueueEntry): string {

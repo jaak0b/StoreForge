@@ -333,6 +333,15 @@ export interface ScrewInsertProduct {
 export type InsertProduct = ManualInsertProduct | ScrewInsertProduct;
 
 /**
+ * The link from a drawer-plate queue row to its drawer group: the group id and
+ * the ids of the group's plates the row stands for (see BaseplateProduct.group).
+ */
+export interface DrawerPlateLink {
+  groupId: string;
+  plateIds: string[];
+}
+
+/**
  * A queue row that orders a Gridfinity baseplate, the tray a bin's feet drop
  * into. Sized in whole grid units.
  */
@@ -377,7 +386,7 @@ export interface BaseplateProduct {
    * group on load by resyncLinkedPlateProducts; never treat them as authoritative
    * row-local state that outranks the group.
    */
-  group?: { groupId: string; plateIds: string[] };
+  group?: DrawerPlateLink;
 }
 
 /**
@@ -500,6 +509,95 @@ export function drawerGroupIdOf(product: Product): string | null {
     case 'binWithInsert':
     case 'insert':
       return null;
+    default:
+      return assertNever(product);
+  }
+}
+
+/**
+ * The drawer link of a linked drawer-plate row (a baseplate carrying a group
+ * link), or null for any other product, a linked clip included.
+ */
+export function drawerPlateLinkOf(product: Product): DrawerPlateLink | null {
+  switch (product.kind) {
+    case 'baseplate':
+      return product.group ?? null;
+    case 'bin':
+    case 'binWithInsert':
+    case 'insert':
+    case 'clip':
+      return null;
+    default:
+      return assertNever(product);
+  }
+}
+
+/**
+ * Whether a product is a linked drawer-plate row that stands for the given
+ * plate of the given drawer group.
+ */
+export function standsForDrawerPlate(product: Product, groupId: string, plateId: string): boolean {
+  const link = drawerPlateLinkOf(product);
+  return link !== null && link.groupId === groupId && link.plateIds.includes(plateId);
+}
+
+/**
+ * The id of the drawer group a linked connection clip row belongs to, or null
+ * for any other product, a linked drawer plate included.
+ */
+export function drawerClipGroupIdOf(product: Product): string | null {
+  switch (product.kind) {
+    case 'clip':
+      return product.group?.groupId ?? null;
+    case 'bin':
+    case 'binWithInsert':
+    case 'insert':
+    case 'baseplate':
+      return null;
+    default:
+      return assertNever(product);
+  }
+}
+
+/**
+ * A copy of a linked drawer-plate product standing for the given plate ids of
+ * the same group. Only a baseplate carrying a group link has plate ids, so
+ * passing any other product is a broken invariant and throws.
+ */
+export function withDrawerPlateIds(product: Product, plateIds: string[]): Product {
+  switch (product.kind) {
+    case 'baseplate':
+      if (product.group === undefined) {
+        throw new Error('Only a drawer-linked baseplate carries plate ids.');
+      }
+      return { ...product, group: { groupId: product.group.groupId, plateIds } };
+    case 'bin':
+    case 'binWithInsert':
+    case 'insert':
+    case 'clip':
+      throw new Error(`A ${product.kind} product carries no drawer plate ids.`);
+    default:
+      return assertNever(product);
+  }
+}
+
+/**
+ * A copy of a product with its drawer group link removed: a linked drawer
+ * plate or clip becomes a standalone row with the same geometry. Any other
+ * product, or one without a link, is copied unchanged.
+ */
+export function withoutDrawerLink(product: Product): Product {
+  switch (product.kind) {
+    case 'baseplate':
+    case 'clip': {
+      const copy = { ...product };
+      delete copy.group;
+      return copy;
+    }
+    case 'bin':
+    case 'binWithInsert':
+    case 'insert':
+      return { ...product };
     default:
       return assertNever(product);
   }

@@ -452,6 +452,15 @@ describe('duplicate_entry, remove_entry and remove_drawer', () => {
     expect(queue.entryById(body.id)!.product).toEqual(queue.entryById(added.body.id)!.product);
   });
 
+  it('refuses to duplicate an unknown entry id', async () => {
+    const { isError, body } = await call('duplicate_entry', { id: 'missing' });
+
+    expect(isError).toBe(true);
+    expect(body.problem).toBe(
+      'This queue entry no longer exists. It may have been removed or moved onto a build plate.',
+    );
+  });
+
   it('removes an entry', async () => {
     const added = await call('add_bin', {});
 

@@ -56,7 +56,7 @@ export function addScrewsTool(pinia: Pinia): AgentTool {
         ),
         heightUnits: {
           type: 'number',
-          description: `Bin height in height units of 7 mm for a single screw. A list of several uses ${DEFAULT_SCREW_HEIGHT_UNITS}.`,
+          description: `Bin height in height units of 7 mm for a single screw. A list of several uses ${DEFAULT_SCREW_HEIGHT_UNITS}. Ignored for an insert, which has no height.`,
         },
         sizeOverride: {
           type: 'object',

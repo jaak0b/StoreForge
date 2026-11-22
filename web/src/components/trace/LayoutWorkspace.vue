@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useApp } from '../../stores/app';
 import { useBinDesigner } from '../../stores/binDesigner';
-import { useBinQueue } from '../../stores/binQueue';
+import { DEFAULT_ENTRY_QUANTITY, useBinQueue } from '../../stores/binQueue';
 import { useToolTrace } from '../../stores/toolTrace';
 import { useBinPreview } from '../../composables/useBinPreview';
 import {
@@ -97,13 +97,13 @@ watch(
 );
 const { tools, fingerHoleMode, selectedToolId } = storeToRefs(trace);
 
-const quantity = ref(1);
+const quantity = ref(DEFAULT_ENTRY_QUANTITY);
 
 // Editing a traced queue row restores its quantity; a new design starts at 1.
 watch(
   () => props.editingEntry?.id ?? null,
   () => {
-    quantity.value = props.editingEntry !== null ? props.editingEntry.quantity : 1;
+    quantity.value = props.editingEntry !== null ? props.editingEntry.quantity : DEFAULT_ENTRY_QUANTITY;
   },
   { immediate: true },
 );
@@ -384,7 +384,7 @@ async function addToQueue(): Promise<void> {
     if (result.problem !== null) return;
   }
   trace.reset();
-  quantity.value = 1;
+  quantity.value = DEFAULT_ENTRY_QUANTITY;
   emit('saved');
 }
 
@@ -402,7 +402,7 @@ async function addToPlate(): Promise<void> {
   if (result.problem !== null) return;
   queue.addEntryToNewestBatch(result.id, quantity.value);
   trace.reset();
-  quantity.value = 1;
+  quantity.value = DEFAULT_ENTRY_QUANTITY;
   emit('saved');
 }
 
@@ -443,7 +443,7 @@ function editingTitle(entry: QueueEntry): string {
 function cancelEdit(): void {
   app.stopEditing();
   trace.reset();
-  quantity.value = 1;
+  quantity.value = DEFAULT_ENTRY_QUANTITY;
   emit('cancelled');
 }
 </script>
