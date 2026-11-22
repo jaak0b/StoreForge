@@ -3,17 +3,17 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { RELAY_DIRECTORY, RELAY_FILES } from './src/agentTools/localRelay';
+import { RELAY_DIRECTORY, RELAY_FILES, RELAY_PACKAGE } from './src/agentTools/localRelay';
 
 /**
  * Ships the WebMCP local relay's browser files (embed script and the widget it
- * loads) from the installed @mcp-b/webmcp-local-relay package: emitted into
+ * loads) from the installed RELAY_PACKAGE: emitted into
  * the build output under RELAY_DIRECTORY, and served from the same path by the
  * dev server. The embed script resolves widget.html relative to its own URL,
  * so all three files share one directory on the app's own origin.
  */
 function webmcpRelayAssets(): Plugin {
-  const packageEntry = createRequire(import.meta.url).resolve('@mcp-b/webmcp-local-relay');
+  const packageEntry = createRequire(import.meta.url).resolve(RELAY_PACKAGE);
   const sourceDir = join(dirname(packageEntry), 'browser');
   const read = (name: string): Buffer => readFileSync(join(sourceDir, name));
   const contentType = (name: string): string =>

@@ -12,6 +12,15 @@
  * page is reloaded.
  */
 
+/** The relay's npm package: its browser files ship with the app, its CLI runs beside the agent. */
+export const RELAY_PACKAGE = '@mcp-b/webmcp-local-relay';
+
+/**
+ * The relay version, pinned exactly in package.json. The agent side must run
+ * the same version as the shipped browser files, so the setup commands pin it.
+ */
+export const RELAY_VERSION = '6.2.0';
+
 /** The directory the relay's browser files are served from, relative to the app base. */
 export const RELAY_DIRECTORY = 'webmcp-relay';
 
