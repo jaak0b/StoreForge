@@ -415,9 +415,14 @@ describe('buildBinManifold', () => {
  * 9.80 mm cubed of that root the surrounding foot shell and rib lattice did
  * not already occupy. Re-recorded 2026-11-22 when bins without magnet holes
  * got the 0.8 mm thicker foot shell: the bin gained 1678.03 mm cubed, about
- * 419.5 per cell, the same change the 1x1 pocket volume shows.
+ * 419.5 per cell, the same change the 1x1 pocket volume shows. Re-recorded
+ * 2026-11-22 when divider walls were lowered 0.4 mm below the nominal top to
+ * clear a stacked bin's foot: the bin lost 37.584 mm cubed, the 0.4 x 1.2 mm
+ * top strip of the divider over the 78.3 mm it spans inside the lip tip
+ * (the 83.5 mm outer width less 2 x 2.6 mm lip depth; the strip's ends in
+ * the lip band were wall material already).
  */
-const EVEN_DIVIDER_2X2_VOLUME_MM3 = 39671.111944439894;
+const EVEN_DIVIDER_2X2_VOLUME_MM3 = 39633.5279444399;
 
 describe('interior dividers', () => {
   it('keeps the solid watertight with dividers on both axes', () => {

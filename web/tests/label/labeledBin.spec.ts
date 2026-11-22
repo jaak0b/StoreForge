@@ -16,8 +16,6 @@ import {
   insertLengthMm,
   INSERT_DEPTH,
   INSERT_TAB_LENGTH,
-  INSERT_TEXT_RAISE,
-  INSERT_TEXT_WELD,
   SLOT_DEPTH,
   SLOT_FRONT_INSET,
 } from '../../src/engine/label/slot';
@@ -268,10 +266,11 @@ describe('fused label', () => {
     const label = buildFusedLabel(m, font, spec, binParams());
     expect(label).not.toBeNull();
     expect(label!.status()).toBe('NoError');
-    // The raised face stands INSERT_TEXT_RAISE above the shelf's top face,
-    // which is the nominal bin top, exactly as the insert label stands above
-    // its plate.
-    expect(label!.boundingBox().max[2]).toBeCloseTo(bodyTop + INSERT_TEXT_RAISE, 6);
+    // The raised face stands 0.2 mm above the shelf's top face and ends at
+    // the channel top, exactly where an inserted label's face ends: the 21 mm
+    // nominal top of a 3-unit bin less the 0.4 mm stacking clearance drop,
+    // so a stacked bin's foot clears it.
+    expect(label!.boundingBox().max[2]).toBeCloseTo(20.6, 6);
     label!.delete();
   });
 
@@ -339,11 +338,14 @@ describe('fused label', () => {
   it('stands the label text on the shelf instead of floating it over the cavity', () => {
     const body = buildSlottedBinBody(m, fusedParams());
     const label = buildFusedLabel(m, font, spec, binParams());
-    // The text reaches into the plate below the bin top, and the plate is
-    // there to receive it: the two solids share volume, so the printed part is
-    // one welded piece rather than text hanging in mid air.
-    expect(label!.boundingBox().min[2]).toBeCloseTo(bodyTop - INSERT_TEXT_WELD, 6);
-    expect(label!.boundingBox().min[2]).toBeGreaterThan(bodyTop - FUSED_SHELF_THICKNESS);
+    // The text reaches 0.05 mm into the plate below the shelf's 20.4 mm top
+    // face (where an inserted plate's top sits: 21 nominal top, less the
+    // 0.4 mm stacking clearance drop, less the 0.2 mm text raise), and the
+    // plate is there to receive it: the two solids share volume, so the
+    // printed part is one welded piece rather than text hanging in mid air.
+    expect(label!.boundingBox().min[2]).toBeCloseTo(20.35, 6);
+    // The plate is 1.8 mm thick (a 1.0 shelf plate plus a 0.8 insert plate).
+    expect(label!.boundingBox().min[2]).toBeGreaterThan(18.6);
     const weld = m.Manifold.intersection(body, label!);
     expect(weld.volume()).toBeGreaterThan(0);
     weld.delete();
@@ -357,14 +359,16 @@ describe('fused label', () => {
     // edge is the end stop's back face, so the inner end shows a short
     // vertical face there before the 45 degree ramp begins. The fused shelf
     // must show the same face; without the riser its chamfer starts straight
-    // off the top surface and the plate top reaches a further slot height into
-    // the bin.
+    // off the top surface and the plate top reaches a further riser height
+    // into the bin.
     const p = fusedParams();
     const yBack = -binOuterSizeMm(p.gridY) / 2 + SLOT_FRONT_INSET + SLOT_DEPTH;
     const body = buildSlottedBinBody(m, p);
-    // Cross-section just under the top face, over the interior (clear of the
-    // side walls): the material must stop at the plate's top-back edge.
-    const justBelowTop = m.Manifold.cube([10, 18, 0.05]).translate(-5, -20, bodyTop - 0.05);
+    // Cross-section just under the shelf's 20.4 mm top face, over the
+    // interior (clear of the side walls): the material must stop at the
+    // plate's top-back edge.
+    const shelfTop = 20.4;
+    const justBelowTop = m.Manifold.cube([10, 18, 0.05]).translate(-5, -20, shelfTop - 0.05);
     const topSlice = m.Manifold.intersection(body, justBelowTop);
     expect(topSlice.boundingBox().max[1]).toBeCloseTo(yBack + SHELF_THICKNESS, 6);
     justBelowTop.delete();
@@ -374,7 +378,7 @@ describe('fused label', () => {
     const behindEdge = m.Manifold.cube([10, SHELF_THICKNESS, 0.05]).translate(
       -5,
       yBack + SHELF_THICKNESS + 0.01,
-      bodyTop - 0.05,
+      shelfTop - 0.05,
     );
     const stray = m.Manifold.intersection(body, behindEdge);
     expect(Math.abs(stray.volume())).toBeLessThan(1e-9);

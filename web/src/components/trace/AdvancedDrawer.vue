@@ -5,6 +5,7 @@ import { useBinDesigner } from '../../stores/binDesigner';
 import { CLEARANCE_CHOICES, HOLE_WIDTH_CHOICES, useToolTrace } from '../../stores/toolTrace';
 import { binPlacement } from '../../engine/trace/layoutModel';
 import { maxPocketDepthMm } from '../../engine/trace/pocketBin';
+import { formatMm } from '../../engine/sketch/measure';
 import { DEFAULT_DRAFT_ANGLE_DEG, validateDraftAngleDeg } from '../../engine/carve/sweep';
 import type { FingerHole, TracedTool } from '../../engine/trace/types';
 import { overallHeightMm } from '../../heightHint';
@@ -161,7 +162,7 @@ function holeLengthMm(hole: FingerHole): number {
   );
 }
 
-const depthLimit = computed(() => maxPocketDepthMm(heightUnits.value));
+const depthLimit = computed(() => formatMm(maxPocketDepthMm(heightUnits.value)));
 
 const heightMm = computed(() => overallHeightMm(heightUnits.value));
 

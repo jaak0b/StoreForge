@@ -143,14 +143,16 @@ describe('buildInsertSolids', () => {
 });
 
 describe('buildSlotShelf', () => {
-  it('is watertight and stops at the nominal bin top', () => {
-    // The shelf adds nothing above the nominal top: on a lipped bin the tab
+  it('is watertight and stops at the channel top, 0.4 mm under the nominal bin top', () => {
+    // The shelf adds nothing above the channel top: on a lipped bin the tab
     // pockets sit inside the walls' lip support band, whose own material
     // forms the retaining ceilings (matching the reference bin, whose
-    // ceiling is the lip seat's 45 degree taper overhead).
+    // ceiling is the lip seat's 45 degree taper overhead). The channel top is
+    // the 21 mm nominal top of a 3-unit bin less the 0.4 mm stacking
+    // clearance drop, so the end stop stays below a stacked bin's foot.
     const shelf = buildSlotShelf(m, binParams());
     expect(shelf.status()).toBe('NoError');
-    expect(shelf.boundingBox().max[2]).toBeCloseTo(21, 6);
+    expect(shelf.boundingBox().max[2]).toBeCloseTo(20.6, 6);
     shelf.delete();
   });
 });
@@ -285,12 +287,14 @@ describe('slotted bin front region (measured against the Pred 1x1x6 mesh)', () =
     // The end stop stands on the plate and its back face is the plate's own
     // top-back edge, one plate thickness behind the channel's back edge, so
     // the strip between the two is filled solid from the channel floor to the
-    // nominal bin top. A shallower stop would leave a sliver of exposed plate
+    // channel top. A shallower stop would leave a sliver of exposed plate
     // top with air above it, far narrower than one extrusion width.
     const p = binParams();
     const body = buildSlottedBinBody(m, p);
     const yBack = -binOuterSizeMm(p.gridY) / 2 + SLOT_FRONT_INSET + SLOT_DEPTH;
-    const floorTop = p.heightUnits * HEIGHT_UNIT - SLOT_HEIGHT;
+    // Channel floor of a 3-unit bin: 21 nominal top, less the 0.4 mm
+    // stacking clearance drop, less the 1.0 mm channel height.
+    const floorTop = 19.6;
     const width = 10;
     const volume = probeVolume(
       body,
@@ -335,11 +339,16 @@ describe('insert in slot', () => {
     const insert = placedInsert({ ...p, labelText: 'M3' });
     const overlap = insert.intersect(body);
     // The insert rests on the channel floor (coincident faces), so the
-    // intersection may be a zero-volume film, but never solid material.
-    expect(Math.abs(overlap.volume())).toBeLessThan(1e-9);
+    // intersection may be a film, but never solid material. The floor plane
+    // at 19.6 is not exactly representable, so the film carries rounding
+    // thickness: measured 6.2e-7 mm^3, a 1.5e-9 mm film over the 420 mm^2
+    // plate. Sinking the insert just 0.0001 mm into the floor already
+    // overlaps 0.042 mm^3, so the bound still rejects any solid overlap.
+    expect(Math.abs(overlap.volume())).toBeLessThan(1e-5);
     overlap.delete();
-    // The insert sits on the channel floor: heightUnits 3, floor at 20.0.
-    expect(insert.boundingBox().min[2]).toBeCloseTo(20.0, 6);
+    // The insert sits on the channel floor: heightUnits 3, floor at 19.6
+    // (21 nominal top, less the 0.4 mm stacking clearance drop, less 1.0).
+    expect(insert.boundingBox().min[2]).toBeCloseTo(19.6, 6);
     body.delete();
     insert.delete();
   });
@@ -411,32 +420,34 @@ describe('generateSlottedBin with and without a paired insert', () => {
     expect(result.label).not.toBeNull();
     // The label mesh is the raised face alone: it stands on the plate top
     // 0.8 above the channel floor, welded 0.05 into the plate, so its
-    // lowest point is 20.75 for a 3-unit bin (channel floor at 20.0). The
+    // lowest point is 20.35 for a 3-unit bin (channel floor at 19.6: the
+    // 21 nominal top less the 0.4 mm stacking clearance drop less 1.0). The
     // plate itself joins the body mesh and rests on the channel floor.
     let minZ = Infinity;
     for (let i = 2; i < result.label!.vertices.length; i += 3) {
       minZ = Math.min(minZ, result.label!.vertices[i]);
     }
-    expect(minZ).toBeCloseTo(20.75, 5);
+    expect(minZ).toBeCloseTo(20.35, 5);
     let bodyMinAtFront = Infinity;
     for (let i = 0; i < result.body.vertices.length; i += 3) {
       const y = result.body.vertices[i + 1];
       const z = result.body.vertices[i + 2];
       // Sample the channel region (front of the bin) above the shelf plate.
-      if (y < -8 && z > 19.9) bodyMinAtFront = Math.min(bodyMinAtFront, z);
+      if (y < -8 && z > 19.59) bodyMinAtFront = Math.min(bodyMinAtFront, z);
     }
-    expect(bodyMinAtFront).toBeCloseTo(20.0, 5);
+    expect(bodyMinAtFront).toBeCloseTo(19.6, 5);
   });
 
   it('placed preview insert build matches the standalone insert position', () => {
     const p = params();
     const placed = buildInsertInSlotSolids(m, font, p.insert!, p);
     expect(placed.plate.status()).toBe('NoError');
-    expect(placed.plate.boundingBox().min[2]).toBeCloseTo(20.0, 6);
+    expect(placed.plate.boundingBox().min[2]).toBeCloseTo(19.6, 6);
     expect(placed.label).not.toBeNull();
-    // The raised label face ends flush with the nominal bin top: 21.0 for a
-    // 3-unit bin.
-    expect(placed.label!.boundingBox().max[2]).toBeCloseTo(21.0, 6);
+    // The raised label face ends flush with the channel top, 0.4 mm under the
+    // nominal bin top so a stacked bin's foot clears it: 20.6 for a 3-unit
+    // bin.
+    expect(placed.label!.boundingBox().max[2]).toBeCloseTo(20.6, 6);
     placed.plate.delete();
     placed.label!.delete();
   });

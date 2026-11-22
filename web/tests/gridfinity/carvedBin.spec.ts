@@ -16,7 +16,6 @@ import {
   binInteriorSizeMm,
   binOuterSizeMm,
   FLOOR_TOP,
-  HEIGHT_UNIT,
 } from '../../src/engine/gridfinity/constants';
 import {
   FUSED_SHELF_REACH_DEPTH,
@@ -48,9 +47,6 @@ function params(overrides: Partial<CarvedBinParams> = {}): CarvedBinParams {
   };
 }
 
-/** Nominal bin top of the shared test bin: 3 height units of 7 mm. */
-const BODY_TOP = 3 * HEIGHT_UNIT;
-
 /** Intersection volume of a solid with an axis-aligned probe box. */
 function probeVolume(
   body: Manifold,
@@ -75,7 +71,7 @@ function interiorCube(): Manifold {
 }
 
 describe('buildInteriorFill', () => {
-  it('welds into the floor plate and stops at the nominal bin top', () => {
+  it('welds into the floor plate and stops 0.4 mm under the nominal bin top', () => {
     // The eps overlap is what makes the fill weld to the floor rather than
     // meeting it on a coincident face; dropping it in the move would leave a
     // gap that makes the union non-manifold.
@@ -83,7 +79,9 @@ describe('buildInteriorFill', () => {
     const box = fill.boundingBox();
 
     expect(box.min[2]).toBeCloseTo(FLOOR_TOP - CARVE_OVERLAP_EPS, 6);
-    expect(box.max[2]).toBeCloseTo(BODY_TOP, 6);
+    // The fill top stays clear below a stacked bin's foot: the 21 mm nominal
+    // top less the 0.4 mm stacking clearance drop.
+    expect(box.max[2]).toBeCloseTo(20.6, 6);
     expect(box.max[0] - box.min[0]).toBeCloseTo(binInteriorSizeMm(2), 6);
     expect(box.max[1] - box.min[1]).toBeCloseTo(binInteriorSizeMm(1), 6);
 
@@ -126,17 +124,18 @@ describe('buildCarvedBinBody with no cutters', () => {
     body.delete();
   });
 
-  it('fills the interior up to the nominal bin top and no further', () => {
-    // The mistake this pins: extruding the fill to the lip top instead of the
-    // nominal bin top, which fills the stacking lip region solid.
+  it('fills the interior up to the fill top and no further', () => {
+    // The mistake this pins: extruding the fill to the nominal bin top or the
+    // lip top instead of the fill top 0.4 mm under the nominal top (20.6 mm
+    // here), which props up a stacked bin whose foot sinks into the lip seat.
     const body = buildCarvedBinBody(m, params(), [], 'Test bin');
     const plain = buildSlottedBinBody(m, { ...params(), scoop: false });
 
     expect(body.volume()).toBeGreaterThan(plain.volume());
-    // Just under the bin top, inside the interior: filled solid.
-    expect(probeVolume(body, [0, 5, BODY_TOP - 0.25], [4, 4, 0.5])).toBeCloseTo(8, 5);
-    // Just above the bin top, in the lip region: still open.
-    expect(probeVolume(body, [0, 5, BODY_TOP + 0.25], [4, 4, 0.5])).toBe(0);
+    // Just under the fill top (20.1 to 20.6), inside the interior: filled solid.
+    expect(probeVolume(body, [0, 5, 20.35], [4, 4, 0.5])).toBeCloseTo(8, 5);
+    // From the fill top up into the lip region (20.6 to 21.1): still open.
+    expect(probeVolume(body, [0, 5, 20.85], [4, 4, 0.5])).toBe(0);
 
     plain.delete();
     body.delete();
@@ -148,7 +147,9 @@ describe('buildCarvedBinBody with no cutters', () => {
     // nowhere to slide in.
     const body = buildCarvedBinBody(m, params(), [], 'Test bin');
     const channelY = -binOuterSizeMm(1) / 2 + SLOT_FRONT_INSET + SLOT_DEPTH / 2;
-    const channelZ = BODY_TOP - SLOT_HEIGHT / 2;
+    // Channel mid-height: floor 19.6, top 20.6 (21 nominal top less the
+    // 0.4 mm stacking clearance drop).
+    const channelZ = 20.1;
 
     expect(probeVolume(body, [0, channelY, channelZ], [4, 4, SLOT_HEIGHT / 2])).toBe(0);
 
@@ -312,12 +313,13 @@ describe('labelStructureStrip', () => {
 });
 
 describe('maxCarveDepthMm', () => {
-  it('is the nominal bin top down to the top of the floor plate', () => {
+  it('is the fill top down to the top of the floor plate', () => {
     // The figure the depth validation messages quote; drifting from it would
-    // make a message name a limit the geometry does not enforce.
-    for (const heightUnits of [2, 3, 6, 12]) {
-      expect(maxCarveDepthMm(heightUnits)).toBe(heightUnits * HEIGHT_UNIT - FLOOR_TOP);
-    }
-    expect(maxCarveDepthMm(3)).toBe(14);
+    // make a message name a limit the geometry does not enforce. Fill top is
+    // the nominal top less 0.4 mm, the floor plate top is at 7 mm.
+    expect(maxCarveDepthMm(2)).toBeCloseTo(6.6, 9);
+    expect(maxCarveDepthMm(3)).toBeCloseTo(13.6, 9);
+    expect(maxCarveDepthMm(6)).toBeCloseTo(34.6, 9);
+    expect(maxCarveDepthMm(12)).toBeCloseTo(76.6, 9);
   });
 });

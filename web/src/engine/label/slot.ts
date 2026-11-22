@@ -2,7 +2,7 @@ import type { Manifold, ManifoldToplevel, SimplePolygon } from 'manifold-3d';
 import type { Font } from 'opentype.js';
 import {
   binOuterSizeMm,
-  HEIGHT_UNIT,
+  interiorFeatureTopZ,
   LIP_DEPTH,
   OUTER_CORNER_RADIUS,
 } from '../gridfinity/constants';
@@ -86,10 +86,12 @@ export const SLOT_SIDE_CLEARANCE = 0.5;
  * x 1.85..2.85, y 29.8..36.5, z 36.25..37.25 on the 1x1x6 mesh). The pockets
  * sit entirely inside the side walls' thick lip support band (the pocket's
  * inner face is flush with the band's inner face), so the band material above
- * the nominal top forms the retaining ceiling by itself: a lifted insert hits
+ * the channel top forms the retaining ceiling by itself: a lifted insert hits
  * it with its tabs. No extra material is added, exactly as in the reference
  * bin, whose measured 0.65 mm of ceiling at the pocket midline is the lip
- * seat's 45 degree taper overhead.
+ * seat's 45 degree taper overhead. Unlike the reference, the whole channel
+ * sits STACK_SEAT_CLEARANCE_DROP lower (see slotChannelTopZ), so the ceiling
+ * here is that much thicker.
  */
 export const TAB_POCKET_WIDTH = 6.7;
 
@@ -110,11 +112,14 @@ export const SLOT_FRONT_INSET = LIP_DEPTH;
  * SLOT_HEIGHT minus INSERT_THICKNESS (0.2 mm). The text is physical relief,
  * so it stays readable on a single-color print, and a filament swap paused
  * at the plate top height colors exactly the raised text in the second
- * color. The raised top ends flush with the nominal bin top, the plane a
- * stacked bin's foot rests on, so the text cannot rise any higher; unlike
- * the reference insert (which recesses the field instead) the text touches
- * that plane with zero clearance. The plate itself is unchanged, so
- * interchange with the reference bins is unaffected.
+ * color. The raised top ends flush with the channel top, which is the
+ * highest plane any feature inside the stacking lip may reach
+ * (interiorFeatureTopZ): a stacked bin's foot sinks slightly below the
+ * nominal bin top into the lip seat, and the channel top stays clear below
+ * that seat, so the text cannot touch the bin stacked above. Unlike the
+ * reference insert (which recesses the field instead) the text reaches that
+ * plane itself. The plate itself is unchanged, so interchange with the
+ * reference bins is unaffected.
  */
 export const INSERT_TEXT_RAISE = SLOT_HEIGHT - INSERT_THICKNESS;
 
@@ -150,23 +155,44 @@ export function slotOpenSpanMm(cells: number): number {
 export const SLOT_REACH_DEPTH = SLOT_FRONT_INSET + SLOT_DEPTH + SHELF_THICKNESS;
 
 /**
- * Thickness of the fused label's shelf plate: the slot shelf's plate plus the
- * channel height above it. A fused bin prints the label instead of holding a
- * swappable insert, so the channel is filled in solid: same underside as the
- * slot shelf's plate, top face at the nominal bin top. No fused-only figure is
+ * Thickness of the fused label's shelf plate: the slot shelf's plate plus an
+ * insert plate resting on it. A fused bin prints the label instead of holding
+ * a swappable insert, so the shelf is the slot shelf with its insert printed
+ * in: same underside as the slot shelf's plate, top face where an inserted
+ * plate's top face sits, so the raised label face ends on the same plane in
+ * both modes (the channel top, see slotChannelTopZ). No fused-only figure is
  * introduced.
  */
-export const FUSED_SHELF_THICKNESS = SLOT_HEIGHT + SHELF_THICKNESS;
+export const FUSED_SHELF_THICKNESS = SHELF_THICKNESS + INSERT_THICKNESS;
 
 /**
  * How far the fused label's shelf reaches into the bin from the outer front
  * face, in plan: exactly SLOT_REACH_DEPTH. The fused plate has no end stop (a
- * fused bin retains nothing), but its back edge carries the same SLOT_HEIGHT
- * riser the stop occupies in the slot shelf, so its top face ends on the same
- * plane and the 45-degree chamfer below the riser only recedes toward the
- * front.
+ * fused bin retains nothing), but its back edge carries an INSERT_THICKNESS
+ * riser, so its 45-degree back chamfer starts at the slot shelf's channel
+ * floor level and on the same edge as the slot shelf's, and only recedes
+ * toward the front below it.
  */
 export const FUSED_SHELF_REACH_DEPTH = SLOT_REACH_DEPTH;
+
+/**
+ * Height of the insert channel's top for a bin: the highest plane any feature
+ * inside the stacking lip may reach (interiorFeatureTopZ), which keeps the end
+ * stop and the raised label face clear below a stacked bin's foot. The whole
+ * channel hangs from this plane; the single home for it in the slot module.
+ */
+export function slotChannelTopZ(params: BinParams): number {
+  return interiorFeatureTopZ(params.heightUnits);
+}
+
+/**
+ * Height of the fused label's shelf top face for a bin: where an inserted
+ * plate's top face sits in the channel, so the raised label face standing
+ * INSERT_TEXT_RAISE on it ends at the channel top, exactly like an insert's.
+ */
+function fusedShelfTopZ(params: BinParams): number {
+  return slotChannelTopZ(params) - INSERT_TEXT_RAISE;
+}
 
 /**
  * Where an insert generated by buildInsertSolids (resting on z = 0, centred
@@ -179,11 +205,10 @@ export function insertPositionInBin(params: BinParams): {
   z: number;
 } {
   const outerDepth = binOuterSizeMm(params.gridY);
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
   return {
     x: 0,
     y: -outerDepth / 2 + SLOT_FRONT_INSET + SLOT_DEPTH / 2,
-    z: bodyTop - SLOT_HEIGHT,
+    z: slotChannelTopZ(params) - SLOT_HEIGHT,
   };
 }
 
@@ -254,7 +279,7 @@ function assembleShelf(
 
 /**
  * The slot shelf: the shared plate-and-ribs shelf structure with its top face
- * one channel height below the nominal bin top (forming the channel floor,
+ * one channel height below the channel top (forming the channel floor,
  * extended under the end stop), plus the end stop along the channel's back
  * edge. That is all the shelf adds: the channel sits flush behind the lip's
  * inner support face (SLOT_FRONT_INSET), so the side walls' lip band already
@@ -263,8 +288,8 @@ function assembleShelf(
  * space above the plate.
  */
 export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold {
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  const floorTop = bodyTop - SLOT_HEIGHT;
+  const channelTop = slotChannelTopZ(params);
+  const floorTop = channelTop - SLOT_HEIGHT;
   const cavityWidth = slotChannelWidthMm(params.gridX);
 
   const { yBack } = shelfFrameY(params);
@@ -284,8 +309,8 @@ export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold
   const stopProfile: SimplePolygon = [
     [yBack, floorTop],
     [yStopBack, floorTop],
-    [yStopBack, bodyTop],
-    [yBack, bodyTop],
+    [yStopBack, channelTop],
+    [yBack, channelTop],
   ];
   parts.push(prismFromProfile(m, stopProfile, cavityWidth).translate(-cavityWidth / 2, 0, 0));
 
@@ -295,50 +320,60 @@ export function buildSlotShelf(m: ManifoldToplevel, params: BinParams): Manifold
 /**
  * The fused label's shelf: the same plate-and-ribs structure the slot shelf
  * carries, with the same ramp, the same ribs, the same plan footprint and the
- * same underside, but FUSED_SHELF_THICKNESS thick, so its top face lands at the
- * nominal bin top instead of one channel height below it. Since a fused label
- * is printed with the bin there is no channel to leave open, no insert to
- * retain and therefore no end stop and no tab pockets: the plate is solid and
- * its top face is the surface the raised label text stands on. The bin's own
- * top face runs on in front of the plate, exactly as it does over the insert
- * channel. The plate's back edge carries a SLOT_HEIGHT riser, so the inner end
- * shows the same short vertical face the slot shelf's end stop presents there,
- * with the chamfer below it starting at the same height: the two modes share
+ * same underside, but FUSED_SHELF_THICKNESS thick, so its top face lands
+ * where an inserted plate's top face sits (fusedShelfTopZ) instead of on the
+ * channel floor. Since a fused label is printed with the bin there is no
+ * channel to leave open, no insert to retain and therefore no end stop and no
+ * tab pockets: the plate is solid and its top face is the surface the raised
+ * label text stands on. The bin's own top face runs on in front of the plate,
+ * exactly as it does over the insert channel. The plate's back edge carries an
+ * INSERT_THICKNESS riser, so the chamfer below it starts at the channel floor
+ * level on the same edge as the slot shelf's, under a short vertical face
+ * like the one the slot shelf's end stop presents there: the two modes share
  * one inner-end silhouette, without a fused-only figure. Unioned with the bin
- * body.
+ * body by applyFusedShelfToBody.
  */
 export function buildFusedShelf(m: ManifoldToplevel, params: BinParams): Manifold {
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const { yBack } = shelfFrameY(params);
   return assembleShelf(
     m,
     params,
-    [buildShelfStructure(m, params, bodyTop, yBack, FUSED_SHELF_THICKNESS, SLOT_HEIGHT)],
+    [
+      buildShelfStructure(
+        m,
+        params,
+        fusedShelfTopZ(params),
+        yBack,
+        FUSED_SHELF_THICKNESS,
+        INSERT_THICKNESS,
+      ),
+    ],
     'Fused label shelf',
   );
 }
 
 /**
- * Cutter clearing the insert channel's cavity (the open span plus the two
- * tab pockets), for the bin body before the slot shelf is unioned in and for
- * builders that fill the bin interior solid (the pocket bin): subtracting
- * this and then unioning buildSlotShelf produces the channel. The open span
- * is slightly oversized in height so no film is left over the channel; the
- * pocket voids stop exactly at the nominal bin top, where wall or ceiling
- * material above them stays.
+ * The open span of the insert channel between the two tab pockets, as a solid
+ * from zBottom to zTop: the channel's plan footprint behind the lip's inner
+ * support face, clipped to that face where it curves with the outer corner
+ * radius. Shared by the slot's clearance and the fused label's clearance, so
+ * both clear exactly the same plan region.
  */
-export function slotClearanceCutter(m: ManifoldToplevel, params: BinParams): Manifold {
+function channelOpenSpanSolid(
+  m: ManifoldToplevel,
+  params: BinParams,
+  zBottom: number,
+  zTop: number,
+): Manifold {
   const outerWidth = binOuterSizeMm(params.gridX);
   const outerDepth = binOuterSizeMm(params.gridY);
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
-  const floorTop = bodyTop - SLOT_HEIGHT;
   const openSpan = slotOpenSpanMm(params.gridX);
   const yFront = -outerDepth / 2 + SLOT_FRONT_INSET;
   const eps = 0.01;
-  const box = m.Manifold.cube([openSpan, SLOT_DEPTH, SLOT_HEIGHT + eps]).translate(
+  const box = m.Manifold.cube([openSpan, SLOT_DEPTH, zTop - zBottom]).translate(
     -openSpan / 2,
     yFront,
-    floorTop,
+    zBottom,
   );
   // The open span's edges are flush with the lip's inner support face, so at
   // the bin's front corners, where that face curves with the outer corner
@@ -355,12 +390,29 @@ export function slotClearanceCutter(m: ManifoldToplevel, params: BinParams): Man
         OUTER_CORNER_RADIUS - LIP_DEPTH,
       ),
     ],
-    SLOT_HEIGHT + 3 * eps,
-  ).translate(0, 0, floorTop - eps);
-  const main = m.Manifold.intersection(box, bandInner);
+    zTop - zBottom + 2 * eps,
+  ).translate(0, 0, zBottom - eps);
+  const span = m.Manifold.intersection(box, bandInner);
   box.delete();
   bandInner.delete();
-  const voids = tabPocketVoids(m, params, floorTop, bodyTop);
+  return span;
+}
+
+/**
+ * Cutter clearing the insert channel's cavity (the open span plus the two
+ * tab pockets), for the bin body before the slot shelf is unioned in and for
+ * builders that fill the bin interior solid (the pocket bin): subtracting
+ * this and then unioning buildSlotShelf produces the channel. The open span
+ * is slightly oversized in height so no film is left over the channel; the
+ * pocket voids stop exactly at the channel top, where wall or ceiling
+ * material above them stays.
+ */
+export function slotClearanceCutter(m: ManifoldToplevel, params: BinParams): Manifold {
+  const channelTop = slotChannelTopZ(params);
+  const floorTop = channelTop - SLOT_HEIGHT;
+  const eps = 0.01;
+  const main = channelOpenSpanSolid(m, params, floorTop, channelTop + eps);
+  const voids = tabPocketVoids(m, params, floorTop, channelTop);
   const cutter = m.Manifold.union([main, ...voids]);
   main.delete();
   for (const v of voids) v.delete();
@@ -398,11 +450,49 @@ export function applySlotToBody(
 }
 
 /**
- * The fused label raised directly on the bin's top face, at the same XY the
+ * Give a bin body its fused label shelf: the open channel span above the
+ * shelf's top face is cleared up to the channel top first, then the fused
+ * shelf is unioned in. The fused counterpart of applySlotToBody and the single
+ * place the sequence lives. On a plain bin the clearance finds only open
+ * interior; on a bin whose interior was filled solid (the carve flows) it
+ * opens the label field, whose fill would otherwise stand above the shelf top
+ * and bury the raised label face. Consumes the given body and returns the
+ * shelved result.
+ */
+export function applyFusedShelfToBody(
+  m: ManifoldToplevel,
+  params: BinParams,
+  body: Manifold,
+): Manifold {
+  const eps = 0.01;
+  const clearance = channelOpenSpanSolid(
+    m,
+    params,
+    fusedShelfTopZ(params),
+    slotChannelTopZ(params) + eps,
+  );
+  const cleared = m.Manifold.difference(body, clearance);
+  body.delete();
+  clearance.delete();
+  const shelf = buildFusedShelf(m, params);
+  const shelved = m.Manifold.union([cleared, shelf]);
+  cleared.delete();
+  shelf.delete();
+  if (shelved.status() !== 'NoError') {
+    const status = shelved.status();
+    shelved.delete();
+    throw new Error(`Fused label shelf union produced an invalid solid: ${status}`);
+  }
+  return shelved;
+}
+
+/**
+ * The fused label raised on the fused shelf's top face, at the same XY the
  * insert label would occupy in the slot (insertPositionInBin). Same layout
  * and relief height as the insert's label (INSERT_TEXT_RAISE), but standing on
  * the fused shelf (buildFusedShelf) instead of on an insert plate: that
- * shelf's top face is the bin's nominal top, so the raised face reaches
+ * shelf's top face is where an inserted plate's top face sits, so the raised
+ * face ends at the channel top exactly like an insert's, reaches
  * INSERT_TEXT_WELD into the plate below it, making the union with the body one
  * welded solid, and rises INSERT_TEXT_RAISE above it. Every dimension is reused
  * from the insert label so no fused-only figure is introduced. Kept as its own
@@ -431,11 +521,10 @@ export function buildFusedLabel(
   if (faceSolids.length > 1) {
     for (const solid of faceSolids) solid.delete();
   }
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
   const at = insertPositionInBin(params);
   // The face sits on the fused shelf's top face, reaching INSERT_TEXT_WELD
   // into the plate below it.
-  const label = face.translate(at.x, at.y, bodyTop - INSERT_TEXT_WELD);
+  const label = face.translate(at.x, at.y, fusedShelfTopZ(params) - INSERT_TEXT_WELD);
   face.delete();
   if (label.status() !== 'NoError') {
     const status = label.status();

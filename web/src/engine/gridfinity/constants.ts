@@ -149,6 +149,95 @@ export const LIP_FILLET_RADIUS = 0.6;
 export const LIP_CREST_HEIGHT = LIP_HEIGHT - LIP_FILLET_RADIUS * Math.SQRT2;
 
 /**
+ * How far a stacked bin's foot sinks below the nominal top of the bin it
+ * stands on: the depth below that plane at which the foot's bottom face comes
+ * to rest. Derived from the foot profile (buildFoot) and the lip seat profile
+ * (the interior cutter), not measured.
+ *
+ * The foot's lower chamfer and the lip's lower taper are both 45 degrees
+ * (rise equals run), and both outlines follow every inset with their corner
+ * radii shrinking by the same amount, so the foot slides down until its
+ * chamfer lies on the taper, and it sinks below the lip tip plane (the
+ * nominal top) by exactly the narrowest plan clearance between the foot's
+ * bottom outline and the lip tip outline. The foot footprint and the bin's
+ * outer face share the same footprint clearance to the pitch, so both
+ * outlines are measured inward from one outer face.
+ *
+ * Both outlines are rounded rectangles, so the narrowest clearance is the
+ * smaller of the straight-side clearance and the clearance along the corner
+ * diagonal. Along a side it is the difference of the two insets. At a corner
+ * the two arcs are nested circles whose centres lie on the diagonal: their
+ * narrowest gap is the difference of the radii less the distance between the
+ * centres (sqrt 2 times their inset difference), attained on that diagonal.
+ * When the foot's corner centre does not lie further out than the tip's, the
+ * corner is no closer than the sides. With the published profiles the corner
+ * governs: 1.4 - 0.8 - 0.25 * sqrt(2), about 0.246 mm, against 0.35 mm along
+ * the sides.
+ *
+ * Throws when the profiles no longer meet on the two 45-degree faces (no
+ * clearance at all, or a sink deeper than the foot's lower chamfer), which is
+ * the premise of this derivation.
+ */
+export function stackedFootSeatDepthMm(): number {
+  const footBottomInset = FOOT_UPPER_CHAMFER + FOOT_LOWER_CHAMFER;
+  const footBottomRadius = Math.max(0, BASE_TOP_RADIUS - footBottomInset);
+  const lipTipRadius = Math.max(0, OUTER_CORNER_RADIUS - LIP_DEPTH);
+  const sideClearance = footBottomInset - LIP_DEPTH;
+  // Corner arc centres, measured inward from the outer face along each axis.
+  // A positive offset puts the foot's corner centre further out than the tip's.
+  const centreOffset =
+    LIP_DEPTH + lipTipRadius - (footBottomInset + footBottomRadius);
+  const cornerClearance =
+    centreOffset > 0
+      ? lipTipRadius - footBottomRadius - Math.SQRT2 * centreOffset
+      : sideClearance;
+  const depth = Math.min(sideClearance, cornerClearance);
+  if (!(depth > 0 && depth <= FOOT_LOWER_CHAMFER)) {
+    throw new Error(
+      `The foot and lip profiles no longer meet on their 45-degree faces (seat depth ${depth} mm).`,
+    );
+  }
+  return depth;
+}
+
+/**
+ * How far below the nominal bin top every feature inside the stacking lip
+ * stops: the label slot (channel, end stop, inserted label face), the fused
+ * label, divider walls and the carved fill surface. A stacked bin's foot sinks
+ * stackedFootSeatDepthMm (about 0.25 mm) below the nominal top, so anything
+ * reaching that plane inside the lip props the upper bin up or tilts it. The
+ * owner's choice is two 0.2 mm layers: after the slicer rounds heights to its
+ * layers (a 0.25 mm first layer, then 0.2 mm layers) the printed top of
+ * anything inside the lip still stays below the seat. A printability decision,
+ * not a value fitted to a scan.
+ */
+export const STACK_SEAT_CLEARANCE_DROP = 0.4;
+
+/**
+ * Highest z any feature inside the stacking lip may reach, for a bin of the
+ * given height: the nominal bin top lowered by STACK_SEAT_CLEARANCE_DROP. The
+ * single home for this figure; the label slot, the fused label, the divider
+ * walls and the carved fill all stop here.
+ */
+export function interiorFeatureTopZ(heightUnits: number): number {
+  return heightUnits * HEIGHT_UNIT - STACK_SEAT_CLEARANCE_DROP;
+}
+
+/**
+ * Fewest whole height units (at least MIN_HEIGHT_UNITS) whose
+ * interiorFeatureTopZ reaches `topZ`: the inverse of interiorFeatureTopZ, for
+ * a flow that sizes a bin's height to what it has to hold.
+ */
+export function heightUnitsForInteriorTopZ(topZ: number): number {
+  if (!Number.isFinite(topZ)) {
+    throw new RangeError(`topZ must be finite, got ${topZ}`);
+  }
+  let units = MIN_HEIGHT_UNITS;
+  while (interiorFeatureTopZ(units) < topZ) units += 1;
+  return units;
+}
+
+/**
  * Recessed band around the outer face at the rim, measured from the Pred
  * reference bin (gridfinitybin_1x1x6_d1_l12_s1, vertical cross-section at
  * mid-depth): the outer face steps inward 0.7 mm over a 45 degree chamfer,

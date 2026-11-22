@@ -535,8 +535,9 @@ describe('models at and through the rim', () => {
     const models = [cubeModel(20, 0, at(0, 5, BODY_TOP), 'raised.stl')];
     const result = buildCutoutBinBody(m, params({ models }));
 
-    // Just under the nominal bin top, inside the model's column: open.
-    expect(probeVolume(result.body, [0, 5, BODY_TOP - 0.5], [4, 4, 0.5])).toBe(0);
+    // Just under the fill top (41.1 to 41.6 mm: the 42 mm nominal top less
+    // the 0.4 mm stacking clearance drop), inside the model's column: open.
+    expect(probeVolume(result.body, [0, 5, 41.35], [4, 4, 0.5])).toBe(0);
 
     result.body.delete();
     for (const model of models) model.solid.delete();
@@ -547,7 +548,7 @@ describe('models at and through the rim', () => {
     const result = buildCutoutBinBody(m, params({ models }));
 
     // The same probe, over a buried model: solid material all the way across.
-    expect(probeVolume(result.body, [0, 5, BODY_TOP - 0.5], [4, 4, 0.5])).toBeCloseTo(8, 5);
+    expect(probeVolume(result.body, [0, 5, 41.35], [4, 4, 0.5])).toBeCloseTo(8, 5);
 
     result.body.delete();
     for (const model of models) model.solid.delete();

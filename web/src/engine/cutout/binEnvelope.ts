@@ -8,7 +8,8 @@ import {
   cellsForInteriorMm,
   FLOOR_TOP,
   HEIGHT_UNIT,
-  MIN_HEIGHT_UNITS,
+  heightUnitsForInteriorTopZ,
+  interiorFeatureTopZ,
 } from '../gridfinity/constants';
 import type { ModelPlacement } from './cutoutBin';
 import type { MeshBounds } from './cutoutMesh';
@@ -38,7 +39,8 @@ export interface PlacedModelExtent {
 /**
  * The bin interior as an axis-aligned box in bin-local millimetres: centred on
  * the origin in X and Y, running from the top of the interior floor up to the
- * nominal bin top in Z. The same span buildInteriorFill extrudes, from the same
+ * interior feature top (interiorFeatureTopZ) in Z, which stays clear below a
+ * stacked bin's foot. The same span buildInteriorFill extrudes, from the same
  * figures, so the box the editor judges a placement against and the solid the
  * carve subtracts from are the same interior.
  *
@@ -55,7 +57,7 @@ export function interiorBoundsMm(
 ): MeshBounds {
   const halfX = binInteriorSizeMm(gridX) / 2;
   const halfY = binInteriorSizeMm(gridY) / 2;
-  const topZ = heightUnits * HEIGHT_UNIT;
+  const topZ = interiorFeatureTopZ(heightUnits);
   return {
     minX: -halfX,
     minY: -halfY,
@@ -102,15 +104,18 @@ export function fitBinToModels(extents: PlacedModelExtent[]): BinEnvelopeSize | 
   for (const { bounds, clearanceMm } of extents) {
     topZ = Math.max(topZ, bounds.maxZ + clearanceMm);
   }
-  const heightUnits = Math.max(MIN_HEIGHT_UNITS, Math.ceil(topZ / HEIGHT_UNIT));
-  const interiorTopZ = heightUnits * HEIGHT_UNIT;
+  const heightUnits = heightUnitsForInteriorTopZ(topZ);
+  // The flare is judged at the nominal bin top, as before the fill top was
+  // lowered: the swept pocket keeps widening above the fill, so the higher
+  // plane is the safer upper bound.
+  const nominalTopZ = heightUnits * HEIGHT_UNIT;
   let halfX = 0;
   let halfY = 0;
   for (const { bounds, clearanceMm, sweepEnabled, draftAngleDeg } of extents) {
     const flareMm =
       sweepEnabled && draftAngleDeg > 0
         ? Math.tan((draftAngleDeg * Math.PI) / 180) *
-          Math.max(0, interiorTopZ - (bounds.minZ - clearanceMm))
+          Math.max(0, nominalTopZ - (bounds.minZ - clearanceMm))
         : 0;
     const grow = clearanceMm + flareMm;
     halfX = Math.max(halfX, Math.abs(bounds.minX) + grow, bounds.maxX + grow);

@@ -280,9 +280,10 @@ export function shelfRibCentresMm(cells: number): number[] {
  * floor plate) so unioning with the bin body welds them, and the solid is
  * clipped to the bin's rounded outer outline so it also welds to the side
  * walls without protruding outside the bin. The slot shelf (see ./slot.ts)
- * places it one slot height below the nominal bin top as the floor of the
- * insert channel; the fused label's shelf places it at the nominal top at a
- * greater thickness, which is what the trailing thickness parameter is for
+ * places it one slot height below the channel top as the floor of the
+ * insert channel; the fused label's shelf places it where an inserted plate's
+ * top sits, at a greater thickness, which is what the trailing thickness
+ * parameter is for
  * (the back chamfer stays at 45 degrees whatever the plate thickness, and the
  * ribs start at the plate underside, so they grow with it). The trailing riser
  * parameter puts a short vertical face at the plate's back edge before the

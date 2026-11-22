@@ -42,13 +42,15 @@ function extent(b: MeshBounds, clearanceMm = 0): PlacedModelExtent {
 }
 
 describe('interiorBoundsMm', () => {
-  it('spans the interior between the walls and from the floor to the bin top', () => {
+  it('spans the interior between the walls and from the floor to the fill top', () => {
     const box = interiorBoundsMm(2, 3, 6);
     expect(box.sizeX).toBeCloseTo(binInteriorSizeMm(2), 10);
     expect(box.sizeY).toBeCloseTo(binInteriorSizeMm(3), 10);
     expect(box.minX).toBeCloseTo(-box.maxX, 10);
     expect(box.minZ).toBe(FLOOR_TOP);
-    expect(box.maxZ).toBe(6 * HEIGHT_UNIT);
+    // 42 mm nominal top of a 6-unit bin, less the 0.4 mm stacking clearance
+    // drop that keeps the carved fill clear of a stacked bin's foot.
+    expect(box.maxZ).toBeCloseTo(41.6, 9);
   });
 });
 
@@ -108,6 +110,16 @@ describe('fitBinToModels', () => {
     const fit = fitBinToModels([extent(tall)])!;
     expect(fit.heightUnits * HEIGHT_UNIT).toBeGreaterThanOrEqual(50);
     expect((fit.heightUnits - 1) * HEIGHT_UNIT).toBeLessThan(50);
+  });
+
+  it('adds a unit when a model reaches the nominal top but not under the fill top', () => {
+    // A model top at 49 mm sits flush with a 7-unit bin's 49 mm nominal top,
+    // above its 48.6 mm fill top, where a stacked bin's foot would hit it.
+    const flush = bounds(-8, 8, -8, 8, FLOOR_TOP, 49);
+    expect(fitBinToModels([extent(flush)])!.heightUnits).toBe(8);
+    // 48.6 mm fits the 7-unit bin's fill top exactly.
+    const fits = bounds(-8, 8, -8, 8, FLOOR_TOP, 48.6);
+    expect(fitBinToModels([extent(fits)])!.heightUnits).toBe(7);
   });
 
   it('never proposes a bin with no interior at all', () => {

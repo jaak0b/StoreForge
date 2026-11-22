@@ -15,7 +15,8 @@ import type {
 import type { Font } from 'opentype.js';
 import type { FingerHole, MmPoint, TracedOutline, TracedTool, ToolPlacement } from './types';
 import { CHORDAL_TOLERANCE_MM, fingerHoleOutline, resolvedToolOutline } from './edit';
-import { FLOOR_TOP, HEIGHT_UNIT, LIP_HEIGHT } from '../gridfinity/constants';
+import { FLOOR_TOP, HEIGHT_UNIT, interiorFeatureTopZ, LIP_HEIGHT } from '../gridfinity/constants';
+import { formatMm } from '../sketch/measure';
 import {
   finishBinPartMeshes,
   finishBinUnionMesh,
@@ -251,7 +252,7 @@ export function validatePocketLayout(
     if (pocket.pocketDepthMm > maxDepth) {
       throw new Error(
         `The pocket for "${pocket.tool.name}" is ${pocket.pocketDepthMm} mm deep, but a bin ` +
-          `${params.heightUnits} units tall allows at most ${maxDepth} mm before the pocket ` +
+          `${params.heightUnits} units tall allows at most ${formatMm(maxDepth)} mm before the pocket ` +
           'would break through the interior floor. Make the pocket shallower or the bin taller.',
       );
     }
@@ -345,7 +346,8 @@ export function validatePocketLayout(
  * layout, build one cutter per pocket, and hand them to the shared carve
  * stage, which fills the interior, subtracts them and restores the slot.
  *
- * Each pocket is cut from above the bin top down to bodyTop minus its depth;
+ * Each pocket is cut from above the bin top down to its depth below the fill
+ * surface (interiorFeatureTopZ, where the shared carve stage tops the fill);
  * finger holes are cut further, down to the top of the interior floor. They
  * are grab reliefs, not through-holes: the floor plate under them stays
  * intact. The cutters reach past the solid top so a pocket is always open at
@@ -395,7 +397,7 @@ export function buildPocketBinBodyWithWarnings(
 
   const cutters: Manifold[] = [];
   for (const pocket of placed) {
-    const pocketBottom = bodyTop - pocket.pocketDepthMm;
+    const pocketBottom = interiorFeatureTopZ(params.heightUnits) - pocket.pocketDepthMm;
     const section = outlinesSection(m, pocket.outlines);
     const extruded = section
       .extrude(solidTop + CARVE_OVERLAP_EPS - pocketBottom)

@@ -9,9 +9,9 @@ import type {
   SlottedBinParams,
 } from './types';
 import {
+  applyFusedShelfToBody,
   applySlotToBody,
   buildFusedLabel,
-  buildFusedShelf,
   buildInsertSolids,
   insertPositionInBin,
 } from '../label/slot';
@@ -40,6 +40,7 @@ import {
   FOOT_UPPER_CHAMFER,
   FOOT_VERTICAL,
   HEIGHT_UNIT,
+  interiorFeatureTopZ,
   LIP_CREST_HEIGHT,
   LIP_DEPTH,
   LIP_FILLET_RADIUS,
@@ -406,8 +407,8 @@ function buildInteriorCutter(m: ManifoldToplevel, params: BinParams): Manifold {
 /**
  * Interior divider walls. Each wall is a free segment (see DividerWall): it
  * runs from (x1,y1) to (x2,y2) at any angle, is DIVIDER_THICKNESS thick, and
- * rises from inside the floor slab (top of the feet) to the nominal bin top
- * (below the stacking lip seat). Every wall is extended slightly at both ends
+ * rises from the interior floor to interiorFeatureTopZ, clear below the plane
+ * a stacked bin's foot sinks to in the lip seat. Every wall is extended slightly at both ends
  * along its own direction so a wall reaching the perimeter overlaps into the
  * side wall for a solid weld; the whole set is then trimmed to the outer wall
  * envelope so nothing pokes outside the bin or through the rim groove. Axis
@@ -474,7 +475,7 @@ function buildDividers(
   dividerWalls: DividerWall[],
   footprint: BinFootprint,
   envelope: Manifold,
-  bodyTop: number,
+  heightUnits: number,
 ): Manifold {
   // A divider stands on the interior floor and belongs entirely to the
   // container above it: nothing of it may reach into the base. The interior
@@ -483,7 +484,7 @@ function buildDividers(
   // based on it shares that plane exactly. No embedding is needed, because
   // manifold's union is exact on coincident faces.
   const zBottom = FLOOR_TOP;
-  const height = bodyTop - zBottom;
+  const height = interiorFeatureTopZ(heightUnits) - zBottom;
   const solids: Manifold[] = [];
   const capRadius = DIVIDER_THICKNESS / 2;
   for (const wall of dividerWalls) {
@@ -618,7 +619,7 @@ export function buildBinManifold(m: ManifoldToplevel, params: BinParams): Manifo
   }
 
   if (dividerWalls.length > 0) {
-    const dividers = buildDividers(m, dividerWalls, params, envelope, bodyTop);
+    const dividers = buildDividers(m, dividerWalls, params, envelope, heightUnits);
     result = m.Manifold.union([result, dividers]);
   }
 
@@ -734,18 +735,7 @@ export function buildSlottedBinBody(
   params: BinParams & { labelSlot?: boolean } & Pick<SlottedBinParams, 'fusedLabel'>,
 ): Manifold {
   const body = buildBinManifold(m, params);
-  if (hasFusedShelf(params)) {
-    const shelf = buildFusedShelf(m, params);
-    const fused = m.Manifold.union([body, shelf]);
-    body.delete();
-    shelf.delete();
-    if (fused.status() !== 'NoError') {
-      const status = fused.status();
-      fused.delete();
-      throw new Error(`Fused label shelf union produced an invalid solid: ${status}`);
-    }
-    return fused;
-  }
+  if (hasFusedShelf(params)) return applyFusedShelfToBody(m, params, body);
   if (params.labelSlot === false) return body;
   return applySlotToBody(m, params, body);
 }

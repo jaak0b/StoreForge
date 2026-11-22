@@ -163,12 +163,13 @@ describe('buildPocketBinBody', () => {
     expect(() => buildPocketBinBody(m, params({ tools: [tool] }))).toThrow(/into the bin wall/);
   });
 
-  it('places the pocket bottom exactly at the bin top minus the pocket depth', () => {
-    // heightUnits 3 puts the bin top at 21 mm; a 5 mm pocket bottoms at 16 mm.
+  it('places the pocket bottom exactly at the fill top minus the pocket depth', () => {
+    // heightUnits 3 puts the nominal bin top at 21 mm and the fill top 0.4 mm
+    // under it at 20.6 mm; a 5 mm pocket bottoms at 15.6 mm.
     const body = buildPocketBinBody(m, params());
     // Probe XY (-10, -1.5) lies inside the L's bottom arm.
-    const above = probeVolume(body, [-10, -1.5, 16.3], [2, 2, 0.5]);
-    const below = probeVolume(body, [-10, -1.5, 15.7], [2, 2, 0.5]);
+    const above = probeVolume(body, [-10, -1.5, 15.9], [2, 2, 0.5]);
+    const below = probeVolume(body, [-10, -1.5, 15.3], [2, 2, 0.5]);
     expect(above).toBe(0);
     expect(below).toBeCloseTo(2, 5);
     body.delete();
@@ -178,7 +179,7 @@ describe('buildPocketBinBody', () => {
     const tool = lTool({ fingerHoles: [{ x: 20, y: 6.5, diameterMm: 12 }] });
     const body = buildPocketBinBody(
       m,
-      params({ tools: [tool], placements: [{ ...centeredL, pocketDepthMm: 14 }] }),
+      params({ tools: [tool], placements: [{ ...centeredL, pocketDepthMm: 13.6 }] }),
     );
     // The floor plate spans 4.8 to 7 mm. Probes centred at z 5.9 must come
     // back fully solid; the plate under pockets and finger holes is intact.
@@ -186,7 +187,8 @@ describe('buildPocketBinBody', () => {
     // Finger hole centre lands at bin-local (5, 1.4).
     expect(probeVolume(body, [5, 1.4, 5.9], [2, 2, 1.5])).toBeCloseTo(6, 5);
     // Directly above the floor top the finger hole is cut, even though the
-    // pocket bottom (at 7 mm for a 14 mm pocket) coincides with it here.
+    // pocket bottom (at 7 mm for a 13.6 mm pocket under the 20.6 mm fill
+    // top) coincides with it here.
     expect(probeVolume(body, [5, 1.4, 7.3], [2, 2, 0.5])).toBe(0);
     body.delete();
   });
@@ -216,7 +218,7 @@ describe('buildPocketBinBody', () => {
     // bottoms out flat at the floor top with no fillet intruding.
     const body = buildPocketBinBody(
       m,
-      params({ placements: [{ ...centeredL, pocketDepthMm: 14 }] }),
+      params({ placements: [{ ...centeredL, pocketDepthMm: 13.6 }] }),
     );
     // Inside the pocket, where the scoop fillet would be solid (11.4 mm from
     // the would-be fillet centre at y 9.8, z 17, outside its radius): air.
@@ -237,11 +239,13 @@ describe('buildPocketBinBody', () => {
   });
 
   it('rejects a pocket deeper than the interior allows, naming the real limit', () => {
-    // A 3 unit bin tops out at 21 mm and the floor top is at 7 mm: 14 mm max.
-    expect(maxPocketDepthMm(3)).toBe(14);
+    // A 3 unit bin's fill tops out at 20.6 mm (the 21 mm nominal top less the
+    // 0.4 mm stacking clearance drop) and the floor top is at 7 mm: 13.6 mm
+    // max, quoted rounded rather than with its float noise.
+    expect(maxPocketDepthMm(3)).toBeCloseTo(13.6, 9);
     expect(() =>
-      buildPocketBinBody(m, params({ placements: [{ ...centeredL, pocketDepthMm: 15 }] })),
-    ).toThrow(/at most 14 mm/);
+      buildPocketBinBody(m, params({ placements: [{ ...centeredL, pocketDepthMm: 14 }] })),
+    ).toThrow(/at most 13\.6 mm before/);
   });
 
   it('keeps an unfilled hole as an island in the placed pocket outline', () => {
@@ -256,9 +260,10 @@ describe('buildPocketBinBody', () => {
   });
 
   it('cuts away the island of a filled hole so the pocket floor is clear there', () => {
-    // Bin top 21 mm, a 5 mm pocket bottoms at 16 mm. Tool-local hole centre
-    // (15, 11) maps to bin-local (0, 5.9). Left standing, that column stays
-    // solid up to the bin top; filling the hole cuts it to the pocket floor.
+    // Fill top 20.6 mm, a 5 mm pocket bottoms at 15.6 mm. Tool-local hole
+    // centre (15, 11) maps to bin-local (0, 5.9). Left standing, that column
+    // stays solid up to the fill top; filling the hole cuts it to the pocket
+    // floor.
     const standing = buildPocketBinBody(
       m,
       params({ tools: [holedPlate()], placements: [{ ...centeredL, toolId: 'plate' }] }),
@@ -436,8 +441,9 @@ function pocketAreaInBox(
 }
 
 describe('drafted pocket walls', () => {
-  // Bin top 21 mm; a 5 mm pocket bottoms at 16 mm. The circle sits at bin
-  // (0, 7), clear of the label insert slot along the front (-Y) wall.
+  // Fill top 20.6 mm (21 mm nominal top less the 0.4 mm stacking clearance
+  // drop); a 5 mm pocket bottoms at 15.6 mm. The circle sits at bin (0, 7),
+  // clear of the label insert slot along the front (-Y) wall.
   const circlePlacement: ToolPlacement = {
     toolId: 'circle',
     xMm: 0,
@@ -457,12 +463,12 @@ describe('drafted pocket walls', () => {
     );
     expect(body.status()).toBe('NoError');
     const r1 = pocketRadiusAt(body, 0, 7, 16.5, 24);
-    const r2 = pocketRadiusAt(body, 0, 7, 20.5, 24);
-    // Hand-calculated: a 10 degree draft over the 4 mm between the two probe
-    // heights flares the radius by tan(10 deg) * 4 mm = 0.7053 mm. The
-    // faceted sweep cone is inscribed in the true cone, so the measured flare
-    // dips slightly under nominal; 0.1 mm covers the faceting budget.
-    expect(Math.abs(r2 - r1 - 0.7053)).toBeLessThan(0.1);
+    const r2 = pocketRadiusAt(body, 0, 7, 20.1, 24);
+    // Hand-calculated: a 10 degree draft over the 3.6 mm between the two
+    // probe heights flares the radius by tan(10 deg) * 3.6 mm = 0.6348 mm.
+    // The faceted sweep cone is inscribed in the true cone, so the measured
+    // flare dips slightly under nominal; 0.1 mm covers the faceting budget.
+    expect(Math.abs(r2 - r1 - 0.6348)).toBeLessThan(0.1);
     // The drafted pocket removes more material than the straight one.
     const straight = buildPocketBinBody(
       m,
@@ -480,7 +486,7 @@ describe('drafted pocket walls', () => {
     );
     expect(body.status()).toBe('NoError');
     const r1 = pocketRadiusAt(body, 0, 7, 16.5, 24);
-    const r2 = pocketRadiusAt(body, 0, 7, 20.5, 24);
+    const r2 = pocketRadiusAt(body, 0, 7, 20.1, 24);
     expect(Math.abs(r2 - r1)).toBeLessThan(0.02);
     // The straight pocket is exactly the extruded 20 mm circle (its faceted
     // polygon is inscribed in the true circle, just under 10 mm in radius).
@@ -499,7 +505,7 @@ describe('drafted pocket walls', () => {
       }),
     );
     expect(body.status()).toBe('NoError');
-    // Below the pocket bottom (16 mm) only the finger hole is cut; its
+    // Below the pocket bottom (15.6 mm) only the finger hole is cut; its
     // radius is the same near the floor and near the pocket bottom.
     const rLow = pocketRadiusAt(body, 0, 7, 9, 20);
     const rHigh = pocketRadiusAt(body, 0, 7, 14, 20);
@@ -623,8 +629,8 @@ describe('multi-part pocket union (regression for the phantom wall between adjac
       }),
     );
     expect(body.status()).toBe('NoError');
-    // Probe well inside the pocket's depth (bottoms at 21 - 5 = 16 mm on a 3
-    // unit bin), sized generously around the combined footprint (grown
+    // Probe well inside the pocket's depth (bottoms 5 mm under the 20.6 mm
+    // fill top of a 3 unit bin, at 15.6 mm), sized generously around the combined footprint (grown
     // bounds roughly x -21.5..21.5, y -2.5..20.5) without reaching either
     // side wall or the back wall on this 3x3 bin.
     const measured = pocketAreaInBox(body, 0, 9, 18, 50, 30);

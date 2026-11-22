@@ -1,7 +1,7 @@
 // The carve stage shared by every bin whose interior is filled solid and then
 // cut away again: build the standard slotted bin, fill its interior cavity
-// from the floor top to the nominal bin top, subtract a set of cutter solids,
-// and restore the label slot the fill closed. The traced pocket bin and the
+// from the floor top to the interior feature top, subtract a set of cutter
+// solids, and restore the label slot or label field the fill closed. The traced pocket bin and the
 // cutout bin differ only in how they build their cutters, so everything either
 // side of that step lives here. Framework-agnostic; the ManifoldToplevel is
 // injected as everywhere else in the engine.
@@ -15,12 +15,17 @@ import {
   binInteriorSizeMm,
   binOuterSizeMm,
   FLOOR_TOP,
-  HEIGHT_UNIT,
+  interiorFeatureTopZ,
   OUTER_CORNER_RADIUS,
   WALL_THICKNESS,
 } from './constants';
 import { buildSlottedBinBody, hasFusedShelf, roundedRectPolygon } from './binGenerator';
-import { applySlotToBody, FUSED_SHELF_REACH_DEPTH, SLOT_REACH_DEPTH } from '../label/slot';
+import {
+  applyFusedShelfToBody,
+  applySlotToBody,
+  FUSED_SHELF_REACH_DEPTH,
+  SLOT_REACH_DEPTH,
+} from '../label/slot';
 import type { BinParams, SlottedBinParams } from './types';
 
 /** The bin parameters every carve flow shares: a slotted bin body's parameters. */
@@ -84,14 +89,17 @@ export function interiorSection(
 
 /**
  * The interior fill solid: the interior cavity from the floor top up to the
- * nominal bin top, reaching CARVE_OVERLAP_EPS into the floor plate so it welds
- * to it. Exported so tests can measure the fill independently of any carve.
+ * interior feature top (interiorFeatureTopZ), reaching CARVE_OVERLAP_EPS into
+ * the floor plate so it welds to it. The fill stops there, not at the nominal
+ * bin top, so it stays clear below the plane a stacked bin's foot sinks to in
+ * the lip seat; every carve depth is measured down from this fill surface.
+ * Exported so tests can measure the fill independently of any carve.
  */
 export function buildInteriorFill(m: ManifoldToplevel, params: BinParams): Manifold {
-  const bodyTop = params.heightUnits * HEIGHT_UNIT;
+  const fillTop = interiorFeatureTopZ(params.heightUnits);
   const section = interiorSection(m, params.gridX, params.gridY);
   const fill = section
-    .extrude(bodyTop - FLOOR_TOP + CARVE_OVERLAP_EPS)
+    .extrude(fillTop - FLOOR_TOP + CARVE_OVERLAP_EPS)
     .translate(0, 0, FLOOR_TOP - CARVE_OVERLAP_EPS);
   section.delete();
   return fill;
@@ -99,11 +107,11 @@ export function buildInteriorFill(m: ManifoldToplevel, params: BinParams): Manif
 
 /**
  * The deepest a cut may reach before it breaks through the interior floor:
- * from the nominal bin top down to the top of the floor plate. The single home
- * for this figure; the depth validation messages quote it.
+ * from the fill top (interiorFeatureTopZ) down to the top of the floor plate. The
+ * single home for this figure; the depth validation messages quote it.
  */
 export function maxCarveDepthMm(heightUnits: number): number {
-  return heightUnits * HEIGHT_UNIT - FLOOR_TOP;
+  return interiorFeatureTopZ(heightUnits) - FLOOR_TOP;
 }
 
 /**
@@ -149,9 +157,10 @@ export function labelStructureStrip(
  * cutter solids. The standard slotted bin body is built first with the scoop
  * suppressed (the interior is filled solid, so a scoop has nothing to sweep and
  * would only fight the carve), its interior cavity is filled from the floor top
- * up to the nominal bin top so the cuts have material to sink into, and the
- * cutters are subtracted. The interior fill closes the insert channel, so the
- * slot is applied again last; a bin without the slot has no channel to restore.
+ * up to the fill top (interiorFeatureTopZ) so the cuts have material to sink into,
+ * and the cutters are subtracted. The interior fill closes the insert channel,
+ * or covers a fused label's field, so the slot or the fused shelf is applied
+ * again last; a plain bin has neither to restore.
  *
  * The caller owns validating its own cutters; this stage owns the fill, the
  * subtraction, restoring the slot the fill closed, and the manifold status
@@ -209,7 +218,9 @@ export function buildCarvedBinBody(
         throw new CarveCancelledError(subject);
       }
     }
-    if (params.labelSlot !== false) {
+    if (hasFusedShelf(params)) {
+      body = applyFusedShelfToBody(m, params, body);
+    } else if (params.labelSlot !== false) {
       body = applySlotToBody(m, params, body);
     }
     const status = body.status();
