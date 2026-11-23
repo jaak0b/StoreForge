@@ -13,10 +13,16 @@
  * between the two views keeps them visually separate. The general category
  * adds silhouettes of common workshop items drawn to the same single-view
  * rules as before.
+ *
+ * The brass spacer and standoff (fasteners) and the electrical category
+ * (crimp terminals, splices and connectors) are single-view silhouettes drawn
+ * 100 units tall and centred horizontally in the box. Overlapping source
+ * shapes are merged into one outline per piece so the even-odd fill never
+ * cancels an overlap; only real openings remain as holes.
  */
 
 /** The picker category an icon belongs to. */
-export type IconCategory = 'fasteners' | 'general' | 'custom';
+export type IconCategory = 'fasteners' | 'electrical' | 'general' | 'custom';
 
 /** A filled single-path icon in SVG path-data form. */
 export interface LabelIcon {
@@ -160,6 +166,22 @@ export const LABEL_ICONS: LabelIcon[] = [
     category: 'fasteners',
   },
   {
+    // Hex brass spacer in side view: chamfered body with the female thread
+    // shown as a notch at each end.
+    name: 'brass spacer',
+    path: 'M30 0H40V20H60V0H70L76 6V94L70 100H60V80H40V100H30L24 94V6Z',
+    viewBox: VIEW_BOX,
+    category: 'fasteners',
+  },
+  {
+    // Hex brass standoff in side view: male threaded stud on top of a body
+    // with a chamfered upper edge.
+    name: 'brass standoff',
+    path: 'M39 0H61V30H70L76 36V100H24V36L30 30H39Z',
+    viewBox: VIEW_BOX,
+    category: 'fasteners',
+  },
+  {
     // Mains plug in side view: two prongs on the left, a blocky plug body,
     // and the cord running off to the right.
     name: 'cable',
@@ -244,6 +266,89 @@ export const LABEL_ICONS: LabelIcon[] = [
       'M8 34L92 34L92 48L84 48L84 90L16 90L16 48L8 48Z',
     viewBox: VIEW_BOX,
     category: 'general',
+  },
+  {
+    // Two-pin JST housing face on: a keyed body with two contact windows
+    // (even-odd) and the two pins below.
+    name: 'jst connector',
+    path:
+      'M7 10H35V0H65V10H93V60H76V100H58V60H42V100H24V60H7Z' +
+      'M25 22H41V46H25Z' +
+      'M59 22H75V46H59Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Crimp contact pin in side view: contact tip, wire crimp, insulation
+    // crimp and a wide collar at the end.
+    name: 'crimp pin',
+    path: 'M35 0H65V40H59V56H70V78H59V84H75V100H25V84H41V78H30V56H41V40H35Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Wire end ferrule in side view: tapered plastic collar over the metal
+    // sleeve.
+    name: 'ferrule',
+    path: 'M18 0H82L74 48H62V100H38V48H26Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Ring terminal face on: a ring with a round stud hole (even-odd), a
+    // neck and the crimp barrel.
+    name: 'ring terminal',
+    path:
+      'M40 62.3974A32 32 0 1 1 60 62.3974V68H72V100H28V68H40Z' +
+      'M37 32A13 13 0 1 0 63 32A13 13 0 1 0 37 32Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Fork terminal face on: a fork open at the top, a neck and the crimp
+    // barrel.
+    name: 'fork terminal',
+    path:
+      'M18 0H38V30A12 12 0 0 0 62 30V0H82V34A32 32 0 0 1 60 64.3974V70H72V100H28V70' +
+      'H40V64.3974A32 32 0 0 1 18 34Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Male spade terminal face on: a blade with the detent hole (even-odd),
+    // a neck and the crimp barrel.
+    name: 'spade male',
+    path:
+      'M32 0H68L75 7V50H60V58H80V100H20V58H40V50H25V7Z' +
+      'M41 20A9 9 0 1 0 59 20A9 9 0 1 0 41 20Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Female spade receptacle face on: a rolled sleeve with its open
+    // centre (even-odd), a neck and the crimp barrel.
+    name: 'spade female',
+    path:
+      'M23 0H77V50H60V58H80V100H20V58H40V50H23Z' +
+      'M39 10H61V40H39Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Butt splice in side view: two insulated crimp barrels joined by a
+    // narrow waist, with the wire running through both ends.
+    name: 'butt splice',
+    path: 'M41 0H59V12H72V46H62V54H72V88H59V100H41V88H28V54H38V46H28V12H41Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
+  },
+  {
+    // Bullet connector in side view: the rounded bullet on top of the
+    // crimp barrel.
+    name: 'bullet splice',
+    path: 'M38 46V12A12 12 0 0 1 62 12V46H74V100H26V46Z',
+    viewBox: VIEW_BOX,
+    category: 'electrical',
   },
 ];
 

@@ -6,9 +6,9 @@ import { useCustomIcons, validateIconSource } from '../stores/customIcons';
 
 /**
  * Label icon picker: one flat wrap-grid of icon tiles ("No icon" first, then
- * fasteners, general and custom icons separated by thin dividers), ending in
- * a "+" tile that opens the custom SVG upload dialog. v-model is the icon
- * name or null for no icon.
+ * fasteners, electrical, general and custom icons separated by thin
+ * dividers), ending in a "+" tile that opens the custom SVG upload dialog.
+ * v-model is the icon name or null for no icon.
  */
 
 const model = defineModel<string | null>({ required: true });
@@ -17,6 +17,9 @@ const customIcons = useCustomIcons();
 
 const fastenerIcons = computed(() =>
   LABEL_ICONS.filter((icon) => icon.category === 'fasteners'),
+);
+const electricalIcons = computed(() =>
+  LABEL_ICONS.filter((icon) => icon.category === 'electrical'),
 );
 const generalIcons = computed(() =>
   LABEL_ICONS.filter((icon) => icon.category === 'general'),
@@ -253,7 +256,7 @@ function confirmRemove(): void {
         <v-tooltip activator="parent" location="bottom">No icon</v-tooltip>
       </v-btn>
       <template
-        v-for="group in [fastenerIcons, generalIcons, userIcons].filter(
+        v-for="group in [fastenerIcons, electricalIcons, generalIcons, userIcons].filter(
           (icons) => icons.length > 0,
         )"
         :key="group[0].category"

@@ -109,6 +109,17 @@ describe('svgPathToPolygons', () => {
       bit: 0,
       adhesive: 0,
       'misc box': 0,
+      'brass spacer': 0,
+      'brass standoff': 0,
+      'jst connector': 2,
+      'crimp pin': 0,
+      ferrule: 0,
+      'ring terminal': 1,
+      'fork terminal': 0,
+      'spade male': 1,
+      'spade female': 1,
+      'butt splice': 0,
+      'bullet splice': 0,
     };
     expect(LABEL_ICONS.map((icon) => icon.name).sort()).toEqual(Object.keys(expected).sort());
     for (const [name, genus] of Object.entries(expected)) {
@@ -126,21 +137,40 @@ describe('svgPathToPolygons', () => {
       expect(box.minY, icon.name).toBeGreaterThanOrEqual(minY);
       expect(box.maxX, icon.name).toBeLessThanOrEqual(minX + width);
       expect(box.maxY, icon.name).toBeLessThanOrEqual(minY + height);
-      // Consistent visual weight: each silhouette fills the bulk of the box.
-      expect(box.maxX - box.minX, icon.name).toBeGreaterThanOrEqual(0.6 * width);
-      expect(box.maxY - box.minY, icon.name).toBeGreaterThanOrEqual(0.4 * height);
+      // Consistent visual weight: each silhouette fills the bulk of the box
+      // along its longer side (wide icons span the width, tall single-view
+      // icons span the height) and a fair share along the other.
+      const spanX = (box.maxX - box.minX) / width;
+      const spanY = (box.maxY - box.minY) / height;
+      expect(Math.max(spanX, spanY), icon.name).toBeGreaterThanOrEqual(0.6);
+      expect(Math.min(spanX, spanY), icon.name).toBeGreaterThanOrEqual(0.4);
     }
   });
 
   it('assigns every icon a picker category, and the new sets land in theirs', () => {
     for (const icon of LABEL_ICONS) {
-      expect(['fasteners', 'general'], icon.name).toContain(icon.category);
+      expect(['fasteners', 'electrical', 'general'], icon.name).toContain(icon.category);
     }
     const byCategory = (category: string): string[] =>
       LABEL_ICONS.filter((icon) => icon.category === category).map((icon) => icon.name);
     expect(byCategory('fasteners')).toContain('brad');
     expect(byCategory('fasteners')).toContain('dowel');
     expect(byCategory('fasteners')).toContain('pocket screw');
+    expect(byCategory('fasteners')).toContain('brass spacer');
+    expect(byCategory('fasteners')).toContain('brass standoff');
+    expect(byCategory('electrical').sort()).toEqual(
+      [
+        'jst connector',
+        'crimp pin',
+        'ferrule',
+        'ring terminal',
+        'fork terminal',
+        'spade male',
+        'spade female',
+        'butt splice',
+        'bullet splice',
+      ].sort(),
+    );
     expect(byCategory('general').sort()).toEqual(
       [
         'cable',
