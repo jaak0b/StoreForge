@@ -89,7 +89,7 @@ describe('text bolding', () => {
     const original = new m.CrossSection(part.polygons, part.fillRule);
     const bold = original.offset(TEXT_BOLD_OFFSET, 'Round');
     // Dilating every stem by TEXT_BOLD_OFFSET per side must grow the printed
-    // area (this is the whole point: thin Roboto stems become thick enough
+    // area (this is the whole point: thin glyph stems become thick enough
     // to slice as solid perimeters).
     expect(bold.area()).toBeGreaterThan(original.area());
     // Kerned letters that start out separated must stay separated: same

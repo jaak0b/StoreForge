@@ -55,11 +55,11 @@ export const ICON_TEXT_GAP = 2;
  * ends up well under its nominal size; at a smaller ratio its stems, even
  * after TEXT_BOLD_OFFSET, come out barely wider than one 0.4 mm extrusion
  * width and slice as thin, unreliable strokes. This ratio gives the second line
- * enough size to print as solid strokes while the first line, shrunk to fit
- * the depth that remains, stays at the size it had with the larger margins
- * and line gap used before.
+ * enough size to print as solid strokes on a 0.4 mm nozzle, while the first
+ * line, shrunk to fit the depth that remains, stays at essentially the size it
+ * had before the ratio was raised.
  */
-export const LABEL_LINE2_SCALE = 0.75;
+export const LABEL_LINE2_SCALE = 0.8;
 
 /**
  * Vertical gap between the first and second text line, in millimetres: just
@@ -70,14 +70,19 @@ export const LABEL_LINE_GAP = 0.8;
 
 /**
  * How far text outlines are dilated (per side, in millimetres) before
- * extrusion. Roboto Medium at LABEL_TEXT_HEIGHT (6 mm cap height) has stems
- * around 0.55 mm wide, under one 0.4 mm nozzle extrusion width, so slicers
- * render the embossed strokes as thin, barely-visible perimeters. Offsetting
- * by 0.15 mm per side brings those stems to roughly 0.85 mm, about two
- * extrusion widths, so the text slices as solid, legible strokes. Icons are
- * already bold silhouettes and are left alone. Applied after the label is
- * scaled to its final on-shelf size, so the dilation is always a true 0.15 mm
- * regardless of any scale-to-fit shrink.
+ * extrusion. The label font, Atkinson Hyperlegible Regular, has stems of about
+ * 0.13 to 0.14 times the cap height, so about 0.76 to 0.85 mm at
+ * LABEL_TEXT_HEIGHT (6 mm cap height). Labels are usually shrunk to fit the
+ * insert, and a second line is smaller still, so on the printed label the
+ * stems often come out at roughly 0.3 to 0.5 mm: about one 0.4 mm nozzle
+ * extrusion width, which slicers render as thin, unreliable perimeters.
+ * Offsetting by 0.15 mm per side adds 0.3 mm to every stem (a full-size stem
+ * becomes about 1.06 to 1.15 mm, a shrunk one about 0.6 to 0.8 mm), so small
+ * text slices as solid strokes. The font's open letter shapes keep wide
+ * counters (the gaps in e, a and s), so they do not close up after the
+ * offset. Icons are already bold silhouettes and are left alone. Applied
+ * after the label is scaled to its final on-shelf size, so the dilation is
+ * always a true 0.15 mm regardless of any scale-to-fit shrink.
  */
 export const TEXT_BOLD_OFFSET = 0.15;
 
