@@ -4,7 +4,7 @@ import wasmUrl from 'manifold-3d/manifold.wasm?url';
 import type { ExecutionContext, ManifoldToplevel } from 'manifold-3d';
 import { parse as parseFont } from 'opentype.js';
 import type { Font } from 'opentype.js';
-import fontUrl from '../assets/fonts/atkinson-hyperlegible-regular.ttf?url';
+import fontUrl from '../assets/fonts/atkinson-hyperlegible-next-medium.ttf?url';
 import {
   generateBin,
   generateInsert,

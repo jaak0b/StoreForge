@@ -70,19 +70,23 @@ export const LABEL_LINE_GAP = 0.8;
 
 /**
  * How far text outlines are dilated (per side, in millimetres) before
- * extrusion. The label font, Atkinson Hyperlegible Regular, has stems of about
- * 0.13 to 0.14 times the cap height, so about 0.76 to 0.85 mm at
+ * extrusion. The label font, Atkinson Hyperlegible Next Medium (a static
+ * wght 500 instance of the variable font), has stems of about 0.159 (l, n) to
+ * 0.172 (I, H) times the cap height, so about 0.95 to 1.03 mm at
  * LABEL_TEXT_HEIGHT (6 mm cap height). Labels are usually shrunk to fit the
- * insert, and a second line is smaller still, so on the printed label the
- * stems often come out at roughly 0.3 to 0.5 mm: about one 0.4 mm nozzle
- * extrusion width, which slicers render as thin, unreliable perimeters.
- * Offsetting by 0.15 mm per side adds 0.3 mm to every stem (a full-size stem
- * becomes about 1.06 to 1.15 mm, a shrunk one about 0.6 to 0.8 mm), so small
- * text slices as solid strokes. The font's open letter shapes keep wide
- * counters (the gaps in e, a and s), so they do not close up after the
- * offset. Icons are already bold silhouettes and are left alone. Applied
- * after the label is scaled to its final on-shelf size, so the dilation is
- * always a true 0.15 mm regardless of any scale-to-fit shrink.
+ * insert, and a second line is smaller still (a cap height of about 2.8 mm on
+ * a one-unit insert with an icon), so on the printed label the stems often
+ * come out at roughly 0.45 to 0.55 mm: about one 0.4 mm nozzle extrusion
+ * width, which slicers render as thin, unreliable perimeters. Offsetting by
+ * 0.15 mm per side adds 0.3 mm to every stem (a full-size stem becomes about
+ * 1.25 to 1.33 mm, a shrunk one about 0.75 to 0.85 mm), so small text slices
+ * as solid strokes; the thinnest points of such a second line, where the arch
+ * of h or n joins the stem and the tail of g, come out at about 0.58 mm. The
+ * font's open letter shapes keep the gaps in e, a and s open after the
+ * offset, although on that smallest second line the gap in e narrows to
+ * about 0.12 mm. Icons are already bold silhouettes and are left alone.
+ * Applied after the label is scaled to its final on-shelf size, so the
+ * dilation is always a true 0.15 mm regardless of any scale-to-fit shrink.
  */
 export const TEXT_BOLD_OFFSET = 0.15;
 

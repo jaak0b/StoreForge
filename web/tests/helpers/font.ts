@@ -9,7 +9,7 @@ let instance: Promise<Font> | null = null;
 export function loadLabelFont(): Promise<Font> {
   if (!instance) {
     const path = fileURLToPath(
-      new URL('../../src/assets/fonts/atkinson-hyperlegible-regular.ttf', import.meta.url),
+      new URL('../../src/assets/fonts/atkinson-hyperlegible-next-medium.ttf', import.meta.url),
     );
     instance = readFile(path).then((buffer) =>
       parse(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)),

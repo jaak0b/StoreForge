@@ -51,9 +51,11 @@ Durable gotchas:
   only, never port its code. Geometry constants come from MIT-licensed kennetek/gridfinity-rebuilt-openscad.
 - Icons must be single filled silhouettes (EvenOdd holes allowed, no strokes); stroke-based icon sets
   (Lucide/Tabler) do not extrude.
-- The label font is Atkinson Hyperlegible Regular (SIL OFL, `web/src/assets/fonts/`), chosen over
-  Roboto Medium because its open letter shapes keep small counters (e, a, s) from closing after the
-  stroke offset. Do not switch to a bold weight: thicker strokes close the counters on small text.
+- The label font is Atkinson Hyperlegible Next Medium (SIL OFL, `web/src/assets/fonts/`), a static
+  wght 500 instance baked with `fontTools.varLib.instancer --static --remove-overlaps` because
+  opentype.js cannot instance variable fonts. Chosen over Roboto Medium because its open letter shapes
+  keep small counters (e, a, s) from closing after the stroke offset. Regular (400) was too light:
+  Orca Slicer left gaps at the h/n arch joins and the g tail. Heavier weights (600+) close the counters.
 - Text extrusion uses NonZero fill (TrueType convention; EvenOdd cancels overlapping contours, which
   some fonts use); icons use EvenOdd. Glyph paths are assembled per character with GPOS kerning
   (opentype.js 2.0's string shaper threw on Roboto's GSUB table; keep the per-character path).
