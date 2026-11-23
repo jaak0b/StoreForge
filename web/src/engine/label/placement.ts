@@ -36,17 +36,37 @@ export const LABEL_TEXT_HEIGHT = 6;
 /** Clear margin kept between the label and the interior side walls. */
 export const LABEL_MARGIN = 3;
 
-/** Clear margin kept between the label and the shelf's front and back edges. */
-export const SHELF_DEPTH_MARGIN = 1.5;
+/**
+ * Clear margin kept between the label and the insert's front and back edges.
+ * Nothing in the bin covers those edges: the channel's front edge is flush
+ * with the stacking lip's innermost face, which only widens outward above it,
+ * and the end stop begins at the channel's back edge, so the margin is only a
+ * visual border. It is kept small so a two-line label has the depth to give
+ * its second line enough size to print as solid strokes on a 0.4 mm nozzle.
+ */
+export const SHELF_DEPTH_MARGIN = 1.0;
 
 /** Horizontal gap between the icon and the text when both are present. */
 export const ICON_TEXT_GAP = 2;
 
-/** Cap height of the second text line relative to the first. */
-export const LABEL_LINE2_SCALE = 0.6;
+/**
+ * Cap height of the second text line relative to the first. A two-line label
+ * usually fills the insert's depth and is shrunk to fit, so the second line
+ * ends up well under its nominal size; at a smaller ratio its stems, even
+ * after TEXT_BOLD_OFFSET, come out barely wider than one 0.4 mm extrusion
+ * width and slice as thin, unreliable strokes. This ratio gives the second line
+ * enough size to print as solid strokes while the first line, shrunk to fit
+ * the depth that remains, stays at the size it had with the larger margins
+ * and line gap used before.
+ */
+export const LABEL_LINE2_SCALE = 0.75;
 
-/** Vertical gap between the first and second text line, in millimetres. */
-export const LABEL_LINE_GAP = 1;
+/**
+ * Vertical gap between the first and second text line, in millimetres: just
+ * enough for the two lines to read as separate after TEXT_BOLD_OFFSET widens
+ * both, with the rest of the depth going to the second line's size.
+ */
+export const LABEL_LINE_GAP = 0.8;
 
 /**
  * How far text outlines are dilated (per side, in millimetres) before
