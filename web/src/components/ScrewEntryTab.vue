@@ -49,7 +49,7 @@ import {
 } from '../engine/plan/screwProducts';
 import { applySuggestion, suggestShorthand, type ScrewSuggestion } from '../engine/plan/screwSuggest';
 import { overallHeightMm } from '../heightHint';
-import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
+import { downloadProduct, type ProductDownload } from '../binDownloads';
 import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
 import BinViewport from './BinViewport.vue';
 import ProductSelect from './ProductSelect.vue';
@@ -550,16 +550,14 @@ function addToPlate(): void {
 // generation can return are shown, never dropped.
 const downloadWarnings = ref<string[]>([]);
 
-async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+async function downloadDesign(request: ProductDownload): Promise<void> {
   if (!formValid.value) return;
   saveError.value = null;
   downloadWarnings.value = [];
   try {
     for (const { product } of pending.value.products) {
       const warnings =
-        format === 'stl'
-          ? await downloadProductStl(product)
-          : await downloadProduct3mf(product);
+        await downloadProduct(product, request);
       downloadWarnings.value = [...downloadWarnings.value, ...warnings];
     }
   } catch (error) {

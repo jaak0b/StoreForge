@@ -5,13 +5,17 @@ import type { BatchItem, PrintBatch } from '../engine/plan/types';
 import { describeProduct, type RowDescriptor } from '../engine/plan/rowDescriptor';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
-import { downloadBatch, type BatchFormat } from '../binDownloads';
+import { downloadBatch, type BatchDownload, type BatchFormat } from '../binDownloads';
+import { useToolAssignment } from '../stores/toolAssignment';
+import { assertNever } from '../engine/plan/types';
 import CountStepper from './CountStepper.vue';
+import ToolAssignmentFields from './ToolAssignmentFields.vue';
 
 /**
  * One print batch box: an editable name, per-row confirm and fail actions
  * (confirm supports a partial amount through an inline input) and a download
- * menu with the three export formats. There is no plate preview; the layout
+ * menu with the three export formats (the two-filament 3MF with the shared
+ * base and label tool fields beside it). There is no plate preview; the layout
  * is arranged automatically inside the download.
  */
 
@@ -86,7 +90,29 @@ const formats: { format: BatchFormat; title: string; detail: string }[] = [
   },
 ];
 
+const toolAssignment = useToolAssignment();
+
+/** The download request for a format, or null while the tool fields are invalid. */
+function requestFor(format: BatchFormat): BatchDownload | null {
+  switch (format) {
+    case 'stl':
+      return { format: 'stl' };
+    case '3mf-single':
+      return { format: '3mf-single' };
+    case '3mf-two': {
+      const tools = toolAssignment.assignment;
+      return tools === null ? null : { format: '3mf-two', tools };
+    }
+    default:
+      return assertNever(format);
+  }
+}
+
 async function download(format: BatchFormat): Promise<void> {
+  const request = requestFor(format);
+  // The entry is disabled while its request cannot be built, so this is a
+  // defensive stop, not a reachable path.
+  if (request === null) return;
   downloading.value = true;
   errorMessage.value = null;
   downloadWarnings.value = [];
@@ -97,7 +123,7 @@ async function download(format: BatchFormat): Promise<void> {
         product: item.product,
         count: item.count,
       })),
-      format,
+      request,
       props.batch.name,
       (text) => {
         progressText.value = text;
@@ -155,9 +181,10 @@ async function download(format: BatchFormat): Promise<void> {
             :key="entry.format"
             :title="entry.title"
             :subtitle="entry.detail"
-            :disabled="downloading"
+            :disabled="downloading || requestFor(entry.format) === null"
             @click="download(entry.format)"
           />
+          <ToolAssignmentFields />
         </v-list>
       </v-menu>
     </div>

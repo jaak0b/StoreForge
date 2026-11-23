@@ -53,7 +53,7 @@ import {
 import { describeProduct } from '../../engine/plan/rowDescriptor';
 import { overallHeightMm } from '../../heightHint';
 import type { CutoutGhost, CutoutGhostMoved } from './cutoutGhost';
-import { downloadProduct3mf, downloadProductStl } from '../../binDownloads';
+import { downloadProduct, type ProductDownload } from '../../binDownloads';
 import AddToQueueSplitButton from '../AddToQueueSplitButton.vue';
 import CutoutViewport from './CutoutViewport.vue';
 import PaintToolbar from '../carve/PaintToolbar.vue';
@@ -923,16 +923,14 @@ function addToPlate(): void {
 // placement warnings a carve can return are shown, never dropped.
 const downloadWarnings = ref<string[]>([]);
 
-async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+async function downloadDesign(request: ProductDownload): Promise<void> {
   if (submitBlocker.value !== null) return;
   saveError.value = null;
   downloadWarnings.value = [];
   try {
     const product = designedProduct();
     downloadWarnings.value =
-      format === 'stl'
-        ? await downloadProductStl(product)
-        : await downloadProduct3mf(product);
+      await downloadProduct(product, request);
   } catch (error) {
     saveError.value = error instanceof Error ? error.message : 'The download failed.';
   }

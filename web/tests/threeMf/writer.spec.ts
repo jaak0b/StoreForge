@@ -85,7 +85,7 @@ describe('writePlate3mf with synthetic meshes', () => {
   let files: Record<string, string>;
 
   beforeAll(() => {
-    files = unzip(writePlate3mf([item]));
+    files = unzip(writePlate3mf([item], { body: 1, label: 2 }));
   });
 
   it('contains the required package files, all well formed', () => {
@@ -173,7 +173,7 @@ describe('writePlate3mf with synthetic meshes', () => {
     const singleFiles = unzip(
       writePlate3mf([
         { body: cuboid(0, 0), label: null, name: 'Plain', instances: [{ xMm: 10, yMm: 10 }] },
-      ]),
+      ], { body: 1, label: 2 }),
     );
     const settings = singleFiles['Metadata/model_settings.config'];
     expect(countMatches(settings, /<part /)).toBe(1);
@@ -181,10 +181,67 @@ describe('writePlate3mf with synthetic meshes', () => {
   });
 
   it('rejects empty input and items without instances', () => {
-    expect(() => writePlate3mf([])).toThrow();
+    expect(() => writePlate3mf([], { body: 1, label: 2 })).toThrow();
     expect(() =>
-      writePlate3mf([{ body: cuboid(0, 0), label: null, name: 'x', instances: [] }]),
+      writePlate3mf([{ body: cuboid(0, 0), label: null, name: 'x', instances: [] }], {
+        body: 1,
+        label: 2,
+      }),
     ).toThrow();
+  });
+});
+
+describe('writePlate3mf tool assignment', () => {
+  /** The extruder values of the object, then of each part, in document order. */
+  function extruderValues(tools: { body: number; label: number }, labeled: boolean): string[] {
+    const files = unzip(
+      writePlate3mf(
+        [
+          {
+            body: cuboid(0, 0),
+            label: labeled ? cuboid(3, 3) : null,
+            name: 'Bin',
+            instances: [{ xMm: 50, yMm: 50 }],
+          },
+        ],
+        tools,
+      ),
+    );
+    const settings = files['Metadata/model_settings.config'];
+    return [...settings.matchAll(/<metadata key="extruder" value="([^"]*)"\/>/g)].map(
+      (match) => match[1],
+    );
+  }
+
+  it('writes the chosen base tool on the object and body and the label tool on the label', () => {
+    expect(extruderValues({ body: 3, label: 4 }, true)).toEqual(['3', '3', '4']);
+  });
+
+  it('writes only the base tool for an item without a label', () => {
+    expect(extruderValues({ body: 4, label: 2 }, false)).toEqual(['4', '4']);
+  });
+
+  it('allows the same tool for the body and the label', () => {
+    expect(extruderValues({ body: 2, label: 2 }, true)).toEqual(['2', '2', '2']);
+  });
+
+  it('accepts the range ends 1 and 100', () => {
+    expect(extruderValues({ body: 1, label: 100 }, true)).toEqual(['1', '1', '100']);
+  });
+
+  it.each([
+    ['base tool 0', { body: 0, label: 2 }, /Base tool 0 is invalid/],
+    ['base tool 101', { body: 101, label: 2 }, /Base tool 101 is invalid/],
+    ['label tool 1.5', { body: 1, label: 1.5 }, /Label tool 1.5 is invalid/],
+    ['label tool NaN', { body: 1, label: Number.NaN }, /Label tool NaN is invalid/],
+  ])('rejects %s', (_name, tools, message) => {
+    const item: PlateItem = {
+      body: cuboid(0, 0),
+      label: cuboid(3, 3),
+      name: 'Bin',
+      instances: [{ xMm: 50, yMm: 50 }],
+    };
+    expect(() => writePlate3mf([item], tools)).toThrow(message);
   });
 });
 
@@ -220,7 +277,7 @@ describe('writePlate3mf with two real labeled bins', () => {
       writePlate3mf([
         { body: binA.body, label: binA.label, name: 'Bin A', instances: [{ xMm: 40, yMm: 40 }] },
         { body: binB.body, label: binB.label, name: 'Bin B', instances: [{ xMm: 130, yMm: 40 }] },
-      ]),
+      ], { body: 1, label: 2 }),
     );
     const model = files['3D/3dmodel.model'];
     assertWellFormedXml(model);

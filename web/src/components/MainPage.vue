@@ -14,7 +14,9 @@ import { partitionQueue } from '../engine/plan/queuePartition';
 import { snapshotProduct, type BatchSelection } from '../engine/plan/batches';
 import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
-import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
+import { downloadProduct, type ProductDownload } from '../binDownloads';
+import { useToolAssignment } from '../stores/toolAssignment';
+import ToolAssignmentFields from './ToolAssignmentFields.vue';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
 import DeleteDrawerDialog from './DeleteDrawerDialog.vue';
@@ -243,19 +245,26 @@ function editRow(entry: QueueEntry): void {
 // the model they are about, which is what makes them readable here, where
 // there is no model list beside them.
 const downloadingId = ref<string | null>(null);
+const toolAssignment = useToolAssignment();
+
+function downloadRow3mf(entry: QueueEntry): void {
+  const tools = toolAssignment.assignment;
+  // The entry is disabled while a tool field is invalid, so this is a
+  // defensive stop, not a reachable path.
+  if (tools === null) return;
+  void downloadRow(entry, { format: '3mf', tools });
+}
 const errorMessage = ref<string | null>(null);
 const downloadWarnings = ref<string[]>([]);
 
-async function downloadRow(entry: QueueEntry, format: 'stl' | '3mf'): Promise<void> {
+async function downloadRow(entry: QueueEntry, request: ProductDownload): Promise<void> {
   downloadingId.value = entry.id;
   errorMessage.value = null;
   downloadWarnings.value = [];
   try {
     const product = snapshotProduct(entry.product);
     downloadWarnings.value =
-      format === 'stl'
-        ? await downloadProductStl(product)
-        : await downloadProduct3mf(product);
+      await downloadProduct(product, request);
   } catch (error) {
     errorMessage.value =
       error instanceof Error ? error.message : 'The download failed.';
@@ -454,13 +463,15 @@ function duplicateRow(entry: QueueEntry): void {
                 <v-list-item
                   title="STL"
                   :subtitle="menuText.stl"
-                  @click="downloadRow(entry, 'stl')"
+                  @click="downloadRow(entry, { format: 'stl' })"
                 />
                 <v-list-item
                   :title="menuText.threeMfTitle"
                   :subtitle="menuText.threeMf"
-                  @click="downloadRow(entry, '3mf')"
+                  :disabled="toolAssignment.assignment === null"
+                  @click="downloadRow3mf(entry)"
                 />
+                <ToolAssignmentFields />
               </template>
             </v-list>
           </v-menu>

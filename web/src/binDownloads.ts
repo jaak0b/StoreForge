@@ -20,6 +20,10 @@ import { binInteriorOf, partsOf, type PrintablePart } from './engine/plan/geomet
 import { arrangeAutoPlate, type FootprintItem, type Placement } from './engine/plate/arranger';
 import { mergePlacedMeshes, type PlacedMesh } from './engine/plate/placement';
 import { writePlate3mf, type PlateItem } from './engine/threeMf/writer';
+import {
+  DEFAULT_TOOL_ASSIGNMENT,
+  type ToolAssignment,
+} from './engine/threeMf/toolAssignment';
 
 /**
  * Shared download plumbing for the single-page UI: single-entry STL/3MF from
@@ -314,8 +318,14 @@ export async function downloadProductStl(product: Product): Promise<string[]> {
   return warnings;
 }
 
-/** Downloads one product as a two-filament 3MF (body slot 1, label slot 2). */
-export async function downloadProduct3mf(product: Product): Promise<string[]> {
+/**
+ * Downloads one product as a two-filament 3MF, the body and the label on the
+ * given filament slots.
+ */
+export async function downloadProduct3mf(
+  product: Product,
+  tools: ToolAssignment,
+): Promise<string[]> {
   const arranged = arrangeUniqueParts([{ product, count: 1 }]);
   const { warn, warnings } = collectWarnings();
   const items: PlateItem[] = [];
@@ -328,7 +338,7 @@ export async function downloadProduct3mf(product: Product): Promise<string[]> {
       instances: placements.map((p) => ({ xMm: p.xMm, yMm: p.yMm })),
     });
   }
-  const bytes = writePlate3mf(items);
+  const bytes = writePlate3mf(items, tools);
   triggerDownload(
     new Blob([bytes.buffer as ArrayBuffer], { type: 'model/3mf' }),
     `${fileStem(product)}.3mf`,
@@ -336,26 +346,60 @@ export async function downloadProduct3mf(product: Product): Promise<string[]> {
   return warnings;
 }
 
+/**
+ * One single-product download as the UI requests it: an STL, or a
+ * two-filament 3MF with the filament slots chosen for it.
+ */
+export type ProductDownload =
+  | { format: 'stl' }
+  | { format: '3mf'; tools: ToolAssignment };
+
+/** Downloads one product in the requested format; returns the generation warnings. */
+export async function downloadProduct(
+  product: Product,
+  request: ProductDownload,
+): Promise<string[]> {
+  switch (request.format) {
+    case 'stl':
+      return downloadProductStl(product);
+    case '3mf':
+      return downloadProduct3mf(product, request.tools);
+    default:
+      return assertNever(request);
+  }
+}
+
 /** The three formats a batch can be downloaded as. */
 export type BatchFormat = 'stl' | '3mf-single' | '3mf-two';
 
 /**
+ * One batch download as the UI requests it; only the two-filament 3MF carries
+ * the filament slots chosen for it.
+ */
+export type BatchDownload =
+  | { format: 'stl' }
+  | { format: '3mf-single' }
+  | { format: '3mf-two'; tools: ToolAssignment };
+
+/**
  * Downloads a whole batch in the given format: one merged STL, a
- * single-color 3MF (inserts as plain single-color parts) or a two-filament
- * 3MF (bodies on slot 1, insert labels on slot 2). Progress is reported per
+ * single-color 3MF (inserts as plain single-color parts, all on the default
+ * body slot, since no slot choice is offered for it) or a two-filament 3MF
+ * (bodies and labels on the slots the request carries). Progress is reported per
  * unique part, and whatever the generation warned about comes back for the
  * caller to show.
  */
 export async function downloadBatch(
   products: DownloadProduct[],
-  format: BatchFormat,
+  request: BatchDownload,
   batchName: string,
   onProgress: (text: string) => void,
 ): Promise<string[]> {
+  const format = request.format;
   const unique = arrangeUniqueParts(products);
   const { warn, warnings } = collectWarnings();
   const stem = batchName.trim() === '' ? 'gridfinity_batch' : sanitizeFileName(batchName);
-  if (format === 'stl') {
+  if (request.format === 'stl') {
     const placed: PlacedMesh[] = [];
     for (let i = 0; i < unique.length; i++) {
       onProgress(`Generating part ${i + 1} of ${unique.length}`);
@@ -386,13 +430,30 @@ export async function downloadBatch(
       instances: unique[i].placements.map((p) => ({ xMm: p.xMm, yMm: p.yMm })),
     });
   }
-  const bytes = writePlate3mf(items);
+  const bytes = writePlate3mf(items, batchToolAssignment(request));
   const suffix = format === '3mf-two' ? '' : '_single_color';
   triggerDownload(
     new Blob([bytes.buffer as ArrayBuffer], { type: 'model/3mf' }),
     `${stem}${suffix}.3mf`,
   );
   return warnings;
+}
+
+/**
+ * The slots a batch 3MF is written with: the chosen ones for the two-filament
+ * format, the default body slot for the single-color one (it offers no choice).
+ */
+function batchToolAssignment(
+  request: Exclude<BatchDownload, { format: 'stl' }>,
+): ToolAssignment {
+  switch (request.format) {
+    case '3mf-two':
+      return request.tools;
+    case '3mf-single':
+      return DEFAULT_TOOL_ASSIGNMENT;
+    default:
+      return assertNever(request);
+  }
 }
 
 function sanitizeFileName(name: string): string {

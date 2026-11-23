@@ -18,7 +18,7 @@ import { originOf, type QueueEntry } from '../engine/plan/types';
 import { describeProduct } from '../engine/plan/rowDescriptor';
 import { baseplateCellCount } from '../engine/baseplate/generator';
 import { validateProduct } from '../engine/plan/planFile';
-import { downloadProduct3mf, downloadProductStl } from '../binDownloads';
+import { downloadProduct, type ProductDownload } from '../binDownloads';
 import AddToQueueSplitButton from './AddToQueueSplitButton.vue';
 import BinViewport from './BinViewport.vue';
 import BaseplateOptionsFields from './BaseplateOptionsFields.vue';
@@ -208,15 +208,13 @@ function addToPlate(): void {
 // warnings a generation can return are shown, never dropped.
 const downloadWarnings = ref<string[]>([]);
 
-async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+async function downloadDesign(request: ProductDownload): Promise<void> {
   saveError.value = null;
   downloadWarnings.value = [];
   try {
     const product = store.product;
     downloadWarnings.value =
-      format === 'stl'
-        ? await downloadProductStl(product)
-        : await downloadProduct3mf(product);
+      await downloadProduct(product, request);
   } catch (error) {
     saveError.value = error instanceof Error ? error.message : 'The download failed.';
   }

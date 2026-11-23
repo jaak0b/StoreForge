@@ -32,7 +32,7 @@ import type { TraceSession } from '../../engine/trace/types';
 import { putPhoto } from '../../photoStore';
 import { primitiveOutline } from '../../engine/trace/edit';
 import { referencedSessionIds } from '../../engine/trace/layoutModel';
-import { downloadProduct3mf, downloadProductStl } from '../../binDownloads';
+import { downloadProduct, type ProductDownload } from '../../binDownloads';
 import AddToQueueSplitButton from '../AddToQueueSplitButton.vue';
 import BinViewport from '../BinViewport.vue';
 import CarveProgressBar from '../CarveProgressBar.vue';
@@ -410,7 +410,7 @@ async function addToPlate(): Promise<void> {
 // warnings a generation can return are shown, never dropped.
 const downloadWarnings = ref<string[]>([]);
 
-async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
+async function downloadDesign(request: ProductDownload): Promise<void> {
   addError.value = null;
   downloadWarnings.value = [];
   if (submitBlocker.value !== null) {
@@ -420,9 +420,7 @@ async function downloadDesign(format: 'stl' | '3mf'): Promise<void> {
   try {
     const product = designedProduct([]);
     downloadWarnings.value =
-      format === 'stl'
-        ? await downloadProductStl(product)
-        : await downloadProduct3mf(product);
+      await downloadProduct(product, request);
   } catch (error) {
     addError.value = error instanceof Error ? error.message : 'The download failed.';
   }

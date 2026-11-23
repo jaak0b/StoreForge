@@ -12,6 +12,7 @@
 import { strToU8, zipSync } from 'fflate';
 import type { MeshData } from '../gridfinity/types';
 import { meshBounds, placementTransform } from '../plate/placement';
+import { assertValidToolAssignment, type ToolAssignment } from './toolAssignment';
 
 /** One placement of a plate item, in plate coordinates (front-left origin). */
 export interface PlateInstance {
@@ -25,19 +26,15 @@ export interface PlateInstance {
 
 /** One distinct bin on the plate, instanced at one or more positions. */
 export interface PlateItem {
-  /** The bin body mesh, printed with extruder 1. */
+  /** The bin body mesh, printed with the assignment's body slot. */
   body: MeshData;
-  /** The label mesh, printed with extruder 2, or null for a plain bin. */
+  /** The label mesh, printed with the assignment's label slot, or null for a plain bin. */
   label: MeshData | null;
   /** Object name shown in the slicer. */
   name: string;
   /** Every position this bin is placed at; at least one. */
   instances: PlateInstance[];
 }
-
-/** The extruder numbers (1-based, as slicers count them) for the two parts. */
-export const BODY_EXTRUDER = 1;
-export const LABEL_EXTRUDER = 2;
 
 const MODEL_NAMESPACE = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
 const PRODUCTION_NAMESPACE =
@@ -115,11 +112,14 @@ const RELS_XML =
 
 /**
  * Serialize the plate as a 3MF package. Each item becomes one object with a
- * body part on extruder 1 and, when present, a label part on extruder 2;
- * each instance becomes one build item whose transform centres the object's
- * footprint at the instance position and rests its lowest point on z = 0.
+ * body part on the assignment's body slot and, when present, a label part on
+ * its label slot (the two may be the same slot). Each instance becomes one
+ * build item whose transform centres the object's footprint at the instance
+ * position and rests its lowest point on z = 0. An invalid slot number throws
+ * a user-worded error.
  */
-export function writePlate3mf(items: PlateItem[]): Uint8Array {
+export function writePlate3mf(items: PlateItem[], tools: ToolAssignment): Uint8Array {
+  assertValidToolAssignment(tools);
   if (items.length === 0) {
     throw new Error('At least one plate item is required to write a 3MF file.');
   }
@@ -164,12 +164,12 @@ export function writePlate3mf(items: PlateItem[]): Uint8Array {
 
     const partNames = item.label ? ['Body', 'Label'] : ['Body'];
     const partExtruders = item.label
-      ? [BODY_EXTRUDER, LABEL_EXTRUDER]
-      : [BODY_EXTRUDER];
+      ? [tools.body, tools.label]
+      : [tools.body];
     settingsObjectsXml.push(
       `  <object id="${objectId}">\n` +
         `    <metadata key="name" value="${escapeXml(item.name)}"/>\n` +
-        `    <metadata key="extruder" value="${BODY_EXTRUDER}"/>\n` +
+        `    <metadata key="extruder" value="${tools.body}"/>\n` +
         partIds
           .map(
             (id, i) =>
