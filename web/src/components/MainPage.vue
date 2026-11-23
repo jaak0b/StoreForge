@@ -16,7 +16,6 @@ import { resolveLabelIcon } from '../labelIcons';
 import type { LabelIcon } from '../engine/label/icons';
 import { downloadProduct, type ProductDownload } from '../binDownloads';
 import { useToolAssignment } from '../stores/toolAssignment';
-import ToolAssignmentFields from './ToolAssignmentFields.vue';
 import AddBinCard from './AddBinCard.vue';
 import BatchBox from './BatchBox.vue';
 import DeleteDrawerDialog from './DeleteDrawerDialog.vue';
@@ -247,12 +246,10 @@ function editRow(entry: QueueEntry): void {
 const downloadingId = ref<string | null>(null);
 const toolAssignment = useToolAssignment();
 
-function downloadRow3mf(entry: QueueEntry): void {
-  const tools = toolAssignment.assignment;
-  // The entry is disabled while a tool field is invalid, so this is a
-  // defensive stop, not a reachable path.
+async function downloadRow3mf(entry: QueueEntry): Promise<void> {
+  const tools = await toolAssignment.requestAssignment();
   if (tools === null) return;
-  void downloadRow(entry, { format: '3mf', tools });
+  await downloadRow(entry, { format: '3mf', tools });
 }
 const errorMessage = ref<string | null>(null);
 const downloadWarnings = ref<string[]>([]);
@@ -468,10 +465,8 @@ function duplicateRow(entry: QueueEntry): void {
                 <v-list-item
                   :title="menuText.threeMfTitle"
                   :subtitle="menuText.threeMf"
-                  :disabled="toolAssignment.assignment === null"
                   @click="downloadRow3mf(entry)"
                 />
-                <ToolAssignmentFields />
               </template>
             </v-list>
           </v-menu>

@@ -6,6 +6,7 @@ import { useBinQueue } from './stores/binQueue';
 import { triggerDownload } from './binDownloads';
 import MainPage from './components/MainPage.vue';
 import SettingsDialog from './components/SettingsDialog.vue';
+import ToolAssignmentDialog from './components/ToolAssignmentDialog.vue';
 
 const app = useApp();
 const queue = useBinQueue();
@@ -176,6 +177,8 @@ function finishImport(mode: 'merge' | 'replace'): void {
     </v-dialog>
 
     <SettingsDialog />
+
+    <ToolAssignmentDialog />
 
     <v-dialog v-model="app.shortcutSheetOpen" max-width="460">
       <v-card>

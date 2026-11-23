@@ -23,4 +23,47 @@ describe('tool assignment store', () => {
     store.labelText = '';
     expect(store.assignment).toBeNull();
   });
+
+  it('resolves a tool request with the typed slots when the user confirms', async () => {
+    const store = useToolAssignment();
+    const request = store.requestAssignment();
+    store.bodyText = '4';
+    store.labelText = '7';
+
+    store.confirmRequest();
+
+    await expect(request).resolves.toEqual({ body: 4, label: 7 });
+    expect(store.dialogOpen).toBe(false);
+  });
+
+  it('resolves a tool request with null when the user cancels', async () => {
+    const store = useToolAssignment();
+    const request = store.requestAssignment();
+
+    store.cancelRequest();
+
+    await expect(request).resolves.toBeNull();
+    expect(store.dialogOpen).toBe(false);
+  });
+
+  it('keeps the dialog open when the user confirms an invalid slot', () => {
+    const store = useToolAssignment();
+    void store.requestAssignment();
+    store.labelText = '0';
+
+    const confirmed = store.confirmRequest();
+
+    expect(confirmed).toBe(false);
+    expect(store.dialogOpen).toBe(true);
+  });
+
+  it('cancels an open tool request when a second one starts', async () => {
+    const store = useToolAssignment();
+    const first = store.requestAssignment();
+
+    void store.requestAssignment();
+
+    await expect(first).resolves.toBeNull();
+    expect(store.dialogOpen).toBe(true);
+  });
 });

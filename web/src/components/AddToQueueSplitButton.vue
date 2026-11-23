@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import type { ProductDownload } from '../binDownloads';
 import { useToolAssignment } from '../stores/toolAssignment';
-import ToolAssignmentFields from './ToolAssignmentFields.vue';
 
 /**
  * The split add button of the add/edit tabs: the primary button queues (or
  * saves the edit) exactly as the plain button did, and a joined dropdown
  * opens the secondary actions (queue onto the newest build plate, or download
- * the design directly as STL or 3MF, with the shared base and label tool
- * fields beside the 3MF entry). In edit mode the dropdown is hidden:
+ * the design directly as STL or 3MF; the 3MF entry first asks for the base
+ * and label tools in the shared tool dialog). In edit mode the dropdown is hidden:
  * the secondary actions only apply to a new design. The component is
  * presentation only; the owning tab performs every action.
  */
@@ -33,10 +32,8 @@ const emit = defineEmits<{
 
 const tools = useToolAssignment();
 
-function download3mf(): void {
-  const assignment = tools.assignment;
-  // The entry is disabled while a tool field is invalid, so this is a
-  // defensive stop, not a reachable path.
+async function download3mf(): Promise<void> {
+  const assignment = await tools.requestAssignment();
   if (assignment === null) return;
   emit('download', { format: '3mf', tools: assignment });
 }
@@ -69,12 +66,7 @@ function download3mf(): void {
         <v-list density="compact">
           <v-list-item title="Add to newest build plate" @click="emit('addToPlate')" />
           <v-list-item title="Download STL" @click="emit('download', { format: 'stl' })" />
-          <v-list-item
-            title="Download 3MF"
-            :disabled="tools.assignment === null"
-            @click="download3mf"
-          />
-          <ToolAssignmentFields />
+          <v-list-item title="Download 3MF" @click="download3mf" />
         </v-list>
       </v-menu>
     </v-btn>
