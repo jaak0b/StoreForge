@@ -2,6 +2,7 @@ import type { Pinia } from 'pinia';
 import { addBinTool, updateEntryTool } from './binTools';
 import { addDrawerBaseplatesTool, removeDrawerTool } from './drawerTools';
 import { duplicateEntryTool, removeEntryTool } from './entryTools';
+import { addCustomIconsTool, removeCustomIconTool } from './iconTools';
 import { listIconsTool, listQueueTool } from './listTools';
 import { realmNeutralCopy, type AgentTool, type ModelContextLike } from './modelContext';
 import { addScrewsTool } from './screwTools';
@@ -18,6 +19,8 @@ export function agentTools(pinia: Pinia): AgentTool[] {
   return [
     listQueueTool(pinia),
     listIconsTool(pinia),
+    addCustomIconsTool(pinia),
+    removeCustomIconTool(pinia),
     addBinTool(pinia),
     addScrewsTool(pinia),
     addDrawerBaseplatesTool(pinia),

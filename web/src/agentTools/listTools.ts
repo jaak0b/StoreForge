@@ -117,7 +117,7 @@ export function listIconsTool(pinia: Pinia): AgentTool {
     description:
       'Lists the icon names a bin label can show: the built-in icons with their category, and ' +
       "the user's custom icons. Use it before add_bin or update_entry to pick a valid icon name. " +
-      'Custom icon names are user text.',
+      'When no icon fits, add one with add_custom_icons. Custom icon names are user text.',
     inputSchema: { type: 'object', properties: {} },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute: () =>

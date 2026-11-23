@@ -78,6 +78,23 @@ export function optionalObject(
   return value as Record<string, unknown>;
 }
 
+/** A list of objects that must be present and hold at least one item. */
+export function requiredObjectList(
+  fields: Record<string, unknown>,
+  key: string,
+): Record<string, unknown>[] {
+  const value = fields[key];
+  if (value === undefined) throw new InputProblem(`${key} is required.`);
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => typeof item !== 'object' || item === null || Array.isArray(item))
+  ) {
+    throw new InputProblem(`${key} must be a list of objects.`);
+  }
+  if (value.length === 0) throw new InputProblem(`${key} must hold at least one item.`);
+  return value as Record<string, unknown>[];
+}
+
 /** One of a fixed set of text values, or undefined when absent. */
 export function optionalChoice<T extends string>(
   fields: Record<string, unknown>,

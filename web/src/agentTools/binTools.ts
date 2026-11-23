@@ -84,7 +84,8 @@ export function addBinTool(pinia: Pinia): AgentTool {
       'Adds one hand-designed Gridfinity bin, bin with label insert, or standalone label insert ' +
       'to the print queue, exactly as the Manual bin tab does. Sizes are in grid units of 42 mm ' +
       'and height units of 7 mm; omitted fields take the designer defaults. Use add_screws for ' +
-      'screw and fastener bins. Returns the new entry id.',
+      'screw and fastener bins. A custom label icon can be added first with add_custom_icons. ' +
+      'Returns the new entry id.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -4,7 +4,16 @@ import { createPinia, setActivePinia, type Pinia } from 'pinia';
 // The queue store's persist path fans out to IndexedDB-backed stores and the
 // geometry worker, none of which exist in the node test environment. They are
 // mocked to no-ops so the tests exercise only the plan mutations themselves.
-vi.mock('../../src/workerClient', () => ({ releaseCutoutModels: () => Promise.resolve() }));
+// validateCustomIcon runs the real normalize pipeline in process, standing in
+// for the worker thread that does not exist in node.
+vi.mock('../../src/workerClient', async () => {
+  const { loadManifold } = await import('../helpers/manifold');
+  const { normalizeCustomIcon } = await import('../../src/engine/label/customIcon');
+  return {
+    releaseCutoutModels: () => Promise.resolve(),
+    validateCustomIcon: async (input: string) => normalizeCustomIcon(await loadManifold(), input),
+  };
+});
 vi.mock('../../src/photoStore', () => ({
   listPhotoIds: () => Promise.resolve([]),
   deletePhoto: () => Promise.resolve(),
@@ -38,6 +47,7 @@ import {
 import { useBinQueue } from '../../src/stores/binQueue';
 import { useBinDesigner } from '../../src/stores/binDesigner';
 import { manualProduct } from '../../src/engine/plan/manualProduct';
+import { useCustomIcons } from '../../src/stores/customIcons';
 
 /** A model context that records every registration, refusing duplicate names like the spec. */
 function fakeModelContext(): ModelContextLike & { tools: Map<string, AgentTool> } {
@@ -95,11 +105,13 @@ describe('agent tool registration', () => {
   it('registers every tool once', () => {
     expect([...context.tools.keys()].sort()).toEqual([
       'add_bin',
+      'add_custom_icons',
       'add_drawer_baseplates',
       'add_screws',
       'duplicate_entry',
       'list_icons',
       'list_queue',
+      'remove_custom_icon',
       'remove_drawer',
       'remove_entry',
       'update_entry',
@@ -597,5 +609,112 @@ describe('duplicate_entry, remove_entry and remove_drawer', () => {
 
     expect(isError).toBe(true);
     expect(body.problem).toBe('This drawer no longer exists. It may have been removed.');
+  });
+});
+
+describe('add_custom_icons', () => {
+  const SQUARE = 'M10 10H90V90H10Z';
+  const EMPTY_SVG = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+
+  it('adds the valid icons of a batch and reports each refused one with its reason', async () => {
+    const { isError, body } = await call('add_custom_icons', {
+      icons: [
+        { name: 'square', svg: SQUARE },
+        { name: 'blank', svg: EMPTY_SVG },
+        { name: 'hex bolt', svg: SQUARE },
+      ],
+    });
+
+    expect(isError).toBe(false);
+    expect(body.results).toEqual([
+      { name: 'square', added: true },
+      {
+        name: 'blank',
+        added: false,
+        problem:
+          'This file has no drawable shape to emboss. Add a filled shape or a stroked outline, then upload it again.',
+      },
+      {
+        name: 'hex bolt',
+        added: false,
+        problem: 'An icon with this name already exists. Choose a different name.',
+      },
+    ]);
+    expect(useCustomIcons(pinia).icons.map((icon) => icon.name)).toEqual(['square']);
+  });
+
+  it('refuses the second of two icons with the same name in one call', async () => {
+    const { body } = await call('add_custom_icons', {
+      icons: [
+        { name: 'bolt', svg: SQUARE },
+        { name: 'bolt', svg: SQUARE },
+      ],
+    });
+
+    expect(body.results[1]).toEqual({
+      name: 'bolt',
+      added: false,
+      problem: 'An icon with this name already exists. Choose a different name.',
+    });
+    expect(useCustomIcons(pinia).icons).toHaveLength(1);
+  });
+
+  it('makes an added icon usable as a label icon in add_bin', async () => {
+    await call('add_custom_icons', { icons: [{ name: 'square', svg: SQUARE }] });
+
+    const { isError } = await call('add_bin', { labelIcon: 'square' });
+
+    expect(isError).toBe(false);
+  });
+
+  it.each([
+    [{}, 'icons is required.'],
+    [{ icons: 'square' }, 'icons must be a list of objects.'],
+    [{ icons: [] }, 'icons must hold at least one item.'],
+    [{ icons: [{ name: 'a', svg: SQUARE }, { name: 'b' }] }, 'In icons item 2: svg is required.'],
+  ])('refuses malformed input %j as an error and adds nothing', async (input, problem) => {
+    const { isError, body } = await call('add_custom_icons', input);
+
+    expect(isError).toBe(true);
+    expect(body.problem).toBe(problem);
+    expect(useCustomIcons(pinia).icons).toEqual([]);
+  });
+});
+
+describe('remove_custom_icon', () => {
+  it('removes a custom icon by name', async () => {
+    useCustomIcons(pinia).add('gear', 'M10 10H90V90H10Z', [10, 10, 80, 80]);
+
+    const { isError, body } = await call('remove_custom_icon', { name: 'gear' });
+
+    expect(isError).toBe(false);
+    expect(body).toEqual({ removed: 'gear' });
+    expect(useCustomIcons(pinia).icons).toEqual([]);
+  });
+
+  it('leaves queued bins that use the removed icon in the queue unchanged', async () => {
+    useCustomIcons(pinia).add('gear', 'M10 10H90V90H10Z', [10, 10, 80, 80]);
+    await call('add_bin', { labelIcon: 'gear' });
+
+    await call('remove_custom_icon', { name: 'gear' });
+
+    const [entry] = useBinQueue(pinia).entries;
+    expect(entry.product.kind === 'binWithInsert' ? entry.product.insert.icon : null).toBe('gear');
+  });
+
+  it('refuses an unknown name', async () => {
+    const { isError, body } = await call('remove_custom_icon', { name: 'sprocket' });
+
+    expect(isError).toBe(true);
+    expect(body.problem).toBe('There is no custom icon named "sprocket".');
+  });
+
+  it('refuses a built-in icon name', async () => {
+    const { isError, body } = await call('remove_custom_icon', { name: 'hex bolt' });
+
+    expect(isError).toBe(true);
+    expect(body.problem).toBe(
+      'The hex bolt icon is built in and cannot be removed. Only custom icons can be removed.',
+    );
   });
 });

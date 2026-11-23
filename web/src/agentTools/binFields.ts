@@ -88,7 +88,8 @@ export const LABEL_PROPERTIES: Record<string, JsonSchema> = {
   },
   labelIcon: {
     type: ['string', 'null'],
-    description: 'Label icon name from list_icons, or null for no icon.',
+    description:
+      'Label icon name from list_icons, or null for no icon. Add new icons with add_custom_icons.',
   },
 };
 
